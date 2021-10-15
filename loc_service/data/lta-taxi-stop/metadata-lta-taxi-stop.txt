@@ -1,0 +1,36 @@
+# Metadata for LTA Taxi Stop
+---
+Identifier: '00c1bdb4-cb25-4c24-af90-22f6c6660708'
+Name: 'lta-taxi-stop'
+Title: 'LTA Taxi Stop'
+Description: 'The layer contains the locations of taxi stop in Singapore.'
+Topics:
+  - 'Transport'
+Keywords:
+  - 'Stop'
+  - 'Taxi'
+  - 'Taxistop'
+Publisher:
+  Name: 'Land Transport Authority'
+  Admin 1:
+    Name: 'Chan Bee Ling'
+    Department: 'LAND TRANSPORT AUTHORITY'
+    Email: 'chan_bee_ling@lta.gov.sg'
+Sources:
+  - 'Land Transport Authority'
+License: 'https://data.gov.sg/open-data-licence'
+Frequency: 'Ad-hoc'
+Last Updated: '2020-07-29T00:05:05.135451'
+Resources:
+  -
+    Identifier: 'fb808253-852c-423d-9715-20404eda8c9e'
+    Title: 'LTA Taxi Stop (KML)'
+    Url: 'https://geo.data.gov.sg/taxistop/2020/07/22/kml/taxistop.kml'
+    Format: 'KML'
+    Last Updated: '2020-07-21T16:00:00'
+  -
+    Identifier: '113b362f-ffc7-4e06-adb1-1c06e8b8ae90'
+    Title: 'LTA Taxi Stop (GEOJSON)'
+    Url: 'https://geo.data.gov.sg/taxistop/2020/07/22/geojson/taxistop.geojson'
+    Format: 'GeoJSON'
+    Last Updated: '2020-07-21T16:00:00'

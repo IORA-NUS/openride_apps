@@ -1,0 +1,7 @@
+# MOngodb Queries
+
+
+db.dropDatabase()
+db.driver_trip.getIndexes()
+
+db.driver_trip.find({current_loc: {$near: {$geometry: {type: "Point", coordinates: [103.833057754201, 1.41709038337595]}, $maxDistance: 5000}}})
