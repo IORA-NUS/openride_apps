@@ -8,13 +8,13 @@ import json, requests
 import paho.mqtt.client as paho
 from datetime import datetime
 
-from messenger_service import Messenger
-from loc_service import OSRMClient
+from apps.messenger_service import Messenger
+from apps.loc_service import OSRMClient
 
-from utils.user_registry import UserRegistry
-from config import settings
+from apps.utils.user_registry import UserRegistry
+from apps.config import settings
 
-from lib import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
+from apps.lib import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from .solver import * # NOTE * is deliverate to load all solvers in globals()
 from .engine_manager import EngineManager
 
@@ -117,8 +117,10 @@ class AssignmentApp:
 
             # self.messenger.client.publish(f'Agent/{passenger_id}', json.dumps(driver_assignment))
             # self.messenger.client.publish(f'Agent/{driver_id}', json.dumps(passenger_assignment))
-            self.messenger.client.publish(f"Agent/{passenger_trip['passenger']}", json.dumps(driver_assignment))
-            self.messenger.client.publish(f"Agent/{driver['_id']}", json.dumps(passenger_assignment))
+            # self.messenger.client.publish(f"Agent/{passenger_trip['passenger']}", json.dumps(driver_assignment))
+            # self.messenger.client.publish(f"Agent/{driver['_id']}", json.dumps(passenger_assignment))
+            self.messenger.client.publish(f"{self.run_id}/{passenger_trip['passenger']}", json.dumps(driver_assignment))
+            self.messenger.client.publish(f"{self.run_id}/{driver['_id']}", json.dumps(passenger_assignment))
 
 
 

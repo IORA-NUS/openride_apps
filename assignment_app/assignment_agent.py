@@ -5,8 +5,8 @@ sys.path.append(parent_path)
 
 from mesa import Agent
 from .assignment_app import AssignmentApp
-from config import settings
-from loc_service import PlanningArea
+from apps.config import settings
+from apps.loc_service import PlanningArea
 
 from shapely.geometry import MultiPolygon, mapping
 

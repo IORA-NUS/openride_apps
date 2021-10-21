@@ -1,9 +1,9 @@
 import requests, json
 
-from config import settings
-from utils import id_generator, is_success
+from apps.config import settings
+from apps.utils import id_generator, is_success
 
-from lib import RidehailDriverTripStateMachine
+from apps.lib import RidehailDriverTripStateMachine
 
 
 class DriverTripManager:
@@ -126,7 +126,8 @@ class DriverTripManager:
 
         self.refresh() # refresh self.trip
 
-        self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
                                     'driver_id': self.trip['driver'],
@@ -175,7 +176,8 @@ class DriverTripManager:
 
         self.refresh() # refresh self.trip
 
-        self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
                                     'driver_id': self.trip['driver'],
@@ -223,7 +225,8 @@ class DriverTripManager:
 
         self.refresh() # refresh self.trip
 
-        self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
                                     'driver_id': self.trip['driver'],
@@ -273,7 +276,8 @@ class DriverTripManager:
 
         self.refresh() # refresh self.trip
 
-        self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
                                     'driver_id': self.trip['driver'],
@@ -303,7 +307,8 @@ class DriverTripManager:
 
         self.refresh() # refresh self.trip
 
-        self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
                                     'driver_id': self.trip['driver'],

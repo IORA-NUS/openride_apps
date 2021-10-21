@@ -1,9 +1,10 @@
 
 import json
-from config import settings
+from apps.config import settings
 import requests
 import urllib3
 from urllib.parse import quote
+import logging
 
 import paho.mqtt.client as paho
 
@@ -14,6 +15,8 @@ class Messenger:
         ''' '''
         self.run_id = run_id
         self.credentials = credentials
+
+        # print('registering messenger')
 
         if transport is None:
             self.client = paho.Client(credentials['email'])
@@ -37,7 +40,8 @@ class Messenger:
 
         if channel_id is not None:
             self.client.loop_start()
-            self.client.subscribe(f"Agent/{channel_id}")
+            self.client.subscribe(f"{self.run_id}/{channel_id}")
+            print(f"Channel: {self.run_id}/{channel_id}")
 
     # def subscribe(self, channel_id):
     #     if channel_id is not None:
@@ -51,7 +55,7 @@ class Messenger:
 
         response = requests.get(f"{settings['RABBITMQ_MANAGEMENT_SERVER']}/users/{username}")
         if (response.status_code >= 200) and (response.status_code <= 299):
-            print('User is already registered')
+            logging.warning('User is already registered')
         else:
             try:
                 response = requests.put(f"{settings['RABBITMQ_MANAGEMENT_SERVER']}/users/{username}",
@@ -61,7 +65,8 @@ class Messenger:
                                     )
                 # print(response.text)
             except Exception as e:
-                print(e)
+                # print(e)
+                logging.exception(str(e))
                 raise(e)
 
         # reset the user and set appropriate permissions as needed

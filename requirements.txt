@@ -34,9 +34,11 @@ dash-table==4.11.3
 decorator==4.4.2
 defusedxml==0.7.1
 distlib==0.3.1
+dnspython==2.1.0
 entrypoints==0.3
 enum34==1.1.10
 Eve==1.1.5
+eventlet==0.32.0
 Events==0.3
 falcon==2.0.0
 falcon-jsonify==1.2
@@ -44,6 +46,7 @@ filelock==3.0.12
 Fiona==1.8.17
 Flask==1.1.2
 Flask-Compress==1.9.0
+flower==1.0.0
 future==0.18.2
 geographiclib==1.50
 geojson==2.5.0
@@ -52,6 +55,7 @@ geopy==2.0.0
 greenlet==1.0.0
 gunicorn==20.1.0
 haversine==2.3.0
+humanize==3.11.0
 idna==2.10
 iniconfig==1.1.1
 ipykernel==5.5.3
@@ -123,6 +127,7 @@ pycparser==2.20
 Pygments==2.8.1
 PyJWT==2.0.1
 pymongo==3.11.3
+Pyomo==6.0.1
 pyparsing==2.4.7
 pyproj==2.6.1.post1
 pyrsistent==0.17.3
@@ -158,5 +163,6 @@ vine==5.0.0
 virtualenv==20.0.31
 wcwidth==0.2.5
 webencodings==0.5.1
+websockets==10.0
 Werkzeug==1.0.1
 widgetsnbextension==3.5.1

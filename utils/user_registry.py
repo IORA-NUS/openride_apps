@@ -1,9 +1,9 @@
 import requests, json
 from http import HTTPStatus
 
-from config import settings
-from utils import id_generator, is_success
-from lib import WorkflowStateMachine
+from apps.config import settings
+from .utils import id_generator, is_success
+from apps.lib import WorkflowStateMachine
 
 # from abc import ABC, abstractmethod
 

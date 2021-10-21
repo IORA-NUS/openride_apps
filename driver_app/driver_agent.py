@@ -1,11 +1,14 @@
+
 from shapely.geometry.linestring import LineString
-from lib.agent_workflow_sm import WorkflowStateMachine
+from apps.lib.agent_workflow_sm import WorkflowStateMachine
 import os, sys
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
 # print(sys.path)
+
+import logging
 
 import json, time, asyncio
 import pika
@@ -19,13 +22,13 @@ from mesa import Agent
 
 from shapely.geometry import Point, mapping
 
-from config import settings
-from driver_app import DriverApp
-from utils.utils import id_generator, cut
-from lib import RidehailDriverTripStateMachine
-from loc_service import OSRMClient
+from apps.config import settings
+from apps.driver_app import DriverApp
+from apps.utils.utils import id_generator, cut
+from apps.lib import RidehailDriverTripStateMachine
+from apps.loc_service import OSRMClient
 
-from loc_service import TaxiStop, BusStop
+from apps.loc_service import TaxiStop, BusStop
 
 # Driver agent will be called to apply behavior at every step
 # At each step, the Agent will process list of collected messages in the app.
@@ -236,8 +239,9 @@ class DriverAgent(Agent):
                     self.current_loc = mapping(self.current_route_coords)
                 # print(moved_distance, self.current_loc) #, self.current_route_coords)
             except Exception as e:
-                print(moved_distance)
-                print(e)
+                logging.info(moved_distance)
+                # print(e)
+                logging.exception(str(e))
 
         # print(self.current_route_coords)
         # print(list(self.current_route_coords.coords))
@@ -265,7 +269,8 @@ class DriverAgent(Agent):
                                                         current_loc=self.current_loc,
                                                         requested_trip=requested_trip)
                 except Exception as e:
-                    print(e)
+                    logging.exception(str(e))
+                    # print(e)
                     raise e
             elif payload['action'] == 'passenger_workflow_event':
                 if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
@@ -294,9 +299,9 @@ class DriverAgent(Agent):
                             self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
 
                     else:
-                        print(f"WARNING: Mismatch {self.app.get_trip()['passenger']=} and {payload['passenger_id']=}")
+                        logging.warning(f"Mismatch {self.app.get_trip()['passenger']=} and {payload['passenger_id']=}")
                 else:
-                    print(f"WARNING: Driver will not listen to Passenger workflow events when {self.app.get_trip()['state']=}")
+                    logging.warning(f"Driver will not listen to Passenger workflow events when {self.app.get_trip()['state']=}")
 
 
             payload = self.app.dequeue_message()

@@ -4,7 +4,7 @@ from random import sample
 from shapely.geometry import Point, mapping
 import polyline
 
-from config import settings
+from apps.config import settings
 
 # from one_map_auth import OneMapAuth
 

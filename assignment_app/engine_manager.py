@@ -1,9 +1,10 @@
 import requests, json
 from http import HTTPStatus
 
-from config import settings
-from utils import id_generator, is_success
-from lib import WorkflowStateMachine
+import logging
+from apps.config import settings
+from apps.utils import id_generator, is_success
+from apps.lib import WorkflowStateMachine
 
 
 class EngineManager():
@@ -16,7 +17,8 @@ class EngineManager():
         try:
             self.engine = self.init_engine(sim_clock)
         except Exception as e:
-            print(e)
+            logging.exception(str(e))
+            # print(e)
 
     def as_dict(self):
         return self.engine

@@ -3,6 +3,8 @@ current_path = os.path.abspath('.')
 # parent_path = os.path.dirname(current_path)
 sys.path.append(current_path)
 
+import logging
+
 from mesa import Model
 from mesa.time import RandomActivation, BaseScheduler
 from utils.async_base_scheduler import ParallelBaseScheduler
@@ -28,7 +30,7 @@ class SequentialOpenRideSimRandomised(Model):
     def __init__(self, num_drivers, num_passengers):
         self.run_id = id_generator(12)
         self.start_time = datetime(2020,1,1,8,0,0)
-        print(f"{self.run_id = }, {self.start_time = }")
+        logging.info(f"{self.run_id = }, {self.start_time = }")
         self.current_time = self.start_time
 
         self.num_agents = num_drivers + num_passengers
@@ -63,7 +65,7 @@ class SequentialOpenRideSimRandomised(Model):
 
     def step(self):
         self.current_time = self.current_time + relativedelta(seconds=settings['SIM_STEP_SIZE'])
-        print(self.current_time)
+        logging.info(self.current_time)
 
         for agent in self.driver_agents:
             if agent.entering_market():
@@ -83,7 +85,8 @@ class SequentialOpenRideSimRandomised(Model):
                 try:
                     self.driver_schedule.remove(agent)
                 except Exception as e:
-                    print(traceback.format_exc())
+                    logging.exception(str(e))
+                    # print(traceback.format_exc())
 
 
         for agent in self.passenger_agents:
@@ -91,10 +94,11 @@ class SequentialOpenRideSimRandomised(Model):
                 try:
                     self.passenger_schedule.remove(agent)
                 except Exception as e:
-                    print(traceback.format_exc())
+                    logging.exception(str(e))
+                    # print(traceback.format_exc())
 
-        print(f"{self.driver_schedule.get_agent_count() = }")
-        print(f"{self.passenger_schedule.get_agent_count() = }")
+        logging.info(f"{self.driver_schedule.get_agent_count() = }")
+        logging.info(f"{self.passenger_schedule.get_agent_count() = }")
 
 
     def get_current_time(self):

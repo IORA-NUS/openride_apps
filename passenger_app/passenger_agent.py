@@ -4,7 +4,7 @@ parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
 # print(sys.path)
-
+import logging
 import json, time, asyncio
 import pika
 import traceback
@@ -18,13 +18,13 @@ from mesa import Agent
 
 from shapely.geometry import Point, mapping
 
-from config import settings
-from passenger_app import PassengerApp
-from utils.utils import id_generator, cut
-from lib import RidehailPassengerTripStateMachine, WorkflowStateMachine
-from loc_service import OSRMClient
+from apps.config import settings
+from apps.passenger_app import PassengerApp
+from apps.utils.utils import id_generator, cut
+from apps.lib import RidehailPassengerTripStateMachine, WorkflowStateMachine
+from apps.loc_service import OSRMClient
 
-from loc_service import TaxiStop, BusStop
+from apps.loc_service import TaxiStop, BusStop
 
 # Passenger agent will be called to apply behavior at every step
 # At each step, the Agent will process list of collected messages in the app.
@@ -185,8 +185,9 @@ class PassengerAgent(Agent):
         try:
             self.refresh()
         except Exception as e:
-            print(self.behavior)
-            print(self.app.get_trip())
+            # print(self.behavior)
+            # print(self.app.get_trip())
+            logging.exception(str(e))
             raise e
 
         if self.model.passenger_schedule.time == settings['SIM_DURATION']-1:
@@ -229,11 +230,12 @@ class PassengerAgent(Agent):
                                                     current_loc=self.current_loc,
                                                     driver=payload['driver_id'])
                     except Exception as e:
-                        print(e)
+                        # print(e)
+                        logging.exception(str(e))
                         raise e
                 else:
                     # print(self.app.get_trip())
-                    print(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
+                    logging.warning(f"Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
                     # raise Exception('passenger must be in Requested State to assign new driver.')
 
             elif payload['action'] == 'driver_workflow_event':
@@ -268,9 +270,9 @@ class PassengerAgent(Agent):
                                 self.app.ping(self.get_current_time_str(), current_loc=self.current_loc)
 
                     else:
-                        print(f"WARNING: Mismatch {self.app.get_trip()['driver']=} and {payload['driver_id']=}")
+                        logging.warning(f"WARNING: Mismatch {self.app.get_trip()['driver']=} and {payload['driver_id']=}")
                 else:
-                    print(f"WARNING: Passenger will not listen to Driver workflow events when {self.app.get_trip()['state']=}")
+                    logging.warning(f"WARNING: Passenger will not listen to Driver workflow events when {self.app.get_trip()['state']=}")
 
 
 
@@ -286,14 +288,15 @@ class PassengerAgent(Agent):
                                 datetime.strptime(self.app.get_trip()['_updated'], "%a, %d %b %Y %H:%M:%S GMT")
                                 ).total_seconds()
         except Exception as e:
-            print(self.behavior)
+            logging.info(self.behavior)
+            logging.exception(str(e))
             raise e
 
         if passenger['state'] != WorkflowStateMachine.online.identifier:
             raise Exception(f"{passenger['state'] = } is not valid")
         elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier) and \
                 (self.behavior['trip_request_time'] + (self.behavior['settings']['patience']/settings['SIM_STEP_SIZE']) < self.model.passenger_schedule.time):
-            print(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, patience: {self.behavior['settings']['patience']/settings['SIM_STEP_SIZE']}")
+            logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, patience: {self.behavior['settings']['patience']/settings['SIM_STEP_SIZE']}")
             self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
 
         else:

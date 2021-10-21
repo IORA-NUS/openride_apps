@@ -1,9 +1,9 @@
-import requests, json
+import requests, json, logging
 from http import HTTPStatus
 
-from config import settings
-from utils import id_generator, is_success
-from lib import WorkflowStateMachine
+from apps.config import settings
+from apps.utils import id_generator, is_success
+from apps.lib import WorkflowStateMachine
 
 
 class DriverManager():
@@ -16,7 +16,8 @@ class DriverManager():
         try:
             self.driver = self.init_driver(sim_clock)
         except Exception as e:
-            print(e)
+            logging.exception(str(e))
+            # print(e)
 
         self.vehicle = self.init_vehicle(sim_clock)
 

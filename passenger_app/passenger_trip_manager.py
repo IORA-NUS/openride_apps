@@ -1,10 +1,10 @@
-import requests, json
+import requests, json, logging
 
-from config import settings
-from utils import id_generator, is_success
-from loc_service import OSRMClient
+from apps.config import settings
+from apps.utils import id_generator, is_success
+from apps.loc_service import OSRMClient
 
-from lib import RidehailPassengerTripStateMachine
+from apps.lib import RidehailPassengerTripStateMachine
 
 class PassengerTripManager:
     ''' '''
@@ -101,8 +101,8 @@ class PassengerTripManager:
             self.refresh()
         else:
             # print (response.text)
-            print(f"{self.trip =}")
-            print(f"{data =}")
+            logging.error(f"{self.trip =}")
+            logging.error(f"{data =}")
             raise Exception(response.text)
 
     def assign(self, sim_clock, current_loc, driver):
@@ -160,7 +160,8 @@ class PassengerTripManager:
 
         self.refresh()
 
-        self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                     json.dumps({
                                         'action': 'passenger_workflow_event',
                                         'passenger_id': self.trip['passenger'],
@@ -189,7 +190,8 @@ class PassengerTripManager:
 
         self.refresh()
 
-        self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                     json.dumps({
                                         'action': 'passenger_workflow_event',
                                         'passenger_id': self.trip['passenger'],
@@ -220,7 +222,8 @@ class PassengerTripManager:
         # print(self.trip)
 
         if self.trip.get('driver') is not None:
-            self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+            # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                     json.dumps({
                                         'action': 'passenger_workflow_event',
                                         'passenger_id': self.trip['passenger'],
@@ -287,7 +290,8 @@ class PassengerTripManager:
         self.refresh()
 
         # Message driver
-        self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                 json.dumps({
                                     'action': 'passenger_workflow_event',
                                     'passenger_id': self.trip['passenger'],
@@ -354,7 +358,8 @@ class PassengerTripManager:
         self.refresh()
 
         # Message driver
-        self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
+        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                 json.dumps({
                                     'action': 'passenger_workflow_event',
                                     'passenger_id': self.trip['passenger'],

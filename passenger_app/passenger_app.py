@@ -4,17 +4,18 @@ from http import HTTPStatus
 import shapely
 from shapely.geometry.geo import mapping
 
-from config import settings
-from utils.utils import is_success
+import logging
+from apps.config import settings
+from apps.utils.utils import is_success
 
-from utils.user_registry import UserRegistry
+from apps.utils.user_registry import UserRegistry
 from .passenger_manager import PassengerManager
 from .passenger_trip_manager import PassengerTripManager
-from loc_service import OSRMClient
+from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
 
 
-from messenger_service import Messenger
+from apps.messenger_service import Messenger
 
 
 
@@ -55,13 +56,14 @@ class PassengerApp:
 
     def logout(self, sim_clock, current_loc):
         ''' '''
-        print(f'logging out Passenger {self.passenger.get_id()}')
+        logging.info(f'logging out Passenger {self.passenger.get_id()}')
         try:
             self.trip.end_trip(sim_clock, current_loc, force_quit=True, shutdown=True)
             self.passenger.logout(sim_clock)
             self.exited_market = True
         except Exception as e:
-            print(e)
+            # print(e)
+            logging.exception(str(e))
             # raise e
 
     # def end_trip(self, sim_clock, current_loc, force_quit=False, shutdown=False):

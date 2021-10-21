@@ -3,6 +3,7 @@ current_path = os.path.abspath('.')
 # parent_path = os.path.dirname(current_path)
 sys.path.append(current_path)
 
+import logging
 from mesa import Model
 from mesa.time import RandomActivation, BaseScheduler
 from utils.async_base_scheduler import ParallelBaseScheduler
@@ -31,7 +32,8 @@ class SequentialOpenRideSimFromCSV(Model):
     def __init__(self, scenario_name):
         self.run_id = id_generator(12)
         self.start_time = datetime(2020,1,1,0,0,0)
-        print(f"{self.run_id = }, {self.start_time = }")
+        # print(f"{self.run_id = }, {self.start_time = }")
+        logging.info(f"{self.run_id = }, {self.start_time = }")
         self.current_time = self.start_time
 
         # self.num_agents = num_drivers + num_passengers
@@ -102,7 +104,7 @@ class SequentialOpenRideSimFromCSV(Model):
         driver_df['End_Time'] = driver_df['End_Time'].apply(lambda dt: dt.replace(day=1, month=1, year=2020))
 
         driver_df = driver_df[(driver_df['Start_Time'] >= datetime(2020, 1, 1, 0, 0, 0)) & (driver_df['Start_Time'] <= datetime(2020, 1, 1, 0, 1, 0))]
-        print(driver_df)
+        logging.info(driver_df)
 
         # create drivers
         for _, row in driver_df.iterrows():
@@ -163,7 +165,7 @@ class SequentialOpenRideSimFromCSV(Model):
 
                 'TrTime_dropoff': 0,
             }
-            print(behavior['shift_start_time'])
+            logging.info(behavior['shift_start_time'])
 
             agent = DriverAgent(row['Driver_ID'], self, behavior)
             # self.schedule.add(agent)
@@ -173,7 +175,7 @@ class SequentialOpenRideSimFromCSV(Model):
         passenger_df['Start_Time'] = passenger_df['Start_Time'].apply(lambda dt: dt.replace(day=1, month=1, year=2020))
 
         passenger_df = passenger_df[(passenger_df['Start_Time'] >= datetime(2020, 1, 1, 0, 0, 0)) & (passenger_df['Start_Time'] <= datetime(2020, 1, 1, 0, 30, 0))]
-        print(passenger_df)
+        logging.info(passenger_df)
 
         # Create Pasenger Trips
         for _, row in passenger_df.iterrows():
@@ -226,7 +228,7 @@ class SequentialOpenRideSimFromCSV(Model):
                 },
             }
 
-            print(behavior['trip_request_time'])
+            logging.info(behavior['trip_request_time'])
             agent = PassengerAgent(row['Booking_ID'], self)
             # self.schedule.add(agent)
             self.passenger_agents.append(agent)
@@ -242,7 +244,7 @@ class SequentialOpenRideSimFromCSV(Model):
 
     def step(self):
         self.current_time = self.current_time + relativedelta(seconds=settings['SIM_STEP_SIZE'])
-        print(self.current_time)
+        logging.info(self.current_time)
 
         for agent in self.driver_agents:
             if agent.entering_market():
@@ -265,7 +267,8 @@ class SequentialOpenRideSimFromCSV(Model):
                 try:
                     self.driver_schedule.remove(agent)
                 except Exception as e:
-                    print(traceback.format_exc())
+                    logging.exception(str(e))
+                    # print(traceback.format_exc())
 
 
         for agent in self.passenger_agents:
@@ -273,10 +276,11 @@ class SequentialOpenRideSimFromCSV(Model):
                 try:
                     self.passenger_schedule.remove(agent)
                 except Exception as e:
-                    print(traceback.format_exc())
+                    logging.exception(str(e))
+                    # print(traceback.format_exc())
 
-        print(f"{self.driver_schedule.get_agent_count() = }")
-        print(f"{self.passenger_schedule.get_agent_count() = }")
+        logging.info(f"{self.driver_schedule.get_agent_count() = }")
+        logging.info(f"{self.passenger_schedule.get_agent_count() = }")
 
 
     def get_current_time(self):

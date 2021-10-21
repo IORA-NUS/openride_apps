@@ -3,7 +3,8 @@ current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
-from config import settings
+import logging
+from apps.config import settings
 from mesa import Agent
 from .analytics_app import AnalyticsApp
 
@@ -70,7 +71,7 @@ class AnalyticsAgent(Agent):
             if (((self.model.service_schedule.time + 1) * settings['SIM_STEP_SIZE']) % settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
                 timewindow_end = self.model.get_current_time()
                 timewindow_start = timewindow_end - relativedelta(seconds=settings['PATHS_HISTORY_TIME_WINDOW']+settings['SIM_STEP_SIZE'])
-                print(timewindow_start, timewindow_end)
+                logging.info(timewindow_start, timewindow_end)
 
                 paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
                 # print(publish_dict)
@@ -82,4 +83,5 @@ class AnalyticsAgent(Agent):
 
                     with open(f"{current_dir}/output/{self.model.run_id}/{self.model.service_schedule.time}.paths_history.json", 'w') as publish_file:
                         publish_file.write(json.dumps(paths_history))
+
 

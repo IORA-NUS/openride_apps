@@ -31,7 +31,7 @@ class PlanningArea:
 
         token = response.json()
 
-        print(token)
+        # print(token)
         with open(f"{self.dir_path}/.onemap_token", 'w') as f:
             json.dump(token, f)
 

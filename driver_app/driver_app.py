@@ -1,22 +1,24 @@
+
 import requests, json, polyline
 from random import choice
 from http import HTTPStatus
 from datetime import datetime
 import shapely
 from shapely.geometry.geo import mapping
+import logging
 
-from config import settings
-from utils.utils import is_success
+from apps.config import settings
+from apps.utils.utils import is_success
 
-from utils.user_registry import UserRegistry
+from apps.utils.user_registry import UserRegistry
 from .driver_manager import DriverManager
 from .driver_trip_manager import DriverTripManager
-from loc_service import OSRMClient
+from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
 
-from lib import RidehailDriverTripStateMachine
+from apps.lib import RidehailDriverTripStateMachine
 
-from messenger_service import Messenger
+from apps.messenger_service import Messenger
 
 # Driver app must be a registered listener to Message events
 
@@ -57,13 +59,14 @@ class DriverApp:
 
     def logout(self, sim_clock, current_loc):
         ''' '''
-        print(f'logging out Driver {self.driver.get_id()}')
+        logging.info(f'logging out Driver {self.driver.get_id()}')
         try:
             # self.end_trip(sim_clock, current_loc, force_quit=True, look_for_job=False)
             self.trip.end_trip(sim_clock, current_loc, force_quit=True)
             self.driver.logout(sim_clock)
         except Exception as e:
-            print(e)
+            logging.exception(str(e))
+            # print(e)
             # raise e
 
     def refresh(self):
@@ -77,7 +80,8 @@ class DriverApp:
         self.trip.ping(sim_clock, current_loc, **kwargs)
 
         if self.get_trip()['state'] in [RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier]:
-            self.messenger.client.publish(f'Agent/{self.get_trip()["passenger"]}',
+            # self.messenger.client.publish(f'Agent/{self.get_trip()["passenger"]}',
+            self.messenger.client.publish(f'{self.run_id}/{self.get_trip()["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
                                     'driver_id': self.driver.get_id(),
@@ -105,7 +109,7 @@ class DriverApp:
             # print("create_new_received_trip Success")
         else:
             # raise Exception("Driver is already engaged in an Occupied trip")
-            print('WARNING: Driver is already engaged in an Occupied trip')
+            logging.warning('Driver is already engaged in an Occupied trip')
             pass
 
     # def look_for_job(self, sim_clock, current_loc, route=None):

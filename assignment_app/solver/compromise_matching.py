@@ -2,10 +2,11 @@ from random import choice
 import traceback
 from numpy import mat
 
+import logging
 from .abstract_solver import AbstractSolver
 from pyomo.environ import *
 
-from config import settings
+from apps.config import settings
 
 class CompromiseMatching(AbstractSolver):
     ''' '''
@@ -169,7 +170,8 @@ class CompromiseMatching(AbstractSolver):
 
             except Exception as e:
                 # print(e)
-                print(traceback.format_exc())
+                # print(traceback.format_exc())
+                logging.exception(str(e))
 
                 raise e
 

@@ -9,14 +9,14 @@ import json, requests
 import paho.mqtt.client as paho
 from datetime import datetime
 
-from messenger_service import Messenger
+from apps.messenger_service import Messenger
 # from loc_service import OSRMClient
 
-from utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
-from utils.user_registry import UserRegistry
-from config import settings
+from apps.utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
+from apps.utils.user_registry import UserRegistry
+from apps.config import settings
 
-from lib import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
+from apps.lib import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 
 import websockets, asyncio
 

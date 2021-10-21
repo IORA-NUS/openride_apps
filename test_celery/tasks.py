@@ -8,10 +8,12 @@ import time
 def execute_step(agent):
     try:
         agent.step()
-    except: pass
+    except Exception as e:
+        # raise e
+        pass
 
-    # print ('long time task begins')
+    print ('long time task begins')
     # # sleep 5 seconds
-    # time.sleep(5)
-    # print ('long time task finished')
+    time.sleep(50)
+    print ('long time task finished')
     return True
