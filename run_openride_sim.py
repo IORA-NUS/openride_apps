@@ -14,7 +14,7 @@ if __name__ == "__main__":
         # sim = SequentialOpenRideSimFromCSV("20171201_Dist5")
         # sim = DistributedOpenRideSimRandomised(num_drivers, num_passengers)
         # print(f"{sim.run_id = }")
-        for s in range(settings['SIM_DURATION']):
+        for s in range(settings['SIM_SETTINGS']['SIM_DURATION']):
             sim.step()
 
         logging.info(f"{sim.run_id = }")

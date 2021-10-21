@@ -44,6 +44,8 @@ class SequentialOpenRideSimRandomised(Model):
         self.driver_agents = []
         self.passenger_agents = []
 
+        self.sim_settings = settings['SIM_SETTINGS']
+
         for i in range(num_drivers):
             agent = DriverAgent(f"d_{i:06d}", self)
             # self.schedule.add(agent)
@@ -64,7 +66,7 @@ class SequentialOpenRideSimRandomised(Model):
 
 
     def step(self):
-        self.current_time = self.current_time + relativedelta(seconds=settings['SIM_STEP_SIZE'])
+        self.current_time = self.current_time + relativedelta(seconds=self.sim_settings['SIM_STEP_SIZE'])
         logging.info(self.current_time)
 
         for agent in self.driver_agents:

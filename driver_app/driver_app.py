@@ -123,6 +123,7 @@ class DriverApp:
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), The agent will pull items from queue and process them in sequence until Queue is empty
         '''
+        # logging.info(f"{message.topic=}, {message.payload=}")
         payload = json.loads(message.payload.decode('utf-8'))
         # print(f"Message Recieved: {message.payload.decode('utf-8')}")
         # print(type(payload))

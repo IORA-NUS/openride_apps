@@ -9,8 +9,8 @@ from random import random
 
 class ORSimController(ABC):
 
-    def __init__(self, settings, run_id):
-        self.settings = settings
+    def __init__(self, sim_settings, run_id):
+        self.sim_settings = sim_settings
         self.run_id = run_id
         self.time = 0
 
@@ -39,10 +39,13 @@ class ORSimController(ABC):
             print(e)
 
     def on_receive_message(self, client, userdata, message):
-        payload = json.loads(message.payload.decode('utf-8'))
-        # print(f"Message Recieved: {payload}")
-        if payload.get('action') == 'completed':
-            self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
+        if message.topic == f"{self.run_id}/ORSimController":
+            payload = json.loads(message.payload.decode('utf-8'))
+            # print(f"Message Recieved: {payload}")
+            if payload.get('action') == 'completed':
+                self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
+            elif payload.get('action') == 'error':
+                logging.warning(f'{self.__class__.__name__} received {message.payload = }')
 
 
     async def confirm_responses(self):
@@ -78,6 +81,6 @@ class ORSimController(ABC):
         self.time += 1
 
     def run_simulation(self):
-        while self.time < self.settings['SIM_DURATION']:
+        while self.time < self.sim_settings['SIM_DURATION']:
             self.step()
 

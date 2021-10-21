@@ -75,11 +75,17 @@ class AssignmentApp:
 
         online_params = self.solver.update_online_params(clock_tick, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
         # print('after update_online_params')
+        result = [{
+            'driver': item[0]['_id'],
+            'passenger': item[1]['passenger'],
+            'passenger_trip': item[1]['_id']
+        } for item in assignment]
 
         performance =  {
             "Runtime": end-start,
             "Num Drivers": len(driver_list),
             "Num Passenger Trips": len(passenger_trip_list),
+            "result": result
         }
         self.engine.update_engine(sim_clock, online_params, performance)
         # print('after update_engine')

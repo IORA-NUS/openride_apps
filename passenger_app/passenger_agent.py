@@ -37,10 +37,11 @@ class PassengerAgent(Agent):
     elapsed_duration_steps = None
     current_route_coords = None # shapely.geometry.LineString
     # model = None
-    step_size = settings['SIM_STEP_SIZE'] # NumSeconds per each step.
+    sim_settings = settings['SIM_SETTINGS']
+    step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
     # stop_locations = TaxiStop().stop_locations # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
     # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    stop_locations = BusStop().get_locations_within(settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
 
 
     def __init__(self, unique_id, model, behavior=None):
@@ -98,7 +99,7 @@ class PassengerAgent(Agent):
             # print(self.app.get_trip())
             self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
             return True
-        elif self.model.passenger_schedule.time == settings['SIM_DURATION']-1:
+        elif self.model.passenger_schedule.time == self.sim_settings['SIM_DURATION']-1:
 
             self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
             return True
@@ -109,7 +110,7 @@ class PassengerAgent(Agent):
     @classmethod
     def load_behavior(cls, unique_id, behavior=None):
         ''' '''
-        trip_request_time = randint(0, settings['SIM_DURATION']-1)
+        trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
 
         if behavior is None:
             behavior = {
@@ -190,7 +191,7 @@ class PassengerAgent(Agent):
             logging.exception(str(e))
             raise e
 
-        if self.model.passenger_schedule.time == settings['SIM_DURATION']-1:
+        if self.model.passenger_schedule.time == self.sim_settings['SIM_DURATION']-1:
             self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
         else:
             self.consume_messages()
@@ -295,8 +296,8 @@ class PassengerAgent(Agent):
         if passenger['state'] != WorkflowStateMachine.online.identifier:
             raise Exception(f"{passenger['state'] = } is not valid")
         elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier) and \
-                (self.behavior['trip_request_time'] + (self.behavior['settings']['patience']/settings['SIM_STEP_SIZE']) < self.model.passenger_schedule.time):
-            logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, patience: {self.behavior['settings']['patience']/settings['SIM_STEP_SIZE']}")
+                (self.behavior['trip_request_time'] + (self.behavior['settings']['patience']/self.sim_settings['SIM_STEP_SIZE']) < self.model.passenger_schedule.time):
+            logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, patience: {self.behavior['settings']['patience']/self.sim_settings['SIM_STEP_SIZE']}")
             self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
 
         else:

@@ -17,6 +17,8 @@ class AnalyticsAgent(Agent):
     def __init__(self, unique_id, model, behavior=None):
         super().__init__(unique_id, model)
 
+        self.sim_settings = settings['SIM_SETTINGS']
+
         if behavior is not None:
             self.behavior = behavior
         else:
@@ -50,11 +52,11 @@ class AnalyticsAgent(Agent):
         # print('AnalyticsAgent.step')
 
         # Publish Active trips using websocket Protocol
-        if settings['PUBLISH_REALTIME_DATA']:
+        if self.sim_settings['PUBLISH_REALTIME_DATA']:
             location_stream, route_stream = self.analytics_app.publish_active_trips(self.get_current_time_str())
             # print(publish_dict)
 
-            if settings['WRITE_WS_OUTPUT_TO_FILE']:
+            if self.sim_settings['WRITE_WS_OUTPUT_TO_FILE']:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 if not os.path.exists(f"{current_dir}/output/{self.model.run_id}"):
                     os.makedirs(f"{current_dir}/output/{self.model.run_id}")
@@ -67,16 +69,16 @@ class AnalyticsAgent(Agent):
 
 
         # Gather history in timewindow as paths for visualization
-        if settings['PUBLISH_PATHS_HISTORY']:
-            if (((self.model.service_schedule.time + 1) * settings['SIM_STEP_SIZE']) % settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
+        if self.sim_settings['PUBLISH_PATHS_HISTORY']:
+            if (((self.model.service_schedule.time + 1) * self.sim_settings['SIM_STEP_SIZE']) % self.sim_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
                 timewindow_end = self.model.get_current_time()
-                timewindow_start = timewindow_end - relativedelta(seconds=settings['PATHS_HISTORY_TIME_WINDOW']+settings['SIM_STEP_SIZE'])
+                timewindow_start = timewindow_end - relativedelta(seconds=self.sim_settings['PATHS_HISTORY_TIME_WINDOW']+self.sim_settings['SIM_STEP_SIZE'])
                 logging.info(timewindow_start, timewindow_end)
 
                 paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
                 # print(publish_dict)
 
-                if settings['WRITE_PH_OUTPUT_TO_FILE']:
+                if self.sim_settings['WRITE_PH_OUTPUT_TO_FILE']:
                     current_dir = os.path.dirname(os.path.abspath(__file__))
                     if not os.path.exists(f"{current_dir}/output/{self.model.run_id}"):
                         os.makedirs(f"{current_dir}/output/{self.model.run_id}")

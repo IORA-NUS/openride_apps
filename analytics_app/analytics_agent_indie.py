@@ -37,6 +37,7 @@ class AnalyticsAgentIndie(ORSimAgent):
         #     self.behavior = behavior
         # else:
         #     self.behavior = AnalyticsAgentIndie.load_behavior(unique_id)
+        self.sim_settings = settings['SIM_SETTINGS']
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -48,12 +49,16 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     #     self.agent_messenger = Messenger(run_id, self.credentials, f"sim_agent_{self.unique_id}", self.on_receive_message)
 
-    def process_message(self, client, userdata, message):
-        ''' '''
-        payload = json.loads(message.payload.decode('utf-8'))
-
+    def process_payload(self, payload):
         if payload.get('action') == 'step':
             self.step(payload.get('time_step'))
+
+    # def process_message(self, client, userdata, message):
+    #     ''' '''
+    #     payload = json.loads(message.payload.decode('utf-8'))
+
+    #     if payload.get('action') == 'step':
+    #         self.step(payload.get('time_step'))
 
 
     # def on_receive_message(self, client, userdata, message):
@@ -89,14 +94,14 @@ class AnalyticsAgentIndie(ORSimAgent):
     def step(self, time_step):
         ''' '''
         # print('AnalyticsAgent.step')
-        self.refresh(time_step)
+        # self.refresh(time_step)
 
         # Publish Active trips using websocket Protocol
-        if settings['PUBLISH_REALTIME_DATA']:
+        if self.sim_settings['PUBLISH_REALTIME_DATA']:
             location_stream, route_stream = self.analytics_app.publish_active_trips(self.get_current_time_str())
             # print(publish_dict)
 
-            if settings['WRITE_WS_OUTPUT_TO_FILE']:
+            if self.sim_settings['WRITE_WS_OUTPUT_TO_FILE']:
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 if not os.path.exists(f"{current_dir}/output/{self.run_id}"):
                     os.makedirs(f"{current_dir}/output/{self.run_id}")
@@ -109,16 +114,16 @@ class AnalyticsAgentIndie(ORSimAgent):
 
 
         # Gather history in timewindow as paths for visualization
-        if settings['PUBLISH_PATHS_HISTORY']:
-            if (((self.current_time_step + 1) * settings['SIM_STEP_SIZE']) % settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
+        if self.sim_settings['PUBLISH_PATHS_HISTORY']:
+            if (((self.current_time_step + 1) * self.sim_settings['SIM_STEP_SIZE']) % self.sim_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
                 timewindow_end = self.current_time
-                timewindow_start = timewindow_end - relativedelta(seconds=settings['PATHS_HISTORY_TIME_WINDOW']+settings['SIM_STEP_SIZE'])
+                timewindow_start = timewindow_end - relativedelta(seconds=self.sim_settings['PATHS_HISTORY_TIME_WINDOW']+self.sim_settings['SIM_STEP_SIZE'])
                 logging.info(timewindow_start, timewindow_end)
 
                 paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
                 # print(publish_dict)
 
-                if settings['WRITE_PH_OUTPUT_TO_FILE']:
+                if self.sim_settings['WRITE_PH_OUTPUT_TO_FILE']:
                     current_dir = os.path.dirname(os.path.abspath(__file__))
                     if not os.path.exists(f"{current_dir}/output/{self.run_id}"):
                         os.makedirs(f"{current_dir}/output/{self.run_id}")
@@ -127,12 +132,15 @@ class AnalyticsAgentIndie(ORSimAgent):
                         publish_file.write(json.dumps(paths_history))
 
 
+        if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+            self.shutdown()
 
-    def refresh(self, time_step):
-        self.prev_time_step = self.current_time_step
-        # self.current_time_step = self.model.driver_schedule.time
-        self.current_time_step = time_step
-        self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
 
-        self.current_time = self.reference_time + relativedelta(seconds = time_step * settings['SIM_STEP_SIZE'])
+    # def refresh(self, time_step):
+    #     self.prev_time_step = self.current_time_step
+    #     # self.current_time_step = self.model.driver_schedule.time
+    #     self.current_time_step = time_step
+    #     self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
+
+    #     self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
 

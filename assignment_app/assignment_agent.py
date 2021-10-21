@@ -17,6 +17,8 @@ class AssignmentAgent(Agent):
     def __init__(self, unique_id, model, behavior=None):
         super().__init__(unique_id, model)
 
+        self.sim_settings = settings['SIM_SETTINGS']
+
         if behavior is not None:
             self.behavior = behavior
         else:
@@ -44,13 +46,13 @@ class AssignmentAgent(Agent):
                 'solver': 'CompromiseMatching',
 
                 'solver_params': {
-                    'name': settings['PLANNING_AREA'],
+                    'name': settings['SIM_SETTINGS']['PLANNING_AREA'],
                     # 'area': {
                     #     # NOTE This must be a MultiPolygon describing the specific region where this engine will gather Supply / demand
                     #     'center': {'type': 'Point', 'coordinates': (103.833057754201, 1.41709038337595)},
                     #     'radius': 50000, # meters
                     # },
-                    'area': mapping(PlanningArea().get_planning_area(settings['PLANNING_AREA'])),
+                    'area': mapping(PlanningArea().get_planning_area(settings['SIM_SETTINGS']['PLANNING_AREA'])),
 
                     'offline_params': {
                         'reverseParameter': 480,  # 480;

@@ -60,7 +60,10 @@ class DistributedOpenRideSimRandomised():
         self.assignment_agent_spec = []
         self.analytics_agent_spec = []
 
-        self.sim_controller = ORSimController(settings['SIM_SETTINGS'], self.run_id)
+        self.sim_settings = settings['SIM_SETTINGS']
+
+
+        self.sim_controller = ORSimController(self.sim_settings, self.run_id)
         self.agent_list = []
 
         for i in range(num_drivers):
@@ -142,8 +145,8 @@ if __name__ == '__main__':
 
     logging.basicConfig(filename='app.log', level=settings['LOG_LEVEL'], filemode='w')
 
-    num_drivers =  100 # 2 # 2 #50
-    num_passengers =  300 # 10 # 10 #100
+    num_drivers =  settings['SIM_SETTINGS']['NUM_DRIVERS'] # 2 # 2 #50
+    num_passengers =  settings['SIM_SETTINGS']['NUM_PASSENGERS'] # 10 # 10 #100
     sim = DistributedOpenRideSimRandomised(num_drivers, num_passengers)
 
     # strategy = 'CELERY' # 'MULTIPROCESSING'
@@ -166,7 +169,7 @@ if __name__ == '__main__':
             execute_step.delay('AssignmentAgentIndie', spec)
             time.sleep(0.1)
 
-        time.sleep(30)
+        time.sleep(5)
 
         sim.sim_controller.run_simulation()
 

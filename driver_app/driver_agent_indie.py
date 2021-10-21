@@ -38,18 +38,19 @@ from apps.orsim import ORSimAgent
 
 class DriverAgentIndie(ORSimAgent):
 
-    unique_id = None
-    current_loc = None
-    prev_time_step = None
-    current_time_step = None
-    elapsed_duration_steps = None
+    # unique_id = None
+    # current_loc = None
+    # prev_time_step = None
+    # current_time_step = None
+    # elapsed_duration_steps = None
     active_route = None # shapely.geometry.LineString
     current_route_coords = None # shapely.geometry.LineString
     active = False
 
-    step_size = settings['SIM_STEP_SIZE'] # NumSeconds per each step.
+    sim_settings = settings['SIM_SETTINGS']
+    step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
     # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    stop_locations = BusStop().get_locations_within(settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
 
 
     def __init__(self, unique_id, run_id, reference_time, behavior=None):
@@ -93,22 +94,32 @@ class DriverAgentIndie(ORSimAgent):
         # self.agent_messenger = Messenger(run_id, self.agent_credentials, f"ORSimAgent_{self.unique_id}", self.on_receive_message)
 
 
-    def process_message(self, client, userdata, message):
+    def process_payload(self, payload):
         ''' '''
-        # print('received message:', message.payload.decode('utf-8'))
-        payload = json.loads(message.payload.decode('utf-8'))
-
-        # if payload.get('action') == 'enter_market':
-        #     self.entering_market(payload.get('time_step'))
-        # elif payload.get('action') == 'step':
-        #     self.step(payload.get('time_step'))
-        # elif payload.get('action') == 'exit_market':
-        #     self.exiting_market()
         if payload.get('action') == 'step':
             self.entering_market(payload.get('time_step'))
             if self.is_active():
                 self.step(payload.get('time_step'))
             self.exiting_market()
+        else:
+            logging.error(f"{payload = }")
+
+    # def process_message(self, client, userdata, message):
+    #     ''' '''
+    #     # print('received message:', message.payload.decode('utf-8'))
+    #     payload = json.loads(message.payload.decode('utf-8'))
+
+    #     # if payload.get('action') == 'enter_market':
+    #     #     self.entering_market(payload.get('time_step'))
+    #     # elif payload.get('action') == 'step':
+    #     #     self.step(payload.get('time_step'))
+    #     # elif payload.get('action') == 'exit_market':
+    #     #     self.exiting_market()
+    #     if payload.get('action') == 'step':
+    #         self.entering_market(payload.get('time_step'))
+    #         if self.is_active():
+    #             self.step(payload.get('time_step'))
+    #         self.exiting_market()
 
         # response_payload = {
         #     'agent_id': self.unique_id,
@@ -154,8 +165,8 @@ class DriverAgentIndie(ORSimAgent):
     @classmethod
     def load_behavior(cls, unique_id, behavior=None):
         ''' '''
-        shift_start_time = randint(0, (settings['SIM_DURATION']//4))
-        shift_end_time = randint(settings['SIM_DURATION']//2, settings['SIM_DURATION']-1)
+        shift_start_time = randint(0, (cls.sim_settings['SIM_DURATION']//4))
+        shift_end_time = randint(cls.sim_settings['SIM_DURATION']//2, cls.sim_settings['SIM_DURATION']-1)
 
         if behavior is None:
             behavior = {
@@ -253,7 +264,7 @@ class DriverAgentIndie(ORSimAgent):
             self.active = False
             return True
         # # elif self.model.driver_schedule.time == settings['SIM_DURATION']-1:
-        elif self.current_time_step == settings['SIM_DURATION']-1:
+        elif self.current_time_step == self.sim_settings['SIM_DURATION']-1:
 
             self.app.logout(self.get_current_time_str(), self.current_loc)
             self.active = False
@@ -278,15 +289,17 @@ class DriverAgentIndie(ORSimAgent):
         # print(f"Driver: {self.behavior['email']}")
 
         # 1. Always refresh trip manager to sync InMemory States with DB
-        self.refresh(time_step)
+        # self.refresh(time_step)
+        self.app.refresh()
         # Driver has likely moved between the ticks, so update their current loc
         self.update_location()
 
         # if self.model.driver_schedule.time == settings['SIM_DURATION']-1:
-        if self.current_time_step == settings['SIM_DURATION']-1:
+        if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
             # If this is the last tick of Simulation, logout and Forcibly terminate the current trip
             self.app.logout(self.get_current_time_str(), self.current_loc)
-            return
+            self.shutdown()
+            # return
         else:
             # If Simulation continues, take the actions for each step
             # 1. DeQueue all messages and process them in sequence
@@ -298,17 +311,18 @@ class DriverAgentIndie(ORSimAgent):
         # # print("Sleep driver for 1 second")
         # # time.sleep(1)
 
-    def refresh(self, time_step):
-        self.app.refresh()
+    # def refresh(self, time_step):
+    #     super().refresh(time_step)
+    #     self.app.refresh()
 
-        # print(self.current_time_step, self.model.driver_schedule.time)
+        # # print(self.current_time_step, self.model.driver_schedule.time)
 
-        self.prev_time_step = self.current_time_step
-        # self.current_time_step = self.model.driver_schedule.time
-        self.current_time_step = time_step
-        self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
+        # self.prev_time_step = self.current_time_step
+        # # self.current_time_step = self.model.driver_schedule.time
+        # self.current_time_step = time_step
+        # self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
 
-        self.current_time = self.reference_time + relativedelta(seconds = time_step * settings['SIM_STEP_SIZE'])
+        # self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
 
     def update_location(self):
         ''' - Update self.current_loc based on:
@@ -439,6 +453,8 @@ class DriverAgentIndie(ORSimAgent):
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     # No need to reset route, continue moving on previous route
+
+            # if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_accepted_trip.identifier:
 
             if self.app.get_trip()['state'] in RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
                 ''''''

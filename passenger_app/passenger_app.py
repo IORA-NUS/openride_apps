@@ -255,7 +255,7 @@ class PassengerApp:
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), pull items from queue and process them in sequence until Queue is empty
         '''
-        # print(f"Message Recieved: {message.payload.decode('utf-8')}")
+        logging.info(f"{message.topic=}, {message.payload=}")
         payload = json.loads(message.payload.decode('utf-8'))
 
         self.enqueue_message(payload)

@@ -47,6 +47,8 @@ class SequentialOpenRideSimFromCSV(Model):
         self.driver_agents = []
         self.passenger_agents = []
 
+        self.sim_settings = settings['SIM_SETTINGS']
+
         data_dir = f"{os.path.dirname(os.path.abspath(__file__))}/data/scenario/{scenario_name}"
 
         driver_df =  pd.read_csv(f"{data_dir}/driver_sample.csv", index_col=0,
@@ -117,8 +119,8 @@ class SequentialOpenRideSimFromCSV(Model):
                 'password': 'password',
 
                 # 'start_time': 0,
-                'shift_start_time': (shift_start_time - self.start_time).seconds // settings['SIM_STEP_SIZE'],
-                'shift_end_time': (shift_end_time - self.start_time).seconds // settings['SIM_STEP_SIZE'], # settings['SIM_DURATION'], #shift_start_time + (settings['SIM_DURATION']//2),
+                'shift_start_time': (shift_start_time - self.start_time).seconds // self.sim_settings['SIM_STEP_SIZE'],
+                'shift_end_time': (shift_end_time - self.start_time).seconds // self.sim_settings['SIM_STEP_SIZE'], # settings['SIM_DURATION'], #shift_start_time + (settings['SIM_DURATION']//2),
 
 
                 'init_loc': mapping(Point(row["Start_Longitude"], row["Start_Latitude"])), # shapely.geometry.Point
@@ -185,7 +187,7 @@ class SequentialOpenRideSimFromCSV(Model):
                 'email': f'{row["Booking_ID"]}@test.com',
                 'password': 'password',
 
-                'trip_request_time': (trip_request_time - self.start_time).seconds // settings['SIM_STEP_SIZE'], # in units of Simulation Step Size
+                'trip_request_time': (trip_request_time - self.start_time).seconds // self.sim_settings['SIM_STEP_SIZE'], # in units of Simulation Step Size
 
                 'pickup_loc': mapping(Point(row["Start_Longitude"], row["Start_Latitude"])), # shapely.geometry.Point
                 'dropoff_loc': mapping(Point(row["End_Longitude"], row["End_Latitude"])), # shapely.geometry.Point
@@ -243,7 +245,7 @@ class SequentialOpenRideSimFromCSV(Model):
 
 
     def step(self):
-        self.current_time = self.current_time + relativedelta(seconds=settings['SIM_STEP_SIZE'])
+        self.current_time = self.current_time + relativedelta(seconds=self.sim_settings['SIM_STEP_SIZE'])
         logging.info(self.current_time)
 
         for agent in self.driver_agents:

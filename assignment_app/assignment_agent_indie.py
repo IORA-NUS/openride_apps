@@ -1,5 +1,5 @@
-import os, sys, json
-from time import time
+import os, sys, json, time
+# from time import time
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
@@ -39,6 +39,8 @@ class AssignmentAgentIndie(ORSimAgent):
         # else:
         #     self.behavior = AssignmentAgentIndie.load_behavior(unique_id)
 
+        self.sim_settings = settings['SIM_SETTINGS']
+
         self.credentials = {
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
@@ -48,14 +50,22 @@ class AssignmentAgentIndie(ORSimAgent):
         self.assignment_app = AssignmentApp(self.run_id, self.get_current_time_str(), self.credentials, self.behavior['solver'], self.behavior['solver_params'])
 
 
+
     #     self.agent_messenger = Messenger(run_id, self.credentials, f"sim_agent_{self.unique_id}", self.on_receive_message)
 
-    def process_message(self, client, userdata, message):
-        ''' '''
-        payload = json.loads(message.payload.decode('utf-8'))
-
+    def process_payload(self, payload):
         if payload.get('action') == 'step':
+            time.sleep(1)
             self.step(payload.get('time_step'))
+
+
+    # def process_message(self, client, userdata, message):
+    #     ''' '''
+    #     payload = json.loads(message.payload.decode('utf-8'))
+
+    #     if payload.get('action') == 'step':
+    #         time.sleep(1)
+    #         self.step(payload.get('time_step'))
 
     # def on_receive_message(self, client, userdata, message):
     #     ''' '''
@@ -89,13 +99,13 @@ class AssignmentAgentIndie(ORSimAgent):
                 'solver': 'CompromiseMatching',
 
                 'solver_params': {
-                    'name': settings['PLANNING_AREA'],
+                    'name': settings['SIM_SETTINGS']['PLANNING_AREA'],
                     # 'area': {
                     #     # NOTE This must be a MultiPolygon describing the specific region where this engine will gather Supply / demand
                     #     'center': {'type': 'Point', 'coordinates': (103.833057754201, 1.41709038337595)},
                     #     'radius': 50000, # meters
                     # },
-                    'area': mapping(PlanningArea().get_planning_area(settings['PLANNING_AREA'])),
+                    'area': mapping(PlanningArea().get_planning_area(settings['SIM_SETTINGS']['PLANNING_AREA'])),
 
                     'offline_params': {
                         'reverseParameter': 480,  # 480;
@@ -126,7 +136,7 @@ class AssignmentAgentIndie(ORSimAgent):
     # def step(self):
     def step(self, time_step):
         ''' '''
-        self.refresh(time_step)
+        # self.refresh(time_step)
 
         # print('AssignmentAgent.step')
         result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
@@ -134,12 +144,16 @@ class AssignmentAgentIndie(ORSimAgent):
 
         self.assignment_app.publish(result)
 
+        if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+            self.shutdown()
 
-    def refresh(self, time_step):
-        self.prev_time_step = self.current_time_step
-        # self.current_time_step = self.model.driver_schedule.time
-        self.current_time_step = time_step
-        self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
 
-        self.current_time = self.reference_time + relativedelta(seconds = time_step * settings['SIM_STEP_SIZE'])
+
+    # def refresh(self, time_step):
+    #     self.prev_time_step = self.current_time_step
+    #     # self.current_time_step = self.model.driver_schedule.time
+    #     self.current_time_step = time_step
+    #     self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
+
+    #     self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
 

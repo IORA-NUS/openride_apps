@@ -42,9 +42,10 @@ class DriverAgent(Agent):
     active_route = None # shapely.geometry.LineString
     current_route_coords = None # shapely.geometry.LineString
 
-    step_size = settings['SIM_STEP_SIZE'] # NumSeconds per each step.
+    sim_settings = settings['SIM_SETTINGS']
+    step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
     # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    stop_locations = BusStop().get_locations_within(settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
 
 
     def __init__(self, unique_id, model, behavior=None):
@@ -78,8 +79,8 @@ class DriverAgent(Agent):
     @classmethod
     def load_behavior(cls, unique_id, behavior=None):
         ''' '''
-        shift_start_time = randint(0, (settings['SIM_DURATION']//4))
-        shift_end_time = randint(settings['SIM_DURATION']//2, settings['SIM_DURATION']-1)
+        shift_start_time = randint(0, (cls.sim_settings['SIM_DURATION']//4))
+        shift_end_time = randint(cls.sim_settings['SIM_DURATION']//2, cls.sim_settings['SIM_DURATION']-1)
 
         if behavior is None:
             behavior = {
@@ -163,7 +164,7 @@ class DriverAgent(Agent):
 
             self.app.logout(self.get_current_time_str(), self.current_loc)
             return True
-        elif self.model.driver_schedule.time == settings['SIM_DURATION']-1:
+        elif self.model.driver_schedule.time == self.sim_settings['SIM_DURATION']-1:
 
             self.app.logout(self.get_current_time_str(), self.current_loc)
             return True
@@ -185,7 +186,7 @@ class DriverAgent(Agent):
         # Driver has likely moved between the ticks, so update their current loc
         self.update_location()
 
-        if self.model.driver_schedule.time == settings['SIM_DURATION']-1:
+        if self.model.driver_schedule.time == self.sim_settings['SIM_DURATION']-1:
             # If this is the last tick of Simulation, logout and Forcibly terminate the current trip
             self.app.logout(self.get_current_time_str(), self.current_loc)
             return
