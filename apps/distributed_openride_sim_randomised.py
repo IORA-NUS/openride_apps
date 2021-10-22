@@ -152,22 +152,38 @@ if __name__ == '__main__':
     # strategy = 'CELERY' # 'MULTIPROCESSING'
     # # sim.run()
     if settings['EXECUTION_STRATEGY'] == 'CELERY':
-        from apps.tasks import execute_step
+
+        from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
         for spec in sim.driver_agent_spec:
-            execute_step.delay('DriverAgentIndie', spec)
+            start_driver.delay(spec)
             time.sleep(0.1)
-
         for spec in sim.passenger_agent_spec:
-            execute_step.delay('PassengerAgentIndie', spec)
+            start_passenger.delay(spec)
             time.sleep(0.1)
-
         for spec in sim.analytics_agent_spec:
-            execute_step.delay('AnalyticsAgentIndie', spec)
+            start_analytics.delay(spec)
+            time.sleep(0.1)
+        for spec in sim.assignment_agent_spec:
+            start_assignment.delay(spec)
             time.sleep(0.1)
 
-        for spec in sim.assignment_agent_spec:
-            execute_step.delay('AssignmentAgentIndie', spec)
-            time.sleep(0.1)
+
+        # from apps.tasks_tmp import execute_step
+        # # for spec in sim.driver_agent_spec:
+        # #     execute_step.delay('DriverAgentIndie', spec)
+        # #     time.sleep(0.1)
+
+        # for spec in sim.passenger_agent_spec:
+        #     execute_step.delay('PassengerAgentIndie', spec)
+        #     time.sleep(0.1)
+
+        # for spec in sim.analytics_agent_spec:
+        #     execute_step.delay('AnalyticsAgentIndie', spec)
+        #     time.sleep(0.1)
+
+        # for spec in sim.assignment_agent_spec:
+        #     execute_step.delay('AssignmentAgentIndie', spec)
+        #     time.sleep(0.1)
 
         time.sleep(5)
 

@@ -1,7 +1,7 @@
 from mesa.time import BaseScheduler
 import asyncio
 from random import random
-from test_celery.tasks import execute_step
+from test_celery.tasks_tmp import execute_step
 
 class ParallelBaseScheduler(BaseScheduler):
 

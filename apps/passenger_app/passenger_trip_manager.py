@@ -395,7 +395,10 @@ class PassengerTripManager:
     def refresh(self):
         # if self.trip is not None:
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/trip/{self.trip['_id']}"
-        response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
-        self.trip = response.json()
+        try:
+            response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
+            self.trip = response.json()
+        except Exception as e:
+            logging.exception(str(e))
 
 

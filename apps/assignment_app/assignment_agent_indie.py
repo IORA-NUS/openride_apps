@@ -139,10 +139,11 @@ class AssignmentAgentIndie(ORSimAgent):
         # self.refresh(time_step)
 
         # print('AssignmentAgent.step')
-        result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
+        if self.current_time_step % self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] == 0:
+            result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
         # print('After assign')
 
-        self.assignment_app.publish(result)
+            self.assignment_app.publish(result)
 
         if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
             self.shutdown()

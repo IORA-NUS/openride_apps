@@ -41,7 +41,7 @@ class Messenger:
         if channel_id is not None:
             self.client.loop_start()
             self.client.subscribe(f"{self.run_id}/{channel_id}")
-            print(f"Channel: {self.run_id}/{channel_id}")
+            logging.info(f"Channel: {self.run_id}/{channel_id}")
 
     # def subscribe(self, channel_id):
     #     if channel_id is not None:
