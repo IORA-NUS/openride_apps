@@ -35,7 +35,7 @@ class PassengerApp:
         self.user = UserRegistry(sim_clock, credentials)
 
         self.passenger = PassengerManager(run_id, sim_clock, self.user, passenger_settings)
-        self.messenger = Messenger(run_id, credentials, self.passenger.get_id(), self.on_receive_message)
+        self.messenger = Messenger(credentials, f"{self.run_id}/{self.passenger.get_id()}", self.on_receive_message)
         self.message_queue = []
         self.trip = PassengerTripManager(run_id, sim_clock, self.user, self.messenger)
 

@@ -9,12 +9,13 @@ from apps.assignment_app import AssignmentAgentIndie
 
 
 @app.task
-def start_assignment(spec):
-    unique_id = spec[0]
-    run_id = spec[1]
-    reference_date = spec[2]
+def start_assignment(**kwargs):
+    # unique_id = spec[0]
+    # run_id = spec[1]
+    # reference_date = spec[2]
 
-    agent = AssignmentAgentIndie(unique_id, run_id, reference_date, None)
+    # agent = AssignmentAgentIndie(unique_id, run_id, reference_date, None)
+    agent = AssignmentAgentIndie(**kwargs)
 
     agent.start_listening()
     # try:

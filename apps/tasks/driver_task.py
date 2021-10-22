@@ -9,12 +9,13 @@ from apps.driver_app import DriverAgentIndie
 
 
 @app.task
-def start_driver(spec):
-    unique_id = spec[0]
-    run_id = spec[1]
-    reference_date = spec[2]
+def start_driver(**kwargs):
+    # unique_id = spec[0]
+    # run_id = spec[1]
+    # reference_date = spec[2]
 
-    agent = DriverAgentIndie(unique_id, run_id, reference_date, None)
+    # agent = DriverAgentIndie(unique_id, run_id, reference_date, None)
+    agent = DriverAgentIndie(**kwargs)
 
     agent.start_listening()
     # try:

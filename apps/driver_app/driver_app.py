@@ -32,7 +32,7 @@ class DriverApp:
 
         self.driver = DriverManager(run_id, sim_clock, self.user, driver_settings)
 
-        self.messenger = Messenger(run_id, credentials, self.driver.get_id(), self.on_receive_message)
+        self.messenger = Messenger(credentials, f"{self.run_id}/{self.driver.get_id()}", self.on_receive_message)
 
         self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
 

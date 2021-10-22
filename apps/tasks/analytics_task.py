@@ -9,12 +9,13 @@ from apps.analytics_app import AnalyticsAgentIndie
 
 
 @app.task
-def start_analytics(spec):
-    unique_id = spec[0]
-    run_id = spec[1]
-    reference_date = spec[2]
+def start_analytics(**kwargs):
+    # unique_id = spec[0]
+    # run_id = spec[1]
+    # reference_date = spec[2]
 
-    agent = AnalyticsAgentIndie(unique_id, run_id, reference_date, None)
+    # agent = AnalyticsAgentIndie(unique_id, run_id, reference_date, None)
+    agent = AnalyticsAgentIndie(**kwargs)
 
     agent.start_listening()
     # try:

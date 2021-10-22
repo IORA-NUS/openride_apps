@@ -18,10 +18,10 @@ from apps.orsim import ORSimAgent
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, behavior=None):
+    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
         # # NOTE, model should include run_id and start_time
         # super().__init__(unique_id, model)
-        super().__init__(unique_id, run_id, reference_time, behavior)
+        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
 
         # self.unique_id = unique_id
         # self.run_id = run_id
@@ -78,17 +78,17 @@ class AnalyticsAgentIndie(ORSimAgent):
     # # def get_current_time_str(self):
     # #     return self.model.get_current_time_str()
 
-    @classmethod
-    def load_behavior(cls, unique_id, behavior=None):
-        ''' '''
-        if behavior is None:
-            behavior = {
-                'email': f'{unique_id}@test.com',
-                'password': 'password',
+    # @classmethod
+    # def load_behavior(cls, unique_id, behavior=None):
+    #     ''' '''
+    #     if behavior is None:
+    #         behavior = {
+    #             'email': f'{unique_id}@test.com',
+    #             'password': 'password',
 
-            }
+    #         }
 
-        return behavior
+    #     return behavior
 
 
     def step(self, time_step):

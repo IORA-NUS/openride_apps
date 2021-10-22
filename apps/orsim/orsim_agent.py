@@ -8,9 +8,12 @@ from apps.config import settings
 
 class ORSimAgent(ABC):
 
-    def __init__(self, unique_id, run_id, reference_time, behavior=None):
+    sim_settings = settings['SIM_SETTINGS']
+
+    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
         self.unique_id = unique_id
         self.run_id = run_id
+        self.scheduler_id = scheduler_id
         self.reference_time = datetime.strptime(reference_time, '%Y%m%d%H%M%S') # datetime
         self.current_time = self.reference_time
 
@@ -21,18 +24,20 @@ class ORSimAgent(ABC):
 
         self._shutdown = False
 
-        if behavior is not None:
-            self.behavior = behavior
-        else:
-            self.behavior = self.__class__.load_behavior(unique_id)
+        self.behavior = behavior
+
+        # if behavior is not None:
+        #     self.behavior = behavior
+        # else:
+        #     self.behavior = self.__class__.load_behavior(unique_id)
 
         self.agent_credentials = {
-            'email': f"{self.run_id}_{unique_id}",
+            'email': f"{self.run_id}_{self.scheduler_id}_{unique_id}",
             'password': "secret_password",
         }
 
         # self.agent_messenger = Messenger(run_id, self.agent_credentials, f"ORSimAgent_{self.unique_id}", self.on_receive_message)
-        self.agent_messenger = Messenger(run_id, self.agent_credentials, f"ORSimAgent", self.on_receive_message)
+        self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimAgent", self.on_receive_message)
 
     def on_receive_message(self, client, userdata, message):
         ''' '''
@@ -47,21 +52,25 @@ class ORSimAgent(ABC):
         # #     self.exiting_market()
         try:
             # logging.info(f"{message.topic = }")
-            if message.topic == f"{self.run_id}/ORSimAgent":
+            if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimAgent":
                 payload = json.loads(message.payload.decode('utf-8'))
 
-                # if payload.get('action') == 'step':
-                #     self.current_time_step = payload['time_step']
+                if payload.get('action') == 'init':
+                    ''' '''
+                    print(f"{self.unique_id} received {payload=}")
+                    response_payload = {
+                        'agent_id': self.unique_id,
+                        'action': 'completed',
+                    }
+                elif payload.get('action') == 'step':
+                    self.refresh(payload['time_step'])
+                    self.process_payload(payload)
 
-                # self.process_message(client, userdata, message)
-                self.refresh(payload['time_step'])
-                self.process_payload(payload)
-
-                response_payload = {
-                    'agent_id': self.unique_id,
-                    'time_step': self.current_time_step,
-                    'action': 'completed',
-                }
+                    response_payload = {
+                        'agent_id': self.unique_id,
+                        'time_step': self.current_time_step,
+                        'action': 'completed',
+                    }
             else:
                 logging.warning(f'Unprocessed Message: {message.topic = }')
                 response_payload = {
@@ -77,27 +86,12 @@ class ORSimAgent(ABC):
             }
             logging.exception(str(e))
 
-        self.agent_messenger.client.publish(f'{self.run_id}/ORSimController', json.dumps(response_payload))
+        self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
 
-    @classmethod
-    def run(cls, specs):
-        unique_id = specs[0]
-        run_id = specs[1]
-        reference_date = specs[2]
-
-        agent = cls(unique_id, run_id, reference_date)
-        # for i in range(1, 10):
-        #     agent.step(i)
-
-        agent.start_listening()
-
-    @abstractclassmethod
-    def load_behavior(cls, unique_id):
-        pass
-
-    # @abstractmethod
-    # def process_message(self, client, userdata, message):
+    # @abstractclassmethod
+    # def load_behavior(cls, unique_id):
     #     pass
+
     @abstractmethod
     def process_payload(self, payload):
         pass
@@ -138,3 +132,12 @@ class ORSimAgent(ABC):
     def shutdown(self):
         logging.info(f'Shutting down {self.unique_id = }')
         self._shutdown = True
+
+    def get_transition_probability(self, condition, default):
+        try:
+            for rule in self.behavior.get('transition_prob'):
+                if rule[0] == condition:
+                    return rule[1]
+        except: pass
+
+        return default

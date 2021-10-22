@@ -13,19 +13,19 @@ settings = {
 
     'WEB_MQTT_PORT': 15675,
 
-    'EXECUTION_STRATEGY': 'CELERY', # 'MULTIPROCESSING', 'CELERY'
+    'EXECUTION_STRATEGY': 'CELERY', #  'CELERY'
     'CONCURRENCY_STRATEGY': 'EVENTLET', # 'ASYNCIO', 'EVENTLET'
 
     # logging
     'LOG_LEVEL': logging.INFO,
 
     'SIM_SETTINGS': {
-        'SIM_DURATION': 60, # 960, # 600,    # 60 # Num Steps
-        'SIM_STEP_SIZE': 60, # 15, # 6,     # 60   # seconds
-        'NUMSTEPS_BETWEEN_SOLVER': 2,
+        'SIM_DURATION': 480, # 960, # 600,    # 60 # Num Steps
+        'SIM_STEP_SIZE': 15, # 15, # 6,     # 60   # seconds
+        'NUMSTEPS_BETWEEN_SOLVER': 1, #2,
 
-        'NUM_DRIVERS': 2,       # 100,
-        'NUM_PASSENGERS': 10,   # 300,
+        'NUM_DRIVERS': 50,       # 100,
+        'NUM_PASSENGERS': 200,   # 300,
 
         'PLANNING_AREA': 'CLEMENTI',
 

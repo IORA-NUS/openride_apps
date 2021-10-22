@@ -39,7 +39,7 @@ class AssignmentApp:
         # Messenger.register_user(self.credentials['email'], self.credentials['password'])
         # self.client.connect(settings['MQTT_BROKER'])
 
-        self.messenger = Messenger(run_id, credentials)
+        self.messenger = Messenger(credentials)
 
 
     def assign(self, sim_clock, clock_tick):

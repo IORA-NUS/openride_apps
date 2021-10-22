@@ -19,6 +19,7 @@ Note: to shutdown celery task server run
 `python distributed_openride_sim_randomised.py`
 
 
+# Deprecated
 ## Running with multiprocessing:
 - set 'EXECUTION_STRATEGY': 'MULTIPROCESSING'
 - set 'CONCURRENCY_STRATEGY': 'ASYNCIO'

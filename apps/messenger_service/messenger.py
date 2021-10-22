@@ -11,9 +11,9 @@ import paho.mqtt.client as paho
 
 class Messenger:
 
-    def __init__(self, run_id, credentials, channel_id=None, on_message=None, transport=None):
+    def __init__(self, credentials, channel_id=None, on_message=None, transport=None):
         ''' '''
-        self.run_id = run_id
+        # self.run_id = run_id
         self.credentials = credentials
 
         # print('registering messenger')
@@ -40,8 +40,8 @@ class Messenger:
 
         if channel_id is not None:
             self.client.loop_start()
-            self.client.subscribe(f"{self.run_id}/{channel_id}")
-            logging.info(f"Channel: {self.run_id}/{channel_id}")
+            self.client.subscribe(f"{channel_id}")
+            logging.info(f"Channel: {channel_id}")
 
     # def subscribe(self, channel_id):
     #     if channel_id is not None:

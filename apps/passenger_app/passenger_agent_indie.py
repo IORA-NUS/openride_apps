@@ -48,10 +48,10 @@ class PassengerAgentIndie(ORSimAgent):
     stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
 
 
-    def __init__(self, unique_id, run_id, reference_time, behavior=None):
+    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
         # super().__init__(unique_id, model)
         # NOTE, model should include run_id and start_time
-        super().__init__(unique_id, run_id, reference_time, behavior)
+        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
 
         # self.unique_id = unique_id
         # self.run_id = run_id
@@ -187,63 +187,63 @@ class PassengerAgentIndie(ORSimAgent):
             return False
 
 
-    @classmethod
-    def load_behavior(cls, unique_id, behavior=None):
-        ''' '''
-        trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
-        # trip_request_time = 0
+    # @classmethod
+    # def load_behavior(cls, unique_id, behavior=None):
+    #     ''' '''
+    #     trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
+    #     # trip_request_time = 0
 
-        if behavior is None:
-            behavior = {
-                'email': f'{unique_id}@test.com',
-                'password': 'password',
+    #     if behavior is None:
+    #         behavior = {
+    #             'email': f'{unique_id}@test.com',
+    #             'password': 'password',
 
-                'trip_request_time': trip_request_time, # in units of Simulation Step Size
+    #             'trip_request_time': trip_request_time, # in units of Simulation Step Size
 
-                'pickup_loc': mapping(choice(cls.stop_locations)), # shapely.geometry.Point
-                'dropoff_loc': mapping(choice(cls.stop_locations)), # shapely.geometry.Point
+    #             'pickup_loc': mapping(choice(cls.stop_locations)), # shapely.geometry.Point
+    #             'dropoff_loc': mapping(choice(cls.stop_locations)), # shapely.geometry.Point
 
-                'settings':{
-                    'market': 'RideHail',
-                    'patience': 600, # in Seconds
-                },
+    #             'settings':{
+    #                 'market': 'RideHail',
+    #                 'patience': 600, # in Seconds
+    #             },
 
-                'transition_prob': {
-                    # cancel | passenger_requested_trip = 1 if exceeded_patience
-                    # cancel | passenger_requested_trip ~ 0
-                    ('cancel', 'passenger_requested_trip', 'exceeded_patience'): 1.0,
-                    ('cancel', 'passenger_requested_trip'): 0.0,
+    #             'transition_prob': {
+    #                 # cancel | passenger_requested_trip = 1 if exceeded_patience
+    #                 # cancel | passenger_requested_trip ~ 0
+    #                 ('cancel', 'passenger_requested_trip', 'exceeded_patience'): 1.0,
+    #                 ('cancel', 'passenger_requested_trip'): 0.0,
 
-                    # cancel | passenger_assigned_trip ~ 0
-                    ('cancel', 'passenger_assigned_trip'): 0.0,
+    #                 # cancel | passenger_assigned_trip ~ 0
+    #                 ('cancel', 'passenger_assigned_trip'): 0.0,
 
-                    # (accept + reject + cancel) | passenger_received_trip_confirmation == 1
-                    ('accept', 'passenger_received_trip_confirmation',): 1.0,
-                    ('reject', 'passenger_received_trip_confirmation'): 0.0,
-                    ('cancel', 'passenger_received_trip_confirmation'): 0.0,
-                    ('cancel', 'passenger_received_trip_confirmation', 'exceeded_patience'): 1.0,
+    #                 # (accept + reject + cancel) | passenger_received_trip_confirmation == 1
+    #                 ('accept', 'passenger_received_trip_confirmation',): 1.0,
+    #                 ('reject', 'passenger_received_trip_confirmation'): 0.0,
+    #                 ('cancel', 'passenger_received_trip_confirmation'): 0.0,
+    #                 ('cancel', 'passenger_received_trip_confirmation', 'exceeded_patience'): 1.0,
 
-                    # (cancel + move_for_pickup + wait_for_pickup) | passenger_accepted_trip ~ 0
-                    ('cancel', 'passenger_accepted_trip'): 0.0,
-                    # NOTE move_for_pickup and wait_for_pickup transition dependant on currentLoc and PickupLoc
+    #                 # (cancel + move_for_pickup + wait_for_pickup) | passenger_accepted_trip ~ 0
+    #                 ('cancel', 'passenger_accepted_trip'): 0.0,
+    #                 # NOTE move_for_pickup and wait_for_pickup transition dependant on currentLoc and PickupLoc
 
-                    # cancel | passenger_moving_for_pickup ~ 0
-                    ('cancel', 'passenger_moving_for_pickup'): 0.0,
+    #                 # cancel | passenger_moving_for_pickup ~ 0
+    #                 ('cancel', 'passenger_moving_for_pickup'): 0.0,
 
-                    # cancel | passenger_waiting_for_pickup ~ 0
-                    ('cancel', 'passenger_waiting_for_pickup'): 0.0,
+    #                 # cancel | passenger_waiting_for_pickup ~ 0
+    #                 ('cancel', 'passenger_waiting_for_pickup'): 0.0,
 
-                    # end_trip | passenger_droppedoff = 1
-                    ('end_trip', 'passenger_droppedoff'): 1.0,
+    #                 # end_trip | passenger_droppedoff = 1
+    #                 ('end_trip', 'passenger_droppedoff'): 1.0,
 
-                },
+    #             },
 
-                # 'Constraint_accept': {
-                # },
+    #             # 'Constraint_accept': {
+    #             # },
 
-            }
+    #         }
 
-        return behavior
+    #     return behavior
 
     # def initialize_location(self):
     #     if self.current_time_step == self.behavior['start_time']:
@@ -397,7 +397,8 @@ class PassengerAgentIndie(ORSimAgent):
             # print(f"{self.app.get_trip()['state'] = }")
             # if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_assigned_trip.identifier:
             if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.identifier:
-                if random() <= self.behavior['transition_prob'].get(('accept', self.app.get_trip()['state']), 1):
+                # if random() <= self.behavior['transition_prob'].get(('accept', self.app.get_trip()['state']), 1):
+                if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
                     self.app.trip.accept(self.get_current_time_str(), current_loc=self.current_loc,)
                 else:
                     # self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)

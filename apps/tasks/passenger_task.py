@@ -9,13 +9,14 @@ from apps.passenger_app import PassengerAgentIndie
 
 
 @app.task
-def start_passenger(spec):
-    unique_id = spec[0]
-    run_id = spec[1]
-    reference_date = spec[2]
+def start_passenger(**kwargs):
+    # unique_id = spec[0]
+    # run_id = spec[1]
+    # reference_date = spec[2]
 
-    agent = PassengerAgentIndie(unique_id, run_id, reference_date, None)
+    # agent = PassengerAgentIndie(unique_id, run_id, reference_date, None)
 
+    agent = PassengerAgentIndie(**kwargs)
     agent.start_listening()
     # try:
     #     agent.step()

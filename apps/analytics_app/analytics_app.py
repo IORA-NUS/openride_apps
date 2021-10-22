@@ -32,7 +32,7 @@ class AnalyticsApp:
 
         self.user = UserRegistry(sim_clock, credentials, role='admin')
 
-        self.messenger = Messenger(run_id, credentials)
+        self.messenger = Messenger(credentials)
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''

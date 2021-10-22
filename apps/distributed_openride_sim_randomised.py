@@ -6,8 +6,8 @@ current_path = os.path.abspath('.')
 # parent_path = os.path.dirname(current_path)
 sys.path.append(current_path)
 
-import logging, time
-from multiprocessing import Pool, Process
+import logging, time, json
+# from multiprocessing import Pool, Process
 
 # from mesa import Model
 # from mesa.time import RandomActivation, BaseScheduler
@@ -19,6 +19,7 @@ from assignment_app import AssignmentAgentIndie
 from analytics_app import AnalyticsAgentIndie
 from config import settings
 from utils import id_generator
+from utils.behavior_gen import BehaviorGen
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -29,7 +30,10 @@ from messenger_service import Messenger
 
 import asyncio
 
-from orsim import ORSimController
+from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
+
+
+from orsim import ORSimScheduler
 
 class DistributedOpenRideSimRandomised():
 
@@ -55,90 +59,135 @@ class DistributedOpenRideSimRandomised():
         # self.driver_schedule = CeleryBaseScheduler(self)
         # self.passenger_schedule = CeleryBaseScheduler(self)
 
-        self.driver_agent_spec = []
-        self.passenger_agent_spec = []
-        self.assignment_agent_spec = []
-        self.analytics_agent_spec = []
+        # self.driver_agent_spec = []
+        # self.passenger_agent_spec = []
+        # self.assignment_agent_spec = []
+        # self.analytics_agent_spec = []
 
         self.sim_settings = settings['SIM_SETTINGS']
 
 
-        self.sim_controller = ORSimController(self.sim_settings, self.run_id)
-        self.agent_list = []
+        self.agent_scheduler = ORSimScheduler(self.run_id, 'agent_scheduler')
+        self.service_scheduler = ORSimScheduler(self.run_id, 'service_scheduler')
+        # self.agent_list = []
 
         for i in range(num_drivers):
             agent_id = f"d_{i:06d}"
-            self.driver_agent_spec.append((agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S')))
-            self.sim_controller.add_agent(agent_id)
+            # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
+            # self.driver_agent_spec.append(spec)
+            behavior = BehaviorGen.ridehail_driver(agent_id)
+            # print(behavior)
+            spec = {
+                'unique_id': agent_id,
+                'run_id': self.run_id,
+                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'behavior': behavior
+            }
+            self.agent_scheduler.add_agent(agent_id, start_driver, spec)
 
         for i in range(num_passengers):
             agent_id = f"p_{i:06d}"
-            self.passenger_agent_spec.append((agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S')))
+            # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
+            # self.passenger_agent_spec.append(spec)
+            behavior = BehaviorGen.ridehail_passenger(agent_id)
+            spec = {
+                'unique_id': agent_id,
+                'run_id': self.run_id,
+                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'behavior': behavior
+            }
 
-            self.sim_controller.add_agent(agent_id)
+            self.agent_scheduler.add_agent(agent_id, start_passenger, spec)
 
         for i in range(1): # Only one Solver for the moment.
             # agent = AssignmentAgent(f"assignment_{i:03d}", self)
             agent_id = f"assignment_{i:03d}"
-            self.assignment_agent_spec.append((agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S')))
-            self.sim_controller.add_agent(agent_id)
+            # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
+            # self.assignment_agent_spec.append(spec)
+            behavior = BehaviorGen.ridehail_assignment(agent_id)
+            spec = {
+                'unique_id': agent_id,
+                'run_id': self.run_id,
+                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'behavior': behavior
+            }
+            self.service_scheduler.add_agent(agent_id, start_assignment, spec)
 
         for i in range(1): # Only one Solver for the moment.
             # agent = AnalyticsAgent(f"analytics_{i:03d}", self)
             agent_id = f"analytics_{i:03d}"
-            self.analytics_agent_spec.append((agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S')))
-            self.sim_controller.add_agent(agent_id)
+            # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
+            # self.analytics_agent_spec.append(spec)
+            behavior = BehaviorGen.ridehail_analytics(agent_id)
+            spec = {
+                'unique_id': agent_id,
+                'run_id': self.run_id,
+                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'behavior': behavior
+            }
+            self.service_scheduler.add_agent(agent_id, start_analytics, spec)
 
-    def run(self):
+    def start_schedulers(self):
+        self.agent_scheduler.initialize()
+        self.service_scheduler.initialize()
 
-        print('starting passenger')
+        # NOTE This should bre replaced by a more reliable handshake function within the Initialize method
+        time.sleep(1)
 
-        # with Pool(len(self.passenger_agent_spec)) as p:
-        #     p.map(PassengerAgentIndie.run, self.passenger_agent_spec)
+    def step_schedulers(self):
+        self.agent_scheduler.step()
+        self.service_scheduler.step()
 
-        # with Pool(len(self.driver_agent_spec)) as p:
-        #     p.map(DriverAgentIndie.run, self.driver_agent_spec)
+    # def run(self):
+
+    #     print('starting passenger')
+
+    #     # with Pool(len(self.passenger_agent_spec)) as p:
+    #     #     p.map(PassengerAgentIndie.run, self.passenger_agent_spec)
+
+    #     # with Pool(len(self.driver_agent_spec)) as p:
+    #     #     p.map(DriverAgentIndie.run, self.driver_agent_spec)
 
 
-        # with Pool(len(self.analytics_agent_spec)) as p:
-        #     p.map(AnalyticsAgentIndie.run, self.analytics_agent_spec)
+    #     # with Pool(len(self.analytics_agent_spec)) as p:
+    #     #     p.map(AnalyticsAgentIndie.run, self.analytics_agent_spec)
 
-        # with Pool(len(self.assignment_agent_spec)) as p:
-        #     p.map(AssignmentAgentIndie.run, self.assignment_agent_spec)
+    #     # with Pool(len(self.assignment_agent_spec)) as p:
+    #     #     p.map(AssignmentAgentIndie.run, self.assignment_agent_spec)
 
-        num_agents = len(self.passenger_agent_spec) + \
-                    len(self.driver_agent_spec) + \
-                    len(self.analytics_agent_spec) + \
-                    len(self.assignment_agent_spec)
+    #     num_agents = len(self.passenger_agent_spec) + \
+    #                 len(self.driver_agent_spec) + \
+    #                 len(self.analytics_agent_spec) + \
+    #                 len(self.assignment_agent_spec)
 
-        pool = Pool(processes=num_agents+1)
-        pool.map_async(PassengerAgentIndie.run, self.passenger_agent_spec)
-        pool.map_async(DriverAgentIndie.run, self.driver_agent_spec)
-        pool.map_async(AnalyticsAgentIndie.run, self.analytics_agent_spec)
-        pool.map_async(AssignmentAgentIndie.run, self.assignment_agent_spec)
+    #     pool = Pool(processes=num_agents+1)
+    #     pool.map_async(PassengerAgentIndie.run, self.passenger_agent_spec)
+    #     pool.map_async(DriverAgentIndie.run, self.driver_agent_spec)
+    #     pool.map_async(AnalyticsAgentIndie.run, self.analytics_agent_spec)
+    #     pool.map_async(AssignmentAgentIndie.run, self.assignment_agent_spec)
 
-        time.sleep(10)
-        self.sim_controller.run_simulation()
+    #     time.sleep(10)
+    #     self.sim_scheduler.run_simulation()
 
-        # for spec in self.driver_agent_spec:
-        #     p = Process(target=DriverAgentIndie.run, args=(spec,))
-        #     p.start()
-        #     p.join()
+    #     # for spec in self.driver_agent_spec:
+    #     #     p = Process(target=DriverAgentIndie.run, args=(spec,))
+    #     #     p.start()
+    #     #     p.join()
 
-        # for spec in self.passenger_agent_spec:
-        #     p = Process(target=PassengerAgentIndie.run, args=(spec,))
-        #     p.start()
-        #     p.join()
+    #     # for spec in self.passenger_agent_spec:
+    #     #     p = Process(target=PassengerAgentIndie.run, args=(spec,))
+    #     #     p.start()
+    #     #     p.join()
 
-        # for spec in self.analytics_agent_spec:
-        #     p = Process(target=AnalyticsAgentIndie.run, args=(spec,))
-        #     p.start()
-        #     p.join()
+    #     # for spec in self.analytics_agent_spec:
+    #     #     p = Process(target=AnalyticsAgentIndie.run, args=(spec,))
+    #     #     p.start()
+    #     #     p.join()
 
-        # for spec in self.assignment_agent_spec:
-        #     p = Process(target=AssignmentAgentIndie.run, args=(spec,))
-        #     p.start()
-        #     p.join()
+    #     # for spec in self.assignment_agent_spec:
+    #     #     p = Process(target=AssignmentAgentIndie.run, args=(spec,))
+    #     #     p.start()
+    #     #     p.join()
 
 
 if __name__ == '__main__':
@@ -153,44 +202,13 @@ if __name__ == '__main__':
     # # sim.run()
     if settings['EXECUTION_STRATEGY'] == 'CELERY':
 
-        from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
-        for spec in sim.driver_agent_spec:
-            start_driver.delay(spec)
-            time.sleep(0.1)
-        for spec in sim.passenger_agent_spec:
-            start_passenger.delay(spec)
-            time.sleep(0.1)
-        for spec in sim.analytics_agent_spec:
-            start_analytics.delay(spec)
-            time.sleep(0.1)
-        for spec in sim.assignment_agent_spec:
-            start_assignment.delay(spec)
-            time.sleep(0.1)
+        sim.start_schedulers()
 
+        for i in range(settings['SIM_SETTINGS']['SIM_DURATION']):
+            sim.step_schedulers()
 
-        # from apps.tasks_tmp import execute_step
-        # # for spec in sim.driver_agent_spec:
-        # #     execute_step.delay('DriverAgentIndie', spec)
-        # #     time.sleep(0.1)
-
-        # for spec in sim.passenger_agent_spec:
-        #     execute_step.delay('PassengerAgentIndie', spec)
-        #     time.sleep(0.1)
-
-        # for spec in sim.analytics_agent_spec:
-        #     execute_step.delay('AnalyticsAgentIndie', spec)
-        #     time.sleep(0.1)
-
-        # for spec in sim.assignment_agent_spec:
-        #     execute_step.delay('AssignmentAgentIndie', spec)
-        #     time.sleep(0.1)
-
-        time.sleep(5)
-
-        sim.sim_controller.run_simulation()
-
-    if settings['EXECUTION_STRATEGY'] == 'MULTIPROCESSING':
-        sim.run()
+    # elif settings['EXECUTION_STRATEGY'] == 'MULTIPROCESSING':
+    #     sim.run()
 
     logging.info(f"{sim.run_id = }")
 
