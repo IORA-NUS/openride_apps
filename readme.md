@@ -3,7 +3,7 @@
 - The following codebase is developed on Python 3.8.5. It should run on python > 3.7, but has not been tested.
 - Create a Vitrual environment and activate it.
 - install requirements.txt
-- The package assumes the following are installed and accessivle over the network (or localhost)
+- The package assumes the following are installed and accessible over the network (or localhost)
 
 ## Prerequisites:
 1. Routing Service: Currently only supports [OSRM](http://project-osrm.org). The instructions for downloading open source routing datasets are provided in the link.
@@ -36,3 +36,5 @@
 
 `./start_simulation.sh`
 
+## Managing the Simulation:
+- Simulation settings can be managed wia the `config.py` module.
