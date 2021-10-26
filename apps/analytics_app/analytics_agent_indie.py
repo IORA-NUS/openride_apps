@@ -118,7 +118,7 @@ class AnalyticsAgentIndie(ORSimAgent):
             if (((self.current_time_step + 1) * self.sim_settings['SIM_STEP_SIZE']) % self.sim_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
                 timewindow_end = self.current_time
                 timewindow_start = timewindow_end - relativedelta(seconds=self.sim_settings['PATHS_HISTORY_TIME_WINDOW']+self.sim_settings['SIM_STEP_SIZE'])
-                logging.info(timewindow_start, timewindow_end)
+                logging.info(f"{timewindow_start}, {timewindow_end}")
 
                 paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
                 # print(publish_dict)

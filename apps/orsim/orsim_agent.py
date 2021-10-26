@@ -37,7 +37,6 @@ class ORSimAgent(ABC):
         }
 
         # self.agent_messenger = Messenger(run_id, self.agent_credentials, f"ORSimAgent_{self.unique_id}", self.on_receive_message)
-        self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimAgent", self.on_receive_message)
 
     def on_receive_message(self, client, userdata, message):
         ''' '''
@@ -97,6 +96,9 @@ class ORSimAgent(ABC):
         pass
 
     def start_listening(self):
+
+        self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimAgent", self.on_receive_message)
+
         async_strategy = 'eventlet'
         if settings['CONCURRENCY_STRATEGY'] == 'ASYNCIO':
             print(f'Agent {self.unique_id} is Listening for Messages')

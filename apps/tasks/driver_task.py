@@ -2,7 +2,7 @@
 
 
 from __future__ import absolute_import
-from apps.celery_proj import app
+from apps.worker import app
 import time
 
 from apps.driver_app import DriverAgentIndie
