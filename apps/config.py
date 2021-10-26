@@ -24,8 +24,8 @@ settings = {
         'SIM_STEP_SIZE': 30, # 15, # 6,     # 60   # seconds
         'NUMSTEPS_BETWEEN_SOLVER': 1, #2,
 
-        'NUM_DRIVERS': 5,       # 100,
-        'NUM_PASSENGERS': 30,   # 300,
+        'NUM_DRIVERS': 50,       # 100,
+        'NUM_PASSENGERS': 300,   # 300,
 
         'PLANNING_AREA': 'CLEMENTI',
 

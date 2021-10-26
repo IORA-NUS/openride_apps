@@ -127,14 +127,14 @@ class DistributedOpenRideSimRandomised():
             }
             self.service_scheduler.add_agent(agent_id, start_analytics, spec)
 
-    def start_schedulers(self):
-        self.agent_scheduler.initialize()
-        self.service_scheduler.initialize()
+    # def start_schedulers(self):
+    #     self.agent_scheduler.initialize()
+    #     self.service_scheduler.initialize()
 
-        # NOTE This should bre replaced by a more reliable handshake function within the Initialize method
-        time.sleep(1)
+    #     # # NOTE This should bre replaced by a more reliable handshake function within the Initialize method
+    #     # time.sleep(1)
 
-    def step_schedulers(self):
+    def step(self):
         print(f"Simulation Step: {self.agent_scheduler.time} of {self.sim_settings['SIM_DURATION']}")
         asyncio.run(self.agent_scheduler.step())
         asyncio.run(self.service_scheduler.step())
@@ -206,11 +206,11 @@ if __name__ == '__main__':
     # # sim.run()
     if settings['EXECUTION_STRATEGY'] == 'CELERY':
 
-        sim.start_schedulers()
+        # sim.start_schedulers()
 
         for i in range(settings['SIM_SETTINGS']['SIM_DURATION']):
             try:
-                sim.step_schedulers()
+                sim.step()
             except Exception as e:
                 print(e)
                 break

@@ -36,6 +36,20 @@ class ORSimScheduler(ABC):
             'step_response': 'waiting'
         }
 
+        kwargs = spec.copy()
+        kwargs['scheduler_id'] = self.scheduler_id
+        method.delay(**kwargs)
+
+        # # NOTE A beter approach is to implement a handshake protocol
+        # time.sleep(0.1)
+        while True:
+            if self.agent_collection[unique_id]['step_response'] == 'ready':
+                print(f'agent {unique_id} is ready')
+                break
+            else:
+                time.sleep(0.001)
+
+
     def remove_agent(self, unique_id):
         try:
             self.agent_collection.pop(unique_id)
@@ -43,30 +57,32 @@ class ORSimScheduler(ABC):
             logging.exception(str(e))
             print(e)
 
-    def initialize(self):
-        for agent_id, value in self.agent_collection.items():
-            method = value['method']
-            kwargs = value['spec']
-            kwargs['scheduler_id'] = self.scheduler_id
-            method.delay(**kwargs)
+    # def initialize(self):
+    #     # for agent_id, value in self.agent_collection.items():
+    #     #     method = value['method']
+    #     #     kwargs = value['spec']
+    #     #     kwargs['scheduler_id'] = self.scheduler_id
+    #     #     method.delay(**kwargs)
 
-            self.agent_collection[agent_id]['step_response'] = 'waiting'
+    #     #     self.agent_collection[agent_id]['step_response'] = 'waiting'
 
-            time.sleep(0.1)
+    #     #     time.sleep(0.1)
 
-        # message = {'action': 'init'}
-        # self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
 
-        # asyncio.run(self.confirm_responses())
+    #     # # message = {'action': 'init'}
+    #     # # self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
 
-        self.time = 0
+    #     # # asyncio.run(self.confirm_responses())
+
+
+    #     self.time = 0
 
 
     def on_receive_message(self, client, userdata, message):
         if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimScheduler":
             payload = json.loads(message.payload.decode('utf-8'))
             # print(f"Message Recieved: {payload}")
-            if payload.get('action') == 'completed':
+            if (payload.get('action') == 'completed') or (payload.get('action') == 'ready'):
                 self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
             elif payload.get('action') == 'error':
                 logging.warning(f'{self.__class__.__name__} received {message.payload = }')
@@ -100,7 +116,7 @@ class ORSimScheduler(ABC):
         message = {'action': 'step', 'time_step': self.time}
 
         for agent_id, _ in self.agent_collection.items():
-            self.agent_collection[agent_id]['step_response'] = 'waiting'
+            self.agent_collection[agent_id]['step_response'] = 'ready'
 
         # print(f'publish Step to {self.run_id}/ORSimAgent')
         # # [client.publish(topic, json.dumps(message)) for topic in topic_list]

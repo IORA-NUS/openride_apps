@@ -123,6 +123,13 @@ class ORSimAgent(ABC):
 
             eventlet.spawn(run_forever)
 
+        # Once agent is setup and listening, send the ready message
+        response_payload = {
+            'agent_id': self.unique_id,
+            'action': 'ready',
+        }
+        self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
+
     def get_current_time_str(self):
         return datetime.strftime(self.current_time, "%a, %d %b %Y %H:%M:%S GMT")
 
