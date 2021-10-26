@@ -5,7 +5,7 @@ from datetime import datetime
 from apps.messenger_service import Messenger
 
 from random import random
-
+from apps.config import settings
 
 class ORSimScheduler(ABC):
 
@@ -14,6 +14,8 @@ class ORSimScheduler(ABC):
         self.run_id = run_id
         self.scheduler_id = scheduler_id
         self.time = 0
+
+        self.sim_settings = settings['SIM_SETTINGS']
 
         self.agent_collection = {}
 
@@ -72,6 +74,7 @@ class ORSimScheduler(ABC):
 
     async def confirm_responses(self):
         ''' '''
+        start_time = time.time()
         num_confirmed_responses = 0
         while num_confirmed_responses != len(self.agent_collection):
             num_confirmed_responses = 0
@@ -79,13 +82,18 @@ class ORSimScheduler(ABC):
                 if self.agent_collection[agent_id]['step_response'] == 'completed':
                     num_confirmed_responses += 1
 
-            # print(f"{self.scheduler_id} has {num_confirmed_responses = }")
-            # # await asyncio.sleep(random()/10)
+            current_time = time.time()
+
+            # if (current_time - start_time) > self.sim_settings['STEP_TIMEOUT']:
+            #     raise Exception(f'Scheduler {self.scheduler_id} timeout beyond {self.sim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.\n{self.agent_collection = }')
+            # else:
+            #     # print(f"{self.scheduler_id} has {num_confirmed_responses = }")
+            #     # # await asyncio.sleep(random()/10)
             await asyncio.sleep(0.1)
 
-        print(f"{self.scheduler_id} has {num_confirmed_responses = }")
+        # print(f"{self.scheduler_id} has {num_confirmed_responses = }")
 
-    def step(self):
+    async def step(self):
 
         logging.info(f"SimController Time: {self.time}")
 
@@ -98,7 +106,13 @@ class ORSimScheduler(ABC):
         # # [client.publish(topic, json.dumps(message)) for topic in topic_list]
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
 
-        asyncio.run(self.confirm_responses())
+        # asyncio.run(self.confirm_responses())
+        try:
+            await asyncio.wait_for(self.confirm_responses(), timeout=self.sim_settings['STEP_TIMEOUT'])
+        except asyncio.TimeoutError as e:
+            logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.sim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.\n{self.agent_collection = }')
+            raise e
+
 
         self.time += 1
 

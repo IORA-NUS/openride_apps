@@ -20,8 +20,8 @@ settings = {
     'LOG_LEVEL': logging.INFO,
 
     'SIM_SETTINGS': {
-        'SIM_DURATION': 240, # 960, # 600,    # 60 # Num Steps
-        'SIM_STEP_SIZE': 15, # 15, # 6,     # 60   # seconds
+        'SIM_DURATION': 120, # 960, # 600,    # 60 # Num Steps
+        'SIM_STEP_SIZE': 30, # 15, # 6,     # 60   # seconds
         'NUMSTEPS_BETWEEN_SOLVER': 1, #2,
 
         'NUM_DRIVERS': 5,       # 100,
@@ -37,6 +37,8 @@ settings = {
         'PUBLISH_PATHS_HISTORY': True,
         'WRITE_PH_OUTPUT_TO_FILE': True,
         'PATHS_HISTORY_TIME_WINDOW': 1*30*60, # 900 # seconds
+
+        'STEP_TIMEOUT': 15, # Max Compute time for each step (seconds)
     },
 
 }

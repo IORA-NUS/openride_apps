@@ -56,7 +56,7 @@ class ORSimAgent(ABC):
 
                 if payload.get('action') == 'init':
                     ''' '''
-                    print(f"{self.unique_id} received {payload=}")
+                    # print(f"{self.unique_id} received {payload=}")
                     response_payload = {
                         'agent_id': self.unique_id,
                         'action': 'completed',
@@ -70,6 +70,9 @@ class ORSimAgent(ABC):
                         'time_step': self.current_time_step,
                         'action': 'completed',
                     }
+                elif payload.get('action') == 'kill':
+                    ''' '''
+                    self.shutdown()
             else:
                 logging.warning(f'Unprocessed Message: {message.topic = }')
                 response_payload = {
@@ -101,7 +104,7 @@ class ORSimAgent(ABC):
 
         async_strategy = 'eventlet'
         if settings['CONCURRENCY_STRATEGY'] == 'ASYNCIO':
-            print(f'Agent {self.unique_id} is Listening for Messages')
+            logging.info(f'Agent {self.unique_id} is Listening for Messages')
             loop = asyncio.get_event_loop()
             try:
                 loop.run_forever()

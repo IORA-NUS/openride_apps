@@ -135,8 +135,10 @@ class DistributedOpenRideSimRandomised():
         time.sleep(1)
 
     def step_schedulers(self):
-        self.agent_scheduler.step()
-        self.service_scheduler.step()
+        print(f"Simulation Step: {self.agent_scheduler.time} of {self.sim_settings['SIM_DURATION']}")
+        asyncio.run(self.agent_scheduler.step())
+        asyncio.run(self.service_scheduler.step())
+
 
     # def run(self):
 
@@ -198,6 +200,8 @@ if __name__ == '__main__':
     num_passengers =  settings['SIM_SETTINGS']['NUM_PASSENGERS'] # 10 # 10 #100
     sim = DistributedOpenRideSimRandomised(num_drivers, num_passengers)
 
+    print(f"Initializing Simulation with {sim.run_id = }")
+
     # strategy = 'CELERY' # 'MULTIPROCESSING'
     # # sim.run()
     if settings['EXECUTION_STRATEGY'] == 'CELERY':
@@ -205,10 +209,14 @@ if __name__ == '__main__':
         sim.start_schedulers()
 
         for i in range(settings['SIM_SETTINGS']['SIM_DURATION']):
-            sim.step_schedulers()
+            try:
+                sim.step_schedulers()
+            except Exception as e:
+                print(e)
+                break
 
     # elif settings['EXECUTION_STRATEGY'] == 'MULTIPROCESSING':
     #     sim.run()
 
-    logging.info(f"{sim.run_id = }")
+    print(f"{sim.run_id = }")
 
