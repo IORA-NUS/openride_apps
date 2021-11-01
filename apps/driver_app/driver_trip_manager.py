@@ -19,7 +19,7 @@ class DriverTripManager:
         return self.trip
 
     def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle): #, route=None):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip"
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         # print(sim_clock)
 
         data = {
@@ -35,26 +35,26 @@ class DriverTripManager:
         response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
 
         if is_success(response.status_code):
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{response.json()['_id']}"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
             response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
             self.trip = response.json()
             # print(self.trip)
         else:
             raise Exception(response.text)
 
-    def create_new_occupied_trip(self, sim_clock, current_loc, driver, vehicle, passenger_trip):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip"
+    def create_new_occupied_trip(self, sim_clock, current_loc, driver, vehicle, passenger_ride_hail_trip):
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
 
         data = {
             "driver": f"{driver['_id']}",
             "vehicle": f"{vehicle['_id']}",
             "current_loc": current_loc, # {"type":"Point","coordinates": current_loc},
-            "next_dest_loc": passenger_trip['pickup_loc'], # {"type":"Point","coordinates": current_loc},
-            "passenger_trip": passenger_trip['_id'],
-            "passenger": passenger_trip['passenger'],
+            "next_dest_loc": passenger_ride_hail_trip['pickup_loc'], # {"type":"Point","coordinates": current_loc},
+            "passenger_ride_hail_trip": passenger_ride_hail_trip['_id'],
+            "passenger": passenger_ride_hail_trip['passenger'],
             "trip_start_loc": current_loc,
-            "pickup_loc": passenger_trip['pickup_loc'], #{"type":"Point","coordinates":passenger_trip['start_loc']},
-            "dropoff_loc": passenger_trip['dropoff_loc'], # {"type":"Point","coordinates":passenger_trip['end_loc']},
+            "pickup_loc": passenger_ride_hail_trip['pickup_loc'], #{"type":"Point","coordinates":passenger_trip['start_loc']},
+            "dropoff_loc": passenger_ride_hail_trip['dropoff_loc'], # {"type":"Point","coordinates":passenger_trip['end_loc']},
             "is_occupied": True,
             "sim_clock": sim_clock,
         }
@@ -63,7 +63,7 @@ class DriverTripManager:
         response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
 
         if is_success(response.status_code):
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{response.json()['_id']}"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
             response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
             self.trip = response.json()
 
@@ -74,7 +74,7 @@ class DriverTripManager:
     def look_for_job(self, sim_clock, current_loc, route):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/look_for_job"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/look_for_job"
         except Exception as e:
             raise e
 
@@ -93,7 +93,7 @@ class DriverTripManager:
     def recieve(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/recieve"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/recieve"
         except Exception as e:
             raise e
 
@@ -111,7 +111,7 @@ class DriverTripManager:
     def confirm(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/confirm"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/confirm"
         except Exception as e:
             raise e
 
@@ -143,7 +143,7 @@ class DriverTripManager:
     def reject(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/reject"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/reject"
         except Exception as e:
             raise e
 
@@ -161,7 +161,7 @@ class DriverTripManager:
     def cancel(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/cancel"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/cancel"
         except Exception as e:
             raise e
 
@@ -191,7 +191,7 @@ class DriverTripManager:
     def passenger_confirmed_trip(self, sim_clock, current_loc, route):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/passenger_confirmed_trip"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_confirmed_trip"
         except Exception as e:
             raise e
 
@@ -210,7 +210,7 @@ class DriverTripManager:
     def wait_to_pickup(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/wait_to_pickup"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/wait_to_pickup"
         except Exception as e:
             raise e
 
@@ -242,7 +242,7 @@ class DriverTripManager:
     def passenger_acknowledge_pickup(self, sim_clock, current_loc, route):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/passenger_acknowledge_pickup"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_acknowledge_pickup"
         except Exception as e:
             raise e
 
@@ -261,7 +261,7 @@ class DriverTripManager:
     def move_to_dropoff(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/move_to_dropoff"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/move_to_dropoff"
         except Exception as e:
             raise e
 
@@ -292,7 +292,7 @@ class DriverTripManager:
     def wait_to_dropoff(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/wait_to_dropoff"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/wait_to_dropoff"
         except Exception as e:
             raise e
 
@@ -322,7 +322,7 @@ class DriverTripManager:
     def passenger_acknowledge_dropoff(self, sim_clock, current_loc):
 
         try:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/passenger_acknowledge_dropoff"
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_acknowledge_dropoff"
         except Exception as e:
             raise e
 
@@ -349,9 +349,9 @@ class DriverTripManager:
         '''
         try:
             if force_quit == True:
-                driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/force_quit"
+                driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
             else:
-                driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}/end_trip"
+                driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
         except Exception as e:
             raise e
 
@@ -370,7 +370,7 @@ class DriverTripManager:
         if self.trip is None:
             raise Exception('trip is not set')
 
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip/{self.trip['_id']}"
+        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}"
 
         data = kwargs
         data['sim_clock'] = sim_clock
@@ -386,7 +386,7 @@ class DriverTripManager:
             raise Exception(response.text)
 
     def refresh(self):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip"
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         driver_trip_item_url = driver_trip_url + f"/{self.trip['_id']}"
 
         response = requests.get(driver_trip_item_url, headers=self.user.get_headers())

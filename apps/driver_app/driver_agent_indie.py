@@ -50,8 +50,8 @@ class DriverAgentIndie(ORSimAgent):
 
     sim_settings = settings['SIM_SETTINGS']
     step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
-    # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    # # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    # stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
 
 
     def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
@@ -64,6 +64,7 @@ class DriverAgentIndie(ORSimAgent):
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
         }
+
 
         # self.app = DriverApp(model.run_id, model.get_current_time_str(), self.current_loc, credentials=self.credentials, driver_settings=self.behavior['settings'])
         self.app = DriverApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, driver_settings=self.behavior['settings'])
@@ -87,8 +88,8 @@ class DriverAgentIndie(ORSimAgent):
             logging.error(f"{payload = }")
 
 
-    def get_random_location(cls):
-        return BehaviorGen.get_random_location()
+    def get_random_location(self):
+        return BehaviorGen.get_random_location(self.behavior['coverage_area_name'])
 
     # def process_message(self, client, userdata, message):
     #     ''' '''

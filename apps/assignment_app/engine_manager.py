@@ -32,7 +32,7 @@ class EngineManager():
 
         params = {
             'where': json.dumps({
-                'name': self.solver.params['name']
+                'name': self.solver.params['planning_area']['name']
             })
         }
         response = requests.get(engine_url, headers=self.user.get_headers(), params=params)
@@ -51,9 +51,10 @@ class EngineManager():
         engine_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/engine"
         # print(f"{self.solver.__class__.__name__=}")
         data = {
-            'name': self.solver.params['name'],
+            'name': self.solver.params['planning_area']['name'],
             'strategy': self.solver.__class__.__name__,
             # 'area': '',
+            'planning_area': self.solver.params['planning_area'],
             'offline_params': self.solver.params['offline_params'],
             'online_params': self.solver.params['online_params'],
         }

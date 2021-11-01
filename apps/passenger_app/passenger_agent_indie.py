@@ -43,9 +43,10 @@ class PassengerAgentIndie(ORSimAgent):
     # model = None
     sim_settings = settings['SIM_SETTINGS']
     step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
-    # stop_locations = TaxiStop().stop_locations # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+
+    # # stop_locations = TaxiStop().stop_locations # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    # # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    # stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
 
 
     def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):

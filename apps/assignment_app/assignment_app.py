@@ -1,3 +1,4 @@
+import logging
 import os, sys, time
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
@@ -68,10 +69,11 @@ class AssignmentApp:
         start = time.time()
         try:
             assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.engine.as_dict().get('online_params'))
-        except: pass
+            # logging.info(f"Solver {self.solver.params['planning_area']['name']}: {assignment=}")
+        except Exception as e:
+            logging.exception(e)
         end = time.time()
         # print('after Solve')
-        # print('Inside assign', assignment)
 
         online_params = self.solver.update_online_params(clock_tick, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
         # print('after update_online_params')
@@ -132,15 +134,16 @@ class AssignmentApp:
 
     def get_driver_trip(self):
         ''' '''
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip"
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
 
         params = {
             "where": json.dumps({
                 "is_active": True,
                 "is_occupied": False,
                 "state": {"$in": [RidehailDriverTripStateMachine.driver_looking_for_job.identifier] },
-                # "current_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
-                "current_loc": {"$geoWithin": {"$geometry": self.solver.params['area']}}
+                # # "current_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
+                # "current_loc": {"$geoWithin": {"$geometry": self.solver.params['area']}},
+                "current_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
             }),
             "embedded": json.dumps({
                 "driver": 1
@@ -162,12 +165,13 @@ class AssignmentApp:
 
     def get_passenger_trip(self):
         ''' '''
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/trip"
+        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
 
         params = {
             "where": json.dumps({
                 "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier]},
                 # "pickup_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
+                "pickup_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
             })
         }
 
@@ -195,12 +199,20 @@ class AssignmentApp:
 if __name__ == "__main__":
 
     solver_params = {
-        'name': 'Singapore',
-        'area': {
-            # THis must be a MultiPolygon describing the specific region where this engine will gather Supply / demand
-            'center': {'type': 'Point', 'coordinates': (103.833057754201, 1.41709038337595)},
-            'radius': 5000000, # meters
+        'planning_area': {
+            'name': 'Singapore',
+            'geometry': {
+                # THis must be a MultiPolygon describing the specific region where this engine will gather Supply / demand
+                'center': {'type': 'Point', 'coordinates': (103.833057754201, 1.41709038337595)},
+                'radius': 5000000, # meters
+            },
         },
+        # 'name': 'Singapore',
+        # 'area': {
+        #     # THis must be a MultiPolygon describing the specific region where this engine will gather Supply / demand
+        #     'center': {'type': 'Point', 'coordinates': (103.833057754201, 1.41709038337595)},
+        #     'radius': 5000000, # meters
+        # },
 
         'offline_params': {
             'reverseParameter': 480,  # 480;

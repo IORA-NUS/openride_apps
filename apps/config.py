@@ -1,15 +1,15 @@
 import logging
 
 settings = {
-    'OPENRIDE_SERVER_URL': 'http://127.0.0.1:11654',
+    'OPENRIDE_SERVER_URL': 'http://192.168.10.135:11654', #'http://127.0.0.1:11654',
 
-    'ROUTING_SERVER': 'http://localhost:50001',
+    'ROUTING_SERVER': 'http://192.168.10.135:50001', #'http://localhost:50001',
 
-    'RABBITMQ_MANAGEMENT_SERVER': "http://localhost:15672/api",
-    'RABBITMQ_ADMIN_USER': 'guest',
-    'RABBITMQ_ADMIN_PASSWORD': 'guest',
+    'RABBITMQ_MANAGEMENT_SERVER': "http://192.168.10.115:15672/api", # "http://localhost:15672/api",
+    'RABBITMQ_ADMIN_USER': 'test', # 'guest',
+    'RABBITMQ_ADMIN_PASSWORD': 'test', # 'guest',
 
-    'MQTT_BROKER': "localhost",
+    'MQTT_BROKER': "192.168.10.115", # "localhost",
 
     'WEB_MQTT_PORT': 15675,
 
@@ -19,23 +19,43 @@ settings = {
     # logging
     'LOG_LEVEL': logging.INFO,
 
+    # 'WEBSOCKET_SERVICE': 'MQTT', # 'WS', # 'MQTT'
+    # 'WS_SERVER': 'ws://172.21.177.199:8003', # 'ws://172.27.114.105:3210', # 'ws://localhost:3210', #'ws://172.27.114.105:3210', # Needed only if WEBSOCKET_SERVICE is WS
+    'WEBSOCKET_SERVICE': 'MQTT',  #'WS', # 'MQTT'
+    'WS_SERVER': 'ws://192.168.10.135do:8003', # 'ws://localhost:8003', # 'ws://172.27.114.105:3210', # 'ws://localhost:3210', #'ws://172.27.114.105:3210', # Needed only if WEBSOCKET_SERVICE is WS
+
+
     'SIM_SETTINGS': {
-        'SIM_DURATION': 120, # 960, # 600,    # 60 # Num Steps
-        'SIM_STEP_SIZE': 30, # 15, # 6,     # 60   # seconds
+        'SIM_DURATION': 480, # 960, # 600,    # 60 # Num Steps
+        'SIM_STEP_SIZE': 15, # 15, # 6,     # 60   # seconds
         'NUMSTEPS_BETWEEN_SOLVER': 1, #2,
 
         'NUM_DRIVERS': 50,       # 100,
-        'NUM_PASSENGERS': 300,   # 300,
+        'NUM_PASSENGERS': 200,   # 300,
 
-        'PLANNING_AREA': 'CLEMENTI',
+        # 'PLANNING_AREA': 'CLEMENTI',
+        'COVERAGE_AREA': [
+            # {
+            #     'name': 'Westside',
+            #     'districts': ['CLEMENTI', 'JURONG'],
+            #     'strategy': 'CompromiseMatching',
+            # },
+            {
+                'name': 'North',
+                'districts': ['WOODLANDS', 'CHANGI'],
+                'strategy': 'CompromiseMatching',
+            },
+            # {
+            #     'name': 'HOUGANG',
+            #     'strategy': 'CompromiseMatching',
+            # },
+        ],
 
-        'PUBLISH_REALTIME_DATA': False,
-        'WEBSOCKET_SERVICE': 'MQTT', # 'WS', # 'MQTT'
-        'WS_SERVER': 'ws://172.21.177.199:8003', # 'ws://172.27.114.105:3210', # 'ws://localhost:3210', #'ws://172.27.114.105:3210', # Needed only if WEBSOCKET_SERVICE is WS
+        'PUBLISH_REALTIME_DATA': False, #True, #False,
         'WRITE_WS_OUTPUT_TO_FILE': False,
 
-        'PUBLISH_PATHS_HISTORY': True,
-        'WRITE_PH_OUTPUT_TO_FILE': True,
+        'PUBLISH_PATHS_HISTORY': False,
+        'WRITE_PH_OUTPUT_TO_FILE': False,
         'PATHS_HISTORY_TIME_WINDOW': 1*30*60, # 900 # seconds
 
         'STEP_TIMEOUT': 15, # Max Compute time for each step (seconds)

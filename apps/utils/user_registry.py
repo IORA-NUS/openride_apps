@@ -97,7 +97,7 @@ class UserRegistry():
             'where': json.dumps({"email": self.email})
         }
         response = requests.get(user_url, headers=self.get_headers(), params=params)
-        # print( response.url)
+        # print(response.url,  response)
         user = response.json()['_items'][0]
         # print(user)
         if user['role'] != self.role:

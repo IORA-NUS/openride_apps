@@ -31,6 +31,7 @@ class AssignmentAgentIndie(ORSimAgent):
             'password': self.behavior.get('password'),
         }
 
+        # print(self.behavior['solver'])
         # self.assignment_app = AssignmentApp(model.run_id, model.get_current_time_str(), self.credentials, self.behavior['solver'], self.behavior['solver_params'])
         self.assignment_app = AssignmentApp(self.run_id, self.get_current_time_str(), self.credentials, self.behavior['solver'], self.behavior['solver_params'])
 
@@ -90,7 +91,7 @@ class AssignmentAgentIndie(ORSimAgent):
     #                 #     'center': {'type': 'Point', 'coordinates': (103.833057754201, 1.41709038337595)},
     #                 #     'radius': 50000, # meters
     #                 # },
-    #                 'area': mapping(PlanningArea().get_planning_area(settings['SIM_SETTINGS']['PLANNING_AREA'])),
+    #                 'area': mapping(PlanningArea().get_planning_area_geometry(settings['SIM_SETTINGS']['PLANNING_AREA'])),
 
     #                 'offline_params': {
     #                     'reverseParameter': 480,  # 480;
@@ -127,7 +128,6 @@ class AssignmentAgentIndie(ORSimAgent):
         if self.current_time_step % self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] == 0:
             result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
         # print('After assign')
-
             self.assignment_app.publish(result)
 
         if self.current_time_step == self.sim_settings['SIM_DURATION']-1:

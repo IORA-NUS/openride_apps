@@ -41,7 +41,7 @@ class DistributedOpenRideSimRandomised():
     def __init__(self, num_drivers, num_passengers):
         self.run_id = id_generator(12)
         self.start_time = datetime(2020,1,1,8,0,0)
-        logging.info(f"{self.run_id = }, {self.start_time = }")
+        # logging.info(f"{self.run_id = }, {self.start_time = }")
         self.current_time = self.start_time
 
         # message_channel = f"sim_admin_{self.run_id}"
@@ -99,12 +99,11 @@ class DistributedOpenRideSimRandomised():
 
             self.agent_scheduler.add_agent(agent_id, start_passenger, spec)
 
-        for i in range(1): # Only one Solver for the moment.
-            # agent = AssignmentAgent(f"assignment_{i:03d}", self)
-            agent_id = f"assignment_{i:03d}"
-            # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
-            # self.assignment_agent_spec.append(spec)
-            behavior = BehaviorGen.ridehail_assignment(agent_id)
+        # for i in range(1): # Only one Solver for the moment.
+        for coverage_area in self.sim_settings['COVERAGE_AREA']: # Support for multiple solvers
+            # agent_id = f"assignment_{i:03d}"
+            agent_id = f"assignment_{coverage_area['name']}"
+            behavior = BehaviorGen.ridehail_assignment(agent_id, coverage_area)
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,

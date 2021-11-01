@@ -3,6 +3,7 @@ import os, json, time, requests
 import pandas as pd
 # from one_map_auth import OneMapAuth
 from shapely.geometry import mapping, shape, Point
+from shapely.ops import unary_union
 
 
 class PlanningArea:
@@ -59,7 +60,26 @@ class PlanningArea:
             ''' '''
             json.dump(planning_area, json_file)
 
-    def get_planning_area(self, pln_area_n):
+    # def get_planning_area_geometry(self, pln_area_n):
+
+    #     with open(self.planning_area_file) as json_file:
+    #         # planning_area = pd.DataFrame(json.load(json_file))
+    #         planning_area = json.load(json_file)
+
+    #     # print(planning_area)
+    #     # return planning_area
+    #     planning_area_defn = None
+    #     try:
+    #         for area in planning_area:
+    #             # print(area)
+    #             if area["pln_area_n"] == pln_area_n:
+    #                 planning_area_defn = shape(json.loads(area['geojson']))
+    #                 return planning_area_defn
+    #     except Exception as e:
+    #         raise e
+    #         # return None
+
+    def get_planning_area_geometry(self, districts):
 
         with open(self.planning_area_file) as json_file:
             # planning_area = pd.DataFrame(json.load(json_file))
@@ -68,16 +88,26 @@ class PlanningArea:
         # print(planning_area)
         # return planning_area
         planning_area_defn = None
+        planning_area_collection = []
         try:
-            for area in planning_area:
-                # print(area)
-                if area["pln_area_n"] == pln_area_n:
-                    planning_area_defn = shape(json.loads(area['geojson']))
-                    return planning_area_defn
+            # print(districts)
+            for pln_area_n in districts:
+                # print(pln_area_n)
+                for area in planning_area:
+                    # print(area)
+                    if area["pln_area_n"] == pln_area_n:
+                        planning_area_collection.append(shape(json.loads(area['geojson'])))
+                        break
         except Exception as e:
             raise e
             # return None
 
+        # print(planning_area_collection)
+
+        planning_area_defn = unary_union(planning_area_collection)
+        # print(planning_area_defn)
+
+        return planning_area_defn
 
 if __name__ == '__main__':
 

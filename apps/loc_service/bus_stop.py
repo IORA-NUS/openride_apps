@@ -77,33 +77,42 @@ class BusStop:
     #     return self.stop_locations
 
 
-    def get_locations_within(self, pln_area_n = None):
-        # planning_area_file = f"{self.dir_path}/data/onemap-planning-area/PlanningArea.json"
+    # def get_locations_within(self, pln_area_n = None):
+    def get_locations_within(self, pln_area_list = None):
 
-        # with open(planning_area_file) as f:
-        #     planning_area_data =  json.load(f)
+        # planning_area_defn = PlanningArea().get_planning_area_geometry(pln_area_n)
 
-        # planning_area_defn = None
-        # try:
-        #     for area in planning_area_data:
-        #         if area["pln_area_n"] == planning_area_name:
-        #             planning_area_defn = shape(json.loads(area['geojson']))
-        # except: pass
+        # if (pln_area_n is not None) and (planning_area_defn is not None):
+        #     planning_area_records = self.records[self.records.within(planning_area_defn)]
+        #     self.stop_locations = [p for p in planning_area_records.geometry]
+        # else:
+        #     self.stop_locations = [p for p in self.records.geometry]
 
-        planning_area_defn = PlanningArea().get_planning_area(pln_area_n)
+        self.stop_locations = []
 
-        if (pln_area_n is not None) and (planning_area_defn is not None):
-            planning_area_records = self.records[self.records.within(planning_area_defn)]
-            self.stop_locations = [p for p in planning_area_records.geometry]
-        else:
+        if pln_area_list is None:
             self.stop_locations = [p for p in self.records.geometry]
+        else:
+            # print(pln_area_list)
+            # for pln_area_n in pln_area_list:
+            #     print(pln_area_n)
+            #     planning_area_defn = PlanningArea().get_planning_area_geometry(pln_area_n)
+                # if (pln_area_n is not None) and (planning_area_defn is not None):
+                #     planning_area_records = self.records[self.records.within(planning_area_defn)]
+                #     self.stop_locations.extend([p for p in planning_area_records.geometry])
+
+            planning_area_defn = PlanningArea().get_planning_area_geometry(pln_area_list)
+            if planning_area_defn is not None:
+                planning_area_records = self.records[self.records.within(planning_area_defn)]
+                self.stop_locations.extend([p for p in planning_area_records.geometry])
+
 
         return self.stop_locations
 
 
 if __name__ == "__main__":
     bs = BusStop()
-    bs.get_locations_within('CLEMENTI')
+    bs.get_locations_within(['CLEMENTI'])
     # bs.get_stop_locations()
 
     print(bs.stop_locations)

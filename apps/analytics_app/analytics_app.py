@@ -36,7 +36,7 @@ class AnalyticsApp:
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/trip"
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
 
         params = {
@@ -75,7 +75,7 @@ class AnalyticsApp:
 
     def get_active_passenger_trips(self, sim_clock):
         ''' '''
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/trip"
+        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
         waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
 
         display_expiry_time = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT") - relativedelta(minutes=2)
@@ -139,25 +139,26 @@ class AnalyticsApp:
         }
 
         for id, trip in driver_trips.items():
-            if (trip.get('current_route_coords') is None) or (len(trip.get('current_route_coords')) == 1):
-                current_loc = trip['current_loc']
+            # if (trip.get('current_route_coords') is None) or (len(trip.get('current_route_coords')) == 1):
+            current_loc = trip['current_loc']
 
-                transformed_loc = transform_lonlat_webmercator(current_loc['coordinates'][1], current_loc['coordinates'][0])
-                driver_feature = {
-                    "attributes": {
-                        "OBJECTID": trip['last_waypoint_id'],
-                        "TRACKID": id,
-                        "CLASS": 'driver',
-                        "STATUS": trip['state']
-                    },
-                    "geometry": {
-                        "x": transformed_loc[0],
-                        "y": transformed_loc[1]
-                    }
+            transformed_loc = transform_lonlat_webmercator(current_loc['coordinates'][1], current_loc['coordinates'][0])
+            driver_feature = {
+                "attributes": {
+                    "OBJECTID": trip['last_waypoint_id'],
+                    "TRACKID": id,
+                    "CLASS": 'driver',
+                    "STATUS": trip['state']
+                },
+                "geometry": {
+                    "x": transformed_loc[0],
+                    "y": transformed_loc[1]
                 }
-                location_stream['features'].append(driver_feature)
+            }
+            location_stream['features'].append(driver_feature)
 
-            else:
+            # else:
+            if (trip.get('current_route_coords') is not None) and (len(trip.get('current_route_coords')) > 1):
                 current_route_coords = trip['current_route_coords']
 
                 transformed_current_route_coords = itransform_lonlat_webmercator([[item[1], item[0]] for item in current_route_coords])
@@ -169,7 +170,7 @@ class AnalyticsApp:
                         "STATUS": trip['state']
                     },
                     "geometry": {
-                        "paths": list(transformed_current_route_coords)
+                        "paths": [list(transformed_current_route_coords)] ### NOTE Paths is a [[[x,y], [x,y]]] format
                     }
                 }
                 route_stream['features'].append(driver_feature)
@@ -194,14 +195,14 @@ class AnalyticsApp:
 
 
         if settings['WEBSOCKET_SERVICE'] == 'MQTT':
-        # # using Web MQTT as Websockets service
+            # # using Web MQTT as Websockets service
 
-        # # # This code publishes on 'test' channel and can be received using rabbitmq's web_mqtt_examples.echo
-        # # self.messenger.client.publish('test', json.dumps(location_stream))
-        # # self.messenger.client.publish('test', json.dumps(route_stream))
+            # # # This code publishes on 'test' channel and can be received using rabbitmq's web_mqtt_examples.echo
+            # self.messenger.client.publish('test', json.dumps(location_stream))
+            # self.messenger.client.publish('test', json.dumps(route_stream))
 
-        # # This is a publication channel that should be used by visualizer
-        # # Note run_id should be made available to the listener so that it can listen to the proper channel
+            # # This is a publication channel that should be used by visualizer
+            # # Note run_id should be made available to the listener so that it can listen to the proper channel
             self.messenger.client.publish(f'anaytics/location_stream', json.dumps(location_stream))
             self.messenger.client.publish(f'anaytics/route_stream', json.dumps(route_stream))
         elif settings['WEBSOCKET_SERVICE'] == 'WS':
@@ -209,12 +210,14 @@ class AnalyticsApp:
             async def publish_location_stream_async(location_stream):
                 uri = f"{settings['WS_SERVER']}/location_stream"
                 async with websockets.connect(uri) as websocket:
-                    await websocket.send(json.dumps(location_stream))
+                    resp = await websocket.send(json.dumps(location_stream))
+                    # print(resp)
 
             async def publish_route_stream_async(route_stream):
                 uri = f"{settings['WS_SERVER']}/route_stream"
                 async with websockets.connect(uri) as websocket:
-                    await websocket.send(json.dumps(route_stream))
+                    resp = await websocket.send(json.dumps(route_stream))
+                    # print(resp)
 
             asyncio.run(publish_location_stream_async(location_stream))
             asyncio.run(publish_route_stream_async(route_stream))

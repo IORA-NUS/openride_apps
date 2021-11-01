@@ -8,12 +8,24 @@ from apps.config import settings
 class BehaviorGen():
 
     sim_settings = settings['SIM_SETTINGS']
-    stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    # stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    stop_locations = {
+        # coverage_area['name']: BusStop().get_locations_within([ coverage_area['name'] ]) # NOTE need to pass a list
+        coverage_area['name']: BusStop().get_locations_within(coverage_area['districts']) # NOTE need to pass a list
+            for coverage_area in sim_settings['COVERAGE_AREA']
+    }
+    # print(stop_locations)
 
-
+    # @classmethod
+    # def get_random_location(cls):
+    #     return mapping(choice(cls.stop_locations))
     @classmethod
-    def get_random_location(cls):
-        return mapping(choice(cls.stop_locations))
+    def get_random_location(cls, coverage_area_name):
+        # print(coverage_area_name, cls.stop_locations[coverage_area_name])
+        # loc = choice(cls.stop_locations[coverage_area_name])
+        # print(loc)
+        # return mapping(loc)
+        return mapping(choice(cls.stop_locations[coverage_area_name]))
 
     @classmethod
     def ridehail_driver(cls, id, record=None):
@@ -22,8 +34,11 @@ class BehaviorGen():
             shift_start_time = randint(0, (cls.sim_settings['SIM_DURATION']//4))
             shift_end_time = randint(cls.sim_settings['SIM_DURATION']//2, cls.sim_settings['SIM_DURATION']-1)
 
-            init_loc = cls.get_random_location()
-            empty_dest_loc = cls.get_random_location()
+            coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
+            coverage_area_name = coverage_area['name']
+
+            init_loc = cls.get_random_location(coverage_area_name)
+            empty_dest_loc = cls.get_random_location(coverage_area_name)
 
             patience = 150
             service_score = randint(1, 1000)
@@ -31,6 +46,8 @@ class BehaviorGen():
         else:
             shift_start_time = record['Start_Time']
             shift_end_time = record['End_Time']
+
+            coverage_area_name = record['coverage_area_name']
 
             init_loc = mapping(Point(record["Start_Longitude"], record["Start_Latitude"]))
             empty_dest_loc = mapping(Point(record["End_Longitude"], record["End_Latitude"]))
@@ -46,6 +63,7 @@ class BehaviorGen():
             'shift_start_time': shift_start_time,
             'shift_end_time': shift_end_time,
 
+            'coverage_area_name': coverage_area_name,
             'init_loc': init_loc,
             'empty_dest_loc': empty_dest_loc,
 
@@ -80,8 +98,11 @@ class BehaviorGen():
         if record is None:
             trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
 
-            pickup_loc = cls.get_random_location()
-            dropoff_loc = cls.get_random_location()
+            coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
+            coverage_area_name = coverage_area['name']
+
+            pickup_loc = cls.get_random_location(coverage_area_name)
+            dropoff_loc = cls.get_random_location(coverage_area_name)
 
             trip_value = randint(0, 100)
             patience = 600
@@ -158,18 +179,23 @@ class BehaviorGen():
         return behavior
 
     @classmethod
-    def ridehail_assignment(cls, id, record=None):
-
+    def ridehail_assignment(cls, id, coverage_area, record=None):
+        # print(coverage_area)
         behavior = {
             'email': f'{id}@test.com',
             'password': 'password',
 
             # 'solver': 'RandomAssignment',
-            'solver': 'CompromiseMatching',
+            'solver': coverage_area['strategy'], #'CompromiseMatching',
 
             'solver_params': {
-                'name': cls.sim_settings['PLANNING_AREA'],
-                'area': mapping(PlanningArea().get_planning_area(cls.sim_settings['PLANNING_AREA'])),
+                'planning_area':{
+                    'name': coverage_area['name'], # cls.sim_settings['PLANNING_AREA'],
+                    # 'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['name'])), #cls.sim_settings['PLANNING_AREA'])),
+                    'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['districts'])), #cls.sim_settings['PLANNING_AREA'])),
+                },
+                # 'name': cls.sim_settings['PLANNING_AREA'],
+                # 'area': mapping(PlanningArea().get_planning_area_geometry(cls.sim_settings['PLANNING_AREA'])),
 
                 'offline_params': {
                     'reverseParameter': 480,  # 480;
