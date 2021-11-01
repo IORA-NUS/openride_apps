@@ -16,7 +16,7 @@ from .driver_trip_manager import DriverTripManager
 from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
 
-from apps.lib import RidehailDriverTripStateMachine
+from apps.state_machine import RidehailDriverTripStateMachine
 
 from apps.messenger_service import Messenger
 

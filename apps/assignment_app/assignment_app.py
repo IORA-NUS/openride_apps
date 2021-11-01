@@ -15,7 +15,7 @@ from apps.loc_service import OSRMClient
 from apps.utils.user_registry import UserRegistry
 from apps.config import settings
 
-from apps.lib import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
+from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from .solver import * # NOTE * is deliverate to load all solvers in globals()
 from .engine_manager import EngineManager
 

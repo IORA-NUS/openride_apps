@@ -5,7 +5,7 @@ sys.path.append(parent_path)
 
 from re import I
 from shapely.geometry.linestring import LineString
-from apps.lib.agent_workflow_sm import WorkflowStateMachine
+from apps.state_machine.agent_workflow_sm import WorkflowStateMachine
 
 # print(sys.path)
 import logging
@@ -24,7 +24,7 @@ from shapely.geometry import Point, mapping
 from apps.config import settings
 from .driver_app import DriverApp
 from apps.utils.utils import id_generator, cut
-from apps.lib import RidehailDriverTripStateMachine
+from apps.state_machine import RidehailDriverTripStateMachine
 from apps.loc_service import OSRMClient
 from apps.utils.behavior_gen import BehaviorGen
 

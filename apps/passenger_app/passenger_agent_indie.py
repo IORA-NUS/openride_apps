@@ -21,7 +21,7 @@ from shapely.geometry import Point, mapping
 from apps.config import settings
 from apps.passenger_app import PassengerApp
 from apps.utils.utils import id_generator, cut
-from apps.lib import RidehailPassengerTripStateMachine, WorkflowStateMachine
+from apps.state_machine import RidehailPassengerTripStateMachine, WorkflowStateMachine
 from apps.loc_service import OSRMClient
 
 from apps.loc_service import TaxiStop, BusStop

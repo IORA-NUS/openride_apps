@@ -3,7 +3,7 @@ from http import HTTPStatus
 
 from apps.config import settings
 from .utils import id_generator, is_success
-from apps.lib import WorkflowStateMachine
+from apps.state_machine import WorkflowStateMachine
 
 # from abc import ABC, abstractmethod
 

@@ -4,7 +4,7 @@ from apps.config import settings
 from apps.utils import id_generator, is_success
 from apps.loc_service import OSRMClient
 
-from apps.lib import RidehailPassengerTripStateMachine
+from apps.state_machine import RidehailPassengerTripStateMachine
 
 class PassengerTripManager:
     ''' '''

@@ -3,7 +3,7 @@ import requests, json
 from apps.config import settings
 from apps.utils import id_generator, is_success
 
-from apps.lib import RidehailDriverTripStateMachine
+from apps.state_machine import RidehailDriverTripStateMachine
 
 
 class DriverTripManager:

@@ -4,7 +4,7 @@ from http import HTTPStatus
 import logging
 from apps.config import settings
 from apps.utils import id_generator, is_success
-from apps.lib import WorkflowStateMachine
+from apps.state_machine import WorkflowStateMachine
 
 
 class EngineManager():
