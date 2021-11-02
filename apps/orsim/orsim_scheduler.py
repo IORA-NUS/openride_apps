@@ -81,37 +81,42 @@ class ORSimScheduler(ABC):
     def on_receive_message(self, client, userdata, message):
         if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimScheduler":
             payload = json.loads(message.payload.decode('utf-8'))
-            # print(f"Message Recieved: {payload}")
-            if (payload.get('action') == 'completed') or (payload.get('action') == 'ready'):
-                self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
-            elif payload.get('action') == 'error':
+            # # print(f"Message Recieved: {payload}")
+            # if (payload.get('action') == 'completed') or (payload.get('action') == 'ready'):
+            #     self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
+            # elif payload.get('action') == 'error':
+            #     logging.warning(f'{self.__class__.__name__} received {message.payload = }')
+            self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
+            if payload.get('action') == 'error':
                 logging.warning(f'{self.__class__.__name__} received {message.payload = }')
 
 
     async def confirm_responses(self):
         ''' '''
         start_time = time.time()
+        base = 0
         num_confirmed_responses = 0
         while num_confirmed_responses != len(self.agent_collection):
             num_confirmed_responses = 0
             for agent_id, _ in self.agent_collection.items():
-                if self.agent_collection[agent_id]['step_response'] == 'completed':
+                if (self.agent_collection[agent_id]['step_response'] == 'completed') or \
+                        (self.agent_collection[agent_id]['step_response'] == 'error'):
                     num_confirmed_responses += 1
 
             current_time = time.time()
+            if current_time - start_time >= 5:
+                logging.info(f"Waiting for Agent Response... {base + (current_time - start_time):0.0f} sec")
+                base = base + (current_time - start_time)
+                start_time = current_time
 
-            # if (current_time - start_time) > self.sim_settings['STEP_TIMEOUT']:
-            #     raise Exception(f'Scheduler {self.scheduler_id} timeout beyond {self.sim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.\n{self.agent_collection = }')
-            # else:
-            #     # print(f"{self.scheduler_id} has {num_confirmed_responses = }")
-            #     # # await asyncio.sleep(random()/10)
+
             await asyncio.sleep(0.1)
 
         # print(f"{self.scheduler_id} has {num_confirmed_responses = }")
 
     async def step(self):
 
-        logging.info(f"SimController Time: {self.time}")
+        logging.info(f"{self.scheduler_id} Step: {self.time}")
 
         message = {'action': 'step', 'time_step': self.time}
 
@@ -124,7 +129,11 @@ class ORSimScheduler(ABC):
 
         # asyncio.run(self.confirm_responses())
         try:
+            start_time = time.time()
             await asyncio.wait_for(self.confirm_responses(), timeout=self.sim_settings['STEP_TIMEOUT'])
+            end_time = time.time()
+            logging.info(f'{self.scheduler_id} Runtime: {end_time-start_time} sec')
+
         except asyncio.TimeoutError as e:
             logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.sim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.\n{self.agent_collection = }')
             raise e

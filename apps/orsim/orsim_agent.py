@@ -1,5 +1,5 @@
 from abc import ABC, abstractclassmethod, abstractmethod
-import asyncio, json, logging
+import asyncio, json, logging, time
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -49,6 +49,7 @@ class ORSimAgent(ABC):
         # #     self.step(payload.get('time_step'))
         # # elif payload.get('action') == 'exit_market':
         # #     self.exiting_market()
+        start_time = time.time()
         try:
             # logging.info(f"{message.topic = }")
             if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimAgent":
@@ -64,6 +65,7 @@ class ORSimAgent(ABC):
                 elif payload.get('action') == 'step':
                     self.refresh(payload['time_step'])
                     self.process_payload(payload)
+
 
                     response_payload = {
                         'agent_id': self.unique_id,
@@ -86,9 +88,13 @@ class ORSimAgent(ABC):
                 'action': 'error',
                 'details': str(e)
             }
-            logging.exception(str(e))
+            logging.exception(f"{self.unique_id} raised {str(e)}")
 
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
+
+        end_time = time.time()
+
+        logging.info(f"Runtime for {self.unique_id} at {self.current_time_step}: {end_time - start_time:0.2f} secs ")
 
     # @abstractclassmethod
     # def load_behavior(cls, unique_id):

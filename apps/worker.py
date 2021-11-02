@@ -1,10 +1,11 @@
 
 from __future__ import absolute_import
 from celery import Celery
+from .config import settings
 
 app = Celery('apps',
             #  broker='amqp://guest:guest@localhost',
-             broker='amqp://test:test@192.168.10.115',
+             broker=f'amqp://{settings["RABBITMQ_ADMIN_USER"]}:{settings["RABBITMQ_ADMIN_PASSWORD"]}@{settings["MQTT_BROKER"]}',
              backend='rpc://',
              include=['apps.tasks'])
 

@@ -387,7 +387,7 @@ class DriverTripManager:
 
     def refresh(self):
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
-        driver_trip_item_url = driver_trip_url + f"/{self.trip['_id']}"
+        driver_trip_item_url = f"{driver_trip_url}/{self.trip['_id']}"
 
         response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
 

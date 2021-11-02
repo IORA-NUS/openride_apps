@@ -1,6 +1,7 @@
 # custom
 archive/
 results/
+output/
 
 # user_db.py
 .DS_Store
