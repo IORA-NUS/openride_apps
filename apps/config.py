@@ -25,8 +25,8 @@ settings = {
 
 
     'SIM_SETTINGS': {
-        'SIM_DURATION': 240, # 960, # 600,    # 60 # Num Steps
-        'SIM_STEP_SIZE': 30, # 15, # 6,     # 60   # seconds
+        'SIM_DURATION': 960, # 960, # 600,    # 60 # Num Steps
+        'SIM_STEP_SIZE': 15, # 15, # 6,     # 60   # seconds
         'NUMSTEPS_BETWEEN_SOLVER': 1, #2,
 
         'NUM_DRIVERS': 100,       # 100,
@@ -36,7 +36,7 @@ settings = {
         'COVERAGE_AREA': [
             # {
             #     'name': 'Westside',
-            #     'districts': ['CLEMENTI', 'JURONG'],
+            #     'districts': ['CLEMENTI'],
             #     'strategy': 'CompromiseMatching',
             # },
             {

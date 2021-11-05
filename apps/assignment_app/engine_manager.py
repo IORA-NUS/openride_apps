@@ -38,7 +38,7 @@ class EngineManager():
         response = requests.get(engine_url, headers=self.user.get_headers(), params=params)
         # print(response.text)
 
-        if response.json()['_meta']['total'] == 0:
+        if len(response.json()['_items']) == 0:
             # Need to register and actvate engine
             response = self.create_engine(sim_clock)
             return self.init_engine(sim_clock)

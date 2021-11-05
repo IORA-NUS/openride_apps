@@ -36,7 +36,7 @@ class DriverManager():
         response = requests.get(driver_url, headers=self.user.get_headers())
         # print(response.json())
 
-        if response.json()['_meta']['total'] == 0:
+        if len(response.json()['_items']) == 0:
             # Need to register and actvate driver
             response = self.create_driver(sim_clock)
             return self.init_driver(sim_clock)
@@ -142,7 +142,7 @@ class DriverManager():
 
         response = requests.get(vehicle_url, headers=self.user.get_headers())
 
-        if response.json()['_meta']['total'] == 0:
+        if len(response.json()['_items']) == 0:
             # Need to register and actvate vehicle
             response = self.create_vehicle(sim_clock)
             return self.init_vehicle(sim_clock)

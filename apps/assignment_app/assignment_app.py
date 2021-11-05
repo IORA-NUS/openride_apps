@@ -149,10 +149,11 @@ class AssignmentApp:
                 "driver": 1
             }),
         }
-
+        # print(params)
         # print({"$near": {"$geometry": self.solver_params['center'], "$maxDistance": self.solver_params['radius']}})
 
         response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
+        # print(response.url)
         # print(response.text)
         response_items = response.json()['_items']
 
@@ -169,13 +170,15 @@ class AssignmentApp:
 
         params = {
             "where": json.dumps({
+                "is_active": True,
                 "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier]},
                 # "pickup_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
                 "pickup_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
             })
         }
-
+        # print(params)
         response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
+        # print(response.url)
         # print(response.json())
         response_items = response.json()['_items']
 

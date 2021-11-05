@@ -35,7 +35,7 @@ class PassengerManager():
 
         response = requests.get(passenger_url, headers=self.user.get_headers())
 
-        if response.json()['_meta']['total'] == 0:
+        if len(response.json()['_items']) == 0:
             # Need to register and actvate passenger
             response = self.create_passenger(sim_clock)
             return self.init_passenger(sim_clock)
