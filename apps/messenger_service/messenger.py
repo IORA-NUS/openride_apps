@@ -15,6 +15,7 @@ class Messenger:
         ''' '''
         # self.run_id = run_id
         self.credentials = credentials
+        self.channel_id = channel_id
 
         # print('registering messenger')
 
@@ -22,6 +23,8 @@ class Messenger:
             self.client = paho.Client(credentials['email'])
             self.client.username_pw_set(username=self.credentials['email'], password=self.credentials['password'])
             Messenger.register_user(self.credentials['email'], self.credentials['password'])
+            # self.client.on_connect = self.on_connect
+
             self.client.connect(settings['MQTT_BROKER'])
         # else:
         #     self.client = paho.Client(credentials['email'], transport=transport)
@@ -47,6 +50,18 @@ class Messenger:
     #     if channel_id is not None:
     #         self.client.loop_start()
     #         self.client.subscribe(f"Agent/{channel_id}")
+
+    # def on_connect(self, client, userdata, flags, rc):
+    #     if self.channel_id is not None:
+    #         client.loop_start()
+    #         client.subscribe(self.channel_id)
+    #         logging.info(f"Channel: {self.channel_id}")
+
+
+    def disconnect(self):
+        if self.channel_id is not None:
+            self.client.unsubscribe(self.channel_id)
+            # self.client.loop_stop()
 
 
     @classmethod

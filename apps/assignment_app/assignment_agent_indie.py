@@ -118,6 +118,9 @@ class AssignmentAgentIndie(ORSimAgent):
     #     # print(f"{behavior['solver_params']['area']=}")
     #     return behavior
 
+    def logout(self):
+        # self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
+        pass
 
     # def step(self):
     def step(self, time_step):
@@ -130,8 +133,8 @@ class AssignmentAgentIndie(ORSimAgent):
         # print('After assign')
             self.assignment_app.publish(result)
 
-        if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
-            self.shutdown()
+        # if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+        #     self.shutdown()
 
 
 

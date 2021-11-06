@@ -53,6 +53,7 @@ class ORSimScheduler(ABC):
     def remove_agent(self, unique_id):
         try:
             self.agent_collection.pop(unique_id)
+            logging.info(self.agent_collection)
         except Exception as e:
             logging.exception(str(e))
             print(e)
@@ -89,7 +90,9 @@ class ORSimScheduler(ABC):
             self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
             if payload.get('action') == 'error':
                 logging.warning(f'{self.__class__.__name__} received {message.payload = }')
-
+            # elif payload.get('action') == 'shutdown':
+            #     # agents_shutdown.append(agent_id)
+            #     self.remove_agent(payload.get('agent_id'))
 
     async def confirm_responses(self):
         ''' '''
@@ -100,17 +103,33 @@ class ORSimScheduler(ABC):
             num_confirmed_responses = 0
             for agent_id, _ in self.agent_collection.items():
                 if (self.agent_collection[agent_id]['step_response'] == 'completed') or \
-                        (self.agent_collection[agent_id]['step_response'] == 'error'):
+                        (self.agent_collection[agent_id]['step_response'] == 'error') or \
+                        (self.agent_collection[agent_id]['step_response'] == 'shutdown'):
                     num_confirmed_responses += 1
+            #     if (self.agent_collection[agent_id]['step_response'] == 'shutdown'):
+            #         agents_shutdown.append(agent_id)
+
+            # for agent_id in agents_shutdown:
+            #     self.remove_agent(agent_id)
 
             current_time = time.time()
             if current_time - start_time >= 5:
-                logging.info(f"Waiting for Agent Response... {base + (current_time - start_time):0.0f} sec")
+                logging.info(f"Waiting for Agent Response... {num_confirmed_responses}, {len(self.agent_collection)}: {base + (current_time - start_time):0.0f} sec")
                 base = base + (current_time - start_time)
                 start_time = current_time
 
-
             await asyncio.sleep(0.1)
+
+        # # Handle shutdown agents once successfully exiting the loop
+        # agents_shutdown = []
+        # for agent_id, _ in self.agent_collection.items():
+        #     if self.agent_collection[agent_id]['step_response'] == 'shutdown':
+        #         agents_shutdown.append(agent_id)
+
+        # logging.info(agents_shutdown)
+        # for agent_id in agents_shutdown:
+        #     logging.info(f'removing agent {agent_id}')
+        #     self.remove_agent(agent_id)
 
         # print(f"{self.scheduler_id} has {num_confirmed_responses = }")
 
@@ -118,7 +137,10 @@ class ORSimScheduler(ABC):
 
         logging.info(f"{self.scheduler_id} Step: {self.time}")
 
-        message = {'action': 'step', 'time_step': self.time}
+        if self.time < self.sim_settings['SIM_DURATION']-1:
+            message = {'action': 'step', 'time_step': self.time}
+        else:
+            message = {'action': 'shutdown', 'time_step': self.time}
 
         for agent_id, _ in self.agent_collection.items():
             self.agent_collection[agent_id]['step_response'] = 'ready'
@@ -138,9 +160,29 @@ class ORSimScheduler(ABC):
             logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.sim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.\n{self.agent_collection = }')
             raise e
 
+        # Handle shutdown agents once successfully exiting the loop
+        agents_shutdown = []
+        for agent_id, _ in self.agent_collection.items():
+            if self.agent_collection[agent_id]['step_response'] == 'shutdown':
+                agents_shutdown.append(agent_id)
+
+        # logging.info(agents_shutdown)
+        for agent_id in agents_shutdown:
+            # logging.info(f'removing agent {agent_id}')
+            self.remove_agent(agent_id)
+
 
         self.time += 1
 
+        sim_stat = {
+            'status': 'success',
+            'end_sim': False,
+        }
+
+        if self.time == self.sim_settings['SIM_DURATION']-1:
+            sim_stat['end_sim'] = True
+
+        return sim_stat
     # def run_simulation(self):
     #     while self.time < self.sim_settings['SIM_DURATION']:
     #         self.step()

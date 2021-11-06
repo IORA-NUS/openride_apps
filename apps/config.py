@@ -25,12 +25,12 @@ settings = {
 
 
     'SIM_SETTINGS': {
-        'SIM_DURATION': 960, # 960, # 600,    # 60 # Num Steps
-        'SIM_STEP_SIZE': 15, # 15, # 6,     # 60   # seconds
+        'SIM_DURATION': 60, # 960, # 600,    # 60 # Num Steps
+        'SIM_STEP_SIZE': 60, # 15, # 6,     # 60   # seconds
         'NUMSTEPS_BETWEEN_SOLVER': 1, #2,
 
-        'NUM_DRIVERS': 100,       # 100,
-        'NUM_PASSENGERS': 300,   # 300,
+        'NUM_DRIVERS': 2,       # 100,
+        'NUM_PASSENGERS': 10,   # 300,
 
         # 'PLANNING_AREA': 'CLEMENTI',
         'COVERAGE_AREA': [
@@ -59,6 +59,13 @@ settings = {
 
         'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds)
     },
+
+    # 'ORSIM': {
+    #     'SIM_DURATION': 480, # 960, # 600,    # 60 # Num Steps
+    #     'SIM_STEP_SIZE': 30, # 15, # 6,     # 60   # seconds
+
+    #     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds)
+    # }
 
 }
 

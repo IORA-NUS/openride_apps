@@ -21,6 +21,8 @@ class ORSimAgent(ABC):
         self.prev_time_step = 0
         self.current_time_step = 0
         self.elapsed_duration_steps = 0
+        self.active = False
+
 
         self._shutdown = False
 
@@ -66,15 +68,19 @@ class ORSimAgent(ABC):
                     self.refresh(payload['time_step'])
                     self.process_payload(payload)
 
-
                     response_payload = {
                         'agent_id': self.unique_id,
                         'time_step': self.current_time_step,
-                        'action': 'completed',
+                        'action': 'completed' if self._shutdown==False else 'shutdown',
                     }
-                elif payload.get('action') == 'kill':
+                elif payload.get('action') == 'shutdown':
                     ''' '''
                     self.shutdown()
+                    response_payload = {
+                        'agent_id': self.unique_id,
+                        'time_step': self.current_time_step,
+                        'action': 'shutdown',
+                    }
             else:
                 logging.warning(f'Unprocessed Message: {message.topic = }')
                 response_payload = {
@@ -136,6 +142,9 @@ class ORSimAgent(ABC):
         }
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
 
+    def stop_listening(self):
+        self.agent_messenger.disconnect()
+
     def get_current_time_str(self):
         return datetime.strftime(self.current_time, "%a, %d %b %Y %H:%M:%S GMT")
 
@@ -149,7 +158,16 @@ class ORSimAgent(ABC):
 
     def shutdown(self):
         logging.info(f'Shutting down {self.unique_id = }')
+        self.logout()
+        self.stop_listening()
+        self.active = False
         self._shutdown = True
+
+    @abstractmethod
+    def logout(self):
+        ''' process any logout processes needed in the agent.
+        '''
+        pass
 
     def get_transition_probability(self, condition, default):
         try:

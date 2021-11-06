@@ -171,19 +171,19 @@ class PassengerAgentIndie(ORSimAgent):
 
             # print('Exit Market')
             # print(self.app.get_trip())
-            self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
+            # self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
             self.shutdown()
             self.active = False
             return True
         # elif self.model.passenger_schedule.time == settings['SIM_DURATION']-1:
-        elif self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+        # elif self.current_time_step == self.sim_settings['SIM_DURATION']-1:
 
-            self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
-            self.shutdown()
+        #     # self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
+        #     self.shutdown()
 
-            self.active = False
+        #     self.active = False
 
-            return True
+        #     return True
         else:
             return False
 
@@ -257,6 +257,8 @@ class PassengerAgentIndie(ORSimAgent):
 
     #         # # self.current_route_coords = self.app.get_route(self.get_current_time_str(), start_loc=self.current_loc, end_loc=None)
 
+    def logout(self):
+        self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
 
 
     # async def step(self, time_step):
@@ -276,12 +278,12 @@ class PassengerAgentIndie(ORSimAgent):
             raise e
 
         # if self.model.passenger_schedule.time == settings['SIM_DURATION']-1:
-        if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
-            self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
-            self.shutdown()
-        else:
-            self.consume_messages()
-            self.perform_workflow_actions()
+        # if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+        #     self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
+        #     self.shutdown()
+        # else:
+        self.consume_messages()
+        self.perform_workflow_actions()
 
         # # if self.behavior['email'] == "p_000001@test.com":
         # #     print(f"{self.behavior['email']} sleeping for 5 seconds")

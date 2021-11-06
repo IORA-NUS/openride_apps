@@ -90,6 +90,9 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     #     return behavior
 
+    def logout(self):
+        # self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
+        pass
 
     def step(self, time_step):
         ''' '''
@@ -132,8 +135,8 @@ class AnalyticsAgentIndie(ORSimAgent):
                         publish_file.write(json.dumps(paths_history))
 
 
-        if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
-            self.shutdown()
+        # if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+        #     self.shutdown()
 
 
     # def refresh(self, time_step):

@@ -247,15 +247,17 @@ class DriverAgentIndie(ORSimAgent):
         elif (self.current_time_step > self.behavior['shift_end_time']) and \
                 (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
 
-            self.app.logout(self.get_current_time_str(), self.current_loc)
+            # self.app.logout(self.get_current_time_str(), self.current_loc)
+            self.shutdown()
             self.active = False
             return True
-        # # elif self.model.driver_schedule.time == settings['SIM_DURATION']-1:
-        elif self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+        # # # elif self.model.driver_schedule.time == settings['SIM_DURATION']-1:
+        # elif self.current_time_step == self.sim_settings['SIM_DURATION']-1:
 
-            self.app.logout(self.get_current_time_str(), self.current_loc)
-            self.active = False
-            return True
+        #     # self.app.logout(self.get_current_time_str(), self.current_loc)
+        #     self.shutdown()
+        #     self.active = False
+        #     return True
         # else:
         #     self.app.logout(self.get_current_time_str(), self.current_loc)
         #     return True
@@ -264,11 +266,16 @@ class DriverAgentIndie(ORSimAgent):
         #     print('logging out')
         #     self.app.logout(self.get_current_time_str(), self.current_loc)
         #     return True
+        else:
+            return False
 
     def set_route(self, from_loc, to_loc): #, state):
         ''' find a Feasible route using some routeing engine'''
         self.active_route = OSRMClient.get_route(from_loc, to_loc)
         self.current_route_coords = OSRMClient.get_coords_from_route(self.active_route)
+
+    def logout(self):
+        self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
 
     # async def step(self, time_step):
     def step(self, time_step):
@@ -281,18 +288,18 @@ class DriverAgentIndie(ORSimAgent):
         # Driver has likely moved between the ticks, so update their current loc
         self.update_location()
 
-        # if self.model.driver_schedule.time == settings['SIM_DURATION']-1:
-        if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
-            # If this is the last tick of Simulation, logout and Forcibly terminate the current trip
-            self.app.logout(self.get_current_time_str(), self.current_loc)
-            self.shutdown()
-            # return
-        else:
-            # If Simulation continues, take the actions for each step
-            # 1. DeQueue all messages and process them in sequence
-            self.consume_messages()
-            # 2. based on current state, perform any workflow actions according to Agent behavior
-            self.perform_workflow_actions()
+        # # if self.model.driver_schedule.time == settings['SIM_DURATION']-1:
+        # if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
+        #     # If this is the last tick of Simulation, logout and Forcibly terminate the current trip
+        #     self.app.logout(self.get_current_time_str(), self.current_loc)
+        #     self.shutdown()
+        #     # return
+        # else:
+        # If Simulation continues, take the actions for each step
+        # 1. DeQueue all messages and process them in sequence
+        self.consume_messages()
+        # 2. based on current state, perform any workflow actions according to Agent behavior
+        self.perform_workflow_actions()
 
         # print(f"{self.model.driver_schedule.time}: Driver {self.behavior['email']} completed execution")
         # # print("Sleep driver for 1 second")
