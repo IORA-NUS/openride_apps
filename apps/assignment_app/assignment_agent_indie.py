@@ -6,7 +6,7 @@ sys.path.append(parent_path)
 
 from mesa import Agent
 from .assignment_app import AssignmentApp
-from apps.config import settings
+# from apps.config import settings
 from apps.loc_service import PlanningArea
 
 from shapely.geometry import MultiPolygon, mapping
@@ -16,6 +16,7 @@ from dateutil.relativedelta import relativedelta
 from apps.messenger_service import Messenger
 
 from apps.orsim import ORSimAgent
+from apps.config import assignment_settings, orsim_settings
 
 class AssignmentAgentIndie(ORSimAgent):
     ''' '''
@@ -24,7 +25,7 @@ class AssignmentAgentIndie(ORSimAgent):
 
         super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
 
-        self.sim_settings = settings['SIM_SETTINGS']
+        # self.sim_settings = settings['SIM_SETTINGS']
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -128,7 +129,8 @@ class AssignmentAgentIndie(ORSimAgent):
         # self.refresh(time_step)
 
         # print('AssignmentAgent.step')
-        if self.current_time_step % self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] == 0:
+        # if self.current_time_step % self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] == 0:
+        if self.current_time_step % assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] == 0:
             result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
         # print('After assign')
             self.assignment_app.publish(result)

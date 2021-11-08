@@ -4,7 +4,7 @@ parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
 import logging
-from apps.config import settings
+# from apps.config import settings
 from mesa import Agent
 from .analytics_app import AnalyticsApp
 
@@ -14,6 +14,8 @@ from dateutil.relativedelta import relativedelta
 from apps.messenger_service import Messenger
 
 from apps.orsim import ORSimAgent
+
+from apps.config import analytics_settings, orsim_settings
 
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
@@ -37,7 +39,7 @@ class AnalyticsAgentIndie(ORSimAgent):
         #     self.behavior = behavior
         # else:
         #     self.behavior = AnalyticsAgentIndie.load_behavior(unique_id)
-        self.sim_settings = settings['SIM_SETTINGS']
+        # self.sim_settings = settings['SIM_SETTINGS']
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -98,40 +100,47 @@ class AnalyticsAgentIndie(ORSimAgent):
         ''' '''
         # print('AnalyticsAgent.step')
         # self.refresh(time_step)
+        output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
 
         # Publish Active trips using websocket Protocol
-        if self.sim_settings['PUBLISH_REALTIME_DATA']:
+        # if self.sim_settings['PUBLISH_REALTIME_DATA']:
+        if analytics_settings['PUBLISH_REALTIME_DATA']:
             location_stream, route_stream = self.analytics_app.publish_active_trips(self.get_current_time_str())
             # print(publish_dict)
 
-            if self.sim_settings['WRITE_WS_OUTPUT_TO_FILE']:
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                if not os.path.exists(f"{current_dir}/output/{self.run_id}"):
-                    os.makedirs(f"{current_dir}/output/{self.run_id}")
+            # if self.sim_settings['WRITE_WS_OUTPUT_TO_FILE']:
+            if analytics_settings['WRITE_WS_OUTPUT_TO_FILE']:
+                stream_output_dir = f"{output_dir}/stream"
+                if not os.path.exists(stream_output_dir):
+                    os.makedirs(stream_output_dir)
 
-                with open(f"{current_dir}/output/{self.run_id}/{self.current_time_step}.location_stream.json", 'w') as publish_file:
+                with open(f"{stream_output_dir}/{self.current_time_step}.location_stream.json", 'w') as publish_file:
                     publish_file.write(json.dumps(location_stream))
 
-                with open(f"{current_dir}/output/{self.run_id}/{self.current_time_step}.route_stream.json", 'w') as publish_file:
+                with open(f"{stream_output_dir}/{self.current_time_step}.route_stream.json", 'w') as publish_file:
                     publish_file.write(json.dumps(route_stream))
 
 
         # Gather history in timewindow as paths for visualization
-        if self.sim_settings['PUBLISH_PATHS_HISTORY']:
-            if (((self.current_time_step + 1) * self.sim_settings['SIM_STEP_SIZE']) % self.sim_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
+        # if self.sim_settings['PUBLISH_PATHS_HISTORY']:
+        if analytics_settings['PUBLISH_PATHS_HISTORY']:
+            # if (((self.current_time_step + 1) * self.sim_settings['SIM_STEP_SIZE']) % self.sim_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
+            if (((self.current_time_step + 1) * orsim_settings['SIM_STEP_SIZE']) % analytics_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
                 timewindow_end = self.current_time
-                timewindow_start = timewindow_end - relativedelta(seconds=self.sim_settings['PATHS_HISTORY_TIME_WINDOW']+self.sim_settings['SIM_STEP_SIZE'])
+                # timewindow_start = timewindow_end - relativedelta(seconds=self.sim_settings['PATHS_HISTORY_TIME_WINDOW']+self.sim_settings['SIM_STEP_SIZE'])
+                timewindow_start = timewindow_end - relativedelta(seconds=analytics_settings['PATHS_HISTORY_TIME_WINDOW']+orsim_settings['SIM_STEP_SIZE'])
                 logging.info(f"{timewindow_start}, {timewindow_end}")
 
                 paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
                 # print(publish_dict)
 
-                if self.sim_settings['WRITE_PH_OUTPUT_TO_FILE']:
-                    current_dir = os.path.dirname(os.path.abspath(__file__))
-                    if not os.path.exists(f"{current_dir}/output/{self.run_id}"):
-                        os.makedirs(f"{current_dir}/output/{self.run_id}")
+                # if self.sim_settings['WRITE_PH_OUTPUT_TO_FILE']:
+                if analytics_settings['WRITE_PH_OUTPUT_TO_FILE']:
+                    rest_output_dir = f"{output_dir}/rest"
+                    if not os.path.exists(rest_output_dir):
+                        os.makedirs(rest_output_dir)
 
-                    with open(f"{current_dir}/output/{self.run_id}/{self.current_time_step}.paths_history.json", 'w') as publish_file:
+                    with open(f"{rest_output_dir}/{self.current_time_step}.paths_history.json", 'w') as publish_file:
                         publish_file.write(json.dumps(paths_history))
 
 

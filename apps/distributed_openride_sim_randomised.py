@@ -17,9 +17,9 @@ from driver_app import DriverAgentIndie
 from passenger_app import PassengerAgentIndie
 from assignment_app import AssignmentAgentIndie
 from analytics_app import AnalyticsAgentIndie
-from config import settings
+
 from utils import id_generator
-from utils.behavior_gen import BehaviorGen
+from utils.generate_behavior import GenerateBehavior
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -32,50 +32,34 @@ import asyncio
 
 from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
 
-
 from orsim import ORSimScheduler
+from apps.config import settings, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
 
 class DistributedOpenRideSimRandomised():
 
 
-    def __init__(self, num_drivers, num_passengers):
+    # def __init__(self, num_drivers, num_passengers):
+    def __init__(self):
         self.run_id = id_generator(12)
         self.start_time = datetime(2020,1,1,8,0,0)
         # logging.info(f"{self.run_id = }, {self.start_time = }")
         self.current_time = self.start_time
 
-        # message_channel = f"sim_admin_{self.run_id}"
-
-        # self.messenger = Messenger(self.run_id,
-        #                             credentials={'email': f'{message_channel}@test.io', 'password': 'password'},
-        #                             channel_id=message_channel,
-        #                             on_message=self.receive_message)
-
-        # self.num_agents = num_drivers + num_passengers
-
-        # self.service_schedule = BaseScheduler(self)
-        # # self.driver_schedule = RandomActivation(self)
-        # # self.passenger_schedule = RandomActivation(self)
-        # self.driver_schedule = CeleryBaseScheduler(self)
-        # self.passenger_schedule = CeleryBaseScheduler(self)
-
-        # self.driver_agent_spec = []
-        # self.passenger_agent_spec = []
-        # self.assignment_agent_spec = []
-        # self.analytics_agent_spec = []
-
-        self.sim_settings = settings['SIM_SETTINGS']
+        # self.sim_settings = settings['SIM_SETTINGS']
 
 
         self.agent_scheduler = ORSimScheduler(self.run_id, 'agent_scheduler')
         self.service_scheduler = ORSimScheduler(self.run_id, 'service_scheduler')
         # self.agent_list = []
+        # self.agent_registry = {i:[] for i in range(self.sim_settings['SIM_DURATION'])}
+        self.agent_registry = {i:[] for i in range(orsim_settings['SIM_DURATION'])}
 
-        for i in range(num_drivers):
+        # for i in range(num_drivers):
+        for i in range(driver_settings['NUM_DRIVERS']):
             agent_id = f"d_{i:06d}"
             # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
             # self.driver_agent_spec.append(spec)
-            behavior = BehaviorGen.ridehail_driver(agent_id)
+            behavior = GenerateBehavior.ridehail_driver(agent_id)
             # print(behavior)
             spec = {
                 'unique_id': agent_id,
@@ -83,27 +67,40 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
                 'behavior': behavior
             }
-            self.agent_scheduler.add_agent(agent_id, start_driver, spec)
+            # self.agent_scheduler.add_agent(agent_id, start_driver, spec)
 
-        for i in range(num_passengers):
+            self.agent_registry[behavior['shift_start_time']].append({
+                                                                'unique_id': agent_id,
+                                                                'method': start_driver,
+                                                                'spec': spec
+                                                            })
+
+        # for i in range(num_passengers):
+        for i in range(passenger_settings['NUM_PASSENGERS']):
             agent_id = f"p_{i:06d}"
             # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
             # self.passenger_agent_spec.append(spec)
-            behavior = BehaviorGen.ridehail_passenger(agent_id)
+            behavior = GenerateBehavior.ridehail_passenger(agent_id)
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
                 'behavior': behavior
             }
+            # self.agent_scheduler.add_agent(agent_id, start_passenger, spec)
 
-            self.agent_scheduler.add_agent(agent_id, start_passenger, spec)
+            self.agent_registry[behavior['trip_request_time']].append({
+                                                                'unique_id': agent_id,
+                                                                'method': start_passenger,
+                                                                'spec': spec
+                                                            })
 
         # for i in range(1): # Only one Solver for the moment.
-        for coverage_area in self.sim_settings['COVERAGE_AREA']: # Support for multiple solvers
+        # for coverage_area in self.sim_settings['COVERAGE_AREA']: # Support for multiple solvers
+        for coverage_area in assignment_settings['COVERAGE_AREA']: # Support for multiple solvers
             # agent_id = f"assignment_{i:03d}"
             agent_id = f"assignment_{coverage_area['name']}"
-            behavior = BehaviorGen.ridehail_assignment(agent_id, coverage_area)
+            behavior = GenerateBehavior.ridehail_assignment(agent_id, coverage_area)
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
@@ -112,12 +109,12 @@ class DistributedOpenRideSimRandomised():
             }
             self.service_scheduler.add_agent(agent_id, start_assignment, spec)
 
-        for i in range(1): # Only one Solver for the moment.
+        for i in range(1): # Only one Analytics agent for the moment.
             # agent = AnalyticsAgent(f"analytics_{i:03d}", self)
             agent_id = f"analytics_{i:03d}"
             # spec = (agent_id, self.run_id, datetime.strftime(self.start_time, '%Y%m%d%H%M%S'))
             # self.analytics_agent_spec.append(spec)
-            behavior = BehaviorGen.ridehail_analytics(agent_id)
+            behavior = GenerateBehavior.ridehail_analytics(agent_id)
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
@@ -133,8 +130,12 @@ class DistributedOpenRideSimRandomised():
     #     # # NOTE This should bre replaced by a more reliable handshake function within the Initialize method
     #     # time.sleep(1)
 
-    def step(self):
-        print(f"Simulation Step: {self.agent_scheduler.time} of {self.sim_settings['SIM_DURATION']}")
+    def step(self, i):
+        print(f"Simulation Step: {self.agent_scheduler.time} of {orsim_settings['SIM_DURATION']}")
+
+        for item in self.agent_registry[i]:
+            self.agent_scheduler.add_agent(**item)
+
         asyncio.run(self.agent_scheduler.step())
         asyncio.run(self.service_scheduler.step())
 
@@ -193,11 +194,16 @@ class DistributedOpenRideSimRandomised():
 
 if __name__ == '__main__':
 
-    logging.basicConfig(filename='app.log', level=settings['LOG_LEVEL'], filemode='w')
+    log_dir = f"{os.path.dirname(os.path.abspath(__file__))}/log"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
 
-    num_drivers =  settings['SIM_SETTINGS']['NUM_DRIVERS'] # 2 # 2 #50
-    num_passengers =  settings['SIM_SETTINGS']['NUM_PASSENGERS'] # 10 # 10 #100
-    sim = DistributedOpenRideSimRandomised(num_drivers, num_passengers)
+    logging.basicConfig(filename=f'{log_dir}/app.log', level=settings['LOG_LEVEL'], filemode='w')
+
+    # num_drivers =  settings['SIM_SETTINGS']['NUM_DRIVERS'] # 2 # 2 #50
+    # num_passengers =  settings['SIM_SETTINGS']['NUM_PASSENGERS'] # 10 # 10 #100
+    # sim = DistributedOpenRideSimRandomised(num_drivers, num_passengers)
+    sim = DistributedOpenRideSimRandomised()
 
     print(f"Initializing Simulation with {sim.run_id = }")
 
@@ -207,9 +213,10 @@ if __name__ == '__main__':
 
         # sim.start_schedulers()
 
-        for i in range(settings['SIM_SETTINGS']['SIM_DURATION']):
+        # for i in range(settings['SIM_SETTINGS']['SIM_DURATION']):
+        for i in range(orsim_settings['SIM_DURATION']):
             try:
-                sim.step()
+                sim.step(i)
             except Exception as e:
                 print(e)
                 break

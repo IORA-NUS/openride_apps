@@ -109,9 +109,19 @@ class PlanningArea:
 
         return planning_area_defn
 
+    def get_names(self):
+        with open(self.planning_area_file) as json_file:
+            # planning_area = pd.DataFrame(json.load(json_file))
+            planning_area = json.load(json_file)
+
+        names = [item['pln_area_n'] for item in planning_area]
+        print(names)
+
+
 if __name__ == '__main__':
 
     planning_area = PlanningArea()
 
-    planning_area.retrieve_planning_area_from_onemap()
+    # planning_area.retrieve_planning_area_from_onemap()
 
+    planning_area.get_names()

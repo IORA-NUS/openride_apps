@@ -1,14 +1,15 @@
 from abc import ABC, abstractclassmethod, abstractmethod
-import asyncio, json, logging, time
+import asyncio, json, logging, time, os
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from apps.messenger_service import Messenger
-from apps.config import settings
+# from apps.config import settings
+from apps.config import orsim_settings, settings
 
 class ORSimAgent(ABC):
 
-    sim_settings = settings['SIM_SETTINGS']
+    # sim_settings = settings['SIM_SETTINGS']
 
     def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
         self.unique_id = unique_id
@@ -25,8 +26,13 @@ class ORSimAgent(ABC):
 
 
         self._shutdown = False
-
         self.behavior = behavior
+
+        # output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
+        # if not os.path.exists(output_dir):
+        #     os.makedirs(output_dir)
+
+        # logging.basicConfig(filename=f"{output_dir}/agent_{self.unique_id}.log", level=settings['LOG_LEVEL'], filemode='w')
 
         # if behavior is not None:
         #     self.behavior = behavior
@@ -39,6 +45,8 @@ class ORSimAgent(ABC):
         }
 
         # self.agent_messenger = Messenger(run_id, self.agent_credentials, f"ORSimAgent_{self.unique_id}", self.on_receive_message)
+    def is_active(self):
+        return self.active
 
     def on_receive_message(self, client, userdata, message):
         ''' '''
@@ -114,7 +122,7 @@ class ORSimAgent(ABC):
 
         self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimAgent", self.on_receive_message)
 
-        async_strategy = 'eventlet'
+        # async_strategy = 'eventlet'
         if settings['CONCURRENCY_STRATEGY'] == 'ASYNCIO':
             logging.info(f'Agent {self.unique_id} is Listening for Messages')
             loop = asyncio.get_event_loop()
@@ -154,7 +162,8 @@ class ORSimAgent(ABC):
         self.current_time_step = time_step
         self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
 
-        self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
+        # self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
+        self.current_time = self.reference_time + relativedelta(seconds = time_step * orsim_settings['SIM_STEP_SIZE'])
 
     def shutdown(self):
         logging.info(f'Shutting down {self.unique_id = }')

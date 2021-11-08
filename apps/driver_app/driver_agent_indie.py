@@ -21,12 +21,12 @@ from dateutil.relativedelta import relativedelta
 
 from shapely.geometry import Point, mapping
 
-from apps.config import settings
+# from apps.config import settings
 from .driver_app import DriverApp
 from apps.utils.utils import id_generator, cut
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.loc_service import OSRMClient
-from apps.utils.behavior_gen import BehaviorGen
+from apps.utils.generate_behavior import GenerateBehavior
 
 from apps.loc_service import TaxiStop, BusStop
 
@@ -36,6 +36,7 @@ from apps.messenger_service import Messenger
 # At each step, the Agent will process list of collected messages in the app.
 
 from apps.orsim import ORSimAgent
+from apps.config import driver_settings, orsim_settings
 
 class DriverAgentIndie(ORSimAgent):
 
@@ -46,12 +47,12 @@ class DriverAgentIndie(ORSimAgent):
     # elapsed_duration_steps = None
     active_route = None # shapely.geometry.LineString
     current_route_coords = None # shapely.geometry.LineString
-    active = False
+    # active = False
 
-    sim_settings = settings['SIM_SETTINGS']
-    step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
-    # # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    # stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    # sim_settings = settings['SIM_SETTINGS']
+    # step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
+    step_size = orsim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
+
 
 
     def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
@@ -89,138 +90,8 @@ class DriverAgentIndie(ORSimAgent):
 
 
     def get_random_location(self):
-        return BehaviorGen.get_random_location(self.behavior['coverage_area_name'])
+        return GenerateBehavior.get_random_location(self.behavior['coverage_area_name'])
 
-    # def process_message(self, client, userdata, message):
-    #     ''' '''
-    #     # print('received message:', message.payload.decode('utf-8'))
-    #     payload = json.loads(message.payload.decode('utf-8'))
-
-    #     # if payload.get('action') == 'enter_market':
-    #     #     self.entering_market(payload.get('time_step'))
-    #     # elif payload.get('action') == 'step':
-    #     #     self.step(payload.get('time_step'))
-    #     # elif payload.get('action') == 'exit_market':
-    #     #     self.exiting_market()
-    #     if payload.get('action') == 'step':
-    #         self.entering_market(payload.get('time_step'))
-    #         if self.is_active():
-    #             self.step(payload.get('time_step'))
-    #         self.exiting_market()
-
-        # response_payload = {
-        #     'agent_id': self.unique_id,
-        #     'action': 'completed'
-        # }
-
-        # self.agent_messenger.client.publish(f'ORSimController', json.dumps(response_payload))
-
-
-    # def on_receive_message(self, client, userdata, message):
-    #     ''' '''
-    #     print('received message:', message.payload.decode('utf-8'))
-    #     payload = json.loads(message.payload.decode('utf-8'))
-
-    #     if payload.get('action') == 'enter_market':
-    #         self.entering_market(payload.get('time_step'))
-    #     elif payload.get('action') == 'step':
-    #         self.step(payload.get('time_step'))
-    #     elif payload.get('action') == 'exit_market':
-    #         self.exiting_market()
-
-    #     response_payload = {
-    #         'agent_id': self.unique_id,
-    #         'action': 'completed'
-    #     }
-
-    #     self.agent_messenger.client.publish(f'ORSimController', json.dumps(response_payload))
-
-    # def start_listening(self):
-    #     loop = asyncio.get_event_loop()
-    #     try:
-    #         loop.run_forever()
-    #     except KeyboardInterrupt:
-    #         pass
-    #     finally:
-    #         loop.close()
-
-    # # def get_current_time_str(self):
-    # #     return self.model.get_current_time_str()
-    # def get_current_time_str(self):
-    #     return datetime.strftime(self.current_time, "%a, %d %b %Y %H:%M:%S GMT")
-
-    # @classmethod
-    # def load_behavior(cls, unique_id, behavior=None):
-    #     ''' '''
-    #     shift_start_time = randint(0, (cls.sim_settings['SIM_DURATION']//4))
-    #     shift_end_time = randint(cls.sim_settings['SIM_DURATION']//2, cls.sim_settings['SIM_DURATION']-1)
-
-    #     if behavior is None:
-    #         behavior = {
-    #             'email': f'{unique_id}@test.com',
-    #             'password': 'password',
-
-    #             # 'start_time': 0,
-    #             'shift_start_time': shift_start_time,
-    #             'shift_end_time': shift_end_time, # settings['SIM_DURATION'], #shift_start_time + (settings['SIM_DURATION']//2),
-
-
-    #             'init_loc': cls.get_home_loc(), # mapping(choice(cls.stop_locations)), # shapely.geometry.Point
-    #             'empty_dest_loc': cls.get_empty_destination_loc(), # mapping(choice(cls.stop_locations)), # shapely.geometry.Point
-
-    #             'settings': {
-    #                 'market': 'RideHail',
-    #                 'patience': 150,
-    #                 'service_score': randint(1, 1000),
-    #             },
-
-    #             'transition_prob': {
-    #                 # (confirm + reject) | driver_received_trip == 1
-    #                 ('confirm', 'driver_received_trip'): 1.0,
-    #                 ('reject', 'driver_received_trip'): 0.0,
-
-    #                 # cancel | driver_accepted_trip = 1  if  exceeded_patience
-    #                 # cancel | driver_accepted_trip ~ 0 otherwise
-    #                 ('cancel', 'driver_accepted_trip', 'exceeded_patience'): 1.0,
-    #                 ('cancel', 'driver_accepted_trip'): 0.0,
-
-    #                 # cancel | driver_moving_to_pickup ~ 0
-    #                 # wait_to_pickup | driver_moving_to_pickup ~ 1
-    #                 ('cancel', 'driver_moving_to_pickup'): 0.0,
-    #                 ('wait_to_pickup', 'driver_moving_to_pickup'): 1.0,
-
-    #                 # cancel | driver_waiting_to_pickup = 1 if exceeded_patience
-    #                 # cancel | driver_waiting_to_pickup ~ 0 otherwise
-    #                 ('cancel', 'driver_waiting_to_pickup', 'exceeded_patience'): 1.0,
-    #                 ('cancel', 'driver_waiting_to_pickup'): 0.0,
-
-    #             },
-
-    #             # 'constraint_accept': {
-    #             #     'max_distance_moving_to_pickup': 5000,
-    #             #     'wait_time_between_jobs': 60,
-    #             # },
-
-    #             # 'TrTime_accepted_TO_moving_to_pickup': 0,
-
-    #             # # 'waiting_time_for_pickup': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
-    #             'TrTime_pickup': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
-    #             # # 'waiting_time_for_dropoff': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
-
-    #             'TrTime_dropoff': 0,
-
-
-    #         }
-
-    #     return behavior
-
-    # @classmethod
-    # def get_home_loc(cls):
-    #     return mapping(choice(cls.stop_locations))
-
-    # @classmethod
-    # def get_empty_destination_loc(cls):
-    #     return mapping(choice(cls.stop_locations))
 
     def entering_market(self, time_step):
         ''' '''
@@ -277,7 +148,6 @@ class DriverAgentIndie(ORSimAgent):
     def logout(self):
         self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
 
-    # async def step(self, time_step):
     def step(self, time_step):
         # # The agent's step will go here.
         # print(f"Driver: {self.behavior['email']}")
@@ -301,22 +171,6 @@ class DriverAgentIndie(ORSimAgent):
         # 2. based on current state, perform any workflow actions according to Agent behavior
         self.perform_workflow_actions()
 
-        # print(f"{self.model.driver_schedule.time}: Driver {self.behavior['email']} completed execution")
-        # # print("Sleep driver for 1 second")
-        # # time.sleep(1)
-
-    # def refresh(self, time_step):
-    #     super().refresh(time_step)
-    #     self.app.refresh()
-
-        # # print(self.current_time_step, self.model.driver_schedule.time)
-
-        # self.prev_time_step = self.current_time_step
-        # # self.current_time_step = self.model.driver_schedule.time
-        # self.current_time_step = time_step
-        # self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
-
-        # self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
 
     def update_location(self):
         ''' - Update self.current_loc based on:

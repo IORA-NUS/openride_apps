@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from apps.config import settings
+# from apps.config import settings
 
 class AbstractSolver(ABC):
     ''' '''
@@ -8,7 +8,7 @@ class AbstractSolver(ABC):
     def __init__(self, params):
         ''' '''
         self._params = params
-        self.sim_settings = settings['SIM_SETTINGS']
+        # self.sim_settings = settings['SIM_SETTINGS']
 
     # def get_params(self):
     #     return self.params

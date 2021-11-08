@@ -3,16 +3,19 @@ from random import randint, choice
 from shapely.geometry import Point, mapping
 
 from apps.loc_service import BusStop, PlanningArea
-from apps.config import settings
+# from apps.config import settings
 
-class BehaviorGen():
+from apps.config import assignment_settings, orsim_settings
 
-    sim_settings = settings['SIM_SETTINGS']
+class GenerateBehavior():
+
+    # sim_settings = settings['SIM_SETTINGS']
     # stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
     stop_locations = {
         # coverage_area['name']: BusStop().get_locations_within([ coverage_area['name'] ]) # NOTE need to pass a list
         coverage_area['name']: BusStop().get_locations_within(coverage_area['districts']) # NOTE need to pass a list
-            for coverage_area in sim_settings['COVERAGE_AREA']
+                                            for coverage_area in assignment_settings['COVERAGE_AREA']
+            # for coverage_area in sim_settings['COVERAGE_AREA']
     }
     # print(stop_locations)
 
@@ -31,10 +34,13 @@ class BehaviorGen():
     def ridehail_driver(cls, id, record=None):
 
         if record is None:
-            shift_start_time = randint(0, (cls.sim_settings['SIM_DURATION']//4))
-            shift_end_time = randint(cls.sim_settings['SIM_DURATION']//2, cls.sim_settings['SIM_DURATION']-1)
+            # shift_start_time = randint(0, (cls.sim_settings['SIM_DURATION']//4))
+            # shift_end_time = randint(cls.sim_settings['SIM_DURATION']//2, cls.sim_settings['SIM_DURATION']-1)
+            shift_start_time = randint(0, (orsim_settings['SIM_DURATION']//4))
+            shift_end_time = randint(orsim_settings['SIM_DURATION']//2, orsim_settings['SIM_DURATION']-1)
 
-            coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
+            # coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
+            coverage_area = choice(assignment_settings['COVERAGE_AREA'])
             coverage_area_name = coverage_area['name']
 
             init_loc = cls.get_random_location(coverage_area_name)
@@ -96,9 +102,12 @@ class BehaviorGen():
     def ridehail_passenger(cls, id, record=None):
 
         if record is None:
-            trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
+            # trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
 
-            coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
+            # coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
+            trip_request_time = randint(0, orsim_settings['SIM_DURATION']-1)
+
+            coverage_area = choice(assignment_settings['COVERAGE_AREA'])
             coverage_area_name = coverage_area['name']
 
             pickup_loc = cls.get_random_location(coverage_area_name)

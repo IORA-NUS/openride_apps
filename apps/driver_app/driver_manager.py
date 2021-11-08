@@ -193,4 +193,7 @@ class DriverManager():
 
         response = requests.get(driver_item_url, headers=self.user.get_headers())
 
-        self.driver = response.json()
+        if is_success(response.status_code):
+            self.driver = response.json()
+        else:
+            logging.warning(f'DriverManager.refresh: Failed getting response for {self.driver["_id"]} Got {response.text}')

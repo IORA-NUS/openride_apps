@@ -1,11 +1,13 @@
 from abc import ABC, abstractclassmethod, abstractmethod
-import asyncio, json, logging, time
+import asyncio, json, logging, time, os, pprint
 
 from datetime import datetime
+from apps import orsim
 from apps.messenger_service import Messenger
 
 from random import random
-from apps.config import settings
+# from apps.config import settings
+from apps.config import orsim_settings
 
 class ORSimScheduler(ABC):
 
@@ -15,7 +17,7 @@ class ORSimScheduler(ABC):
         self.scheduler_id = scheduler_id
         self.time = 0
 
-        self.sim_settings = settings['SIM_SETTINGS']
+        # self.sim_settings = settings['SIM_SETTINGS']
 
         self.agent_collection = {}
 
@@ -23,6 +25,12 @@ class ORSimScheduler(ABC):
             'email': f"{self.run_id}_{self.scheduler_id}_ORSimScheduler",
             'password': "secret_password",
         }
+
+        # output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
+        # if not os.path.exists(output_dir):
+        #     os.makedirs(output_dir)
+
+        # logging.basicConfig(filename=f"{output_dir}/{self.scheduler_id}.log", level=settings['LOG_LEVEL'], filemode='w')
 
         self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimScheduler", self.on_receive_message)
 
@@ -38,7 +46,7 @@ class ORSimScheduler(ABC):
 
         kwargs = spec.copy()
         kwargs['scheduler_id'] = self.scheduler_id
-        method.delay(**kwargs)
+        method.delay(**kwargs) # NOTE This starts the Celery Task in a new worker thread
 
         # # NOTE A beter approach is to implement a handshake protocol
         # time.sleep(0.1)
@@ -53,7 +61,7 @@ class ORSimScheduler(ABC):
     def remove_agent(self, unique_id):
         try:
             self.agent_collection.pop(unique_id)
-            logging.info(self.agent_collection)
+            # logging.info(self.agent_collection)
         except Exception as e:
             logging.exception(str(e))
             print(e)
@@ -137,7 +145,8 @@ class ORSimScheduler(ABC):
 
         logging.info(f"{self.scheduler_id} Step: {self.time}")
 
-        if self.time < self.sim_settings['SIM_DURATION']-1:
+        # if self.time < self.sim_settings['SIM_DURATION']-1:
+        if self.time < orsim_settings['SIM_DURATION']-1:
             message = {'action': 'step', 'time_step': self.time}
         else:
             message = {'action': 'shutdown', 'time_step': self.time}
@@ -152,12 +161,15 @@ class ORSimScheduler(ABC):
         # asyncio.run(self.confirm_responses())
         try:
             start_time = time.time()
-            await asyncio.wait_for(self.confirm_responses(), timeout=self.sim_settings['STEP_TIMEOUT'])
+            # await asyncio.wait_for(self.confirm_responses(), timeout=self.sim_settings['STEP_TIMEOUT'])
+            await asyncio.wait_for(self.confirm_responses(), timeout=orsim_settings['STEP_TIMEOUT'])
             end_time = time.time()
             logging.info(f'{self.scheduler_id} Runtime: {end_time-start_time} sec')
 
         except asyncio.TimeoutError as e:
-            logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.sim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.\n{self.agent_collection = }')
+            logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {orsim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.')
+            pp = pprint.PrettyPrinter(indent=4)
+            logging.exception(f'{pp.pformat(self.agent_collection)}')
             raise e
 
         # Handle shutdown agents once successfully exiting the loop
@@ -179,7 +191,8 @@ class ORSimScheduler(ABC):
             'end_sim': False,
         }
 
-        if self.time == self.sim_settings['SIM_DURATION']-1:
+        # if self.time == self.sim_settings['SIM_DURATION']-1:
+        if self.time == orsim_settings['SIM_DURATION']-1:
             sim_stat['end_sim'] = True
 
         return sim_stat

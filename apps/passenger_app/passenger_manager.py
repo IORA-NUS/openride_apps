@@ -1,3 +1,4 @@
+import logging
 import requests, json
 from http import HTTPStatus
 
@@ -128,4 +129,7 @@ class PassengerManager():
 
         response = requests.get(passenger_item_url, headers=self.user.get_headers())
 
-        self.passenger = response.json()
+        if is_success(response.status_code):
+            self.passenger = response.json()
+        else:
+            logging.warning(f'PassengerManager.refresh: Failed getting response for {self.passenger["_id"]} Got {response.text}')

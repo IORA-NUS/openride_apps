@@ -378,7 +378,9 @@ class PassengerTripManager:
             else:
                 passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/end_trip"
         except Exception as e:
-            raise e
+            # raise e
+            logging.exception(str(e))
+            return
 
         data = {
             'sim_clock': sim_clock,
@@ -396,7 +398,7 @@ class PassengerTripManager:
         # if self.trip is not None:
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
         passenger_trip_item_url = f"{passenger_trip_url}/{self.trip['_id']}"
-        
+
         response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
         self.trip = response.json()
 

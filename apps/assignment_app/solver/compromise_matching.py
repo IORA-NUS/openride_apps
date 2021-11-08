@@ -6,7 +6,8 @@ import logging
 from .abstract_solver import AbstractSolver
 from pyomo.environ import *
 
-from apps.config import settings
+# from apps.config import settings
+from apps.config import assignment_settings
 
 class CompromiseMatching(AbstractSolver):
     ''' '''
@@ -191,9 +192,12 @@ class CompromiseMatching(AbstractSolver):
                     online_params['realtimeServiceScore'] = online_params['realtimeServiceScore'] + driver['settings']['service_score']
 
                 # end for
-                online_params['weightPickupTime'] = max((clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
-                online_params['weightRevenue'] = max((clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetRevenue'] - online_params['realtimeRevenue'], 1.0) / (clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
-                online_params['weightServiceScore'] = max((clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetServiceScore'] - online_params['realtimeServiceScore'], 1.0) / (clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
+                # online_params['weightPickupTime'] = max((clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
+                # online_params['weightRevenue'] = max((clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetRevenue'] - online_params['realtimeRevenue'], 1.0) / (clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
+                # online_params['weightServiceScore'] = max((clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetServiceScore'] - online_params['realtimeServiceScore'], 1.0) / (clock_tick / self.sim_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
+                online_params['weightPickupTime'] = max((clock_tick / assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
+                online_params['weightRevenue'] = max((clock_tick / assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetRevenue'] - online_params['realtimeRevenue'], 1.0) / (clock_tick / assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
+                online_params['weightServiceScore'] = max((clock_tick / assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1) * offline_params['targetServiceScore'] - online_params['realtimeServiceScore'], 1.0) / (clock_tick / assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] + 1)
 
 
 
