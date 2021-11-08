@@ -9,19 +9,11 @@ from apps.config import assignment_settings, orsim_settings
 
 class GenerateBehavior():
 
-    # sim_settings = settings['SIM_SETTINGS']
-    # stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
     stop_locations = {
-        # coverage_area['name']: BusStop().get_locations_within([ coverage_area['name'] ]) # NOTE need to pass a list
         coverage_area['name']: BusStop().get_locations_within(coverage_area['districts']) # NOTE need to pass a list
                                             for coverage_area in assignment_settings['COVERAGE_AREA']
-            # for coverage_area in sim_settings['COVERAGE_AREA']
     }
-    # print(stop_locations)
 
-    # @classmethod
-    # def get_random_location(cls):
-    #     return mapping(choice(cls.stop_locations))
     @classmethod
     def get_random_location(cls, coverage_area_name):
         # print(coverage_area_name, cls.stop_locations[coverage_area_name])
@@ -34,12 +26,9 @@ class GenerateBehavior():
     def ridehail_driver(cls, id, record=None):
 
         if record is None:
-            # shift_start_time = randint(0, (cls.sim_settings['SIM_DURATION']//4))
-            # shift_end_time = randint(cls.sim_settings['SIM_DURATION']//2, cls.sim_settings['SIM_DURATION']-1)
             shift_start_time = randint(0, (orsim_settings['SIM_DURATION']//4))
             shift_end_time = randint(orsim_settings['SIM_DURATION']//2, orsim_settings['SIM_DURATION']-1)
 
-            # coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
             coverage_area = choice(assignment_settings['COVERAGE_AREA'])
             coverage_area_name = coverage_area['name']
 
@@ -90,9 +79,7 @@ class GenerateBehavior():
                 [('cancel', 'driver_waiting_to_pickup'), 0.0],
             ],
 
-            # # 'waiting_time_for_pickup': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
             'TrTime_pickup': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
-            # # 'waiting_time_for_dropoff': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
             'TrTime_dropoff': 0,
         }
 
@@ -102,9 +89,6 @@ class GenerateBehavior():
     def ridehail_passenger(cls, id, record=None):
 
         if record is None:
-            # trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
-
-            # coverage_area = choice(cls.sim_settings['COVERAGE_AREA'])
             trip_request_time = randint(0, orsim_settings['SIM_DURATION']-1)
 
             coverage_area = choice(assignment_settings['COVERAGE_AREA'])
@@ -189,22 +173,17 @@ class GenerateBehavior():
 
     @classmethod
     def ridehail_assignment(cls, id, coverage_area, record=None):
-        # print(coverage_area)
         behavior = {
             'email': f'{id}@test.com',
             'password': 'password',
 
-            # 'solver': 'RandomAssignment',
-            'solver': coverage_area['strategy'], #'CompromiseMatching',
+            'solver': coverage_area['strategy'],
 
             'solver_params': {
                 'planning_area':{
-                    'name': coverage_area['name'], # cls.sim_settings['PLANNING_AREA'],
-                    # 'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['name'])), #cls.sim_settings['PLANNING_AREA'])),
-                    'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['districts'])), #cls.sim_settings['PLANNING_AREA'])),
+                    'name': coverage_area['name'],
+                    'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['districts'])),
                 },
-                # 'name': cls.sim_settings['PLANNING_AREA'],
-                # 'area': mapping(PlanningArea().get_planning_area_geometry(cls.sim_settings['PLANNING_AREA'])),
 
                 'offline_params': {
                     'reverseParameter': 480,  # 480;

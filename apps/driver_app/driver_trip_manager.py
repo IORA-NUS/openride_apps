@@ -18,18 +18,17 @@ class DriverTripManager:
     def as_dict(self):
         return self.trip
 
-    def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle): #, route=None):
+    def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle):
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         # print(sim_clock)
 
         data = {
             "driver": f"{driver['_id']}",
             "vehicle": f"{vehicle['_id']}",
-            "current_loc": current_loc, #{"type":"Point","coordinates": current_loc},
-            "next_dest_loc": current_loc, #{"type":"Point","coordinates":current_loc},
+            "current_loc": current_loc,
+            "next_dest_loc": current_loc,
             "is_occupied": False,
             "sim_clock": sim_clock,
-            # "routes.planned.looking_for_job": route
         }
 
         response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
@@ -38,7 +37,6 @@ class DriverTripManager:
             driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
             response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
             self.trip = response.json()
-            # print(self.trip)
         else:
             raise Exception(response.text)
 
@@ -48,13 +46,13 @@ class DriverTripManager:
         data = {
             "driver": f"{driver['_id']}",
             "vehicle": f"{vehicle['_id']}",
-            "current_loc": current_loc, # {"type":"Point","coordinates": current_loc},
-            "next_dest_loc": passenger_ride_hail_trip['pickup_loc'], # {"type":"Point","coordinates": current_loc},
+            "current_loc": current_loc,
+            "next_dest_loc": passenger_ride_hail_trip['pickup_loc'],
             "passenger_ride_hail_trip": passenger_ride_hail_trip['_id'],
             "passenger": passenger_ride_hail_trip['passenger'],
             "trip_start_loc": current_loc,
-            "pickup_loc": passenger_ride_hail_trip['pickup_loc'], #{"type":"Point","coordinates":passenger_trip['start_loc']},
-            "dropoff_loc": passenger_ride_hail_trip['dropoff_loc'], # {"type":"Point","coordinates":passenger_trip['end_loc']},
+            "pickup_loc": passenger_ride_hail_trip['pickup_loc'],
+            "dropoff_loc": passenger_ride_hail_trip['dropoff_loc'],
             "is_occupied": True,
             "sim_clock": sim_clock,
         }
@@ -88,7 +86,7 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
     def recieve(self, sim_clock, current_loc):
 
@@ -106,7 +104,7 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
     def confirm(self, sim_clock, current_loc):
 
@@ -124,9 +122,8 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
-        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
@@ -156,7 +153,7 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
     def cancel(self, sim_clock, current_loc):
 
@@ -174,9 +171,8 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
-        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
@@ -205,7 +201,7 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
     def wait_to_pickup(self, sim_clock, current_loc):
 
@@ -223,9 +219,8 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
-        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
@@ -256,7 +251,7 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
     def move_to_dropoff(self, sim_clock, current_loc):
 
@@ -274,9 +269,8 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
-        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
@@ -305,9 +299,8 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
-        # self.messenger.client.publish(f'Agent/{self.trip["passenger"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
@@ -335,7 +328,7 @@ class DriverTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh() # refresh self.trip
+        self.refresh()
 
     def end_trip(self, sim_clock, current_loc, force_quit=False):
         '''
@@ -382,7 +375,6 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
         else:
-            # print (response.text)
             raise Exception(response.text)
 
     def refresh(self):

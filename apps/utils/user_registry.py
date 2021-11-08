@@ -5,7 +5,6 @@ from apps.config import settings
 from .utils import id_generator, is_success
 from apps.state_machine import WorkflowStateMachine
 
-# from abc import ABC, abstractmethod
 
 
 class UserRegistry():
@@ -30,8 +29,6 @@ class UserRegistry():
         if self.token is None:
             raise Exception('Cannot initialize User. Bad Credentials')
 
-    # def get_id(self):
-    #     return self.entity['_id']
 
     def get_headers(self, etag=None):
         ''' This Authentication and header generation should be a shared service '''
@@ -97,9 +94,8 @@ class UserRegistry():
             'where': json.dumps({"email": self.email})
         }
         response = requests.get(user_url, headers=self.get_headers(), params=params)
-        # print(response.url,  response)
         user = response.json()['_items'][0]
-        # print(user)
+
         if user['role'] != self.role:
             user_item_url = f"{user_url}/{user['_id']}"
             response = requests.patch(user_item_url,
@@ -108,23 +104,3 @@ class UserRegistry():
 
             if not is_success(response.status_code):
                 raise Exception(f"Unable to update User Role. Got {response.text}")
-
-
-    # def logout(self, sim_clock):
-    #     ''' '''
-    #     # passenger_item_url = settings['OPENRIDE_SERVER_URL'] + f'/passenger/{self.passenger["_id"]}'
-    #     item_url = settings['OPENRIDE_SERVER_URL'] + f'/{self.entity_type}/{self.entity["_id"]}'
-
-    #     data = {
-    #         "transition": "logout",
-    #         "sim_clock": sim_clock,
-    #     }
-
-    #     headers = self.get_headers()
-    #     headers['If-Match'] = self.entity['_etag']
-
-    #     requests.patch(item_url, headers=headers, data=json.dumps(data))
-
-    # @abstractmethod
-    # def refresh(self):
-    #     pass

@@ -6,24 +6,17 @@ from apps.config import settings
 from apps.utils import id_generator, is_success
 from apps.state_machine import WorkflowStateMachine
 
-# from utils.registration import Registration
 from apps.utils.user_registry import UserRegistry
 
 class PassengerManager():
 
-    # token = None
-    # entity = None
-
     def __init__(self, run_id, sim_clock, user, passenger_settings):
-        # super().__init__(sim_clock, credentials)
         self.run_id = run_id
         self.user = user
 
         self.passenger_settings = passenger_settings
 
-        # self.entity_type = 'passenger'
         self.passenger = self.init_passenger(sim_clock)
-        # self.passenger = self.init_passenger()
 
     def as_dict(self):
         return self.passenger
@@ -51,9 +44,6 @@ class PassengerManager():
 
         data = {
             "settings": self.passenger_settings,
-            # "settings": {
-            #     "patience": 180
-            # },
             "sim_clock": sim_clock
         }
 
@@ -62,7 +52,6 @@ class PassengerManager():
     def login(self, sim_clock):
         passenger_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger"
 
-        # print(passenger)
         if self.passenger['state'] == 'dormant': #'offline':
             machine = WorkflowStateMachine(start_value=self.passenger['state'])
             s = machine.current_state
@@ -72,7 +61,6 @@ class PassengerManager():
                         "transition": t.identifier,
                         "sim_clock": sim_clock
                     }
-                    # print(data)
                     passenger_item_url = passenger_url + f"/{self.passenger['_id']}"
 
                     requests.patch(passenger_item_url,
@@ -92,7 +80,7 @@ class PassengerManager():
                         "transition": t.identifier,
                         "sim_clock": sim_clock
                     }
-                    # print(data)
+
                     passenger_item_url = passenger_url + f"/{self.passenger['_id']}"
 
                     requests.patch(passenger_item_url,
@@ -104,14 +92,12 @@ class PassengerManager():
 
                     return self.login(sim_clock)
         elif self.passenger['state'] == 'online': #'offline':
-            # return response.json()['_items'][0]
             return None
         else:
             raise Exception ("unknown Workflow State")
 
     def logout(self, sim_clock):
         ''' '''
-        # passenger_item_url = settings['OPENRIDE_SERVER_URL'] + f'/passenger/{self.passenger["_id"]}'
         item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/{self.get_id()}"
 
         data = {

@@ -4,12 +4,11 @@ import asyncio, json, logging, time, os
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from apps.messenger_service import Messenger
-# from apps.config import settings
+
 from apps.config import orsim_settings, settings
 
 class ORSimAgent(ABC):
 
-    # sim_settings = settings['SIM_SETTINGS']
 
     def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
         self.unique_id = unique_id
@@ -28,52 +27,33 @@ class ORSimAgent(ABC):
         self._shutdown = False
         self.behavior = behavior
 
-        # output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
-        # if not os.path.exists(output_dir):
-        #     os.makedirs(output_dir)
-
-        # logging.basicConfig(filename=f"{output_dir}/agent_{self.unique_id}.log", level=settings['LOG_LEVEL'], filemode='w')
-
-        # if behavior is not None:
-        #     self.behavior = behavior
-        # else:
-        #     self.behavior = self.__class__.load_behavior(unique_id)
-
         self.agent_credentials = {
             'email': f"{self.run_id}_{self.scheduler_id}_{unique_id}",
             'password': "secret_password",
         }
 
-        # self.agent_messenger = Messenger(run_id, self.agent_credentials, f"ORSimAgent_{self.unique_id}", self.on_receive_message)
     def is_active(self):
         return self.active
 
     def on_receive_message(self, client, userdata, message):
         ''' '''
-        # print(f'Agent {self.unique_id} received message:', message.payload.decode('utf-8'))
-        # # payload = json.loads(message.payload.decode('utf-8'))
-
-        # # if payload.get('action') == 'enter_market':
-        # #     self.entering_market(payload.get('time_step'))
-        # # elif payload.get('action') == 'step':
-        # #     self.step(payload.get('time_step'))
-        # # elif payload.get('action') == 'exit_market':
-        # #     self.exiting_market()
         start_time = time.time()
         try:
             # logging.info(f"{message.topic = }")
             if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimAgent":
                 payload = json.loads(message.payload.decode('utf-8'))
+                self.refresh(payload['time_step'])
 
                 if payload.get('action') == 'init':
-                    ''' '''
+                    ''' NOTE This is unused block of code at the moment'''
                     # print(f"{self.unique_id} received {payload=}")
                     response_payload = {
                         'agent_id': self.unique_id,
-                        'action': 'completed',
+                        'time_step': self.current_time_step,
+                        'action': 'ready', # 'completed',
                     }
                 elif payload.get('action') == 'step':
-                    self.refresh(payload['time_step'])
+                    # self.refresh(payload['time_step'])
                     self.process_payload(payload)
 
                     response_payload = {
@@ -99,6 +79,7 @@ class ORSimAgent(ABC):
         except Exception as e:
             response_payload = {
                 'agent_id': self.unique_id,
+                'time_step': self.current_time_step,
                 'action': 'error',
                 'details': str(e)
             }
@@ -110,10 +91,6 @@ class ORSimAgent(ABC):
 
         logging.info(f"Runtime for {self.unique_id} at {self.current_time_step}: {end_time - start_time:0.2f} secs ")
 
-    # @abstractclassmethod
-    # def load_behavior(cls, unique_id):
-    #     pass
-
     @abstractmethod
     def process_payload(self, payload):
         pass
@@ -122,7 +99,6 @@ class ORSimAgent(ABC):
 
         self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimAgent", self.on_receive_message)
 
-        # async_strategy = 'eventlet'
         if settings['CONCURRENCY_STRATEGY'] == 'ASYNCIO':
             logging.info(f'Agent {self.unique_id} is Listening for Messages')
             loop = asyncio.get_event_loop()
@@ -146,6 +122,7 @@ class ORSimAgent(ABC):
         # Once agent is setup and listening, send the ready message
         response_payload = {
             'agent_id': self.unique_id,
+            # 'time_step': self.current_time_step,
             'action': 'ready',
         }
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
@@ -162,7 +139,6 @@ class ORSimAgent(ABC):
         self.current_time_step = time_step
         self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
 
-        # self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
         self.current_time = self.reference_time + relativedelta(seconds = time_step * orsim_settings['SIM_STEP_SIZE'])
 
     def shutdown(self):

@@ -6,31 +6,22 @@ from apps import orsim
 from apps.messenger_service import Messenger
 
 from random import random
-# from apps.config import settings
 from apps.config import orsim_settings
 
 class ORSimScheduler(ABC):
 
     def __init__(self, run_id, scheduler_id):
-        # self.sim_settings = sim_settings
         self.run_id = run_id
         self.scheduler_id = scheduler_id
         self.time = 0
 
-        # self.sim_settings = settings['SIM_SETTINGS']
-
         self.agent_collection = {}
+        self.agent_stat = {}
 
         self.agent_credentials = {
             'email': f"{self.run_id}_{self.scheduler_id}_ORSimScheduler",
             'password': "secret_password",
         }
-
-        # output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
-        # if not os.path.exists(output_dir):
-        #     os.makedirs(output_dir)
-
-        # logging.basicConfig(filename=f"{output_dir}/{self.scheduler_id}.log", level=settings['LOG_LEVEL'], filemode='w')
 
         self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimScheduler", self.on_receive_message)
 
@@ -38,20 +29,21 @@ class ORSimScheduler(ABC):
     def add_agent(self, unique_id, method, spec):
         ''' '''
         self.agent_collection[unique_id] = {
-            # 'object': agent,
             'method': method,
             'spec': spec,
-            'step_response': 'waiting'
+            # 'step_response': 'waiting'
+            'step_response': {
+                self.time: 'waiting'
+            }
         }
 
         kwargs = spec.copy()
         kwargs['scheduler_id'] = self.scheduler_id
         method.delay(**kwargs) # NOTE This starts the Celery Task in a new worker thread
 
-        # # NOTE A beter approach is to implement a handshake protocol
-        # time.sleep(0.1)
         while True:
-            if self.agent_collection[unique_id]['step_response'] == 'ready':
+            # if self.agent_collection[unique_id]['step_response'] == 'ready':
+            if self.agent_collection[unique_id]['step_response'][self.time] == 'ready':
                 print(f'agent {unique_id} is ready')
                 break
             else:
@@ -61,121 +53,104 @@ class ORSimScheduler(ABC):
     def remove_agent(self, unique_id):
         try:
             self.agent_collection.pop(unique_id)
-            # logging.info(self.agent_collection)
         except Exception as e:
             logging.exception(str(e))
             print(e)
 
-    # def initialize(self):
-    #     # for agent_id, value in self.agent_collection.items():
-    #     #     method = value['method']
-    #     #     kwargs = value['spec']
-    #     #     kwargs['scheduler_id'] = self.scheduler_id
-    #     #     method.delay(**kwargs)
-
-    #     #     self.agent_collection[agent_id]['step_response'] = 'waiting'
-
-    #     #     time.sleep(0.1)
-
-
-    #     # # message = {'action': 'init'}
-    #     # # self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
-
-    #     # # asyncio.run(self.confirm_responses())
-
-
-    #     self.time = 0
-
-
     def on_receive_message(self, client, userdata, message):
         if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimScheduler":
             payload = json.loads(message.payload.decode('utf-8'))
-            # # print(f"Message Recieved: {payload}")
-            # if (payload.get('action') == 'completed') or (payload.get('action') == 'ready'):
-            #     self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
-            # elif payload.get('action') == 'error':
-            #     logging.warning(f'{self.__class__.__name__} received {message.payload = }')
-            self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
+            # print(payload.get('time_step'))
+
+            # self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
+            if payload.get('action') == 'ready':
+                self.agent_collection[payload.get('agent_id')]['step_response'][self.time] = payload.get('action')
+            else:
+                self.agent_collection[payload.get('agent_id')]['step_response'][payload.get('time_step')] = payload.get('action')
+
             if payload.get('action') == 'error':
                 logging.warning(f'{self.__class__.__name__} received {message.payload = }')
-            # elif payload.get('action') == 'shutdown':
-            #     # agents_shutdown.append(agent_id)
-            #     self.remove_agent(payload.get('agent_id'))
 
     async def confirm_responses(self):
         ''' '''
         start_time = time.time()
         base = 0
+        completed = 0
+        shutdown = 0
+        error = 0
+        waiting = len(self.agent_collection)
         num_confirmed_responses = 0
-        while num_confirmed_responses != len(self.agent_collection):
-            num_confirmed_responses = 0
+        # while num_confirmed_responses != len(self.agent_collection):
+        #     num_confirmed_responses = 0
+        #     for agent_id, _ in self.agent_collection.items():
+        #         if (self.agent_collection[agent_id]['step_response'] == 'completed') or \
+        #                 (self.agent_collection[agent_id]['step_response'] == 'error') or \
+        #                 (self.agent_collection[agent_id]['step_response'] == 'shutdown'):
+        #             num_confirmed_responses += 1
+
+        while waiting > 0:
+            completed = 0
+            shutdown = 0
+            error = 0
+            waiting = 0
             for agent_id, _ in self.agent_collection.items():
-                if (self.agent_collection[agent_id]['step_response'] == 'completed') or \
-                        (self.agent_collection[agent_id]['step_response'] == 'error') or \
-                        (self.agent_collection[agent_id]['step_response'] == 'shutdown'):
-                    num_confirmed_responses += 1
-            #     if (self.agent_collection[agent_id]['step_response'] == 'shutdown'):
-            #         agents_shutdown.append(agent_id)
+                response = self.agent_collection[agent_id]['step_response'][self.time]
+                if (response == 'completed'):
+                    completed += 1
+                elif (response == 'error'):
+                    error += 1
+                elif (response == 'shutdown'):
+                    shutdown += 1
+                elif (response == 'waiting'):
+                    waiting += 1
 
-            # for agent_id in agents_shutdown:
-            #     self.remove_agent(agent_id)
-
+            self.agent_stat[self.time] = {
+                'completed': completed,
+                'error': error,
+                'shutdown': shutdown,
+                'waiting': waiting,
+            }
             current_time = time.time()
             if current_time - start_time >= 5:
-                logging.info(f"Waiting for Agent Response... {num_confirmed_responses}, {len(self.agent_collection)}: {base + (current_time - start_time):0.0f} sec")
+                # logging.info(f"Waiting for Agent Response... {num_confirmed_responses}, {len(self.agent_collection)}: {base + (current_time - start_time):0.0f} sec")
+                logging.info(f"Waiting for Agent Response... {completed=}, {error=}, {shutdown=}, {waiting=} of {len(self.agent_collection)}: {base + (current_time - start_time):0.0f} sec")
                 base = base + (current_time - start_time)
                 start_time = current_time
 
             await asyncio.sleep(0.1)
 
-        # # Handle shutdown agents once successfully exiting the loop
-        # agents_shutdown = []
-        # for agent_id, _ in self.agent_collection.items():
-        #     if self.agent_collection[agent_id]['step_response'] == 'shutdown':
-        #         agents_shutdown.append(agent_id)
-
-        # logging.info(agents_shutdown)
-        # for agent_id in agents_shutdown:
-        #     logging.info(f'removing agent {agent_id}')
-        #     self.remove_agent(agent_id)
-
-        # print(f"{self.scheduler_id} has {num_confirmed_responses = }")
-
     async def step(self):
 
         logging.info(f"{self.scheduler_id} Step: {self.time}")
 
-        # if self.time < self.sim_settings['SIM_DURATION']-1:
         if self.time < orsim_settings['SIM_DURATION']-1:
             message = {'action': 'step', 'time_step': self.time}
         else:
             message = {'action': 'shutdown', 'time_step': self.time}
 
         for agent_id, _ in self.agent_collection.items():
-            self.agent_collection[agent_id]['step_response'] = 'ready'
+            # self.agent_collection[agent_id]['step_response'] = 'waiting'
+            self.agent_collection[agent_id]['step_response'][self.time] = 'waiting'
 
-        # print(f'publish Step to {self.run_id}/ORSimAgent')
-        # # [client.publish(topic, json.dumps(message)) for topic in topic_list]
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
 
-        # asyncio.run(self.confirm_responses())
         try:
             start_time = time.time()
-            # await asyncio.wait_for(self.confirm_responses(), timeout=self.sim_settings['STEP_TIMEOUT'])
             await asyncio.wait_for(self.confirm_responses(), timeout=orsim_settings['STEP_TIMEOUT'])
             end_time = time.time()
-            logging.info(f'{self.scheduler_id} Runtime: {end_time-start_time} sec')
+            logging.info(f'{self.scheduler_id} Runtime: {(end_time-start_time):0.2f} sec')
 
         except asyncio.TimeoutError as e:
             logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {orsim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.')
-            pp = pprint.PrettyPrinter(indent=4)
+            pp = pprint.PrettyPrinter(indent=2)
             logging.exception(f'{pp.pformat(self.agent_collection)}')
             raise e
 
         # Handle shutdown agents once successfully exiting the loop
         agents_shutdown = []
         for agent_id, _ in self.agent_collection.items():
-            if self.agent_collection[agent_id]['step_response'] == 'shutdown':
+            # if self.agent_collection[agent_id]['step_response'] == 'shutdown':
+            if self.agent_collection[agent_id]['step_response'][self.time] == 'shutdown':
                 agents_shutdown.append(agent_id)
 
         # logging.info(agents_shutdown)
@@ -191,12 +166,8 @@ class ORSimScheduler(ABC):
             'end_sim': False,
         }
 
-        # if self.time == self.sim_settings['SIM_DURATION']-1:
         if self.time == orsim_settings['SIM_DURATION']-1:
             sim_stat['end_sim'] = True
 
         return sim_stat
-    # def run_simulation(self):
-    #     while self.time < self.sim_settings['SIM_DURATION']:
-    #         self.step()
 

@@ -20,8 +20,6 @@ from apps.state_machine import RidehailDriverTripStateMachine
 
 from apps.messenger_service import Messenger
 
-# Driver app must be a registered listener to Message events
-
 class DriverApp:
 
     def __init__(self, run_id, sim_clock, current_loc, credentials, driver_settings):
@@ -36,9 +34,7 @@ class DriverApp:
 
         self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
 
-        # # # mqtt is used for interapp messaging.
-        # self.messenger = Messenger(run_id, credentials, self.driver.get_id(), self.on_receive_message)
-        self.message_queue = []
+        self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual driver behavior
 
     def get_driver(self):
         return self.driver.as_dict()
@@ -49,8 +45,6 @@ class DriverApp:
     def login(self, sim_clock, current_loc, route):
         ''' '''
         self.driver.login(sim_clock)
-        # self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle)
-        # # self.look_for_job(sim_clock, current_loc, route)
         self.create_new_unoccupied_trip(sim_clock, current_loc)
         self.trip.look_for_job(sim_clock, current_loc, route)
 
@@ -61,13 +55,10 @@ class DriverApp:
         ''' '''
         logging.info(f'logging out Driver {self.driver.get_id()}')
         try:
-            # self.end_trip(sim_clock, current_loc, force_quit=True, look_for_job=False)
             self.trip.end_trip(sim_clock, current_loc, force_quit=True)
             self.driver.logout(sim_clock)
         except Exception as e:
             logging.exception(str(e))
-            # print(e)
-            # raise e
 
     def refresh(self):
         ''' Sync ALL inMemory State with the db State'''
@@ -80,7 +71,6 @@ class DriverApp:
         self.trip.ping(sim_clock, current_loc, **kwargs)
 
         if self.get_trip()['state'] in [RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier]:
-            # self.messenger.client.publish(f'Agent/{self.get_trip()["passenger"]}',
             self.messenger.client.publish(f'{self.run_id}/{self.get_trip()["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
@@ -102,18 +92,12 @@ class DriverApp:
         '''
 
         if self.trip.as_dict()['is_occupied'] == False:
-            # self.end_trip(sim_clock, current_loc, force_quit=False, look_for_job=False)
             self.trip.end_trip(sim_clock, current_loc, force_quit=False)
 
             self.trip.create_new_occupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle, requested_trip)
-            # print("create_new_received_trip Success")
         else:
-            # raise Exception("Driver is already engaged in an Occupied trip")
             logging.warning('Driver is already engaged in an Occupied trip')
             pass
-
-    # def look_for_job(self, sim_clock, current_loc, route=None):
-    #     self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle, route)
 
 
     ################
@@ -123,11 +107,7 @@ class DriverApp:
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), The agent will pull items from queue and process them in sequence until Queue is empty
         '''
-        # logging.info(f"{message.topic=}, {message.payload=}")
         payload = json.loads(message.payload.decode('utf-8'))
-        # print(f"Message Recieved: {message.payload.decode('utf-8')}")
-        # print(type(payload))
-
         self.enqueue_message(payload)
 
 

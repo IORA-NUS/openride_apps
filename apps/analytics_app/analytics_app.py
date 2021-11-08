@@ -10,7 +10,6 @@ import paho.mqtt.client as paho
 from datetime import datetime
 
 from apps.messenger_service import Messenger
-# from loc_service import OSRMClient
 
 from apps.utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
 from apps.utils.user_registry import UserRegistry
@@ -27,8 +26,6 @@ class AnalyticsApp:
         ''' '''
         self.run_id = run_id
         self.credentials = credentials
-        # self.solver_params = solver_params
-        # self.sim_clock = sim_clock
 
         self.user = UserRegistry(sim_clock, credentials, role='admin')
 

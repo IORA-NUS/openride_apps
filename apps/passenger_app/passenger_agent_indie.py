@@ -3,7 +3,6 @@ current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
-# print(sys.path)
 import logging
 import json, time, asyncio
 import pika
@@ -13,12 +12,8 @@ from datetime import datetime
 import geopandas as gp
 from random import choice
 from dateutil.relativedelta import relativedelta
-
-# from mesa import Agent
-
 from shapely.geometry import Point, mapping
 
-# from apps.config import settings
 from apps.passenger_app import PassengerApp
 from apps.utils.utils import id_generator, cut
 from apps.state_machine import RidehailPassengerTripStateMachine, WorkflowStateMachine
@@ -40,20 +35,12 @@ class PassengerAgentIndie(ORSimAgent):
     prev_time_step = None
     elapsed_duration_steps = None
     current_route_coords = None # shapely.geometry.LineString
-    # active = False
-    # model = None
-    # sim_settings = settings['SIM_SETTINGS']
-    # step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
-    step_size = orsim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
 
-    # # stop_locations = TaxiStop().stop_locations # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    # # stop_locations = TaxiStop().get_locations_within('CLEMENTI') # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
-    # stop_locations = BusStop().get_locations_within(sim_settings['PLANNING_AREA']) # NOTE THIS CAN A MEMORY HOG. FIND A BETTER SOLUTION
+    step_size = orsim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
 
 
     def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
-        # super().__init__(unique_id, model)
-        # NOTE, model should include run_id and start_time
+        ''' '''
         super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
 
         self.current_loc = self.behavior['pickup_loc']
@@ -79,7 +66,6 @@ class PassengerAgentIndie(ORSimAgent):
 
 
     def entering_market(self, time_step):
-        # if self.model.passenger_schedule.time == self.behavior['trip_request_time']:
         if time_step == self.behavior['trip_request_time']:
             # print('Enter Market')
             # print(self.behavior)
@@ -89,181 +75,52 @@ class PassengerAgentIndie(ORSimAgent):
         else:
             return False
 
-    # def is_active(self):
-    #     return self.active
-
-
     def exiting_market(self):
-        # if self.app.get_trip() is None:
-        #     return False
         if self.app.exited_market:
             return False
-        # elif (self.model.passenger_schedule.time > self.behavior['trip_request_time']) and \
         elif (self.current_time_step > self.behavior['trip_request_time']) and \
                 (self.app.get_trip()['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.identifier,
                                                 RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,]):
-                # (self.app.get_trip() is None):
-
-            # print('Exit Market')
-            # print(self.app.get_trip())
-            # self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
             self.shutdown()
             self.active = False
             return True
-        # elif self.model.passenger_schedule.time == settings['SIM_DURATION']-1:
-        # elif self.current_time_step == self.sim_settings['SIM_DURATION']-1:
 
-        #     # self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
-        #     self.shutdown()
-
-        #     self.active = False
-
-        #     return True
         else:
             return False
-
-
-    # @classmethod
-    # def load_behavior(cls, unique_id, behavior=None):
-    #     ''' '''
-    #     trip_request_time = randint(0, cls.sim_settings['SIM_DURATION']-1)
-    #     # trip_request_time = 0
-
-    #     if behavior is None:
-    #         behavior = {
-    #             'email': f'{unique_id}@test.com',
-    #             'password': 'password',
-
-    #             'trip_request_time': trip_request_time, # in units of Simulation Step Size
-
-    #             'pickup_loc': mapping(choice(cls.stop_locations)), # shapely.geometry.Point
-    #             'dropoff_loc': mapping(choice(cls.stop_locations)), # shapely.geometry.Point
-
-    #             'settings':{
-    #                 'market': 'RideHail',
-    #                 'patience': 600, # in Seconds
-    #             },
-
-    #             'transition_prob': {
-    #                 # cancel | passenger_requested_trip = 1 if exceeded_patience
-    #                 # cancel | passenger_requested_trip ~ 0
-    #                 ('cancel', 'passenger_requested_trip', 'exceeded_patience'): 1.0,
-    #                 ('cancel', 'passenger_requested_trip'): 0.0,
-
-    #                 # cancel | passenger_assigned_trip ~ 0
-    #                 ('cancel', 'passenger_assigned_trip'): 0.0,
-
-    #                 # (accept + reject + cancel) | passenger_received_trip_confirmation == 1
-    #                 ('accept', 'passenger_received_trip_confirmation',): 1.0,
-    #                 ('reject', 'passenger_received_trip_confirmation'): 0.0,
-    #                 ('cancel', 'passenger_received_trip_confirmation'): 0.0,
-    #                 ('cancel', 'passenger_received_trip_confirmation', 'exceeded_patience'): 1.0,
-
-    #                 # (cancel + move_for_pickup + wait_for_pickup) | passenger_accepted_trip ~ 0
-    #                 ('cancel', 'passenger_accepted_trip'): 0.0,
-    #                 # NOTE move_for_pickup and wait_for_pickup transition dependant on currentLoc and PickupLoc
-
-    #                 # cancel | passenger_moving_for_pickup ~ 0
-    #                 ('cancel', 'passenger_moving_for_pickup'): 0.0,
-
-    #                 # cancel | passenger_waiting_for_pickup ~ 0
-    #                 ('cancel', 'passenger_waiting_for_pickup'): 0.0,
-
-    #                 # end_trip | passenger_droppedoff = 1
-    #                 ('end_trip', 'passenger_droppedoff'): 1.0,
-
-    #             },
-
-    #             # 'Constraint_accept': {
-    #             # },
-
-    #         }
-
-    #     return behavior
-
-    # def initialize_location(self):
-    #     if self.current_time_step == self.behavior['start_time']:
-
-    #         ''' find a Feasible route using some routeing engine'''
-    #         # route = OSRMClient.get_route(self.behavior['trip_start_loc'], self.behavior['trip_end_loc'])
-    #         # self.current_route_coords = OSRMClient.get_coords_from_route(route)
-
-    #         # self.app.set_route(self.get_current_time_str(), self.behavior['trip_start_loc'], self.behavior['trip_end_loc'], route)
-
-    #         # # self.current_route_coords = self.app.get_route(self.get_current_time_str(), start_loc=self.current_loc, end_loc=None)
 
     def logout(self):
         self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
 
 
-    # async def step(self, time_step):
     def step(self, time_step):
-        # # The agent's step will go here.
-        # print(f"{self.model.passenger_schedule.time}: Passenger {self.behavior['email']} start execution")
-        # print(f"Passenger: {self.behavior['email']}")
-
         # 1. Always refresh trip manager to sync InMemory States with DB
         try:
-            # self.refresh(time_step)
             self.app.refresh()
         except Exception as e:
-            # print(self.behavior)
-            # print(self.app.get_trip())
             logging.exception(str(e))
             raise e
 
-        # if self.model.passenger_schedule.time == settings['SIM_DURATION']-1:
-        # if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
-        #     self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
-        #     self.shutdown()
-        # else:
         self.consume_messages()
         self.perform_workflow_actions()
 
-        # # if self.behavior['email'] == "p_000001@test.com":
-        # #     print(f"{self.behavior['email']} sleeping for 5 seconds")
-        # #     time.sleep(5)
-        # print(f"{self.model.passenger_schedule.time}: Passenger {self.behavior['email']} end execution")
-
-    # def refresh(self, time_step):
-    #     super().refresh(time_step)
-    #     self.app.refresh()
-
-        # # print(self.current_time_step, self.model.passenger_schedule.time)
-
-        # self.prev_time_step = self.current_time_step
-        # # self.current_time_step = self.model.passenger_schedule.time
-        # self.current_time_step = time_step
-        # self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
-
-        # self.current_time = self.reference_time + relativedelta(seconds = time_step * self.sim_settings['SIM_STEP_SIZE'])
 
     def consume_messages(self):
         ''' '''
         payload = self.app.dequeue_message()
-        # print(f"passenger_agent.consume_messages: {payload = }")
 
         while payload is not None:
             # process message
             if payload['action'] == 'assigned':
                 if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
-                    # driver_id = payload['driver_id']
-
                     try:
-                        # self.app.handle_assigned_trip(self.get_current_time_str(),
-                        #                             current_loc=self.current_loc,
-                        #                             driver_id=payload['driver_id'])
                         self.app.trip.assign(self.get_current_time_str(),
                                                     current_loc=self.current_loc,
                                                     driver=payload['driver_id'])
                     except Exception as e:
-                        # print(e)
                         logging.exception(str(e))
                         raise e
                 else:
-                    # print(self.app.get_trip())
                     logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
-                    # raise Exception('passenger must be in Requested State to assign new driver.')
 
             elif payload['action'] == 'driver_workflow_event':
                 if RidehailPassengerTripStateMachine.is_driver_channel_open(self.app.get_trip()['state']):
@@ -308,7 +165,6 @@ class PassengerAgentIndie(ORSimAgent):
     def perform_workflow_actions(self):
         ''' '''
         passenger = self.app.get_passenger()
-        # current_trip = self.app.get_trip # NOTE current trip is a function
         #### NOTE THIS is a mistake. Should use the last transition time instead of the last waypoint (_updated) time
         try:
             time_since_last_event = (datetime.strptime(self.get_current_time_str(), "%a, %d %b %Y %H:%M:%S GMT") - \
@@ -327,21 +183,14 @@ class PassengerAgentIndie(ORSimAgent):
 
         elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier) and \
                 (self.behavior['trip_request_time'] + (self.behavior['settings']['patience']/self.step_size) < self.current_time_step):
-                # (self.behavior['trip_request_time'] + (self.behavior['settings']['patience']/self.sim_settings['SIM_STEP_SIZE']) < self.current_time_step):
-                # (self.behavior['trip_request_time'] + (self.behavior['settings']['patience']/self.sim_settings['SIM_STEP_SIZE']) < self.model.passenger_schedule.time):
-            # logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, patience: {self.behavior['settings']['patience']/self.sim_settings['SIM_STEP_SIZE']}")
             logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['settings']['patience']/self.step_size} steps")
             self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
 
         else:
-            # print(f"{self.app.get_trip()['state'] = }")
-            # if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_assigned_trip.identifier:
             if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.identifier:
-                # if random() <= self.behavior['transition_prob'].get(('accept', self.app.get_trip()['state']), 1):
                 if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
                     self.app.trip.accept(self.get_current_time_str(), current_loc=self.current_loc,)
                 else:
-                    # self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
                     self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc,)
 
             # move for pickup not implemenetd

@@ -7,7 +7,6 @@ from re import I
 from shapely.geometry.linestring import LineString
 from apps.state_machine.agent_workflow_sm import WorkflowStateMachine
 
-# print(sys.path)
 import logging
 import json, time, asyncio
 import pika
@@ -17,11 +16,8 @@ import geopandas as gp
 from random import choice, randint, random
 from dateutil.relativedelta import relativedelta
 
-# from mesa import Agent
-
 from shapely.geometry import Point, mapping
 
-# from apps.config import settings
 from .driver_app import DriverApp
 from apps.utils.utils import id_generator, cut
 from apps.state_machine import RidehailDriverTripStateMachine
@@ -32,25 +28,14 @@ from apps.loc_service import TaxiStop, BusStop
 
 from apps.messenger_service import Messenger
 
-# Driver agent will be called to apply behavior at every step
-# At each step, the Agent will process list of collected messages in the app.
-
 from apps.orsim import ORSimAgent
 from apps.config import driver_settings, orsim_settings
 
 class DriverAgentIndie(ORSimAgent):
 
-    # unique_id = None
-    # current_loc = None
-    # prev_time_step = None
-    # current_time_step = None
-    # elapsed_duration_steps = None
     active_route = None # shapely.geometry.LineString
     current_route_coords = None # shapely.geometry.LineString
-    # active = False
 
-    # sim_settings = settings['SIM_SETTINGS']
-    # step_size = sim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
     step_size = orsim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
 
 
@@ -67,15 +52,7 @@ class DriverAgentIndie(ORSimAgent):
         }
 
 
-        # self.app = DriverApp(model.run_id, model.get_current_time_str(), self.current_loc, credentials=self.credentials, driver_settings=self.behavior['settings'])
         self.app = DriverApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, driver_settings=self.behavior['settings'])
-
-        # self.agent_credentials = {
-        #     'email': f"Agent_{self.behavior.get('email')}",
-        #     'password': self.behavior.get('password'),
-        # }
-
-        # self.agent_messenger = Messenger(run_id, self.agent_credentials, f"ORSimAgent_{self.unique_id}", self.on_receive_message)
 
 
     def process_payload(self, payload):
@@ -95,8 +72,6 @@ class DriverAgentIndie(ORSimAgent):
 
     def entering_market(self, time_step):
         ''' '''
-
-        # if self.model.driver_schedule.time == self.behavior['shift_start_time']:
         if time_step == self.behavior['shift_start_time']:
             self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
             self.app.login(self.get_current_time_str(), self.current_loc, self.active_route)
@@ -114,33 +89,16 @@ class DriverAgentIndie(ORSimAgent):
 
         if self.app.get_trip() is None:
             return False
-        # elif (self.model.driver_schedule.time > self.behavior['shift_end_time']) and \
         elif (self.current_time_step > self.behavior['shift_end_time']) and \
                 (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
 
-            # self.app.logout(self.get_current_time_str(), self.current_loc)
             self.shutdown()
             self.active = False
             return True
-        # # # elif self.model.driver_schedule.time == settings['SIM_DURATION']-1:
-        # elif self.current_time_step == self.sim_settings['SIM_DURATION']-1:
-
-        #     # self.app.logout(self.get_current_time_str(), self.current_loc)
-        #     self.shutdown()
-        #     self.active = False
-        #     return True
-        # else:
-        #     self.app.logout(self.get_current_time_str(), self.current_loc)
-        #     return True
-        #     # return False
-        # else:
-        #     print('logging out')
-        #     self.app.logout(self.get_current_time_str(), self.current_loc)
-        #     return True
         else:
             return False
 
-    def set_route(self, from_loc, to_loc): #, state):
+    def set_route(self, from_loc, to_loc):
         ''' find a Feasible route using some routeing engine'''
         self.active_route = OSRMClient.get_route(from_loc, to_loc)
         self.current_route_coords = OSRMClient.get_coords_from_route(self.active_route)
@@ -153,7 +111,6 @@ class DriverAgentIndie(ORSimAgent):
         # print(f"Driver: {self.behavior['email']}")
 
         # 1. Always refresh trip manager to sync InMemory States with DB
-        # self.refresh(time_step)
         self.app.refresh()
         # Driver has likely moved between the ticks, so update their current loc
         self.update_location()
@@ -239,24 +196,20 @@ class DriverAgentIndie(ORSimAgent):
                         passenger_data = payload['data']
 
                         if passenger_data.get('event') == "passenger_confirmed_trip":
-                            self.set_route(self.current_loc, self.app.get_trip()['pickup_loc']) #, self.app.get_driver()['state'])
-                            # self.app.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                            self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
                             self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
                         if passenger_data.get('event') == "passenger_rejected_trip":
-                            self.set_route(self.current_loc, self.app.get_trip()['pickup_loc']) #, self.app.get_driver()['state'])
-                            # self.app.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                            self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
                             self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
                             self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
                             self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
                         if passenger_data.get('event') == "passenger_acknowledge_pickup":
-                            self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc']) #, self.app.get_driver()['state'])
-                            # self.app.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                            self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
                             self.app.trip.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
                         if passenger_data.get('event') == "passenger_acknowledge_dropoff":
-                            # self.app.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
                             self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
 
                     else:
@@ -286,7 +239,6 @@ class DriverAgentIndie(ORSimAgent):
                 if type(self.current_route_coords) == Point:
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
 
-                    # self.set_route(self.current_loc, self.get_empty_destination_loc())
                     self.set_route(self.current_loc, self.get_random_location())
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
@@ -294,51 +246,36 @@ class DriverAgentIndie(ORSimAgent):
 
             if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_received_trip.identifier:
                 if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
-                    # self.app.confirm_trip(self.get_current_time_str(), current_loc=self.current_loc,)
                     self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc,)
                 else:
-                    # self.app.reject_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     # No need to reset route, continue moving on previous route
 
-            # if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_accepted_trip.identifier:
-
             if self.app.get_trip()['state'] in RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
                 ''''''
                 distance = hs.haversine(self.current_loc['coordinates'][:2], self.app.get_trip()['pickup_loc']['coordinates'][:2], unit=hs.Unit.METERS)
-                # print(f"{distance = }")
 
                 if (distance < 100):
-                    # self.app.wait_to_pickup(self.get_current_time_str(), current_loc=self.current_loc,)
                     self.app.trip.wait_to_pickup(self.get_current_time_str(), current_loc=self.current_loc,)
 
 
             if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_pickedup.identifier) and \
                 (time_since_last_event >= self.behavior['TrTime_pickup']):
-                    # self.app.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.trip.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
 
             if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier):
 
                 distance = hs.haversine(self.current_loc['coordinates'][:2], self.app.get_trip()['dropoff_loc']['coordinates'][:2], unit=hs.Unit.METERS)
-                # print(f"{distance = }")
 
                 if (distance < 100):
-                    # self.app.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
                     self.app.trip.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
 
             if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_droppedoff.identifier) and \
                 (time_since_last_event >= self.behavior['TrTime_dropoff']):
 
-                    # self.app.complete(self.get_current_time_str(), current_loc=self.current_loc,)
-
-                    # self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-                    # self.app.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-
                     self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-                    # self.app.end_trip(self.get_current_time_str(), current_loc=self.current_loc, look_for_job=True, route=self.active_route)
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)

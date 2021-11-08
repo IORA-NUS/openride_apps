@@ -23,48 +23,22 @@ class PassengerTripManager:
 
         data = {
             "passenger": passenger['_id'],
-            "current_loc": current_loc, #{"type":"Point","coordinates": current_loc},
-            "pickup_loc": pickup_loc, #{"type":"Point","coordinates":current_loc},
-            "dropoff_loc": dropoff_loc, #{"type":"Point","coordinates":current_loc},
+            "current_loc": current_loc,
+            "pickup_loc": pickup_loc,
+            "dropoff_loc": dropoff_loc,
             "sim_clock": sim_clock,
             "trip_value": self.compute_trip_value(pickup_loc, dropoff_loc) if trip_value is None else trip_value
         }
 
         response = requests.post(passenger_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
-        # print(response.text)
 
         if is_success(response.status_code):
             passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{response.json()['_id']}"
             response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
             self.trip = response.json()
-            # print(self.trip)
         else:
             raise Exception(response.text)
 
-
-    # def create_new_assigned_trip(self, sim_clock, passenger, vehicle, current_loc, passenger_trip):
-    #     passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip"
-
-    #     data = {
-    #         "passenger": f"{passenger['_id']}",
-    #         "vehicle": f"{vehicle['_id']}",
-    #         "current_loc": {"type":"Point","coordinates": current_loc},
-    #         "passenger_trip": passenger_trip['_id'],
-    #         "passenger": passenger_trip['passenger'],
-    #         "start_loc": {"type":"Point","coordinates":passenger_trip['start_loc']},
-    #         "end_loc": {"type":"Point","coordinates":passenger_trip['end_loc']},
-    #         "is_occupied": True,
-    #         "sim_clock": sim_clock,
-    #     }
-
-    #     response = requests.post(passenger_trip_url, headers=self.headers, data=json.dumps(data))
-
-    #     if is_success(response.status_code):
-    #         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/{response.json()['_id']}"
-    #         response = requests.get(passenger_trip_item_url, headers=self.headers)
-    #         self.trip = response.json()
-    #     else:
-    #         raise Exception(response.text)
     def compute_trip_value(self, start_loc, end_loc):
         route = OSRMClient.get_route(start_loc, end_loc)
 
@@ -77,21 +51,9 @@ class PassengerTripManager:
 
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}"
 
-        # data = {
-        #     "current_loc": location,
-        #     # "current_loc": {
-        #     #     "type":"Point",
-        #     #     "coordinates":location
-        #     # }
-        # }
-
-        # if transition is not None:
-        #     data['transition'] = transition
-
         data = kwargs
         data['sim_clock'] = sim_clock
 
-        # print(data)
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
@@ -160,7 +122,6 @@ class PassengerTripManager:
 
         self.refresh()
 
-        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                     json.dumps({
                                         'action': 'passenger_workflow_event',
@@ -290,7 +251,6 @@ class PassengerTripManager:
         self.refresh()
 
         # Message driver
-        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                 json.dumps({
                                     'action': 'passenger_workflow_event',
@@ -358,7 +318,6 @@ class PassengerTripManager:
         self.refresh()
 
         # Message driver
-        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
         self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                 json.dumps({
                                     'action': 'passenger_workflow_event',
@@ -390,12 +349,9 @@ class PassengerTripManager:
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
-        # if shutdown:
-        # self.trip = None
 
 
     def refresh(self):
-        # if self.trip is not None:
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
         passenger_trip_item_url = f"{passenger_trip_url}/{self.trip['_id']}"
 
