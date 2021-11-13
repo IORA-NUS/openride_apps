@@ -48,6 +48,19 @@ class RidehailPassengerTripStateMachine(StateMachine):
                                             passenger_moving_for_pickup,
                                             passenger_waiting_for_pickup)
 
+    force_quit =passenger_cancelled_trip.from_(
+                                passenger_requested_trip,
+                                passenger_assigned_trip,
+                                passenger_received_trip_confirmation,
+                                passenger_accepted_trip,
+                                passenger_moving_for_pickup,
+                                passenger_waiting_for_pickup,
+                                passenger_pickedup,
+                                passenger_moving_for_dropoff,
+                                passenger_waiting_for_dropoff,
+                                passenger_droppedoff,
+                            )
+
     @classmethod
     def is_moving(cls, state):
         if state in [cls.passenger_requested_trip.identifier,

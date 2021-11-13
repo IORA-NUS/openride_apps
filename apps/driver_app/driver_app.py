@@ -65,22 +65,24 @@ class DriverApp:
         # Driver
         self.driver.refresh()
         self.trip.refresh()
+        # raise exception if unable to refresh
 
-    def ping(self, sim_clock, current_loc, **kwargs):
+    def ping(self, sim_clock, current_loc, publish=False, **kwargs):
         ''' '''
-        self.trip.ping(sim_clock, current_loc, **kwargs)
+        self.trip.ping(sim_clock, current_loc, **kwargs) # Raises exception if ping fails
 
-        if self.get_trip()['state'] in [RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier]:
-            self.messenger.client.publish(f'{self.run_id}/{self.get_trip()["passenger"]}',
-                                json.dumps({
-                                    'action': 'driver_workflow_event',
-                                    'driver_id': self.driver.get_id(),
-                                    'data': {
-                                        'location': current_loc,
-                                    }
+        if publish:
+            if self.get_trip()['state'] in [RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier]:
+                self.messenger.client.publish(f'{self.run_id}/{self.get_trip()["passenger"]}',
+                                    json.dumps({
+                                        'action': 'driver_workflow_event',
+                                        'driver_id': self.driver.get_id(),
+                                        'data': {
+                                            'location': current_loc,
+                                        }
 
-                                })
-                            )
+                                    })
+                                )
 
     def handle_requested_trip(self, sim_clock, current_loc, requested_trip):
         '''
@@ -121,6 +123,8 @@ class DriverApp:
             return self.message_queue.pop(0)
         except: return None
 
+    def enfront_message(self, payload):
+        self.message_queue.insert(0, payload)
 
 
 if __name__ == '__main__':

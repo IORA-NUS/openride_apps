@@ -51,7 +51,8 @@ class PassengerApp:
         ''' '''
         logging.info(f'logging out Passenger {self.passenger.get_id()}')
         try:
-            self.trip.end_trip(sim_clock, current_loc, force_quit=True, shutdown=True)
+            # self.trip.end_trip(sim_clock, current_loc, force_quit=True, shutdown=True)
+            self.trip.force_quit(sim_clock, current_loc)
             self.passenger.logout(sim_clock)
             self.exited_market = True
         except Exception as e:
@@ -67,6 +68,7 @@ class PassengerApp:
         # Passenger
         self.passenger.refresh()
         self.trip.refresh()
+        # raise exception if unable to refresh
 
 
     ################
@@ -91,6 +93,8 @@ class PassengerApp:
             return self.message_queue.pop(0)
         except: return None
 
+    def enfront_message(self, payload):
+        self.message_queue.insert(0, payload)
 
 
 if __name__ == '__main__':

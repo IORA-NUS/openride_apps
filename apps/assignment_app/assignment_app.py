@@ -34,6 +34,7 @@ class AssignmentApp:
         self.engine = EngineManager(self.run_id, sim_clock, self.user, self.solver)
 
         self.messenger = Messenger(credentials)
+        self.server_max_results = 50 # make sure this is in sync with server
 
 
     def assign(self, sim_clock, clock_tick):
@@ -108,20 +109,32 @@ class AssignmentApp:
         ''' '''
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
 
-        params = {
-            "where": json.dumps({
-                "is_active": True,
-                "is_occupied": False,
-                "state": {"$in": [RidehailDriverTripStateMachine.driver_looking_for_job.identifier] },
-                "current_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
-            }),
-            "embedded": json.dumps({
-                "driver": 1
-            }),
-        }
+        got_results = True
+        response_items = []
+        page = 1
+        while got_results:
+            params = {
+                "where": json.dumps({
+                    "is_active": True,
+                    "is_occupied": False,
+                    "state": {"$in": [RidehailDriverTripStateMachine.driver_looking_for_job.identifier] },
+                    "current_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
+                }),
+                "embedded": json.dumps({
+                    "driver": 1
+                }),
+                'page': page,
+                "max_results": self.server_max_results,
+            }
 
-        response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
-        response_items = response.json()['_items']
+            response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
+            # response_items = response.json()['_items']
+            if response.json()['_items'] == []:
+                got_results = False
+                break
+            else:
+                response_items.extend(response.json()['_items'])
+                page += 1
 
         driver_trip = {}
         for item in response_items:
@@ -133,19 +146,29 @@ class AssignmentApp:
         ''' '''
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
 
-        params = {
-            "where": json.dumps({
-                "is_active": True,
-                "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier]},
-                # "pickup_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
-                "pickup_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
-            })
-        }
-        # print(params)
-        response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
-        # print(response.url)
-        # print(response.json())
-        response_items = response.json()['_items']
+        got_results = True
+        response_items = []
+        page = 1
+        while got_results:
+            params = {
+                "where": json.dumps({
+                    "is_active": True,
+                    "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier]},
+                    # "pickup_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
+                    "pickup_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
+                }),
+                'page': page,
+                "max_results": self.server_max_results,
+            }
+
+            response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
+            # response_items = response.json()['_items']
+            if response.json()['_items'] == []:
+                got_results = False
+                break
+            else:
+                response_items.extend(response.json()['_items'])
+                page += 1
 
         passenger_trip = {}
         for item in response_items:

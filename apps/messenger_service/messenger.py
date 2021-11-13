@@ -33,7 +33,7 @@ class Messenger:
 
         if channel_id is not None:
             self.client.loop_start()
-            self.client.subscribe(f"{channel_id}", qos=2)
+            self.client.subscribe(f"{channel_id}", qos=0)
             logging.info(f"Channel: {channel_id}")
 
 

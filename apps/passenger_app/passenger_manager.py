@@ -1,4 +1,4 @@
-import logging
+import logging, traceback
 import requests, json
 from http import HTTPStatus
 
@@ -110,12 +110,11 @@ class PassengerManager():
                         data=json.dumps(data))
 
     def refresh(self):
-        passenger_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger"
-        passenger_item_url = passenger_url + f"/{self.passenger['_id']}"
+        passenger_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/{self.passenger['_id']}"
 
         response = requests.get(passenger_item_url, headers=self.user.get_headers())
 
         if is_success(response.status_code):
             self.passenger = response.json()
         else:
-            logging.warning(f'PassengerManager.refresh: Failed getting response for {self.passenger["_id"]} Got {response.text}')
+            raise Exception(f'PassengerManager.refresh: Failed getting response for {self.passenger["_id"]} Got {response.text}')

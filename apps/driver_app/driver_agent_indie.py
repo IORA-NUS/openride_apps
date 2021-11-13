@@ -19,12 +19,12 @@ from dateutil.relativedelta import relativedelta
 from shapely.geometry import Point, mapping
 
 from .driver_app import DriverApp
-from apps.utils.utils import id_generator, cut
+from apps.utils.utils import id_generator #, cut
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.loc_service import OSRMClient
 from apps.utils.generate_behavior import GenerateBehavior
 
-from apps.loc_service import TaxiStop, BusStop
+from apps.loc_service import TaxiStop, BusStop, cut
 
 from apps.messenger_service import Messenger
 
@@ -36,7 +36,7 @@ class DriverAgentIndie(ORSimAgent):
     active_route = None # shapely.geometry.LineString
     current_route_coords = None # shapely.geometry.LineString
 
-    step_size = orsim_settings['SIM_STEP_SIZE'] # NumSeconds per each step.
+    # step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
 
 
 
@@ -51,16 +51,26 @@ class DriverAgentIndie(ORSimAgent):
             'password': self.behavior.get('password'),
         }
 
+        self.timeout_error = False
+        self.failure_count = 0
 
         self.app = DriverApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, driver_settings=self.behavior['settings'])
 
 
     def process_payload(self, payload):
         ''' '''
+        self.timeout_error = False
+
         if payload.get('action') == 'step':
             self.entering_market(payload.get('time_step'))
+
             if self.is_active():
-                self.step(payload.get('time_step'))
+                try:
+                    self.step(payload.get('time_step'))
+                    self.failure_count = 0
+                except:
+                    self.failure_count += 1
+
             self.exiting_market()
         else:
             logging.error(f"{payload = }")
@@ -86,17 +96,24 @@ class DriverAgentIndie(ORSimAgent):
 
     def exiting_market(self):
         ''' '''
-
-        if self.app.get_trip() is None:
-            return False
-        elif (self.current_time_step > self.behavior['shift_end_time']) and \
-                (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
-
+        failure_threshold = 3
+        if self.failure_count > failure_threshold:
+            logging.warning(f'Shutting down {self.unique_id} due to too many failures')
             self.shutdown()
-            self.active = False
+            return True
+        elif self.timeout_error:
+            self.shutdown()
             return True
         else:
-            return False
+            if self.app.get_trip() is None:
+                return False
+            elif (self.current_time_step > self.behavior['shift_end_time']) and \
+                    (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
+
+                self.shutdown()
+                return True
+            else:
+                return False
 
     def set_route(self, from_loc, to_loc):
         ''' find a Feasible route using some routeing engine'''
@@ -108,26 +125,80 @@ class DriverAgentIndie(ORSimAgent):
 
     def step(self, time_step):
         # # The agent's step will go here.
-        # print(f"Driver: {self.behavior['email']}")
+        if self.current_time_step % driver_settings['STEPS_PER_ACTION'] == 0:
 
-        # 1. Always refresh trip manager to sync InMemory States with DB
-        self.app.refresh()
-        # Driver has likely moved between the ticks, so update their current loc
-        self.update_location()
+            # 1. Always refresh trip manager to sync InMemory States with DB
+            self.app.refresh() # Raises exception if unable to refresh
+            ### Driver has likely moved between the ticks, so update their current loc
+            ### SUpport for multiple pings per step for smooth animation
+            # if time_step > self.behavior['shift_start_time']: # Strictly > 0
+            #     ping_clock = self.current_time - relativedelta(seconds=(orsim_settings['STEP_INTERVAL'] * self.elapsed_duration_steps))
+            #     prev_time_step = time_step -1
 
-        # # if self.model.driver_schedule.time == settings['SIM_DURATION']-1:
-        # if self.current_time_step == self.sim_settings['SIM_DURATION']-1:
-        #     # If this is the last tick of Simulation, logout and Forcibly terminate the current trip
-        #     self.app.logout(self.get_current_time_str(), self.current_loc)
-        #     self.shutdown()
-        #     # return
-        # else:
-        # If Simulation continues, take the actions for each step
-        # 1. DeQueue all messages and process them in sequence
-        self.consume_messages()
-        # 2. based on current state, perform any workflow actions according to Agent behavior
-        self.perform_workflow_actions()
+            #     ping_clock = ping_clock + relativedelta(seconds=driver_settings['LOCATION_PING_INTERVAL'])
+            #     while ping_clock <= self.current_time:
+            #         # For each tick of the ping_clock
+            #         self.update_location(ping_clock, driver_settings['LOCATION_PING_INTERVAL'], publish=False)
+            #         ping_clock = ping_clock + relativedelta(seconds=driver_settings['LOCATION_PING_INTERVAL'])
 
+            #     # Push back ping_clock One tick
+            #     ping_clock = ping_clock - relativedelta(seconds=driver_settings['LOCATION_PING_INTERVAL'])
+            #     # update location at self.curent_time
+            #     self.update_location(self.current_time, (self.current_time - ping_clock).total_seconds(), publish=True)
+
+
+            # else:
+            #     self.update_location(self.current_time, 0)
+
+            self.update_location()
+
+            # 1. DeQueue all messages and process them in sequence
+            self.consume_messages()
+            # 2. based on current state, perform any workflow actions according to Agent behavior
+            self.perform_workflow_actions()
+
+
+    # def update_location(self, ping_clock, elapsed_time, publish=False):
+    #     ''' - Update self.current_loc based on:
+    #             - last known current_loc
+    #             - driver.state (waiting ==> no change in current_loc)
+    #             - route
+    #             - elapsed time
+    #             - speed (average estimated speed)
+    #         - Ping Waypoint. This restores the current state of the driver
+    #             - Workflow events will be processed in the next step
+    #     '''
+
+    #     speed = 40 * 1000/3600 # 40 Km/H --> m/sec
+
+    #     current_trip = self.app.get_trip()
+
+    #     if RidehailDriverTripStateMachine.is_moving(current_trip['state']) == False:
+    #         return
+    #     else:
+    #         # step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
+    #         # elapsed_time = self.elapsed_duration_steps * step_size ## Make sure the stepSize is appropriately handled
+
+    #         moved_distance = speed * elapsed_time
+
+    #         self.current_route_coords = cut(self.current_route_coords, moved_distance)[-1]
+
+    #         try:
+    #             if type(self.current_route_coords) == LineString:
+    #                 self.current_loc = mapping(Point(self.current_route_coords.boundary[0]))
+    #             elif type(self.current_route_coords) == Point:
+    #                 self.current_loc = mapping(self.current_route_coords)
+    #             # print(moved_distance, self.current_loc) #, self.current_route_coords)
+    #         except Exception as e:
+    #             logging.info(moved_distance)
+    #             # print(e)
+    #             logging.exception(str(e))
+
+    #     # print(self.current_route_coords)
+    #     # print(list(self.current_route_coords.coords))
+
+    #     # NOTE This will be called at every Step hence the current_route_coords will always be based on Latest info from Agent
+    #     self.app.ping(self.format_time(ping_clock), current_loc=self.current_loc, publish=publish, current_route_coords=list(self.current_route_coords.coords))
 
     def update_location(self):
         ''' - Update self.current_loc based on:
@@ -147,7 +218,10 @@ class DriverAgentIndie(ORSimAgent):
         if RidehailDriverTripStateMachine.is_moving(current_trip['state']) == False:
             return
         else:
-            moved_distance = speed * self.elapsed_duration_steps * self.step_size ## Make sure the stepSize is appropriately handled
+            step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
+            elapsed_time = self.elapsed_duration_steps * step_size ## Make sure the stepSize is appropriately handled
+
+            moved_distance = speed * elapsed_time
 
             self.current_route_coords = cut(self.current_route_coords, moved_distance)[-1]
 
@@ -178,47 +252,51 @@ class DriverAgentIndie(ORSimAgent):
         # print(f"driver_agent.consume_messages: {payload = }")
 
         while payload is not None:
-            if payload['action'] == 'requested_trip':
-                passenger_id = payload['passenger_id']
-                requested_trip = payload['requested_trip']
+            try:
+                if payload['action'] == 'requested_trip':
+                    passenger_id = payload['passenger_id']
+                    requested_trip = payload['requested_trip']
 
-                try:
-                    self.app.handle_requested_trip(self.get_current_time_str(),
-                                                        current_loc=self.current_loc,
-                                                        requested_trip=requested_trip)
-                except Exception as e:
-                    logging.exception(str(e))
-                    # print(e)
-                    raise e
-            elif payload['action'] == 'passenger_workflow_event':
-                if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
-                    if self.app.get_trip()['passenger'] == payload['passenger_id']:
-                        passenger_data = payload['data']
+                    try:
+                        self.app.handle_requested_trip(self.get_current_time_str(),
+                                                            current_loc=self.current_loc,
+                                                            requested_trip=requested_trip)
+                    except Exception as e:
+                        logging.exception(str(e))
+                        # print(e)
+                        raise e
+                elif payload['action'] == 'passenger_workflow_event':
+                    if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
+                        if self.app.get_trip()['passenger'] == payload['passenger_id']:
+                            passenger_data = payload['data']
 
-                        if passenger_data.get('event') == "passenger_confirmed_trip":
-                            self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-                            self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                            if passenger_data.get('event') == "passenger_confirmed_trip":
+                                self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
+                                self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-                        if passenger_data.get('event') == "passenger_rejected_trip":
-                            self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-                            self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
-                            self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                            self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                            if passenger_data.get('event') == "passenger_rejected_trip":
+                                self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
+                                self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
+                                self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
+                                self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-                        if passenger_data.get('event') == "passenger_acknowledge_pickup":
-                            self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
-                            self.app.trip.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                            if passenger_data.get('event') == "passenger_acknowledge_pickup":
+                                self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
+                                self.app.trip.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-                        if passenger_data.get('event') == "passenger_acknowledge_dropoff":
-                            self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
+                            if passenger_data.get('event') == "passenger_acknowledge_dropoff":
+                                self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
 
+                        else:
+                            logging.warning(f"Mismatch {self.app.get_trip()['passenger']=} and {payload['passenger_id']=}")
                     else:
-                        logging.warning(f"Mismatch {self.app.get_trip()['passenger']=} and {payload['passenger_id']=}")
-                else:
-                    logging.warning(f"Driver will not listen to Passenger workflow events when {self.app.get_trip()['state']=}")
+                        logging.warning(f"Driver will not listen to Passenger workflow events when {self.app.get_trip()['state']=}")
 
-
-            payload = self.app.dequeue_message()
+                payload = self.app.dequeue_message()
+            except Exception as e:
+                # push message back into fornt of queue for processing in next step
+                self.app.enfront_message(payload)
+                raise e # Important do not allow the while loop to continue
 
     def perform_workflow_actions(self):
         ''' '''

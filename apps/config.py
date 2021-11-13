@@ -26,10 +26,11 @@ settings = {
 }
 
 orsim_settings = {
-    'SIM_DURATION': 480, # 960, # 600,    # 60 # Num Steps
-    'SIM_STEP_SIZE': 15, # 15, # 6,     # 60   # seconds
+    'SIMULATION_LENGTH_IN_STEPS': 240, # 960, # 600,    # 60 # Num Steps
+    'STEP_INTERVAL': 15, # 15, # 6,     # 60   # seconds in Simulation Universe
 
-    'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds)
+    'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
+    'STEP_TIMEOUT_TOLERANCE': 0.05,
 }
 
 analytics_settings = {
@@ -40,12 +41,18 @@ analytics_settings = {
     'WRITE_PH_OUTPUT_TO_FILE': False,
     'PATHS_HISTORY_TIME_WINDOW': 1*30*60, # 900 # seconds
 
+    'STEPS_PER_ACTION': 1, #2,
 }
 
 assignment_settings = {
-    'NUMSTEPS_BETWEEN_SOLVER': 1, #2,
+    'STEPS_PER_ACTION': 4, #2,
 
     'COVERAGE_AREA': [
+        # {
+        #     'name': 'Clementi',
+        #     'districts': ['CLEMENTI'],
+        #     'strategy': 'CompromiseMatching',
+        # },
         # {
         #     'name': 'Westside',
         #     'districts': ['CLEMENTI', 'JURONG EAST', 'QUEENSTOWN'],
@@ -64,7 +71,7 @@ assignment_settings = {
         {
             'name': 'RoundIsland',
             'districts': ['PUNGGOL', 'SELETAR', 'HOUGANG', 'CLEMENTI', 'JURONG EAST', 'QUEENSTOWN',  'DOWNTOWN CORE', 'NEWTON', 'ORCHARD', 'KALLANG', 'CHOA CHU KANG', 'MANDAI',],
-            'strategy': 'CompromiseMatching',
+            'strategy': 'GreedyDriverMatching' # 'CompromiseMatching',
         },
         # {
         #     'name': 'Singapore',
@@ -77,10 +84,16 @@ assignment_settings = {
 driver_settings = {
     'NUM_DRIVERS': 100,       # 100,
     'BEHAVIOR': 'random',       # 100,
+
+    'STEPS_PER_ACTION': 1, #2,
+    # 'LOCATION_PING_INTERVAL': 15,  # seconds in Simulation Universe
+    # NOTE LOCATION_PING_INTERVAL must be Less than STEP_INTERVAL
 }
 
 passenger_settings = {
     'NUM_PASSENGERS': 400,       # 100,
     'BEHAVIOR': 'random',       # 100,
+
+    'STEPS_PER_ACTION': 4, #2,
 }
 

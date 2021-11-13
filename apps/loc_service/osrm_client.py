@@ -29,13 +29,12 @@ class OSRMClient:
         start_lon_lat = f"{start['coordinates'][0]},{start['coordinates'][1]}"
         end_lon_lat = f"{end['coordinates'][0]},{end['coordinates'][1]}"
 
-        url = f"{settings['ROUTING_SERVER']}/route/v1/{cls.profile}/{start_lon_lat};{end_lon_lat}" # ?geometries=geojson
-        # url = f"http://localhost:5000/route/v1/{route_type}/{start_lon_lat};{end_lon_lat}?geometries=geojson"
+        url = f"{settings['ROUTING_SERVER']}/route/v1/{cls.profile}/{start_lon_lat};{end_lon_lat}"
 
         params = {
             "overview": "full",
             "alternatives": "false",
-            "steps": "false",
+            "steps": "true",
             # "hints": "false"
         }
         try:
@@ -90,6 +89,65 @@ class OSRMClient:
         #     print("Failed to get_distance_matrix: ", supply_fmt_list, demand_fmt_list)
 
         return None
+
+
+
+from geopy.distance import Distance
+
+from shapely.geometry import LineString, Point
+from math import atan2,degrees
+
+
+def cut(line, distance):
+    '''inputs:
+    line: in lat-lon Degrees
+    distance: in meters
+    '''
+    # Cuts a line in two at a distance from its starting point
+    if type(line) == Point:
+        return [line]
+
+    line = LineString(line)
+    # convert distance from meters to degrees. Note approximation only valid near Equator
+    # https://www.usna.edu/Users/oceano/pguth/md_help/html/approx_equivalents.htm
+    distance = distance / 111000
+    if distance == 0:
+        return [LineString(line)]
+    if distance < 0.0:
+        raise Exception(f"Nonnegative {distance=}")
+    elif distance >= line.length:
+        coords = list(line.coords)
+        return [Point(coords[-1])]
+
+    coords = list(line.coords)
+    for i, p in enumerate(coords):
+        pd = line.project(Point(p))
+        if pd == distance:
+            return [LineString(coords[:i+1]),
+                    LineString(coords[i:])]
+        if pd > distance:
+            cp = line.interpolate(distance)
+            return [LineString(coords[:i] + [(cp.x, cp.y)]),
+                    LineString([(cp.x, cp.y)] + coords[i:])]
+
+
+
+def get_angle(p1, p2):
+    return degrees(atan2(p2[1]-p1[1], p2[0]-p1[0]))
+
+
+from pyproj import Transformer
+
+TRAN_4326_TO_3857 = Transformer.from_crs("EPSG:4326", "EPSG:3857")
+
+def transform_lonlat_webmercator(lon, lat):
+  return TRAN_4326_TO_3857.transform(lon, lat)
+
+def itransform_lonlat_webmercator(lonlat_points):
+#   return TRAN_4326_TO_3857.transform(lon, lat)
+  return TRAN_4326_TO_3857.itransform(lonlat_points)
+
+
 
 if __name__== '__main__':
 

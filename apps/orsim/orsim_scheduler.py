@@ -25,6 +25,8 @@ class ORSimScheduler(ABC):
 
         self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimScheduler", self.on_receive_message)
 
+        self.pp = pprint.PrettyPrinter(indent=2)
+
 
     def add_agent(self, unique_id, method, spec):
         ''' '''
@@ -44,6 +46,7 @@ class ORSimScheduler(ABC):
         while True:
             # if self.agent_collection[unique_id]['step_response'] == 'ready':
             if self.agent_collection[unique_id]['step_response'][self.time] == 'ready':
+                logging.debug(f'agent {unique_id} is ready')
                 print(f'agent {unique_id} is ready')
                 break
             else:
@@ -52,6 +55,8 @@ class ORSimScheduler(ABC):
 
     def remove_agent(self, unique_id):
         try:
+            logging.debug(f"agent {unique_id} has left")
+            print(f"agent {unique_id} has left")
             self.agent_collection.pop(unique_id)
         except Exception as e:
             logging.exception(str(e))
@@ -60,15 +65,15 @@ class ORSimScheduler(ABC):
     def on_receive_message(self, client, userdata, message):
         if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimScheduler":
             payload = json.loads(message.payload.decode('utf-8'))
-            # print(payload.get('time_step'))
 
-            # self.agent_collection[payload.get('agent_id')]['step_response'] = payload.get('action')
-            if payload.get('action') == 'ready':
-                self.agent_collection[payload.get('agent_id')]['step_response'][self.time] = payload.get('action')
-            else:
-                self.agent_collection[payload.get('agent_id')]['step_response'][payload.get('time_step')] = payload.get('action')
+            response_time_step = payload.get('time_step') if payload.get('time_step') != -1 else self.time
 
-            if payload.get('action') == 'error':
+            try:
+                self.agent_collection[payload.get('agent_id')]['step_response'][response_time_step] = payload.get('action')
+            except Exception as e:
+                logging.exception(str(e))
+
+            if (payload.get('action') == 'error') or (response_time_step is None):
                 logging.warning(f'{self.__class__.__name__} received {message.payload = }')
 
     async def confirm_responses(self):
@@ -79,14 +84,6 @@ class ORSimScheduler(ABC):
         shutdown = 0
         error = 0
         waiting = len(self.agent_collection)
-        num_confirmed_responses = 0
-        # while num_confirmed_responses != len(self.agent_collection):
-        #     num_confirmed_responses = 0
-        #     for agent_id, _ in self.agent_collection.items():
-        #         if (self.agent_collection[agent_id]['step_response'] == 'completed') or \
-        #                 (self.agent_collection[agent_id]['step_response'] == 'error') or \
-        #                 (self.agent_collection[agent_id]['step_response'] == 'shutdown'):
-        #             num_confirmed_responses += 1
 
         while waiting > 0:
             completed = 0
@@ -112,7 +109,6 @@ class ORSimScheduler(ABC):
             }
             current_time = time.time()
             if current_time - start_time >= 5:
-                # logging.info(f"Waiting for Agent Response... {num_confirmed_responses}, {len(self.agent_collection)}: {base + (current_time - start_time):0.0f} sec")
                 logging.info(f"Waiting for Agent Response... {completed=}, {error=}, {shutdown=}, {waiting=} of {len(self.agent_collection)}: {base + (current_time - start_time):0.0f} sec")
                 base = base + (current_time - start_time)
                 start_time = current_time
@@ -123,13 +119,13 @@ class ORSimScheduler(ABC):
 
         logging.info(f"{self.scheduler_id} Step: {self.time}")
 
-        if self.time < orsim_settings['SIM_DURATION']-1:
-            message = {'action': 'step', 'time_step': self.time}
-        else:
+
+        if self.time == orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1:
             message = {'action': 'shutdown', 'time_step': self.time}
+        else:
+            message = {'action': 'step', 'time_step': self.time}
 
         for agent_id, _ in self.agent_collection.items():
-            # self.agent_collection[agent_id]['step_response'] = 'waiting'
             self.agent_collection[agent_id]['step_response'][self.time] = 'waiting'
 
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
@@ -142,20 +138,15 @@ class ORSimScheduler(ABC):
 
         except asyncio.TimeoutError as e:
             logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {orsim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.')
-            pp = pprint.PrettyPrinter(indent=2)
-            logging.exception(f'{pp.pformat(self.agent_collection)}')
-            raise e
+            self.step_timeout_handler(e)
 
         # Handle shutdown agents once successfully exiting the loop
         agents_shutdown = []
         for agent_id, _ in self.agent_collection.items():
-            # if self.agent_collection[agent_id]['step_response'] == 'shutdown':
-            if self.agent_collection[agent_id]['step_response'][self.time] == 'shutdown':
+            if self.agent_collection[agent_id]['step_response'][self.time] in ['shutdown', 'waiting']:
                 agents_shutdown.append(agent_id)
 
-        # logging.info(agents_shutdown)
         for agent_id in agents_shutdown:
-            # logging.info(f'removing agent {agent_id}')
             self.remove_agent(agent_id)
 
 
@@ -166,8 +157,22 @@ class ORSimScheduler(ABC):
             'end_sim': False,
         }
 
-        if self.time == orsim_settings['SIM_DURATION']-1:
+        if self.time == orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1:
             sim_stat['end_sim'] = True
 
         return sim_stat
 
+
+    def step_timeout_handler(self, e):
+        ''' '''
+        tolerance = orsim_settings['STEP_TIMEOUT_TOLERANCE'] # Max % or agents having network issues
+
+
+        if (self.agent_stat[self.time]['waiting'] / len(self.agent_collection)) <= tolerance:
+            logging.debug(f"agent_stat = {self.pp.pformat(self.agent_stat)}")
+            logging.warning(f"Unable to receive response from {self.agent_stat[self.time]['waiting']} Agents at {self.time=}. % Error ({(self.agent_stat[self.time]['waiting'] / len(self.agent_collection)):0.3f}) is within {tolerance=}. Continue processing...")
+            # logging.warning(f'{self.pp.pformat(self.agent_collection)}')
+        else:
+            logging.error(f"Too many missing messages. % Error ({self.agent_stat[self.time]['waiting'] *100 / len(self.agent_collection)}) exceeded {tolerance=}. Abort...")
+            logging.error(f'{self.pp.pformat(self.agent_collection)}')
+            raise e

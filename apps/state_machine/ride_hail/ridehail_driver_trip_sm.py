@@ -39,6 +39,20 @@ class RidehailDriverTripStateMachine(StateMachine):
     reject = driver_rejected_trip.from_(driver_received_trip)
     cancel = driver_cancelled_trip.from_(driver_accepted_trip, driver_moving_to_pickup, driver_waiting_to_pickup, driver_looking_for_job)
 
+    force_quit = driver_cancelled_trip.from_(
+                            driver_init_trip,
+                            driver_looking_for_job,
+                            driver_received_trip,
+                            driver_rejected_trip,
+                            driver_accepted_trip,
+                            driver_moving_to_pickup,
+                            driver_waiting_to_pickup,
+                            driver_pickedup,
+                            driver_moving_to_dropoff,
+                            driver_waiting_to_dropoff,
+                            driver_droppedoff,
+                        )
+
     @classmethod
     def is_moving(cls, state):
         if state  in [cls.driver_waiting_to_pickup.identifier, cls.driver_waiting_to_dropoff.identifier]:

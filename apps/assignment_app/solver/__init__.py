@@ -1,2 +1,3 @@
 from .random_assignment import RandomAssignment
 from .compromise_matching import CompromiseMatching
+from .greedy_driver_matching import GreedyDriverMatching

@@ -1,4 +1,4 @@
-import requests, json, logging
+import requests, json, logging, traceback
 from http import HTTPStatus
 
 from apps.config import settings
@@ -188,12 +188,11 @@ class DriverManager():
         return response
 
     def refresh(self):
-        driver_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver"
-        driver_item_url = driver_url + f"/{self.driver['_id']}"
+        driver_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/{self.driver['_id']}"
 
         response = requests.get(driver_item_url, headers=self.user.get_headers())
 
         if is_success(response.status_code):
             self.driver = response.json()
         else:
-            logging.warning(f'DriverManager.refresh: Failed getting response for {self.driver["_id"]} Got {response.text}')
+            raise Exception(f'DriverManager.refresh: Failed getting response for {self.driver["_id"]} Got {response.text}')

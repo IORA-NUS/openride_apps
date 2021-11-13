@@ -40,41 +40,42 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     def step(self, time_step):
         ''' '''
-        # print('AnalyticsAgent.step')
-        output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
+        if self.current_time_step % analytics_settings['STEPS_PER_ACTION'] == 0:
+            # print('AnalyticsAgent.step')
+            output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
 
-        # Publish Active trips using websocket Protocol
-        if analytics_settings['PUBLISH_REALTIME_DATA']:
-            location_stream, route_stream = self.analytics_app.publish_active_trips(self.get_current_time_str())
-            # print(publish_dict)
-
-            if analytics_settings['WRITE_WS_OUTPUT_TO_FILE']:
-                stream_output_dir = f"{output_dir}/stream"
-                if not os.path.exists(stream_output_dir):
-                    os.makedirs(stream_output_dir)
-
-                with open(f"{stream_output_dir}/{self.current_time_step}.location_stream.json", 'w') as publish_file:
-                    publish_file.write(json.dumps(location_stream))
-
-                with open(f"{stream_output_dir}/{self.current_time_step}.route_stream.json", 'w') as publish_file:
-                    publish_file.write(json.dumps(route_stream))
-
-
-        # Gather history in timewindow as paths for visualization
-        if analytics_settings['PUBLISH_PATHS_HISTORY']:
-            if (((self.current_time_step + 1) * orsim_settings['SIM_STEP_SIZE']) % analytics_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
-                timewindow_end = self.current_time
-                timewindow_start = timewindow_end - relativedelta(seconds=analytics_settings['PATHS_HISTORY_TIME_WINDOW']+orsim_settings['SIM_STEP_SIZE'])
-                logging.info(f"{timewindow_start}, {timewindow_end}")
-
-                paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
+            # Publish Active trips using websocket Protocol
+            if analytics_settings['PUBLISH_REALTIME_DATA']:
+                location_stream, route_stream = self.analytics_app.publish_active_trips(self.get_current_time_str())
                 # print(publish_dict)
 
-                if analytics_settings['WRITE_PH_OUTPUT_TO_FILE']:
-                    rest_output_dir = f"{output_dir}/rest"
-                    if not os.path.exists(rest_output_dir):
-                        os.makedirs(rest_output_dir)
+                if analytics_settings['WRITE_WS_OUTPUT_TO_FILE']:
+                    stream_output_dir = f"{output_dir}/stream"
+                    if not os.path.exists(stream_output_dir):
+                        os.makedirs(stream_output_dir)
 
-                    with open(f"{rest_output_dir}/{self.current_time_step}.paths_history.json", 'w') as publish_file:
-                        publish_file.write(json.dumps(paths_history))
+                    with open(f"{stream_output_dir}/{self.current_time_step}.location_stream.json", 'w') as publish_file:
+                        publish_file.write(json.dumps(location_stream))
+
+                    with open(f"{stream_output_dir}/{self.current_time_step}.route_stream.json", 'w') as publish_file:
+                        publish_file.write(json.dumps(route_stream))
+
+
+            # Gather history in timewindow as paths for visualization
+            if analytics_settings['PUBLISH_PATHS_HISTORY']:
+                if (((self.current_time_step + 1) * orsim_settings['STEP_INTERVAL']) % analytics_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
+                    timewindow_end = self.current_time
+                    timewindow_start = timewindow_end - relativedelta(seconds=analytics_settings['PATHS_HISTORY_TIME_WINDOW']+orsim_settings['STEP_INTERVAL'])
+                    logging.info(f"{timewindow_start}, {timewindow_end}")
+
+                    paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
+                    # print(publish_dict)
+
+                    if analytics_settings['WRITE_PH_OUTPUT_TO_FILE']:
+                        rest_output_dir = f"{output_dir}/rest"
+                        if not os.path.exists(rest_output_dir):
+                            os.makedirs(rest_output_dir)
+
+                        with open(f"{rest_output_dir}/{self.current_time_step}.paths_history.json", 'w') as publish_file:
+                            publish_file.write(json.dumps(paths_history))
 

@@ -1,4 +1,4 @@
-import requests, json, logging
+import requests, json, logging, traceback
 
 from apps.config import settings
 from apps.utils import id_generator, is_success
@@ -33,9 +33,11 @@ class PassengerTripManager:
         response = requests.post(passenger_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
 
         if is_success(response.status_code):
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{response.json()['_id']}"
-            response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
-            self.trip = response.json()
+            # passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{response.json()['_id']}"
+            # response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
+            # self.trip = response.json()
+            self.trip = {'_id': response.json()['_id']}
+            self.refresh()
         else:
             raise Exception(response.text)
 
@@ -59,20 +61,13 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
         if is_success(response.status_code):
-            # self.trip = response.json()
             self.refresh()
         else:
-            # print (response.text)
-            logging.error(f"{self.trip =}")
-            logging.error(f"{data =}")
             raise Exception(response.text)
 
     def assign(self, sim_clock, current_loc, driver):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/assign"
-        except Exception as e:
-            raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/assign"
 
         data = {
             'sim_clock': sim_clock,
@@ -84,14 +79,14 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
+        else:
+            raise Exception(response.text)
 
     def driver_confirmed_trip(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_confirmed_trip"
-        except Exception as e:
-            raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_confirmed_trip"
 
         data = {
             'sim_clock': sim_clock,
@@ -102,14 +97,14 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
+        else:
+            raise Exception(response.text)
 
     def accept(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/accept"
-        except Exception as e:
-            raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/accept"
 
         data = {
             'sim_clock': sim_clock,
@@ -120,9 +115,10 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
 
-        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
+            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                     json.dumps({
                                         'action': 'passenger_workflow_event',
                                         'passenger_id': self.trip['passenger'],
@@ -132,13 +128,12 @@ class PassengerTripManager:
 
                                     })
                                 )
+        else:
+            raise Exception(response.text)
 
     def reject(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/reject"
-        except Exception as e:
-            raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/reject"
 
         data = {
             'sim_clock': sim_clock,
@@ -149,10 +144,10 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
 
-        # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
-        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
+            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                     json.dumps({
                                         'action': 'passenger_workflow_event',
                                         'passenger_id': self.trip['passenger'],
@@ -162,13 +157,12 @@ class PassengerTripManager:
 
                                     })
                                 )
+        else:
+            raise Exception(response.text)
 
     def cancel(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/cancel"
-        except Exception as e:
-            raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/cancel"
 
         data = {
             'sim_clock': sim_clock,
@@ -179,12 +173,11 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
-        # print(self.trip)
+        if is_success(response.status_code):
+            self.refresh()
 
-        if self.trip.get('driver') is not None:
-            # self.messenger.client.publish(f'Agent/{self.trip["driver"]}',
-            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
+            if self.trip.get('driver') is not None:
+                self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                     json.dumps({
                                         'action': 'passenger_workflow_event',
                                         'passenger_id': self.trip['passenger'],
@@ -194,13 +187,16 @@ class PassengerTripManager:
 
                                     })
                                 )
+        else:
+            raise Exception(response.text)
 
     def wait_for_pickup(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/wait_for_pickup"
-        except Exception as e:
-            raise e
+        # try:
+        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/wait_for_pickup"
+        # except Exception as e:
+        #     raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/wait_for_pickup"
 
         data = {
             'sim_clock': sim_clock,
@@ -211,14 +207,18 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
+        else:
+            raise Exception(response.text)
 
     def driver_cancelled_trip(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_cancelled_trip"
-        except Exception as e:
-            raise e
+        # try:
+        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_cancelled_trip"
+        # except Exception as e:
+        #     raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_cancelled_trip"
 
         data = {
             'sim_clock': sim_clock,
@@ -229,14 +229,18 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
+        else:
+            raise Exception(response.text)
 
     def driver_arrived_for_pickup(self, sim_clock, current_loc, driver_ride_hail_trip):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_pickup"
-        except Exception as e:
-            raise e
+        # try:
+        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_pickup"
+        # except Exception as e:
+        #     raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_pickup"
 
         data = {
             'sim_clock': sim_clock,
@@ -248,10 +252,11 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
 
-        # Message driver
-        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
+            # Message driver
+            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                 json.dumps({
                                     'action': 'passenger_workflow_event',
                                     'passenger_id': self.trip['passenger'],
@@ -261,13 +266,16 @@ class PassengerTripManager:
 
                                 })
                             )
+        else:
+            raise Exception(response.text)
 
     def driver_move_for_dropoff(self, sim_clock, current_loc, route):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_move_for_dropoff"
-        except Exception as e:
-            raise e
+        # try:
+        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_move_for_dropoff"
+        # except Exception as e:
+        #     raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_move_for_dropoff"
 
         data = {
             'sim_clock': sim_clock,
@@ -279,14 +287,18 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
+        else:
+            raise Exception(response.text)
 
     def driver_arrived_for_dropoff(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_dropoff"
-        except Exception as e:
-            raise e
+        # try:
+        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_dropoff"
+        # except Exception as e:
+        #     raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_dropoff"
 
         data = {
             'sim_clock': sim_clock,
@@ -297,14 +309,18 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
+        else:
+            raise Exception(response.text)
 
     def driver_waiting_for_dropoff(self, sim_clock, current_loc):
 
-        try:
-            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_waiting_for_dropoff"
-        except Exception as e:
-            raise e
+        # try:
+        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_waiting_for_dropoff"
+        # except Exception as e:
+        #     raise e
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_waiting_for_dropoff"
 
         data = {
             'sim_clock': sim_clock,
@@ -315,10 +331,11 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        self.refresh()
+        if is_success(response.status_code):
+            self.refresh()
 
-        # Message driver
-        self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
+            # Message driver
+            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
                                 json.dumps({
                                     'action': 'passenger_workflow_event',
                                     'passenger_id': self.trip['passenger'],
@@ -328,18 +345,12 @@ class PassengerTripManager:
 
                                 })
                             )
+        else:
+            raise Exception(response.text)
 
-    def end_trip(self, sim_clock, current_loc, force_quit=False, shutdown=False):
+    def end_trip(self, sim_clock, current_loc):
 
-        try:
-            if force_quit == True:
-                passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/force_quit"
-            else:
-                passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/end_trip"
-        except Exception as e:
-            # raise e
-            logging.exception(str(e))
-            return
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/end_trip"
 
         data = {
             'sim_clock': sim_clock,
@@ -350,12 +361,63 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
+        # # WATCH THIS
+        if is_success(response.status_code):
+            self.trip = None
+        else:
+            raise Exception(response.text)
+
+    # def end_trip(self, sim_clock, current_loc, force_quit=False, shutdown=False):
+
+    #     if force_quit == True:
+    #         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/force_quit"
+    #     else:
+    #         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/end_trip"
+
+    #     data = {
+    #         'sim_clock': sim_clock,
+    #         'current_loc': current_loc,
+    #     }
+
+    #     response = requests.patch(passenger_trip_item_url,
+    #                             headers=self.user.get_headers(etag=self.trip['_etag']),
+    #                             data=json.dumps(data))
+
+    #     # # WATCH THIS
+    #     if is_success(response.status_code):
+    #         self.trip = None
+    #     else:
+    #         raise Exception(response.text)
+
+    def force_quit(self, sim_clock, current_loc):
+
+        if (self.trip is None) or  (self.trip['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.identifier,
+                                                            RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,]):
+            return
+
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/force_quit"
+
+        data = {
+            'sim_clock': sim_clock,
+            'current_loc': current_loc,
+        }
+
+        response = requests.patch(passenger_trip_item_url,
+                                headers=self.user.get_headers(etag=self.trip['_etag']),
+                                data=json.dumps(data))
+
+        if is_success(response.status_code):
+            self.trip = None
+        else:
+            raise Exception(response.text)
 
     def refresh(self):
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
-        passenger_trip_item_url = f"{passenger_trip_url}/{self.trip['_id']}"
+        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}"
 
         response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
-        self.trip = response.json()
 
+        if is_success(response.status_code):
+            self.trip = response.json()
+        else:
+            raise Exception(f'PassengerTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
 

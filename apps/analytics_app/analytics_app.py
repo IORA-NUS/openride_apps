@@ -1,6 +1,8 @@
 import os, sys
 
 from dateutil.relativedelta import relativedelta
+
+from apps.utils.utils import is_success
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
@@ -11,7 +13,8 @@ from datetime import datetime
 
 from apps.messenger_service import Messenger
 
-from apps.utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
+# from apps.utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
+from apps.loc_service import transform_lonlat_webmercator, itransform_lonlat_webmercator
 from apps.utils.user_registry import UserRegistry
 from apps.config import settings
 
@@ -30,23 +33,36 @@ class AnalyticsApp:
         self.user = UserRegistry(sim_clock, credentials, role='admin')
 
         self.messenger = Messenger(credentials)
+        self.server_max_results = 50 # make sure this is in sync with server
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
 
-        params = {
-            "where": json.dumps({
-                "$and": [
-                    {"run_id": self.run_id},
-                    {"is_active": True},
-                ]
-            })
-        }
+        got_results = True
+        response_items = []
+        page = 1
+        while got_results:
+            params = {
+                "where": json.dumps({
+                    "$and": [
+                        {"run_id": self.run_id},
+                        {"is_active": True},
+                    ]
+                }),
+                'page': page,
+                "max_results": self.server_max_results
+            }
 
-        response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
-        response_items = response.json()['_items']
+            response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
+            # response_items = response.json()['_items']
+            if response.json()['_items'] == []:
+                got_results = False
+                break
+            else:
+                response_items.extend(response.json()['_items'])
+                page += 1
 
         driver_trips = {}
         for item in response_items:
@@ -75,29 +91,45 @@ class AnalyticsApp:
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
         waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
 
-        display_expiry_time = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT") - relativedelta(minutes=2)
+        display_expiry_time = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT") - relativedelta(seconds=30)
         # print(sim_clock, datetime.strftime(display_expiry_time, "%a, %d %b %Y %H:%M:%S GMT"))
 
-        params = {
-            "where": json.dumps({
-                "$and": [
-                    {"run_id": self.run_id},
-                    {"$or": [
-                        {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier]} },
-                        {"$and": [
-                            {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_completed_trip.identifier,
-                                            RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,
-                                            ]}},
-                            {"sim_clock": {"$gte": datetime.strftime(display_expiry_time, "%a, %d %b %Y %H:%M:%S GMT")}},
-                            ],
-                        }
-                    ]}
-                ]
-            })
-        }
+        got_results = True
+        response_items = []
+        page = 1
+        while got_results:
+            params = {
+                "where": json.dumps({
+                    "$and": [
+                        {"run_id": self.run_id},
+                        # {"is_active": True},
+                        {"$or": [
+                            {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier,
+                                               RidehailPassengerTripStateMachine.passenger_assigned_trip.identifier,
+                                               RidehailPassengerTripStateMachine.passenger_accepted_trip.identifier,
+                                               RidehailPassengerTripStateMachine.passenger_waiting_for_pickup.identifier,]} },
+                            {"$and": [
+                                {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_completed_trip.identifier,
+                                                RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,
+                                                ]}},
+                                {"sim_clock": {"$gte": datetime.strftime(display_expiry_time, "%a, %d %b %Y %H:%M:%S GMT")}},
+                                ],
+                            }
+                        ]}
+                    ]
+                }),
+                'page': page,
+                "max_results": self.server_max_results
+            }
 
-        response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
-        response_items = response.json()['_items']
+            response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
+            # response_items = response.json()['_items']
+            if response.json()['_items'] == []:
+                got_results = False
+                break
+            else:
+                response_items.extend(response.json()['_items'])
+                page += 1
 
         passenger_trips = {}
         for item in response_items:
@@ -236,4 +268,27 @@ class AnalyticsApp:
         # print(response.json())
 
         return response.json()
+
+
+    def update_platform_revenue(sef, sim_clock):
+        ''' '''
+
+
+
+    def save_kpi(self, sim_clock, metric, value):
+        ''' '''
+        kpi_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/kpi"
+
+        data = {
+            'metric': metric,
+            'value': value,
+            'sim_clock': sim_clock,
+        }
+
+        response = requests.post(kpi_url, headers=self.user.get_headers(),
+                                 data=json.dumps(data))
+
+        if not is_success(response.status_code):
+            raise Exception(response.text)
+        # return response.json()
 

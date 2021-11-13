@@ -1,5 +1,5 @@
 from abc import ABC, abstractclassmethod, abstractmethod
-import asyncio, json, logging, time, os
+import asyncio, json, logging, time, os, traceback
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -23,7 +23,6 @@ class ORSimAgent(ABC):
         self.elapsed_duration_steps = 0
         self.active = False
 
-
         self._shutdown = False
         self.behavior = behavior
 
@@ -32,17 +31,22 @@ class ORSimAgent(ABC):
             'password': "secret_password",
         }
 
+        self.start_time = time.time()
+        self.message_processing_active = False
+
     def is_active(self):
         return self.active
 
     def on_receive_message(self, client, userdata, message):
         ''' '''
-        start_time = time.time()
+        self.start_time = time.time()
+        self.message_processing_active = True
         try:
-            # logging.info(f"{message.topic = }")
+            payload = json.loads(message.payload.decode('utf-8'))
+            logging.debug(f"Agent {self.unique_id} received {payload.get('action')}")
+
             if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimAgent":
-                payload = json.loads(message.payload.decode('utf-8'))
-                self.refresh(payload['time_step'])
+                self.bootstrap_step(payload['time_step'])
 
                 if payload.get('action') == 'init':
                     ''' NOTE This is unused block of code at the moment'''
@@ -53,7 +57,7 @@ class ORSimAgent(ABC):
                         'action': 'ready', # 'completed',
                     }
                 elif payload.get('action') == 'step':
-                    # self.refresh(payload['time_step'])
+
                     self.process_payload(payload)
 
                     response_payload = {
@@ -81,15 +85,16 @@ class ORSimAgent(ABC):
                 'agent_id': self.unique_id,
                 'time_step': self.current_time_step,
                 'action': 'error',
-                'details': str(e)
+                'details': traceback.format_exc() # str(e)
             }
             logging.exception(f"{self.unique_id} raised {str(e)}")
 
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
 
-        end_time = time.time()
+        self.end_time = time.time()
+        self.message_processing_active = False
 
-        logging.info(f"Runtime for {self.unique_id} at {self.current_time_step}: {end_time - start_time:0.2f} secs ")
+        logging.info(f"Runtime for {self.unique_id} at {self.current_time_step}: {self.end_time - self.start_time:0.2f} secs ")
 
     @abstractmethod
     def process_payload(self, payload):
@@ -114,6 +119,8 @@ class ORSimAgent(ABC):
             def run_forever():
                 while True:
                     eventlet.sleep(0.1)
+                    self.handle_heartbeat_failure()
+                    # logging.info(f"{self.unique_id} Heartbeat")
                     if self._shutdown == True:
                         break
 
@@ -122,7 +129,7 @@ class ORSimAgent(ABC):
         # Once agent is setup and listening, send the ready message
         response_payload = {
             'agent_id': self.unique_id,
-            # 'time_step': self.current_time_step,
+            'time_step': -1,
             'action': 'ready',
         }
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
@@ -131,15 +138,18 @@ class ORSimAgent(ABC):
         self.agent_messenger.disconnect()
 
     def get_current_time_str(self):
-        return datetime.strftime(self.current_time, "%a, %d %b %Y %H:%M:%S GMT")
+        return self.format_time(self.current_time)
 
-    def refresh(self, time_step):
+    def format_time(self, time_var):
+        return datetime.strftime(time_var, "%a, %d %b %Y %H:%M:%S GMT")
+
+    def bootstrap_step(self, time_step):
 
         self.prev_time_step = self.current_time_step
         self.current_time_step = time_step
         self.elapsed_duration_steps = self.current_time_step - self.prev_time_step
 
-        self.current_time = self.reference_time + relativedelta(seconds = time_step * orsim_settings['SIM_STEP_SIZE'])
+        self.current_time = self.reference_time + relativedelta(seconds = time_step * orsim_settings['STEP_INTERVAL'])
 
     def shutdown(self):
         logging.info(f'Shutting down {self.unique_id = }')
@@ -147,6 +157,17 @@ class ORSimAgent(ABC):
         self.stop_listening()
         self.active = False
         self._shutdown = True
+
+    def handle_heartbeat_failure(self):
+        if self.message_processing_active:
+            now = time.time()
+            threshold = orsim_settings['STEP_TIMEOUT']
+            if (now - self.start_time) > threshold:
+                logging.warning(f"Auto Shutdown Agent {self.unique_id}. Exceeded heartbeat threshold {threshold} sec")
+                self.stop_listening()
+                self.active = False
+                self._shutdown = True
+
 
     @abstractmethod
     def logout(self):

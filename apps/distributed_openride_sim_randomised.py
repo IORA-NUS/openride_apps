@@ -1,12 +1,13 @@
-import os, sys, traceback
+
+import os, sys
+current_path = os.path.abspath('.')
+parent_path = os.path.dirname(current_path)
+sys.path.append(parent_path)
+
+import logging, time, json, traceback
 
 from analytics_app.analytics_agent_indie import AnalyticsAgentIndie
 from assignment_app.assignment_agent_indie import AssignmentAgentIndie
-current_path = os.path.abspath('.')
-sys.path.append(current_path)
-
-import logging, time, json
-
 from driver_app import DriverAgentIndie
 from passenger_app import PassengerAgentIndie
 from assignment_app import AssignmentAgentIndie
@@ -42,7 +43,7 @@ class DistributedOpenRideSimRandomised():
 
         self.agent_scheduler = ORSimScheduler(self.run_id, 'agent_scheduler')
         self.service_scheduler = ORSimScheduler(self.run_id, 'service_scheduler')
-        self.agent_registry = {i:[] for i in range(orsim_settings['SIM_DURATION'])}
+        self.agent_registry = {i:[] for i in range(orsim_settings['SIMULATION_LENGTH_IN_STEPS'])}
 
         for i in range(driver_settings['NUM_DRIVERS']):
             agent_id = f"d_{i:06d}"
@@ -100,7 +101,7 @@ class DistributedOpenRideSimRandomised():
             self.service_scheduler.add_agent(agent_id, start_analytics, spec)
 
     def step(self, i):
-        print(f"Simulation Step: {self.agent_scheduler.time} of {orsim_settings['SIM_DURATION']}")
+        print(f"Simulation Step: {self.agent_scheduler.time} of {orsim_settings['SIMULATION_LENGTH_IN_STEPS']}")
 
         # IMPORTANT Make sure agents are added into the scheduler before step
         # add_agent is a blocking process and ensures the agent is ready to listen to step()
@@ -127,7 +128,7 @@ if __name__ == '__main__':
     # strategy = 'CELERY' # 'MULTIPROCESSING'
     if settings['EXECUTION_STRATEGY'] == 'CELERY':
 
-        for i in range(orsim_settings['SIM_DURATION']):
+        for i in range(orsim_settings['SIMULATION_LENGTH_IN_STEPS']):
             try:
                 sim.step(i)
             except Exception as e:

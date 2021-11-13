@@ -33,7 +33,7 @@ class AssignmentAgentIndie(ORSimAgent):
 
     def process_payload(self, payload):
         if payload.get('action') == 'step':
-            time.sleep(1)
+            # time.sleep(1)
             self.step(payload.get('time_step'))
 
 
@@ -42,6 +42,6 @@ class AssignmentAgentIndie(ORSimAgent):
 
     def step(self, time_step):
         ''' '''
-        if self.current_time_step % assignment_settings['NUMSTEPS_BETWEEN_SOLVER'] == 0:
+        if self.current_time_step % assignment_settings['STEPS_PER_ACTION'] == 0:
             result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
             self.assignment_app.publish(result)
