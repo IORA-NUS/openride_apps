@@ -45,11 +45,14 @@ class DriverApp:
     def login(self, sim_clock, current_loc, route):
         ''' '''
         self.driver.login(sim_clock)
-        self.create_new_unoccupied_trip(sim_clock, current_loc)
-        self.trip.look_for_job(sim_clock, current_loc, route)
+        # self.create_new_unoccupied_trip(sim_clock, current_loc)
+        # self.trip.look_for_job(sim_clock, current_loc, route)
+        self.create_new_unoccupied_trip(sim_clock, current_loc, route)
 
-    def create_new_unoccupied_trip(self, sim_clock, current_loc):
-        self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle)
+    # def create_new_unoccupied_trip(self, sim_clock, current_loc):
+    #     self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle)
+    def create_new_unoccupied_trip(self, sim_clock, current_loc, route):
+        self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle, route)
 
     def logout(self, sim_clock, current_loc):
         ''' '''

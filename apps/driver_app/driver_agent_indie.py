@@ -221,8 +221,9 @@ class DriverAgentIndie(ORSimAgent):
                                 self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
                                 # self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
                                 self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=True)
-                                self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                                self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                                # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
+                                # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                                self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
                             if passenger_data.get('event') == "passenger_acknowledge_pickup":
                                 self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
@@ -262,8 +263,10 @@ class DriverAgentIndie(ORSimAgent):
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
 
                     self.set_route(self.current_loc, self.get_random_location())
-                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                    self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
+                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     # No need to reset route, continue moving on previous route
 
             if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_received_trip.identifier:
@@ -271,8 +274,10 @@ class DriverAgentIndie(ORSimAgent):
                     self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc,)
                 else:
                     self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
-                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                    self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
+                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     # No need to reset route, continue moving on previous route
 
             if self.app.get_trip()['state'] in RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
@@ -299,8 +304,10 @@ class DriverAgentIndie(ORSimAgent):
 
                     self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
-                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                    self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
+                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
 
 if __name__ == '__main__':

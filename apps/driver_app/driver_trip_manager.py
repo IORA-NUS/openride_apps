@@ -18,7 +18,8 @@ class DriverTripManager:
     def as_dict(self):
         return self.trip
 
-    def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle):
+    # def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle):
+    def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle, route):
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         # print(sim_clock)
 
@@ -38,7 +39,8 @@ class DriverTripManager:
             # response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
             # self.trip = response.json()
             self.trip = {'_id': response.json()['_id']}
-            self.refresh()
+            # self.refresh()
+            self.look_for_job(sim_clock, current_loc, route)
         else:
             raise Exception(response.text)
 
