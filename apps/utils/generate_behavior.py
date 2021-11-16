@@ -5,7 +5,10 @@ from shapely.geometry import Point, mapping
 from apps.loc_service import BusStop, PlanningArea
 # from apps.config import settings
 
-from apps.config import assignment_settings, orsim_settings
+from apps.config import (assignment_settings, orsim_settings,
+                         driver_settings, passenger_settings,
+                         analytics_settings
+                        )
 
 class GenerateBehavior():
 
@@ -27,7 +30,9 @@ class GenerateBehavior():
 
         if record is None:
             shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//4))
-            shift_end_time = randint(orsim_settings['SIMULATION_LENGTH_IN_STEPS']//2, orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1)
+            # shift_end_time = randint(orsim_settings['SIMULATION_LENGTH_IN_STEPS']//2, orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1)
+            # shift_start_time = 0
+            shift_end_time = orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1
 
             coverage_area = choice(assignment_settings['COVERAGE_AREA'])
             coverage_area_name = coverage_area['name']

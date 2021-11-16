@@ -39,12 +39,15 @@ class DistributedOpenRideSimRandomised():
         # logging.info(f"{self.run_id = }, {self.start_time = }")
         self.current_time = self.start_time
 
-
-
         self.agent_scheduler = ORSimScheduler(self.run_id, 'agent_scheduler')
         self.service_scheduler = ORSimScheduler(self.run_id, 'service_scheduler')
         self.agent_registry = {i:[] for i in range(orsim_settings['SIMULATION_LENGTH_IN_STEPS'])}
 
+        output_dir = f"{os.path.dirname(os.path.abspath(__file__))}/output/{self.run_id}"
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        driver_collection = {}
         for i in range(driver_settings['NUM_DRIVERS']):
             agent_id = f"d_{i:06d}"
             behavior = GenerateBehavior.ridehail_driver(agent_id)
@@ -62,6 +65,12 @@ class DistributedOpenRideSimRandomised():
                                                                 'spec': spec
                                                             })
 
+            driver_collection[agent_id] = behavior
+
+        with open(f"{output_dir}/driver_behavior.json", "w") as fp:
+            json.dump(driver_collection, fp)
+
+        passenger_collection = {}
         for i in range(passenger_settings['NUM_PASSENGERS']):
             agent_id = f"p_{i:06d}"
             behavior = GenerateBehavior.ridehail_passenger(agent_id)
@@ -77,7 +86,12 @@ class DistributedOpenRideSimRandomised():
                                                                 'method': start_passenger,
                                                                 'spec': spec
                                                             })
+            passenger_collection[agent_id] = behavior
 
+        with open(f"{output_dir}/passenger_behavior.json", "w") as fp:
+            json.dump(passenger_collection, fp)
+
+        assignment_collection = {}
         for coverage_area in assignment_settings['COVERAGE_AREA']: # Support for multiple solvers
             agent_id = f"assignment_{coverage_area['name']}"
             behavior = GenerateBehavior.ridehail_assignment(agent_id, coverage_area)
@@ -89,6 +103,13 @@ class DistributedOpenRideSimRandomised():
             }
             self.service_scheduler.add_agent(agent_id, start_assignment, spec)
 
+            assignment_collection[agent_id] = behavior
+
+        with open(f"{output_dir}/assignment_behavior.json", "w") as fp:
+            json.dump(assignment_collection, fp)
+
+
+        analytics_collection = {}
         for i in range(1): # Only one Analytics agent for the moment.
             agent_id = f"analytics_{i:03d}"
             behavior = GenerateBehavior.ridehail_analytics(agent_id)
@@ -99,6 +120,11 @@ class DistributedOpenRideSimRandomised():
                 'behavior': behavior
             }
             self.service_scheduler.add_agent(agent_id, start_analytics, spec)
+            analytics_collection[agent_id] = behavior
+
+        with open(f"{output_dir}/analytics_behavior.json", "w") as fp:
+            json.dump(analytics_collection, fp)
+
 
     def step(self, i):
         print(f"Simulation Step: {self.agent_scheduler.time} of {orsim_settings['SIMULATION_LENGTH_IN_STEPS']}")

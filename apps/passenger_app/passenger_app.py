@@ -66,11 +66,23 @@ class PassengerApp:
     def refresh(self):
         ''' Sync ALL inMemory State with the db State'''
         # Passenger
-        self.passenger.refresh()
+        # No need to refresh passenger at every step
+        # self.passenger.refresh()
         self.trip.refresh()
         # raise exception if unable to refresh
 
+    def handle_overbooking(self, sim_clock, driver):
 
+        self.messenger.client.publish(f'{self.run_id}/{driver}',
+                            json.dumps({
+                                'action': 'passenger_workflow_event',
+                                'passenger_id': self.passenger.get_id(),
+                                'data': {
+                                    'event': 'passenger_rejected_trip'
+                                }
+
+                            })
+                        )
     ################
     # Message Callbacks and other methods
 

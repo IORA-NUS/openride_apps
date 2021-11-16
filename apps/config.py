@@ -26,15 +26,15 @@ settings = {
 }
 
 orsim_settings = {
-    'SIMULATION_LENGTH_IN_STEPS': 240, # 960, # 600,    # 60 # Num Steps
-    'STEP_INTERVAL': 15, # 15, # 6,     # 60   # seconds in Simulation Universe
+    'SIMULATION_LENGTH_IN_STEPS': 480, # 960, # 600,    # 60 # Num Steps
+    'STEP_INTERVAL': 30, # 15, # 6,     # 60   # seconds in Simulation Universe
 
     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
     'STEP_TIMEOUT_TOLERANCE': 0.05,
 }
 
 analytics_settings = {
-    'PUBLISH_REALTIME_DATA': True, #True, #False,
+    'PUBLISH_REALTIME_DATA': False, #True, #False,
     'WRITE_WS_OUTPUT_TO_FILE': True,
 
     'PUBLISH_PATHS_HISTORY': False,
@@ -42,10 +42,13 @@ analytics_settings = {
     'PATHS_HISTORY_TIME_WINDOW': 1*30*60, # 900 # seconds
 
     'STEPS_PER_ACTION': 1, #2,
+    'RESPONSE_RATE': 1, # Keep this 1 to regularly update stats
+
 }
 
 assignment_settings = {
-    'STEPS_PER_ACTION': 4, #2,
+    'STEPS_PER_ACTION': 2, #2,
+    'RESPONSE_RATE': 1,  # Keep this 1 to regularly update stats
 
     'COVERAGE_AREA': [
         # {
@@ -68,32 +71,41 @@ assignment_settings = {
         #     'districts': ['CHANGI', 'PASIR RIS', 'TAMPINES', 'BEDOK'],
         #     'strategy': 'CompromiseMatching',
         # },
-        {
-            'name': 'RoundIsland',
-            'districts': ['PUNGGOL', 'SELETAR', 'HOUGANG', 'CLEMENTI', 'JURONG EAST', 'QUEENSTOWN',  'DOWNTOWN CORE', 'NEWTON', 'ORCHARD', 'KALLANG', 'CHOA CHU KANG', 'MANDAI',],
-            'strategy': 'GreedyDriverMatching' # 'CompromiseMatching',
-        },
+        # {
+        #     'name': 'RoundIsland',
+        #     'districts': ['PUNGGOL', 'SELETAR', 'HOUGANG', 'CLEMENTI', 'JURONG EAST', 'QUEENSTOWN',  'DOWNTOWN CORE', 'NEWTON', 'ORCHARD', 'KALLANG', 'CHOA CHU KANG', 'MANDAI',],
+        #     'strategy': 'GreedyDriverMatching' # 'CompromiseMatching',
+        # },
         # {
         #     'name': 'Singapore',
         #     'districts': ['SIMPANG', 'SUNGEI KADUT', 'DOWNTOWN CORE', 'NEWTON', 'ORCHARD', 'KALLANG', 'LIM CHU KANG', 'PASIR RIS',  'MARINA SOUTH', 'SERANGOON', 'BOON LAY', 'BEDOK', 'BUKIT MERAH', 'BUKIT PANJANG', 'JURONG EAST', 'BUKIT TIMAH', 'CHANGI', 'CHOA CHU KANG', 'QUEENSTOWN', 'SELETAR', 'MANDAI', 'ANG MO KIO', 'BISHAN', 'BUKIT BATOK',  'JURONG WEST', 'CLEMENTI', 'GEYLANG', 'HOUGANG', 'PIONEER', 'PUNGGOL', 'SEMBAWANG', 'SENGKANG', 'TAMPINES', 'TANGLIN', 'TOA PAYOH', 'WOODLANDS', 'YISHUN', 'OUTRAM', 'MARINE PARADE', 'NOVENA', 'PAYA LEBAR', 'RIVER VALLEY', 'ROCHOR',],
         #     'strategy': 'CompromiseMatching',
         # },
+        {
+            'name': 'Singapore_SG',
+            'districts': ['SINGAPORE',],
+            'strategy': 'CompromiseMatching',
+        },
     ],
 }
 
 driver_settings = {
-    'NUM_DRIVERS': 100,       # 100,
+    'NUM_DRIVERS': 400,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,
+    'RESPONSE_RATE': 0.25,
+
     # 'LOCATION_PING_INTERVAL': 15,  # seconds in Simulation Universe
     # NOTE LOCATION_PING_INTERVAL must be Less than STEP_INTERVAL
+    'UPDATE_PASSENGER_LOCATION': False
 }
 
 passenger_settings = {
-    'NUM_PASSENGERS': 400,       # 100,
+    'NUM_PASSENGERS': 600,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
-    'STEPS_PER_ACTION': 4, #2,
+    'STEPS_PER_ACTION': 1, #2,
+    'RESPONSE_RATE': 0.25,
 }
 

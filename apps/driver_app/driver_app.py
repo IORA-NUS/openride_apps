@@ -63,7 +63,9 @@ class DriverApp:
     def refresh(self):
         ''' Sync ALL inMemory State with the db State'''
         # Driver
-        self.driver.refresh()
+        # No need to refresh driver at every step
+        # self.driver.refresh()
+
         self.trip.refresh()
         # raise exception if unable to refresh
 
@@ -98,7 +100,7 @@ class DriverApp:
 
             self.trip.create_new_occupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle, requested_trip)
         else:
-            logging.warning('Driver is already engaged in an Occupied trip')
+            logging.warning(f'Ignoring Assignment request: Driver {self.driver.get_id()} is already engaged in an Occupied trip')
             pass
 
 

@@ -29,13 +29,16 @@ class PassengerManager():
 
         response = requests.get(passenger_url, headers=self.user.get_headers())
 
-        if len(response.json()['_items']) == 0:
-            # Need to register and actvate passenger
-            response = self.create_passenger(sim_clock)
-            return self.init_passenger(sim_clock)
+        if is_success(response.status_code):
+            if len(response.json()['_items']) == 0:
+                # Need to register and actvate passenger
+                response = self.create_passenger(sim_clock)
+                return self.init_passenger(sim_clock)
 
+            else:
+                passenger = response.json()['_items'][0]
         else:
-            passenger = response.json()['_items'][0]
+            raise Exception(response.text)
 
         return passenger
 
@@ -105,9 +108,14 @@ class PassengerManager():
             "sim_clock": sim_clock,
         }
 
-        requests.patch(item_url,
+        response = requests.patch(item_url,
                         headers=self.user.get_headers(etag=self.passenger['_etag']),
                         data=json.dumps(data))
+
+        if is_success(response.status_code):
+            self.refresh()
+        else:
+            raise Exception(response.text)
 
     def refresh(self):
         passenger_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/{self.passenger['_id']}"

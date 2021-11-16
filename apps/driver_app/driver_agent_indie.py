@@ -34,10 +34,8 @@ from apps.config import driver_settings, orsim_settings
 class DriverAgentIndie(ORSimAgent):
 
     active_route = None # shapely.geometry.LineString
-    current_route_coords = None # shapely.geometry.LineString
-
-    # step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
-
+    traversed_path = None # shapely.geometry.LineString
+    projected_path = None # shapely.geometry.LineString
 
 
     def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
@@ -68,7 +66,8 @@ class DriverAgentIndie(ORSimAgent):
                 try:
                     self.step(payload.get('time_step'))
                     self.failure_count = 0
-                except:
+                except Exception as e:
+                    logging.exception(str(e))
                     self.failure_count += 1
 
             self.exiting_market()
@@ -118,7 +117,8 @@ class DriverAgentIndie(ORSimAgent):
     def set_route(self, from_loc, to_loc):
         ''' find a Feasible route using some routeing engine'''
         self.active_route = OSRMClient.get_route(from_loc, to_loc)
-        self.current_route_coords = OSRMClient.get_coords_from_route(self.active_route)
+        self.projected_path = OSRMClient.get_coords_from_route(self.active_route)
+        self.traversed_path = []
 
     def logout(self):
         self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
@@ -126,79 +126,16 @@ class DriverAgentIndie(ORSimAgent):
     def step(self, time_step):
         # # The agent's step will go here.
         if self.current_time_step % driver_settings['STEPS_PER_ACTION'] == 0:
+            if random() <= driver_settings['RESPONSE_RATE']:
 
-            # 1. Always refresh trip manager to sync InMemory States with DB
-            self.app.refresh() # Raises exception if unable to refresh
-            ### Driver has likely moved between the ticks, so update their current loc
-            ### SUpport for multiple pings per step for smooth animation
-            # if time_step > self.behavior['shift_start_time']: # Strictly > 0
-            #     ping_clock = self.current_time - relativedelta(seconds=(orsim_settings['STEP_INTERVAL'] * self.elapsed_duration_steps))
-            #     prev_time_step = time_step -1
-
-            #     ping_clock = ping_clock + relativedelta(seconds=driver_settings['LOCATION_PING_INTERVAL'])
-            #     while ping_clock <= self.current_time:
-            #         # For each tick of the ping_clock
-            #         self.update_location(ping_clock, driver_settings['LOCATION_PING_INTERVAL'], publish=False)
-            #         ping_clock = ping_clock + relativedelta(seconds=driver_settings['LOCATION_PING_INTERVAL'])
-
-            #     # Push back ping_clock One tick
-            #     ping_clock = ping_clock - relativedelta(seconds=driver_settings['LOCATION_PING_INTERVAL'])
-            #     # update location at self.curent_time
-            #     self.update_location(self.current_time, (self.current_time - ping_clock).total_seconds(), publish=True)
-
-
-            # else:
-            #     self.update_location(self.current_time, 0)
-
-            self.update_location()
-
-            # 1. DeQueue all messages and process them in sequence
-            self.consume_messages()
-            # 2. based on current state, perform any workflow actions according to Agent behavior
-            self.perform_workflow_actions()
-
-
-    # def update_location(self, ping_clock, elapsed_time, publish=False):
-    #     ''' - Update self.current_loc based on:
-    #             - last known current_loc
-    #             - driver.state (waiting ==> no change in current_loc)
-    #             - route
-    #             - elapsed time
-    #             - speed (average estimated speed)
-    #         - Ping Waypoint. This restores the current state of the driver
-    #             - Workflow events will be processed in the next step
-    #     '''
-
-    #     speed = 40 * 1000/3600 # 40 Km/H --> m/sec
-
-    #     current_trip = self.app.get_trip()
-
-    #     if RidehailDriverTripStateMachine.is_moving(current_trip['state']) == False:
-    #         return
-    #     else:
-    #         # step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
-    #         # elapsed_time = self.elapsed_duration_steps * step_size ## Make sure the stepSize is appropriately handled
-
-    #         moved_distance = speed * elapsed_time
-
-    #         self.current_route_coords = cut(self.current_route_coords, moved_distance)[-1]
-
-    #         try:
-    #             if type(self.current_route_coords) == LineString:
-    #                 self.current_loc = mapping(Point(self.current_route_coords.boundary[0]))
-    #             elif type(self.current_route_coords) == Point:
-    #                 self.current_loc = mapping(self.current_route_coords)
-    #             # print(moved_distance, self.current_loc) #, self.current_route_coords)
-    #         except Exception as e:
-    #             logging.info(moved_distance)
-    #             # print(e)
-    #             logging.exception(str(e))
-
-    #     # print(self.current_route_coords)
-    #     # print(list(self.current_route_coords.coords))
-
-    #     # NOTE This will be called at every Step hence the current_route_coords will always be based on Latest info from Agent
-    #     self.app.ping(self.format_time(ping_clock), current_loc=self.current_loc, publish=publish, current_route_coords=list(self.current_route_coords.coords))
+                # 1. Always refresh trip manager to sync InMemory States with DB
+                self.app.refresh() # Raises exception if unable to refresh
+                ### Driver has likely moved between the ticks, so update their current loc
+                self.update_location()
+                # 1. DeQueue all messages and process them in sequence
+                self.consume_messages()
+                # 2. based on current state, perform any workflow actions according to Agent behavior
+                self.perform_workflow_actions()
 
     def update_location(self):
         ''' - Update self.current_loc based on:
@@ -223,24 +160,28 @@ class DriverAgentIndie(ORSimAgent):
 
             moved_distance = speed * elapsed_time
 
-            self.current_route_coords = cut(self.current_route_coords, moved_distance)[-1]
+            # self.projected_path = cut(self.projected_path, moved_distance)[-1]
+            self.traversed_path, self.projected_path = cut(self.projected_path, moved_distance)
 
             try:
-                if type(self.current_route_coords) == LineString:
-                    self.current_loc = mapping(Point(self.current_route_coords.boundary[0]))
-                elif type(self.current_route_coords) == Point:
-                    self.current_loc = mapping(self.current_route_coords)
-                # print(moved_distance, self.current_loc) #, self.current_route_coords)
+                if type(self.projected_path) == LineString:
+                    self.current_loc = mapping(Point(self.projected_path.boundary[0]))
+                elif type(self.projected_path) == Point:
+                    self.current_loc = mapping(self.projected_path)
+                # print(moved_distance, self.current_loc) #, self.projected_path)
             except Exception as e:
                 logging.info(moved_distance)
                 # print(e)
                 logging.exception(str(e))
 
-        # print(self.current_route_coords)
-        # print(list(self.current_route_coords.coords))
+        # print(self.projected_path)
+        # print(list(self.projected_path.coords))
 
-        # NOTE This will be called at every Step hence the current_route_coords will always be based on Latest info from Agent
-        self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, current_route_coords=list(self.current_route_coords.coords))
+        # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
+        # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
+        self.app.ping(self.get_current_time_str(), current_loc=self.current_loc,
+                      traversed_path=list(self.traversed_path.coords),
+                      projected_path=list(self.projected_path.coords))
 
     def consume_messages(self):
         ''' Consume messages. This ensures all the messages recieved between the two ticks are processed appropriately
@@ -265,6 +206,7 @@ class DriverAgentIndie(ORSimAgent):
                         logging.exception(str(e))
                         # print(e)
                         raise e
+
                 elif payload['action'] == 'passenger_workflow_event':
                     if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
                         if self.app.get_trip()['passenger'] == payload['passenger_id']:
@@ -275,8 +217,10 @@ class DriverAgentIndie(ORSimAgent):
                                 self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
                             if passenger_data.get('event') == "passenger_rejected_trip":
+                                # logging.warning('Overbooking handling is working ok')
                                 self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-                                self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
+                                # self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
+                                self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=True)
                                 self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
                                 self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
@@ -288,7 +232,7 @@ class DriverAgentIndie(ORSimAgent):
                                 self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
 
                         else:
-                            logging.warning(f"Mismatch {self.app.get_trip()['passenger']=} and {payload['passenger_id']=}")
+                            logging.warning(f"Ignore Message due to Mismatch {self.app.get_trip()['passenger']=} and {payload['passenger_id']=}")
                     else:
                         logging.warning(f"Driver will not listen to Passenger workflow events when {self.app.get_trip()['state']=}")
 
@@ -314,7 +258,7 @@ class DriverAgentIndie(ORSimAgent):
             # NOTE The following statements are executed in sequence and each update might affect the execution of the following statements.
             # The order matters.
             if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_looking_for_job.identifier:
-                if type(self.current_route_coords) == Point:
+                if type(self.projected_path) == Point:
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
 
                     self.set_route(self.current_loc, self.get_random_location())

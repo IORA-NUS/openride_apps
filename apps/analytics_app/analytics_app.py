@@ -1,3 +1,4 @@
+import logging
 import os, sys
 
 from dateutil.relativedelta import relativedelta
@@ -34,6 +35,8 @@ class AnalyticsApp:
 
         self.messenger = Messenger(credentials)
         self.server_max_results = 50 # make sure this is in sync with server
+
+        self.passenger_trips_ended = None
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''
@@ -168,7 +171,7 @@ class AnalyticsApp:
         }
 
         for id, trip in driver_trips.items():
-            # if (trip.get('current_route_coords') is None) or (len(trip.get('current_route_coords')) == 1):
+            # if (trip.get('projected_path') is None) or (len(trip.get('projected_path')) == 1):
             current_loc = trip['current_loc']
 
             transformed_loc = transform_lonlat_webmercator(current_loc['coordinates'][1], current_loc['coordinates'][0])
@@ -187,10 +190,10 @@ class AnalyticsApp:
             location_stream['features'].append(driver_feature)
 
             # else:
-            if (trip.get('current_route_coords') is not None) and (len(trip.get('current_route_coords')) > 1):
-                current_route_coords = trip['current_route_coords']
+            if (trip.get('projected_path') is not None) and (len(trip.get('projected_path')) > 1):
+                projected_path = trip['projected_path']
 
-                transformed_current_route_coords = itransform_lonlat_webmercator([[item[1], item[0]] for item in current_route_coords])
+                transformed_projected_path = itransform_lonlat_webmercator([[item[1], item[0]] for item in projected_path])
                 driver_feature = {
                     "attributes": {
                         "OBJECTID": trip['last_waypoint_id'],
@@ -199,7 +202,7 @@ class AnalyticsApp:
                         "STATUS": trip['state']
                     },
                     "geometry": {
-                        "paths": [list(transformed_current_route_coords)] ### NOTE Paths is a [[[x,y], [x,y]]] format
+                        "paths": [list(transformed_projected_path)] ### NOTE Paths is a [[[x,y], [x,y]]] format
                     }
                 }
                 route_stream['features'].append(driver_feature)
@@ -270,9 +273,78 @@ class AnalyticsApp:
         return response.json()
 
 
-    def update_platform_revenue(sef, sim_clock):
+    def prep_metric_computation_queries(self, start_time, end_time):
         ''' '''
+        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
 
+        got_results = True
+        self.passenger_trips_ended = []
+        page = 1
+        while got_results:
+            params = {
+                "where": json.dumps({
+                    "$and": [
+                        {"run_id": self.run_id},
+                        {"state": {
+                            '$in': [RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,
+                                   RidehailPassengerTripStateMachine.passenger_pickedup.identifier]
+                            }},
+                        {"sim_clock": {
+                            "$gte": datetime.strftime(start_time, "%a, %d %b %Y %H:%M:%S GMT"),
+                            "$lt": datetime.strftime(end_time, "%a, %d %b %Y %H:%M:%S GMT"),
+                        }}
+                ]}),
+                'page': page,
+                "max_results": self.server_max_results
+            }
+
+            response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
+            # response_items = response.json()['_items']
+            if response.json()['_items'] == []:
+                got_results = False
+                break
+            else:
+                self.passenger_trips_ended.extend(response.json()['_items'])
+                page += 1
+
+    def compute_revenue(self):
+        step_revenue = 0
+        for item in self.passenger_trips_ended:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+                step_revenue += item['trip_value']
+
+        return step_revenue
+
+    def compute_cancelled(self):
+        num_cancelled = 0
+        for item in self.passenger_trips_ended:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier:
+                num_cancelled += 1
+
+        return num_cancelled
+
+    def compute_served(self):
+        num_served = 0
+        for item in self.passenger_trips_ended:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+                num_served += 1
+
+        return num_served
+
+
+    def compute_waiting_time(self):
+        waiting_for_confirmation = 0
+        total_waiting_time = 0
+        for item in self.passenger_trips_ended:
+            try:
+                if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+                    waiting_for_confirmation += item['stats']['waiting_for_confirmation']
+                    total_waiting_time += item['stats']['total_waiting_for_service']
+            except Exception as e:
+                logging.warning(item)
+                logging.warning(str(e))
+
+        return waiting_for_confirmation, total_waiting_time
 
 
     def save_kpi(self, sim_clock, metric, value):

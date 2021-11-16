@@ -34,7 +34,7 @@ class PassengerAgentIndie(ORSimAgent):
     current_time_step = None
     prev_time_step = None
     elapsed_duration_steps = None
-    # current_route_coords = None # shapely.geometry.LineString
+    # projected_path = None # shapely.geometry.LineString
 
     step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
 
@@ -67,7 +67,8 @@ class PassengerAgentIndie(ORSimAgent):
                 try:
                     self.step(payload.get('time_step'))
                     self.failure_count = 0
-                except:
+                except Exception as e:
+                    logging.exception(traceback.format_exc())
                     self.failure_count += 1
 
             self.exiting_market()
@@ -116,14 +117,15 @@ class PassengerAgentIndie(ORSimAgent):
     def step(self, time_step):
 
         if self.current_time_step % passenger_settings['STEPS_PER_ACTION'] == 0:
+            if random() <= passenger_settings['RESPONSE_RATE']:
 
-            # 1. Always refresh trip manager to sync InMemory States with DB
-            self.app.refresh() # Raises exception if unable to refresh
+                # 1. Always refresh trip manager to sync InMemory States with DB
+                self.app.refresh() # Raises exception if unable to refresh
 
-            # 1. DeQueue all messages and process them in sequence
-            self.consume_messages()
-            # 2. based on current state, perform any workflow actions according to Agent behavior
-            self.perform_workflow_actions()
+                # 1. DeQueue all messages and process them in sequence
+                self.consume_messages()
+                # 2. based on current state, perform any workflow actions according to Agent behavior
+                self.perform_workflow_actions()
 
 
     def consume_messages(self):
@@ -143,7 +145,8 @@ class PassengerAgentIndie(ORSimAgent):
                             logging.exception(str(e))
                             raise e
                     else:
-                        logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
+                        self.app.handle_overbooking(self.get_current_time_str(), driver=payload['driver_id'])
+                        # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
 
                 elif payload['action'] == 'driver_workflow_event':
                     if RidehailPassengerTripStateMachine.is_driver_channel_open(self.app.get_trip()['state']):

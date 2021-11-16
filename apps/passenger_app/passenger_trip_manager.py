@@ -1,5 +1,6 @@
 import requests, json, logging, traceback
 
+from datetime import datetime
 from apps.config import settings
 from apps.utils import id_generator, is_success
 from apps.loc_service import OSRMClient
@@ -15,11 +16,18 @@ class PassengerTripManager:
         self.user = user
         self.messenger = messenger
 
+        self.time_requested = None
+        self.time_assigned = None
+        self.time_pickedup = None
+        self.time_droppedoff = None
+
     def as_dict(self):
         return self.trip
 
     def create_new_trip_request(self, sim_clock, current_loc, passenger, pickup_loc, dropoff_loc, trip_value=None):
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
+
+        self.time_requested = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
 
         data = {
             "passenger": passenger['_id'],
@@ -88,9 +96,13 @@ class PassengerTripManager:
 
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_confirmed_trip"
 
+        self.time_assigned = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
+        waiting_for_confirmation = (self.time_assigned - self.time_requested).total_seconds()
+
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
+            'stats.waiting_for_confirmation': waiting_for_confirmation
         }
 
         response = requests.patch(passenger_trip_item_url,
@@ -242,10 +254,16 @@ class PassengerTripManager:
         #     raise e
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_pickup"
 
+        self.time_pickedup = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
+        waiting_for_pickup = (self.time_pickedup - self.time_assigned).total_seconds()
+        total_waiting_for_service = (self.time_pickedup - self.time_requested).total_seconds()
+
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
             'driver_ride_hail_trip': driver_ride_hail_trip,
+            'stats.waiting_for_pickup': waiting_for_pickup,
+            'stats.total_waiting_for_service': total_waiting_for_service
         }
 
         response = requests.patch(passenger_trip_item_url,
@@ -300,9 +318,13 @@ class PassengerTripManager:
         #     raise e
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_dropoff"
 
+        self.time_droppedoff = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
+        travel_time = (self.time_droppedoff - self.time_pickedup).total_seconds()
+
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
+            'stats.travel_time': travel_time
         }
 
         response = requests.patch(passenger_trip_item_url,
@@ -361,33 +383,13 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        # # WATCH THIS
-        if is_success(response.status_code):
-            self.trip = None
-        else:
-            raise Exception(response.text)
+        # # # WATCH THIS
+        # if is_success(response.status_code):
+        #     logging.info('ending_trip')
+        #     self.trip = None
+        # else:
+        #     raise Exception(response.text)
 
-    # def end_trip(self, sim_clock, current_loc, force_quit=False, shutdown=False):
-
-    #     if force_quit == True:
-    #         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/force_quit"
-    #     else:
-    #         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/end_trip"
-
-    #     data = {
-    #         'sim_clock': sim_clock,
-    #         'current_loc': current_loc,
-    #     }
-
-    #     response = requests.patch(passenger_trip_item_url,
-    #                             headers=self.user.get_headers(etag=self.trip['_etag']),
-    #                             data=json.dumps(data))
-
-    #     # # WATCH THIS
-    #     if is_success(response.status_code):
-    #         self.trip = None
-    #     else:
-    #         raise Exception(response.text)
 
     def force_quit(self, sim_clock, current_loc):
 
@@ -406,18 +408,20 @@ class PassengerTripManager:
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
                                 data=json.dumps(data))
 
-        if is_success(response.status_code):
-            self.trip = None
-        else:
-            raise Exception(response.text)
+        # if is_success(response.status_code):
+        #     logging.info('force quit trip')
+        #     self.trip = None
+        # else:
+        #     raise Exception(response.text)
 
     def refresh(self):
-        passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}"
+        if self.trip is not None:
+            passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}"
 
-        response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
+            response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
 
-        if is_success(response.status_code):
-            self.trip = response.json()
-        else:
-            raise Exception(f'PassengerTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
+            if is_success(response.status_code):
+                self.trip = response.json()
+            else:
+                raise Exception(f'PassengerTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
 

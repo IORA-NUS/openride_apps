@@ -1,6 +1,6 @@
 import requests, json, logging, traceback
 
-from apps.config import settings
+from apps.config import settings, driver_settings
 from apps.utils import id_generator, is_success, deep_update
 
 from apps.state_machine import RidehailDriverTripStateMachine
@@ -67,8 +67,7 @@ class DriverTripManager:
             # response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
             # self.trip = response.json()
             self.trip = {'_id': response.json()['_id']}
-            self.refresh()
-
+            # self.refresh()
             self.recieve(sim_clock, current_loc)
         else:
             raise Exception(response.text)
@@ -116,6 +115,13 @@ class DriverTripManager:
 
         if is_success(response.status_code):
             self.refresh()
+
+            self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
+                                            json.dumps({
+                                                "action": "assigned", # NOTE This is not a 'driver_workflow_event but an 'assigned' event
+                                                "driver_id": self.trip['driver'],
+                                            }))
+
         else:
             raise Exception(response.text)
 
@@ -292,11 +298,10 @@ class DriverTripManager:
 
     def move_to_dropoff(self, sim_clock, current_loc):
 
-        # try:
-        #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/move_to_dropoff"
-        # except Exception as e:
-        #     raise e
         driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/move_to_dropoff"
+
+        if self.trip['state'] != 'driver_moving_to_dropoff':
+            first_ping = True
 
         data = {
             'sim_clock': sim_clock,
@@ -310,7 +315,8 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
 
-            self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
+            if first_ping or driver_settings['UPDATE_PASSENGER_LOCATION']:
+                self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
                                     'driver_id': self.trip['driver'],
@@ -415,6 +421,67 @@ class DriverTripManager:
         else:
             raise Exception(response.text)
 
+
+    # def end_trip(self, sim_clock, current_loc):
+    #     '''
+    #     Send an end_trip signal to the current trip.
+    #     - Force Quit implies that the trip shall be terminated regardless of the current state (i.e. set is_active=False directly)
+    #         -- This will result in inconsistent states and should be used carefully
+    #     - Shutdown signal indicates if a new empty trip should be initiated
+    #         -- Driver should always have an active trip while logged on.
+    #         -- When Driver Logs off, then no new trip should be created. Shutdown signal handles this case.
+    #         -- Hence use with Care.
+    #     '''
+    #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
+
+    #     data = {
+    #         'sim_clock': sim_clock,
+    #         'current_loc': current_loc,
+    #     }
+
+    #     response = requests.patch(driver_trip_item_url,
+    #                             headers=self.user.get_headers(etag=self.trip['_etag']),
+    #                             data=json.dumps(data))
+
+    #     if is_success(response.status_code):
+    #         self.trip = None
+    #     else:
+    #         raise Exception(response.text)
+
+    # def force_quit(self, sim_clock, current_loc):
+    #     '''
+    #     Send an end_trip signal to the current trip.
+    #     - Force Quit implies that the trip shall be terminated regardless of the current state (i.e. set is_active=False directly)
+    #         -- This will result in inconsistent states and should be used carefully
+    #     - Shutdown signal indicates if a new empty trip should be initiated
+    #         -- Driver should always have an active trip while logged on.
+    #         -- When Driver Logs off, then no new trip should be created. Shutdown signal handles this case.
+    #         -- Hence use with Care.
+    #     '''
+    #     # try:
+    #     #     if force_quit == True:
+    #     #         driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
+    #     #     else:
+    #     #         driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
+    #     # except Exception as e:
+    #     #     raise e
+    #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
+
+    #     data = {
+    #         'sim_clock': sim_clock,
+    #         'current_loc': current_loc,
+    #     }
+
+    #     response = requests.patch(driver_trip_item_url,
+    #                             headers=self.user.get_headers(etag=self.trip['_etag']),
+    #                             data=json.dumps(data))
+
+    #     if is_success(response.status_code):
+    #         self.trip = None
+    #     else:
+    #         raise Exception(response.text)
+
+
     def ping(self, sim_clock, current_loc, **kwargs):
         ''' '''
         if self.trip is None:
@@ -436,12 +503,13 @@ class DriverTripManager:
             raise Exception(response.text)
 
     def refresh(self):
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}"
+        if self.trip is not None:
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}"
 
-        response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
+            response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
 
-        if is_success(response.status_code):
-            self.trip = response.json()
-        else:
-            raise Exception(f'DriverTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
+            if is_success(response.status_code):
+                self.trip = response.json()
+            else:
+                raise Exception(f'DriverTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
 

@@ -1,5 +1,7 @@
 
 import json
+
+from numpy import isin
 from apps.config import settings
 import requests
 import urllib3
@@ -31,9 +33,14 @@ class Messenger:
         # This is a deliberate design choice to enable:
         #   - Inter-Agent communication as core part of system design
 
-        if channel_id is not None:
+        # if channel_id is not None:
+        if isinstance(channel_id, str):
             self.client.loop_start()
-            self.client.subscribe(f"{channel_id}", qos=0)
+            self.client.subscribe(channel_id, qos=0)
+            logging.info(f"Channel: {channel_id}")
+        elif isinstance(channel_id, list):
+            self.client.loop_start()
+            self.client.subscribe([(cid, 0) for cid in channel_id])
             logging.info(f"Channel: {channel_id}")
 
 

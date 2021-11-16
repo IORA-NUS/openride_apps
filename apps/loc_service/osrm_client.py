@@ -1,7 +1,7 @@
 import os, json, time, requests
 from random import sample
 
-from shapely.geometry import Point, mapping
+from shapely.geometry import Point, linestring, mapping
 import polyline
 
 from apps.config import settings
@@ -105,19 +105,28 @@ def cut(line, distance):
     '''
     # Cuts a line in two at a distance from its starting point
     if type(line) == Point:
-        return [line]
+        # return [line]
+        left = line
+        right = line
+        return [left, right]
 
     line = LineString(line)
     # convert distance from meters to degrees. Note approximation only valid near Equator
     # https://www.usna.edu/Users/oceano/pguth/md_help/html/approx_equivalents.htm
     distance = distance / 111000
     if distance == 0:
-        return [LineString(line)]
+        # return [LineString(line)]
+        left = Point(list(line.coords)[0])
+        right = LineString(line)
+        return [left, right]
     if distance < 0.0:
         raise Exception(f"Nonnegative {distance=}")
     elif distance >= line.length:
         coords = list(line.coords)
-        return [Point(coords[-1])]
+        # return [Point(coords[-1])]
+        left = LineString(coords)
+        right = Point(coords[-1])
+        return [left, right]
 
     coords = list(line.coords)
     for i, p in enumerate(coords):

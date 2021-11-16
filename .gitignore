@@ -2,6 +2,7 @@
 archive/
 results/
 output/
+nohup*
 
 # user_db.py
 .DS_Store

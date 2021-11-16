@@ -41,6 +41,10 @@ class AnalyticsAgentIndie(ORSimAgent):
     def step(self, time_step):
         ''' '''
         if self.current_time_step % analytics_settings['STEPS_PER_ACTION'] == 0:
+
+            self.compute_all_metrics()
+
+
             # print('AnalyticsAgent.step')
             output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
 
@@ -79,3 +83,26 @@ class AnalyticsAgentIndie(ORSimAgent):
                         with open(f"{rest_output_dir}/{self.current_time_step}.paths_history.json", 'w') as publish_file:
                             publish_file.write(json.dumps(paths_history))
 
+
+    def compute_all_metrics(self):
+        # METRICS COMPUTATION
+        start_time = self.current_time - relativedelta(seconds=(analytics_settings['STEPS_PER_ACTION'] * orsim_settings['STEP_INTERVAL'] ))
+        end_time = self.current_time
+        self.analytics_app.prep_metric_computation_queries(start_time, end_time)
+
+        # Compute and Store platform revenue
+        step_revenue = self.analytics_app.compute_revenue()
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'revenue', step_revenue)
+
+        # Compute and Store cancellation
+        num_cancelled = self.analytics_app.compute_cancelled()
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'cancelled', num_cancelled)
+
+        # Compute and Store Served
+        num_served = self.analytics_app.compute_served()
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'served', num_served)
+
+        # Compute and Store Waiting_time (sum)
+        waiting_for_confirmation, total_waiting_time = self.analytics_app.compute_waiting_time()
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'waiting_for_confirmation', waiting_for_confirmation)
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'total_waiting_time', total_waiting_time)

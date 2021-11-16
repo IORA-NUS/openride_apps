@@ -90,20 +90,18 @@ class AssignmentApp:
             driver = item[0]
             passenger_trip = item[1]
 
-            driver_assignment = {
-                "action": "assigned",
-                "driver_id": driver['_id'],
-            }
+            # driver_assignment = {
+            #     "action": "assigned",
+            #     "driver_id": driver['_id'],
+            # }
             passenger_assignment = {
                 "action": "requested_trip",
                 "passenger_id": passenger_trip['passenger'],
                 "requested_trip": passenger_trip
             }
 
-            self.messenger.client.publish(f"{self.run_id}/{passenger_trip['passenger']}", json.dumps(driver_assignment))
+            # self.messenger.client.publish(f"{self.run_id}/{passenger_trip['passenger']}", json.dumps(driver_assignment))
             self.messenger.client.publish(f"{self.run_id}/{driver['_id']}", json.dumps(passenger_assignment))
-
-
 
     def get_driver_trip(self):
         ''' '''
