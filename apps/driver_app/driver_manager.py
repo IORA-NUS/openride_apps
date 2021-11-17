@@ -8,10 +8,10 @@ from apps.state_machine import WorkflowStateMachine
 
 class DriverManager():
 
-    def __init__(self, run_id, sim_clock, user, driver_settings):
+    def __init__(self, run_id, sim_clock, user, profile):
         self.run_id = run_id
         self.user = user
-        self.driver_settings = driver_settings
+        self.profile = profile
 
         try:
             self.driver = self.init_driver(sim_clock)
@@ -55,7 +55,7 @@ class DriverManager():
                 "country": "Singapore",
                 "expiry":  "Tue, 01 Jan 2030 00:00:00 GMT"
             },
-            "settings": self.driver_settings,
+            "profile": self.profile,
             "sim_clock": sim_clock,
         }
 

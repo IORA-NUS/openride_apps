@@ -27,6 +27,10 @@ class CompromiseMatching(AbstractSolver):
         else:
             assignment = []
 
+        # print(f"{driver_list=}")
+        # print(f"{passenger_trip_list=}")
+        # print(f"{assignment=}")
+
         return assignment, matched_pairs
 
 
@@ -36,7 +40,8 @@ class CompromiseMatching(AbstractSolver):
         # print(f"{online_params=}")
 
         pax_ids = [p['_id'] for p in paxList]
-        driver_ids = [d['_id'] for d in driverList]
+        # driver_ids = [d['_id'] for d in driverList]
+        driver_ids = [d['driver'] for d in driverList]
         matchedPairs = []
         i = 0
         j = 0
@@ -56,7 +61,8 @@ class CompromiseMatching(AbstractSolver):
                 # pickupTime[i][j] = (abs(d.currentLat - p.originLat) + abs(d.currentLon - p.originLon)) * Params.distanceTimeConversion
                 if True: #pickupTime[i][j] < Params.maxAllowedPickupTime:
                     driverListPotential.append(d)
-                    driverListPotential_ids.append(d['_id'])
+                    # driverListPotential_ids.append(d['_id'])
+                    driverListPotential_ids.append(d['driver'])
                     driverPositionMap.append(j) #// j is the position of driver in driverList
                     break
                 i += 1
@@ -79,11 +85,15 @@ class CompromiseMatching(AbstractSolver):
                     for p in paxList:
                         # reducedPickupTime[p.id,d.id] = ((abs(d.currentLat - p.originLat) + abs(d.currentLon - p.originLon)) * Params.distanceTimeConversion)
                         # print(f"{i=}, {j=}")
-                        reducedPickupTime[p['_id'],d['_id']] = pickupTime[j][i] #pickupTime[i][j]
+                        # reducedPickupTime[p['_id'],d['_id']] = pickupTime[j][i] #pickupTime[i][j]
+                        reducedPickupTime[p['_id'],d['driver']] = pickupTime[j][i] #pickupTime[i][j]
                         if True: #reducedPickupTime[p.id,d.id] < Params.maxAllowedPickupTime:
-                            c[p['_id'],d['_id']] = (online_params['weightRevenue'] * p['trip_value']) + (online_params['weightPickupTime'] * (self.params['offline_params']['reverseParameter'] - reducedPickupTime[p['_id'],d['_id']])/2) + (online_params['weightServiceScore'] * d['settings']['service_score'])
+                            # NOTE use [driver_profile]
+                            # c[p['_id'],d['_id']] = (online_params['weightRevenue'] * p['trip_price']) + (online_params['weightPickupTime'] * (self.params['offline_params']['reverseParameter'] - reducedPickupTime[p['_id'],d['_id']])/2) + (online_params['weightServiceScore'] * d['settings']['service_score'])
+                            c[p['_id'],d['driver']] = (online_params['weightRevenue'] * p['trip_price']) + (online_params['weightPickupTime'] * (self.params['offline_params']['reverseParameter'] - reducedPickupTime[p['_id'],d['driver']])/2) + (online_params['weightServiceScore'] * d['meta']['profile']['service_score'])
                         else:
-                            c[p['_id'],d['_id']] = 0
+                            # c[p['_id'],d['_id']] = 0
+                            c[p['_id'],d['driver']] = 0
                         i += 1
                     j += 1
 
@@ -156,8 +166,12 @@ class CompromiseMatching(AbstractSolver):
                 for p in paxList:
                     j = 0
                     for d in driverListPotential:
-                        if (x_i[p['_id'],d['_id']] > 0.5):
-                            newPair = [i, driverPositionMap[j], reducedPickupTime[p['_id'],d['_id']]]
+                        # if (x_i[p['_id'],d['_id']] > 0.5):
+                        #     newPair = [i, driverPositionMap[j], reducedPickupTime[p['_id'],d['_id']]]
+                        #     matchedPairs.append(newPair)
+                        #     break
+                        if (x_i[p['_id'],d['driver']] > 0.5):
+                            newPair = [i, driverPositionMap[j], reducedPickupTime[p['_id'],d['driver']]]
                             matchedPairs.append(newPair)
                             break
                         j += 1
@@ -188,8 +202,10 @@ class CompromiseMatching(AbstractSolver):
                     matchedPickupTime = pair[2]
 
                     online_params['realtimePickupTime'] = online_params['realtimePickupTime'] + (offline_params['reverseParameter'] - matchedPickupTime)/offline_params['reverseParameter2']
-                    online_params['realtimeRevenue'] = online_params['realtimeRevenue'] + passenger_trip['trip_value']
-                    online_params['realtimeServiceScore'] = online_params['realtimeServiceScore'] + driver['settings']['service_score']
+                    online_params['realtimeRevenue'] = online_params['realtimeRevenue'] + passenger_trip['trip_price']
+                    # NOTE: use driver_profile instead of settings
+                    # online_params['realtimeServiceScore'] = online_params['realtimeServiceScore'] + driver['settings']['service_score']
+                    online_params['realtimeServiceScore'] = online_params['realtimeServiceScore'] + driver['meta']['profile']['service_score']
 
                 # end for
                 # online_params['weightPickupTime'] = max((clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1)

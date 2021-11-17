@@ -10,11 +10,11 @@ from apps.utils.user_registry import UserRegistry
 
 class PassengerManager():
 
-    def __init__(self, run_id, sim_clock, user, passenger_settings):
+    def __init__(self, run_id, sim_clock, user, passenger_profile):
         self.run_id = run_id
         self.user = user
 
-        self.passenger_settings = passenger_settings
+        self.passenger_profile = passenger_profile
 
         self.passenger = self.init_passenger(sim_clock)
 
@@ -46,7 +46,7 @@ class PassengerManager():
         create_passenger_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger"
 
         data = {
-            "settings": self.passenger_settings,
+            "profile": self.passenger_profile,
             "sim_clock": sim_clock
         }
 

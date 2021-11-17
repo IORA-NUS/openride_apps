@@ -14,6 +14,8 @@ from .passenger_trip_manager import PassengerTripManager
 from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
 
+from apps.state_machine import RidehailPassengerTripStateMachine
+
 
 from apps.messenger_service import Messenger
 
@@ -23,16 +25,19 @@ class PassengerApp:
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, current_loc, credentials, passenger_settings):
+    def __init__(self, run_id, sim_clock, current_loc, credentials, passenger_profile):
         self.run_id = run_id
         self.credentials = credentials
 
         self.user = UserRegistry(sim_clock, credentials)
 
-        self.passenger = PassengerManager(run_id, sim_clock, self.user, passenger_settings)
+        self.passenger = PassengerManager(run_id, sim_clock, self.user, passenger_profile)
         self.messenger = Messenger(credentials, f"{self.run_id}/{self.passenger.get_id()}", self.on_receive_message)
         self.message_queue = []
         self.trip = PassengerTripManager(run_id, sim_clock, self.user, self.messenger)
+
+        self.latest_sim_clock = sim_clock
+        self.latest_loc = current_loc
 
     def get_passenger(self):
         return self.passenger.as_dict()
@@ -40,12 +45,12 @@ class PassengerApp:
     def get_trip(self):
         return self.trip.as_dict()
 
-    def login(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_value=None):
+    def login(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
         ''' '''
         self.passenger.login(sim_clock)
 
         if (pickup_loc is not None) and (dropoff_loc is not None):
-            self.trip.create_new_trip_request(sim_clock, current_loc, self.passenger.as_dict(), pickup_loc, dropoff_loc, trip_value)
+            self.trip.create_new_trip_request(sim_clock, current_loc, self.passenger.as_dict(), pickup_loc, dropoff_loc, trip_price)
 
     def logout(self, sim_clock, current_loc):
         ''' '''
@@ -59,9 +64,12 @@ class PassengerApp:
             logging.exception(str(e))
 
 
-    def ping(self, sim_clock, **kwargs):
+    def ping(self, sim_clock, current_loc, **kwargs):
         ''' '''
-        self.trip.ping(sim_clock, **kwargs)
+        self.latest_sim_clock = sim_clock
+        self.latest_loc = current_loc
+
+        self.trip.ping(sim_clock, current_loc, **kwargs)
 
     def refresh(self):
         ''' Sync ALL inMemory State with the db State'''
@@ -86,13 +94,30 @@ class PassengerApp:
     ################
     # Message Callbacks and other methods
 
+    def update_current(self, sim_clock, current_loc):
+        self.latest_sim_clock = sim_clock
+        self.latest_loc = current_loc
+
     def on_receive_message(self, client, userdata, message):
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), pull items from queue and process them in sequence until Queue is empty
         '''
         payload = json.loads(message.payload.decode('utf-8'))
 
-        self.enqueue_message(payload)
+        if payload['action'] == 'assigned':
+            if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
+                try:
+                    self.trip.assign(self.latest_sim_clock,
+                                    current_loc=self.latest_loc,
+                                    driver=payload['driver_id'])
+                except Exception as e:
+                    logging.exception(str(e))
+                    raise e
+            else:
+                self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
+                # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
+        else:
+            self.enqueue_message(payload)
 
 
     def enqueue_message(self, payload):

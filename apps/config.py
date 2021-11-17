@@ -26,8 +26,8 @@ settings = {
 }
 
 orsim_settings = {
-    'SIMULATION_LENGTH_IN_STEPS': 480, # 960, # 600,    # 60 # Num Steps
-    'STEP_INTERVAL': 30, # 15, # 6,     # 60   # seconds in Simulation Universe
+    'SIMULATION_LENGTH_IN_STEPS': 60, # 960, # 600,    # 60 # Num Steps
+    'STEP_INTERVAL': 60, # 15, # 6,     # 60   # seconds in Simulation Universe
 
     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
     'STEP_TIMEOUT_TOLERANCE': 0.05,
@@ -51,11 +51,11 @@ assignment_settings = {
     'RESPONSE_RATE': 1,  # Keep this 1 to regularly update stats
 
     'COVERAGE_AREA': [
-        # {
-        #     'name': 'Clementi',
-        #     'districts': ['CLEMENTI'],
-        #     'strategy': 'CompromiseMatching',
-        # },
+        {
+            'name': 'Clementi',
+            'districts': ['CLEMENTI'],
+            'strategy': 'CompromiseMatching', # 'GreedyDriverMatching', # 'CompromiseMatching',
+        },
         # {
         #     'name': 'Westside',
         #     'districts': ['CLEMENTI', 'JURONG EAST', 'QUEENSTOWN'],
@@ -81,16 +81,16 @@ assignment_settings = {
         #     'districts': ['SIMPANG', 'SUNGEI KADUT', 'DOWNTOWN CORE', 'NEWTON', 'ORCHARD', 'KALLANG', 'LIM CHU KANG', 'PASIR RIS',  'MARINA SOUTH', 'SERANGOON', 'BOON LAY', 'BEDOK', 'BUKIT MERAH', 'BUKIT PANJANG', 'JURONG EAST', 'BUKIT TIMAH', 'CHANGI', 'CHOA CHU KANG', 'QUEENSTOWN', 'SELETAR', 'MANDAI', 'ANG MO KIO', 'BISHAN', 'BUKIT BATOK',  'JURONG WEST', 'CLEMENTI', 'GEYLANG', 'HOUGANG', 'PIONEER', 'PUNGGOL', 'SEMBAWANG', 'SENGKANG', 'TAMPINES', 'TANGLIN', 'TOA PAYOH', 'WOODLANDS', 'YISHUN', 'OUTRAM', 'MARINE PARADE', 'NOVENA', 'PAYA LEBAR', 'RIVER VALLEY', 'ROCHOR',],
         #     'strategy': 'CompromiseMatching',
         # },
-        {
-            'name': 'Singapore_SG',
-            'districts': ['SINGAPORE',],
-            'strategy': 'CompromiseMatching',
-        },
+        # {
+        #     'name': 'Singapore_SG',
+        #     'districts': ['SINGAPORE',],
+        #     'strategy': 'CompromiseMatching',
+        # },
     ],
 }
 
 driver_settings = {
-    'NUM_DRIVERS': 400,       # 100,
+    'NUM_DRIVERS': 10,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,
@@ -102,7 +102,7 @@ driver_settings = {
 }
 
 passenger_settings = {
-    'NUM_PASSENGERS': 600,       # 100,
+    'NUM_PASSENGERS': 20,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,

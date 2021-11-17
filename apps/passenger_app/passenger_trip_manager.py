@@ -18,24 +18,28 @@ class PassengerTripManager:
 
         self.time_requested = None
         self.time_assigned = None
+        self.time_confirmed = None
         self.time_pickedup = None
         self.time_droppedoff = None
 
     def as_dict(self):
         return self.trip
 
-    def create_new_trip_request(self, sim_clock, current_loc, passenger, pickup_loc, dropoff_loc, trip_value=None):
+    def create_new_trip_request(self, sim_clock, current_loc, passenger, pickup_loc, dropoff_loc, trip_price=None):
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
 
         self.time_requested = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
 
         data = {
             "passenger": passenger['_id'],
+            "meta": {
+                'profile': passenger['profile'],
+            },
             "current_loc": current_loc,
             "pickup_loc": pickup_loc,
             "dropoff_loc": dropoff_loc,
             "sim_clock": sim_clock,
-            "trip_value": self.compute_trip_value(pickup_loc, dropoff_loc) if trip_value is None else trip_value
+            "trip_price": self.compute_trip_price(pickup_loc, dropoff_loc) if trip_price is None else trip_price,
         }
 
         response = requests.post(passenger_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
@@ -49,12 +53,12 @@ class PassengerTripManager:
         else:
             raise Exception(response.text)
 
-    def compute_trip_value(self, start_loc, end_loc):
+    def compute_trip_price(self, start_loc, end_loc):
         route = OSRMClient.get_route(start_loc, end_loc)
 
         return route.get('duration', 0)
 
-    def ping(self, sim_clock, **kwargs):
+    def ping(self, sim_clock, current_loc, **kwargs):
         ''' '''
         if self.trip is None:
             raise Exception('trip is not set')
@@ -63,6 +67,7 @@ class PassengerTripManager:
 
         data = kwargs
         data['sim_clock'] = sim_clock
+        data['current_loc'] = current_loc
 
 
         response = requests.patch(passenger_trip_item_url,
@@ -76,11 +81,14 @@ class PassengerTripManager:
     def assign(self, sim_clock, current_loc, driver):
 
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/assign"
+        self.time_assigned = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
+        wait_time_assignment = (self.time_assigned - self.time_requested).total_seconds()
 
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
             'driver': driver,
+            'stats.wait_time_assignment': wait_time_assignment
         }
 
         response = requests.patch(passenger_trip_item_url,
@@ -96,13 +104,13 @@ class PassengerTripManager:
 
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_confirmed_trip"
 
-        self.time_assigned = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
-        waiting_for_confirmation = (self.time_assigned - self.time_requested).total_seconds()
+        self.time_confirmed = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
+        wait_time_driver_confirm = (self.time_confirmed - self.time_requested).total_seconds()
 
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
-            'stats.waiting_for_confirmation': waiting_for_confirmation
+            'stats.wait_time_driver_confirm': wait_time_driver_confirm
         }
 
         response = requests.patch(passenger_trip_item_url,
@@ -255,15 +263,15 @@ class PassengerTripManager:
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_pickup"
 
         self.time_pickedup = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
-        waiting_for_pickup = (self.time_pickedup - self.time_assigned).total_seconds()
-        total_waiting_for_service = (self.time_pickedup - self.time_requested).total_seconds()
+        wait_time_pickup = (self.time_pickedup - self.time_assigned).total_seconds()
+        wait_time_total = (self.time_pickedup - self.time_requested).total_seconds()
 
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
             'driver_ride_hail_trip': driver_ride_hail_trip,
-            'stats.waiting_for_pickup': waiting_for_pickup,
-            'stats.total_waiting_for_service': total_waiting_for_service
+            'stats.wait_time_pickup': wait_time_pickup,
+            'stats.wait_time_total': wait_time_total
         }
 
         response = requests.patch(passenger_trip_item_url,
@@ -319,12 +327,12 @@ class PassengerTripManager:
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_dropoff"
 
         self.time_droppedoff = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
-        travel_time = (self.time_droppedoff - self.time_pickedup).total_seconds()
+        travel_time_total = (self.time_droppedoff - self.time_pickedup).total_seconds()
 
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
-            'stats.travel_time': travel_time
+            'stats.travel_time_total': travel_time_total
         }
 
         response = requests.patch(passenger_trip_item_url,

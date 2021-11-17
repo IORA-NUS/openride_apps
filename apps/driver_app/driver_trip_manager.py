@@ -25,6 +25,9 @@ class DriverTripManager:
 
         data = {
             "driver": f"{driver['_id']}",
+            "meta": {
+                'profile': driver['profile']
+            },
             "vehicle": f"{vehicle['_id']}",
             "current_loc": current_loc,
             "next_dest_loc": current_loc,
@@ -39,7 +42,7 @@ class DriverTripManager:
             # response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
             # self.trip = response.json()
             self.trip = {'_id': response.json()['_id']}
-            # self.refresh()
+            self.refresh()
             self.look_for_job(sim_clock, current_loc, route)
         else:
             raise Exception(response.text)
@@ -49,6 +52,9 @@ class DriverTripManager:
 
         data = {
             "driver": f"{driver['_id']}",
+            "meta": {
+                'profile': driver['profile']
+            },
             "vehicle": f"{vehicle['_id']}",
             "current_loc": current_loc,
             "next_dest_loc": passenger_ride_hail_trip['pickup_loc'],
@@ -69,7 +75,7 @@ class DriverTripManager:
             # response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
             # self.trip = response.json()
             self.trip = {'_id': response.json()['_id']}
-            # self.refresh()
+            self.refresh()
             self.recieve(sim_clock, current_loc)
         else:
             raise Exception(response.text)
@@ -502,7 +508,8 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(response.text)
+            # raise Exception(response.text)
+            logging.exception(f"Unable to Ping: {response.text}")
 
     def refresh(self):
         if self.trip is not None:

@@ -39,6 +39,10 @@ class GreedyDriverMatching(AbstractSolver):
                 assignment.append((driver_list[i], passenger_trip_list[nearest_idx]))
                 assigned_passenger_idx[nearest_idx] = True
 
+        # print(f"{driver_list=}")
+        # print(f"{passenger_trip_list=}")
+        # print(f"{assignment=}")
+
         return assignment, []
 
 
@@ -54,7 +58,7 @@ class GreedyDriverMatching(AbstractSolver):
         #             matchedPickupTime = pair[2]
 
         #             online_params['realtimePickupTime'] = online_params['realtimePickupTime'] + (offline_params['reverseParameter'] - matchedPickupTime)/offline_params['reverseParameter2']
-        #             online_params['realtimeRevenue'] = online_params['realtimeRevenue'] + passenger_trip['trip_value']
+        #             online_params['realtimeRevenue'] = online_params['realtimeRevenue'] + passenger_trip['trip_price']
         #             online_params['realtimeServiceScore'] = online_params['realtimeServiceScore'] + driver['settings']['service_score']
 
         #         # end for

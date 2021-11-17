@@ -311,7 +311,7 @@ class AnalyticsApp:
         step_revenue = 0
         for item in self.passenger_trips_ended:
             if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
-                step_revenue += item['trip_value']
+                step_revenue += item['trip_price']
 
         return step_revenue
 
@@ -333,18 +333,20 @@ class AnalyticsApp:
 
 
     def compute_waiting_time(self):
-        waiting_for_confirmation = 0
-        total_waiting_time = 0
+        wait_time_assignment = 0
+        wait_time_driver_confirm = 0
+        wait_time_total = 0
         for item in self.passenger_trips_ended:
             try:
                 if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
-                    waiting_for_confirmation += item['stats']['waiting_for_confirmation']
-                    total_waiting_time += item['stats']['total_waiting_for_service']
+                    wait_time_driver_confirm += item['stats']['wait_time_driver_confirm']
+                    wait_time_total += item['stats']['wait_time_total']
+                    wait_time_assignment += item['stats']['wait_time_assignment']
             except Exception as e:
                 logging.warning(item)
                 logging.warning(str(e))
 
-        return waiting_for_confirmation, total_waiting_time
+        return wait_time_driver_confirm, wait_time_total, wait_time_assignment
 
 
     def save_kpi(self, sim_clock, metric, value):

@@ -22,19 +22,22 @@ from apps.messenger_service import Messenger
 
 class DriverApp:
 
-    def __init__(self, run_id, sim_clock, current_loc, credentials, driver_settings):
+    def __init__(self, run_id, sim_clock, current_loc, credentials, profile):
         self.run_id = run_id
         self.credentials = credentials
 
         self.user = UserRegistry(sim_clock, credentials)
 
-        self.driver = DriverManager(run_id, sim_clock, self.user, driver_settings)
+        self.driver = DriverManager(run_id, sim_clock, self.user, profile)
 
         self.messenger = Messenger(credentials, f"{self.run_id}/{self.driver.get_id()}", self.on_receive_message)
 
         self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
 
         self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual driver behavior
+
+        self.latest_sim_clock = sim_clock
+        self.latest_loc = current_loc
 
     def get_driver(self):
         return self.driver.as_dict()
@@ -74,6 +77,9 @@ class DriverApp:
 
     def ping(self, sim_clock, current_loc, publish=False, **kwargs):
         ''' '''
+        self.latest_sim_clock = sim_clock
+        self.latest_loc = current_loc
+
         self.trip.ping(sim_clock, current_loc, **kwargs) # Raises exception if ping fails
 
         if publish:
@@ -109,13 +115,30 @@ class DriverApp:
 
     ################
     # Message Callbacks and other methods
+    def update_current(self, sim_clock, current_loc):
+        self.latest_sim_clock = sim_clock
+        self.latest_loc = current_loc
 
     def on_receive_message(self, client, userdata, message):
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), The agent will pull items from queue and process them in sequence until Queue is empty
         '''
         payload = json.loads(message.payload.decode('utf-8'))
-        self.enqueue_message(payload)
+
+        if payload['action'] == 'requested_trip':
+            passenger_id = payload['passenger_id']
+            requested_trip = payload['requested_trip']
+
+            try:
+                self.handle_requested_trip(self.latest_sim_clock,
+                                            current_loc=self.latest_loc,
+                                            requested_trip=requested_trip)
+            except Exception as e:
+                logging.exception(str(e))
+                # raise e
+
+        else:
+            self.enqueue_message(payload)
 
 
     def enqueue_message(self, payload):

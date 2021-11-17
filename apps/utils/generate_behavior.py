@@ -29,9 +29,9 @@ class GenerateBehavior():
     def ridehail_driver(cls, id, record=None):
 
         if record is None:
-            shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//4))
+            # shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//4))
             # shift_end_time = randint(orsim_settings['SIMULATION_LENGTH_IN_STEPS']//2, orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1)
-            # shift_start_time = 0
+            shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//10))
             shift_end_time = orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1
 
             coverage_area = choice(assignment_settings['COVERAGE_AREA'])
@@ -67,7 +67,7 @@ class GenerateBehavior():
             'init_loc': init_loc,
             'empty_dest_loc': empty_dest_loc,
 
-            'settings': {
+            'profile': {
                 'market': 'RideHail',
                 'patience': patience,
                 'service_score': service_score,
@@ -102,7 +102,7 @@ class GenerateBehavior():
             pickup_loc = cls.get_random_location(coverage_area_name)
             dropoff_loc = cls.get_random_location(coverage_area_name)
 
-            trip_value = randint(0, 100)
+            trip_price = randint(0, 100)
             patience = 600
 
 
@@ -112,7 +112,7 @@ class GenerateBehavior():
             pickup_loc = mapping(Point(record["Start_Longitude"], record["Start_Latitude"]))
             dropoff_loc = mapping(Point(record["End_Longitude"], record["End_Latitude"]))
 
-            trip_value = record["Fare"]
+            trip_price = record["Fare"]
 
             patience = record['Patience_Level']
 
@@ -125,10 +125,9 @@ class GenerateBehavior():
 
             'pickup_loc': pickup_loc,
             'dropoff_loc': dropoff_loc,
+            'trip_price': trip_price,
 
-            'trip_value': trip_value,
-
-            'settings':{
+            'profile':{
                 'market': 'RideHail',
                 'patience': patience, # in Seconds
             },

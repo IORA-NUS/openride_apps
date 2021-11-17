@@ -52,7 +52,7 @@ class DriverAgentIndie(ORSimAgent):
         self.timeout_error = False
         self.failure_count = 0
 
-        self.app = DriverApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, driver_settings=self.behavior['settings'])
+        self.app = DriverApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, profile=self.behavior['profile'])
 
 
     def process_payload(self, payload):
@@ -125,6 +125,7 @@ class DriverAgentIndie(ORSimAgent):
 
     def step(self, time_step):
         # # The agent's step will go here.
+        self.app.update_current(self.get_current_time_str(), self.current_loc)
         if self.current_time_step % driver_settings['STEPS_PER_ACTION'] == 0:
             if random() <= driver_settings['RESPONSE_RATE']:
 
@@ -194,20 +195,21 @@ class DriverAgentIndie(ORSimAgent):
 
         while payload is not None:
             try:
-                if payload['action'] == 'requested_trip':
-                    passenger_id = payload['passenger_id']
-                    requested_trip = payload['requested_trip']
+                # if payload['action'] == 'requested_trip':
+                #     passenger_id = payload['passenger_id']
+                #     requested_trip = payload['requested_trip']
 
-                    try:
-                        self.app.handle_requested_trip(self.get_current_time_str(),
-                                                            current_loc=self.current_loc,
-                                                            requested_trip=requested_trip)
-                    except Exception as e:
-                        logging.exception(str(e))
-                        # print(e)
-                        raise e
+                #     try:
+                #         self.app.handle_requested_trip(self.get_current_time_str(),
+                #                                             current_loc=self.current_loc,
+                #                                             requested_trip=requested_trip)
+                #     except Exception as e:
+                #         logging.exception(str(e))
+                #         # print(e)
+                #         raise e
 
-                elif payload['action'] == 'passenger_workflow_event':
+                # elif payload['action'] == 'passenger_workflow_event':
+                if payload['action'] == 'passenger_workflow_event':
                     if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
                         if self.app.get_trip()['passenger'] == payload['passenger_id']:
                             passenger_data = payload['data']
@@ -308,7 +310,6 @@ class DriverAgentIndie(ORSimAgent):
                     # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-
 
 if __name__ == '__main__':
 

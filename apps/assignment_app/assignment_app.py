@@ -4,7 +4,7 @@ current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
-import json, requests
+import json, requests, traceback
 import paho.mqtt.client as paho
 from datetime import datetime
 
@@ -49,7 +49,8 @@ class AssignmentApp:
 
         distance_matrix = self.get_distance_matrix(driver_locs, passenger_locs)
 
-        driver_list = [d['driver'] for k, d in driver_trip.items()]
+        # driver_list = [d['driver'] for k, d in driver_trip.items()]
+        driver_list = [d for k, d in driver_trip.items()]
         passenger_trip_list = [p for k, p in passenger_trip.items()]
         # print('driver_list', driver_list)
         # print('passenger_list', passenger_list)
@@ -59,14 +60,15 @@ class AssignmentApp:
         try:
             assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.engine.as_dict().get('online_params'))
         except Exception as e:
-            logging.exception(e)
+            logging.exception(traceback.format_exc())
         end = time.time()
         # print('after Solve')
 
         online_params = self.solver.update_online_params(clock_tick, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
         # print('after update_online_params')
         result = [{
-            'driver': item[0]['_id'],
+            # 'driver': item[0]['_id'],
+            'driver': item[0]['driver'],
             'passenger': item[1]['passenger'],
             'passenger_trip': item[1]['_id']
         } for item in assignment]
@@ -100,8 +102,9 @@ class AssignmentApp:
                 "requested_trip": passenger_trip
             }
 
-            # self.messenger.client.publish(f"{self.run_id}/{passenger_trip['passenger']}", json.dumps(driver_assignment))
-            self.messenger.client.publish(f"{self.run_id}/{driver['_id']}", json.dumps(passenger_assignment))
+            # # self.messenger.client.publish(f"{self.run_id}/{passenger_trip['passenger']}", json.dumps(driver_assignment))
+            # self.messenger.client.publish(f"{self.run_id}/{driver['_id']}", json.dumps(passenger_assignment))
+            self.messenger.client.publish(f"{self.run_id}/{driver['driver']}", json.dumps(passenger_assignment))
 
     def get_driver_trip(self):
         ''' '''
@@ -118,15 +121,21 @@ class AssignmentApp:
                     "state": {"$in": [RidehailDriverTripStateMachine.driver_looking_for_job.identifier] },
                     "current_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
                 }),
-                "embedded": json.dumps({
-                    "driver": 1
+                # "embedded": json.dumps({
+                #     "driver": 1
+                # }),
+                'projection': json.dumps({
+                    '_id': 1,
+                    'driver': 1,
+                    'current_loc': 1,
+                    'meta': 1,
                 }),
                 'page': page,
                 "max_results": self.server_max_results,
             }
 
             response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
-            # response_items = response.json()['_items']
+            # logging.warning(response.text)
             if response.json()['_items'] == []:
                 got_results = False
                 break
@@ -136,7 +145,8 @@ class AssignmentApp:
 
         driver_trip = {}
         for item in response_items:
-            driver_trip[item['driver']['_id']] = item
+            # driver_trip[item['driver']['_id']] = item
+            driver_trip[item['driver']] = item
 
         return driver_trip
 
@@ -154,6 +164,14 @@ class AssignmentApp:
                     "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier]},
                     # "pickup_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
                     "pickup_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
+                }),
+                'projection': json.dumps({
+                    '_id': 1,
+                    'passenger': 1,
+                    'pickup_loc': 1,
+                    'dropoff_loc': 1,
+                    'trip_price': 1,
+                    'meta': 1,
                 }),
                 'page': page,
                 "max_results": self.server_max_results,
@@ -203,7 +221,7 @@ if __name__ == "__main__":
             'gamma': 1.2,     # the target below is estimated from historical data
 
             # KPI Targets
-            'targetReversePickupTime': 4915 * 12, # gamma
+            'targetReversePickupTime': 4915 * 1.2, # gamma
             'targetServiceScore': 5439 * 1.2, # gamma
             'targetRevenue': 4185 * 1.2, # gamma
         },

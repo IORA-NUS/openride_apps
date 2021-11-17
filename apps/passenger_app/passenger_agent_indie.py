@@ -54,7 +54,7 @@ class PassengerAgentIndie(ORSimAgent):
         self.timeout_error = False
         self.failure_count = 0
 
-        self.app = PassengerApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, passenger_settings=self.behavior['settings'])
+        self.app = PassengerApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, passenger_profile=self.behavior['profile'])
 
     def process_payload(self, payload):
 
@@ -81,7 +81,7 @@ class PassengerAgentIndie(ORSimAgent):
         if time_step == self.behavior['trip_request_time']:
             # print('Enter Market')
             # print(self.behavior)
-            self.app.login(self.get_current_time_str(), self.current_loc, self.pickup_loc, self.dropoff_loc, trip_value=self.behavior.get('trip_value'))
+            self.app.login(self.get_current_time_str(), self.current_loc, self.pickup_loc, self.dropoff_loc, trip_price=self.behavior.get('trip_price'))
             self.active = True
             return True
         else:
@@ -115,6 +115,7 @@ class PassengerAgentIndie(ORSimAgent):
 
 
     def step(self, time_step):
+        self.app.update_current(self.get_current_time_str(), self.current_loc)
 
         if self.current_time_step % passenger_settings['STEPS_PER_ACTION'] == 0:
             if random() <= passenger_settings['RESPONSE_RATE']:
@@ -135,20 +136,21 @@ class PassengerAgentIndie(ORSimAgent):
         while payload is not None:
             try:
                 # process message
-                if payload['action'] == 'assigned':
-                    if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
-                        try:
-                            self.app.trip.assign(self.get_current_time_str(),
-                                                        current_loc=self.current_loc,
-                                                        driver=payload['driver_id'])
-                        except Exception as e:
-                            logging.exception(str(e))
-                            raise e
-                    else:
-                        self.app.handle_overbooking(self.get_current_time_str(), driver=payload['driver_id'])
-                        # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
+                # if payload['action'] == 'assigned':
+                #     if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
+                #         try:
+                #             self.app.trip.assign(self.get_current_time_str(),
+                #                                         current_loc=self.current_loc,
+                #                                         driver=payload['driver_id'])
+                #         except Exception as e:
+                #             logging.exception(str(e))
+                #             raise e
+                #     else:
+                #         self.app.handle_overbooking(self.get_current_time_str(), driver=payload['driver_id'])
+                #         # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
 
-                elif payload['action'] == 'driver_workflow_event':
+                # elif payload['action'] == 'driver_workflow_event':
+                if payload['action'] == 'driver_workflow_event':
                     if RidehailPassengerTripStateMachine.is_driver_channel_open(self.app.get_trip()['state']):
                         ''' '''
                         # Some sort of authentication must be present to allow only actie driver to message the passenger
@@ -210,8 +212,8 @@ class PassengerAgentIndie(ORSimAgent):
                 logging.exception(str(e))
 
         elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier) and \
-                (self.behavior['trip_request_time'] + (self.behavior['settings']['patience']/self.step_size) < self.current_time_step):
-            logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['settings']['patience']/self.step_size} steps")
+                (self.behavior['trip_request_time'] + (self.behavior['profile']['patience']/self.step_size) < self.current_time_step):
+            logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps")
             self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
 
         else:

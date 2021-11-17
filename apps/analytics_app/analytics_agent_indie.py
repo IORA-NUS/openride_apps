@@ -36,7 +36,7 @@ class AnalyticsAgentIndie(ORSimAgent):
 
 
     def logout(self):
-        pass
+        self.step(self.current_time_step)
 
     def step(self, time_step):
         ''' '''
@@ -103,6 +103,7 @@ class AnalyticsAgentIndie(ORSimAgent):
         self.analytics_app.save_kpi(self.get_current_time_str(), 'served', num_served)
 
         # Compute and Store Waiting_time (sum)
-        waiting_for_confirmation, total_waiting_time = self.analytics_app.compute_waiting_time()
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'waiting_for_confirmation', waiting_for_confirmation)
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'total_waiting_time', total_waiting_time)
+        wait_time_driver_confirm, wait_time_total, wait_time_assignment = self.analytics_app.compute_waiting_time()
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_driver_confirm', wait_time_driver_confirm)
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_total', wait_time_total)
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_assignment', wait_time_assignment)
