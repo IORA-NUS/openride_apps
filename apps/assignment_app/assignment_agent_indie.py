@@ -3,7 +3,8 @@ current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
-from mesa import Agent
+# from mesa import Agent
+from random import random
 from .assignment_app import AssignmentApp
 from apps.loc_service import PlanningArea
 
@@ -28,7 +29,7 @@ class AssignmentAgentIndie(ORSimAgent):
             'password': self.behavior.get('password'),
         }
 
-        self.assignment_app = AssignmentApp(self.run_id, self.get_current_time_str(), self.credentials, self.behavior['solver'], self.behavior['solver_params'])
+        self.assignment_app = AssignmentApp(self.run_id, self.get_current_time_str(), self.credentials, self.behavior['solver'], self.behavior['solver_params'], self.behavior['STEPS_PER_ACTION'])
 
 
     def process_payload(self, payload):
@@ -40,8 +41,17 @@ class AssignmentAgentIndie(ORSimAgent):
     def logout(self):
         pass
 
+    def estimate_next_event_time(self):
+        ''' '''
+        return self.current_time
+
     def step(self, time_step):
         ''' '''
-        if self.current_time_step % assignment_settings['STEPS_PER_ACTION'] == 0:
+        # if self.current_time_step % assignment_settings['STEPS_PER_ACTION'] == 0:
+        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
+                    (random() <= self.behavior['RESPONSE_RATE']) and \
+                    (self.next_event_time <= self.current_time):
+
             result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
             self.assignment_app.publish(result)
+            # Do not update next_event time for this agent

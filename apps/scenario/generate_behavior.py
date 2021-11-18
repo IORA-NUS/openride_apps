@@ -84,8 +84,12 @@ class GenerateBehavior():
                 [('cancel', 'driver_waiting_to_pickup'), 0.0],
             ],
 
-            'TrTime_pickup': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
-            'TrTime_dropoff': 0,
+            'transition_time_pickup': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
+            'transition_time_dropoff': 0,
+
+            'STEPS_PER_ACTION': driver_settings['STEPS_PER_ACTION'],
+            'RESPONSE_RATE': driver_settings['RESPONSE_RATE'],
+            'STEP_ONLY_ON_EVENTS': driver_settings['STEP_ONLY_ON_EVENTS'],
         }
 
         return behavior
@@ -159,8 +163,12 @@ class GenerateBehavior():
 
                 # end_trip | passenger_droppedoff = 1
                 [('end_trip', 'passenger_droppedoff'), 1.0],
-
             ],
+
+            'STEPS_PER_ACTION': passenger_settings['STEPS_PER_ACTION'],
+            'RESPONSE_RATE': passenger_settings['RESPONSE_RATE'],
+            'STEP_ONLY_ON_EVENTS': passenger_settings['STEP_ONLY_ON_EVENTS'],
+
         }
 
         return behavior
@@ -171,6 +179,10 @@ class GenerateBehavior():
         behavior = {
             'email': f'{id}@test.com',
             'password': 'password',
+
+            'STEPS_PER_ACTION': analytics_settings['STEPS_PER_ACTION'],
+            'RESPONSE_RATE': analytics_settings['RESPONSE_RATE'],
+            'STEP_ONLY_ON_EVENTS': analytics_settings['STEP_ONLY_ON_EVENTS'],
         }
 
         return behavior
@@ -188,6 +200,8 @@ class GenerateBehavior():
                     'name': coverage_area['name'],
                     'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['districts'])),
                 },
+
+                'max_travel_time_pickup': coverage_area.get('max_travel_time_pickup', 99999),
 
                 'offline_params': {
                     'reverseParameter': 480,  # 480;
@@ -209,6 +223,10 @@ class GenerateBehavior():
                     'weightServiceScore': 1,
                 },
             },
+            'STEPS_PER_ACTION': assignment_settings['STEPS_PER_ACTION'],
+            'RESPONSE_RATE': assignment_settings['RESPONSE_RATE'],
+            'STEP_ONLY_ON_EVENTS': assignment_settings['STEP_ONLY_ON_EVENTS'],
+
         }
 
         return behavior

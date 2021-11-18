@@ -20,7 +20,7 @@ class CompromiseMatching(AbstractSolver):
         '''
 
         matched_pairs = self.doMatching(driver_list, passenger_trip_list, distance_matrix, online_params)
-        # print(matched_pairs)
+        # print(f"{matched_pairs=}")
 
         if (len(driver_list) > 0) and (len(passenger_trip_list) > 0):
             assignment = [(driver_list[item[1]], passenger_trip_list[item[0]]) for item in matched_pairs]
@@ -43,8 +43,8 @@ class CompromiseMatching(AbstractSolver):
         # driver_ids = [d['_id'] for d in driverList]
         driver_ids = [d['driver'] for d in driverList]
         matchedPairs = []
-        i = 0
-        j = 0
+        # i = 0
+        # j = 0
 
 
         driverListPotential = []
@@ -55,11 +55,13 @@ class CompromiseMatching(AbstractSolver):
         # print(f"{driverList=}")
         # print(f"{paxList=}")
 
+        j=0
         for d in driverList:
             i = 0
             for p in paxList:
                 # pickupTime[i][j] = (abs(d.currentLat - p.originLat) + abs(d.currentLon - p.originLon)) * Params.distanceTimeConversion
-                if True: #pickupTime[i][j] < Params.maxAllowedPickupTime:
+                # if True: #pickupTime[i][j] < Params.maxAllowedPickupTime:
+                if pickupTime[j][i] < self._params['max_travel_time_pickup']:
                     driverListPotential.append(d)
                     # driverListPotential_ids.append(d['_id'])
                     driverListPotential_ids.append(d['driver'])
@@ -87,7 +89,8 @@ class CompromiseMatching(AbstractSolver):
                         # print(f"{i=}, {j=}")
                         # reducedPickupTime[p['_id'],d['_id']] = pickupTime[j][i] #pickupTime[i][j]
                         reducedPickupTime[p['_id'],d['driver']] = pickupTime[j][i] #pickupTime[i][j]
-                        if True: #reducedPickupTime[p.id,d.id] < Params.maxAllowedPickupTime:
+                        # if True: #reducedPickupTime[p.id,d.id] < Params.maxAllowedPickupTime:
+                        if reducedPickupTime[p['_id'],d['driver']] < self._params['max_travel_time_pickup']:
                             # NOTE use [driver_profile]
                             # c[p['_id'],d['_id']] = (online_params['weightRevenue'] * p['trip_price']) + (online_params['weightPickupTime'] * (self.params['offline_params']['reverseParameter'] - reducedPickupTime[p['_id'],d['_id']])/2) + (online_params['weightServiceScore'] * d['settings']['service_score'])
                             c[p['_id'],d['driver']] = (online_params['weightRevenue'] * p['trip_price']) + (online_params['weightPickupTime'] * (self.params['offline_params']['reverseParameter'] - reducedPickupTime[p['_id'],d['driver']])/2) + (online_params['weightServiceScore'] * d['meta']['profile']['service_score'])
@@ -182,7 +185,7 @@ class CompromiseMatching(AbstractSolver):
                 # compModel.dispose()
                 # env.dispose()
                 # gp.disposeDefaultEnv()
-                return matchedPairs
+                # return matchedPairs
 
             except Exception as e:
                 # print(e)
@@ -191,7 +194,9 @@ class CompromiseMatching(AbstractSolver):
 
                 raise e
 
-    def update_online_params(self, clock_tick, driver_list, passenger_list, matched_pairs, offline_params, online_params):
+        return matchedPairs
+
+    def update_online_params(self, clock_tick, STEPS_PER_ACTION, driver_list, passenger_list, matched_pairs, offline_params, online_params):
         ''' '''
         if matched_pairs is not None:
             if len(matched_pairs) !=0:
@@ -208,13 +213,11 @@ class CompromiseMatching(AbstractSolver):
                     online_params['realtimeServiceScore'] = online_params['realtimeServiceScore'] + driver['meta']['profile']['service_score']
 
                 # end for
-                # online_params['weightPickupTime'] = max((clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1)
-                # online_params['weightRevenue'] = max((clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetRevenue'] - online_params['realtimeRevenue'], 1.0) / (clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1)
-                # online_params['weightServiceScore'] = max((clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetServiceScore'] - online_params['realtimeServiceScore'], 1.0) / (clock_tick / self.sim_settings['STEPS_PER_ACTION'] + 1)
-                online_params['weightPickupTime'] = max((clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1)
-                online_params['weightRevenue'] = max((clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetRevenue'] - online_params['realtimeRevenue'], 1.0) / (clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1)
-                online_params['weightServiceScore'] = max((clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetServiceScore'] - online_params['realtimeServiceScore'], 1.0) / (clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1)
-
-
+                # online_params['weightPickupTime'] = max((clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1)
+                # online_params['weightRevenue'] = max((clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetRevenue'] - online_params['realtimeRevenue'], 1.0) / (clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1)
+                # online_params['weightServiceScore'] = max((clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1) * offline_params['targetServiceScore'] - online_params['realtimeServiceScore'], 1.0) / (clock_tick / assignment_settings['STEPS_PER_ACTION'] + 1)
+                online_params['weightPickupTime'] = max((clock_tick / STEPS_PER_ACTION + 1) * offline_params['targetReversePickupTime'] - online_params['realtimePickupTime'], 1.0) / (clock_tick / STEPS_PER_ACTION + 1)
+                online_params['weightRevenue'] = max((clock_tick / STEPS_PER_ACTION + 1) * offline_params['targetRevenue'] - online_params['realtimeRevenue'], 1.0) / (clock_tick / STEPS_PER_ACTION + 1)
+                online_params['weightServiceScore'] = max((clock_tick / STEPS_PER_ACTION + 1) * offline_params['targetServiceScore'] - online_params['realtimeServiceScore'], 1.0) / (clock_tick / STEPS_PER_ACTION + 1)
 
         return online_params

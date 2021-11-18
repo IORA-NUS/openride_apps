@@ -1,9 +1,11 @@
+from dateutil.relativedelta import relativedelta
 import requests, json, logging, traceback
 
 from apps.config import settings, driver_settings
-from apps.utils import id_generator, is_success, deep_update
+from apps.utils import id_generator, is_success, deep_update, str_to_time
 
 from apps.state_machine import RidehailDriverTripStateMachine
+from apps.utils import time_to_str, str_to_time
 
 
 class DriverTripManager:
@@ -17,6 +19,66 @@ class DriverTripManager:
 
     def as_dict(self):
         return self.trip
+
+    def estimate_next_event_time(self, current_time):
+        '''
+        current_time is datetime
+        '''
+        try:
+            if self.trip['state'] in RidehailDriverTripStateMachine.driver_looking_for_job.identifier:
+                try:
+                    trip_duration = self.trip['routes']['planned']['looking_for_job']['duration']
+                except Exception as e:
+                    logging.debug(str(e))
+                    trip_duration = 0
+
+                try:
+                    last_waypoint_time = str_to_time(self.trip['last_waypoint']['_updated']) # May use sim_clock for consistency
+                    # NOTE May need to check if elapsed time since state change needs to be computed instead of using last_waypoint_time
+                except Exception as e:
+                    logging.debug(str(e))
+                    last_waypoint_time = current_time
+
+                next_waypoint_time = max((last_waypoint_time + relativedelta(seconds=trip_duration)), current_time)
+
+            elif self.trip['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
+                try:
+                    trip_duration = self.trip['routes']['planned']['moving_to_pickup']['duration']
+                except Exception as e:
+                    logging.debug(str(e))
+                    trip_duration = 0
+
+                try:
+                    last_waypoint_time = str_to_time(self.trip['last_waypoint']['_updated']) # May use sim_clock for consistency
+                    # NOTE May need to check if elapsed time since state change needs to be computed instead of using last_waypoint_time
+                except Exception as e:
+                    logging.debug(str(e))
+                    last_waypoint_time = current_time
+
+                next_waypoint_time = max((last_waypoint_time + relativedelta(seconds=trip_duration)), current_time)
+
+            elif self.trip['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier:
+                try:
+                    trip_duration = self.trip['routes']['planned']['moving_to_dropoff']['duration']
+                except Exception as e:
+                    logging.debug(str(e))
+                    trip_duration = 0
+
+                try:
+                    last_waypoint_time = str_to_time(self.trip['last_waypoint']['_updated']) # May use sim_clock for consistency
+                    # NOTE May need to check if elapsed time since state change needs to be computed instead of using last_waypoint_time
+                except Exception as e:
+                    logging.debug(str(e))
+                    last_waypoint_time = current_time
+
+                next_waypoint_time = max((last_waypoint_time + relativedelta(seconds=trip_duration)), current_time)
+
+            else:
+                next_waypoint_time = current_time
+        except:
+            next_waypoint_time = current_time
+
+        return next_waypoint_time
 
     # def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle):
     def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle, route):

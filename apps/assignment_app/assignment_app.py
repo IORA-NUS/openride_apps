@@ -21,11 +21,12 @@ from .engine_manager import EngineManager
 class AssignmentApp:
     ''' '''
 
-    def __init__(self, run_id, sim_clock, credentials, solver_str, solver_params):
+    def __init__(self, run_id, sim_clock, credentials, solver_str, solver_params, STEPS_PER_ACTION):
         ''' '''
         self.run_id = run_id
         self.credentials = credentials
         self.solver_params = solver_params
+        self.STEPS_PER_ACTION = STEPS_PER_ACTION
 
         self.user = UserRegistry(sim_clock, credentials, role='admin')
 
@@ -48,6 +49,7 @@ class AssignmentApp:
         passenger_locs = {k: v['pickup_loc'] for k, v in passenger_trip.items()}
 
         distance_matrix = self.get_distance_matrix(driver_locs, passenger_locs)
+        # logging.info(f"{distance_matrix=}")
 
         # driver_list = [d['driver'] for k, d in driver_trip.items()]
         driver_list = [d for k, d in driver_trip.items()]
@@ -64,7 +66,7 @@ class AssignmentApp:
         end = time.time()
         # print('after Solve')
 
-        online_params = self.solver.update_online_params(clock_tick, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
+        online_params = self.solver.update_online_params(clock_tick, self.STEPS_PER_ACTION, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
         # print('after update_online_params')
         result = [{
             # 'driver': item[0]['_id'],

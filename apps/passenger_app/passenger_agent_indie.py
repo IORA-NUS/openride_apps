@@ -113,20 +113,24 @@ class PassengerAgentIndie(ORSimAgent):
     def logout(self):
         self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
 
+    def estimate_next_event_time(self):
+        ''' '''
+        return self.current_time
 
     def step(self, time_step):
         self.app.update_current(self.get_current_time_str(), self.current_loc)
 
-        if self.current_time_step % passenger_settings['STEPS_PER_ACTION'] == 0:
-            if random() <= passenger_settings['RESPONSE_RATE']:
+        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
+                    (random() <= self.behavior['RESPONSE_RATE']) and \
+                    (self.next_event_time <= self.current_time):
 
-                # 1. Always refresh trip manager to sync InMemory States with DB
-                self.app.refresh() # Raises exception if unable to refresh
+            # 1. Always refresh trip manager to sync InMemory States with DB
+            self.app.refresh() # Raises exception if unable to refresh
 
-                # 1. DeQueue all messages and process them in sequence
-                self.consume_messages()
-                # 2. based on current state, perform any workflow actions according to Agent behavior
-                self.perform_workflow_actions()
+            # 1. DeQueue all messages and process them in sequence
+            self.consume_messages()
+            # 2. based on current state, perform any workflow actions according to Agent behavior
+            self.perform_workflow_actions()
 
 
     def consume_messages(self):

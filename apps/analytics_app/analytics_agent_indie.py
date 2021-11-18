@@ -4,7 +4,8 @@ parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
 import logging
-from mesa import Agent
+# from mesa import Agent
+from random import random
 from .analytics_app import AnalyticsApp
 
 from datetime import datetime
@@ -38,9 +39,17 @@ class AnalyticsAgentIndie(ORSimAgent):
     def logout(self):
         self.step(self.current_time_step)
 
+    def estimate_next_event_time(self):
+        ''' '''
+        return self.current_time
+
     def step(self, time_step):
         ''' '''
-        if self.current_time_step % analytics_settings['STEPS_PER_ACTION'] == 0:
+        # if self.current_time_step % analytics_settings['STEPS_PER_ACTION'] == 0:
+        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
+                    (random() <= self.behavior['RESPONSE_RATE']) and \
+                    (self.next_event_time <= self.current_time):
+            # Do not update next_event time for this agent
 
             self.compute_all_metrics()
 
@@ -86,7 +95,8 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     def compute_all_metrics(self):
         # METRICS COMPUTATION
-        start_time = self.current_time - relativedelta(seconds=(analytics_settings['STEPS_PER_ACTION'] * orsim_settings['STEP_INTERVAL'] ))
+        # start_time = self.current_time - relativedelta(seconds=(analytics_settings['STEPS_PER_ACTION'] * orsim_settings['STEP_INTERVAL'] ))
+        start_time = self.current_time - relativedelta(seconds=(self.behavior['STEPS_PER_ACTION'] * orsim_settings['STEP_INTERVAL'] ))
         end_time = self.current_time
         self.analytics_app.prep_metric_computation_queries(start_time, end_time)
 

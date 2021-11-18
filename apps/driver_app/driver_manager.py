@@ -1,3 +1,4 @@
+from dateutil.relativedelta import relativedelta
 import requests, json, logging, traceback
 from http import HTTPStatus
 
@@ -45,6 +46,10 @@ class DriverManager():
 
         return driver
 
+    def estimate_next_event_time(self, current_time):
+        ''' Return a distant future data as a placeholder'''
+        # Ideally checkdriver status and return a distant future if logged out and a realistic value if logged in
+        return current_time + relativedelta(years=1)
 
     def create_driver(self, sim_clock):
         create_driver_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver"

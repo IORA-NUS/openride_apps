@@ -26,8 +26,8 @@ settings = {
 }
 
 orsim_settings = {
-    'SIMULATION_LENGTH_IN_STEPS': 60, # 960, # 600,    # 60 # Num Steps
-    'STEP_INTERVAL': 60, # 15, # 6,     # 60   # seconds in Simulation Universe
+    'SIMULATION_LENGTH_IN_STEPS': 720, # 960, # 600,    # 60 # Num Steps
+    'STEP_INTERVAL': 15, # 15, # 6,     # 60   # seconds in Simulation Universe
 
     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
     'STEP_TIMEOUT_TOLERANCE': 0.05,
@@ -43,18 +43,20 @@ analytics_settings = {
 
     'STEPS_PER_ACTION': 1, #2,
     'RESPONSE_RATE': 1, # Keep this 1 to regularly update stats
-
+    'STEP_ONLY_ON_EVENTS': False,
 }
 
 assignment_settings = {
     'STEPS_PER_ACTION': 2, #2,
     'RESPONSE_RATE': 1,  # Keep this 1 to regularly update stats
+    'STEP_ONLY_ON_EVENTS': False,
 
     'COVERAGE_AREA': [
         {
             'name': 'Clementi',
             'districts': ['CLEMENTI'],
             'strategy': 'CompromiseMatching', # 'GreedyDriverMatching', # 'CompromiseMatching',
+            'max_travel_time_pickup': 300
         },
         # {
         #     'name': 'Westside',
@@ -90,22 +92,24 @@ assignment_settings = {
 }
 
 driver_settings = {
-    'NUM_DRIVERS': 10,       # 100,
+    'NUM_DRIVERS': 200,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,
-    'RESPONSE_RATE': 0.25,
+    'RESPONSE_RATE': 0.25, # 0.25
+    'STEP_ONLY_ON_EVENTS': True,
 
     # 'LOCATION_PING_INTERVAL': 15,  # seconds in Simulation Universe
     # NOTE LOCATION_PING_INTERVAL must be Less than STEP_INTERVAL
-    'UPDATE_PASSENGER_LOCATION': False
+    'UPDATE_PASSENGER_LOCATION': False,
 }
 
 passenger_settings = {
-    'NUM_PASSENGERS': 20,       # 100,
+    'NUM_PASSENGERS': 1000,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,
-    'RESPONSE_RATE': 0.25,
+    'RESPONSE_RATE': 0.25, # 0.25
+    'STEP_ONLY_ON_EVENTS': True
 }
 

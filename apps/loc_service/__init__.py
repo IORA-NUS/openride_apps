@@ -5,6 +5,6 @@ from .planning_area import PlanningArea
 
 from .osrm_client import OSRMClient
 
-from .osrm_client import (cut, get_angle,
+from .osrm_client import (cut, cut_route, get_angle,
                           transform_lonlat_webmercator,
                           itransform_lonlat_webmercator)

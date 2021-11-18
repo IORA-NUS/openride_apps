@@ -7,7 +7,7 @@ from re import I
 from shapely.geometry.linestring import LineString
 from apps.state_machine.agent_workflow_sm import WorkflowStateMachine
 
-import logging
+import logging, traceback
 import json, time, asyncio
 import pika
 from datetime import datetime
@@ -19,12 +19,13 @@ from dateutil.relativedelta import relativedelta
 from shapely.geometry import Point, mapping
 
 from .driver_app import DriverApp
-from apps.utils.utils import id_generator #, cut
+from apps.utils.utils import id_generator, str_to_time #, cut
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.loc_service import OSRMClient
-from apps.utils.generate_behavior import GenerateBehavior
+# from apps.utils.generate_behavior import GenerateBehavior
+from apps.scenario import GenerateBehavior
 
-from apps.loc_service import TaxiStop, BusStop, cut
+from apps.loc_service import TaxiStop, BusStop, cut, cut_route
 
 from apps.messenger_service import Messenger
 
@@ -123,16 +124,27 @@ class DriverAgentIndie(ORSimAgent):
     def logout(self):
         self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
 
+    def estimate_next_event_time(self):
+        ''' '''
+        next_event_time =  min(self.app.driver.estimate_next_event_time(self.current_time),
+                                self.app.trip.estimate_next_event_time(self.current_time))
+
+        logging.debug(f'{self.unique_id} estimates {next_event_time=}')
+
+        return next_event_time
+
     def step(self, time_step):
         # # The agent's step will go here.
         self.app.update_current(self.get_current_time_str(), self.current_loc)
-        if self.current_time_step % driver_settings['STEPS_PER_ACTION'] == 0:
-            if random() <= driver_settings['RESPONSE_RATE']:
 
+        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
+                    (random() <= self.behavior['RESPONSE_RATE']) and \
+                    (self.next_event_time <= self.current_time):
                 # 1. Always refresh trip manager to sync InMemory States with DB
                 self.app.refresh() # Raises exception if unable to refresh
                 ### Driver has likely moved between the ticks, so update their current loc
-                self.update_location()
+                # self.update_location()
+                self.update_location_by_route()
                 # 1. DeQueue all messages and process them in sequence
                 self.consume_messages()
                 # 2. based on current state, perform any workflow actions according to Agent behavior
@@ -184,6 +196,49 @@ class DriverAgentIndie(ORSimAgent):
                       traversed_path=list(self.traversed_path.coords),
                       projected_path=list(self.projected_path.coords))
 
+
+    def update_location_by_route(self):
+        ''' - Update self.current_loc based on:
+                - last known current_loc
+                - driver.state (waiting ==> no change in current_loc)
+                - route
+                - elapsed time
+                - speed (average estimated speed)
+            - Ping Waypoint. This restores the current state of the driver
+                - Workflow events will be processed in the next step
+        '''
+
+        trip = self.app.get_trip()
+        elapsed_time = (self.current_time - str_to_time(trip['_updated'])).total_seconds()
+
+        if (RidehailDriverTripStateMachine.is_moving(trip['state']) == False) or \
+                (elapsed_time == 0) or (self.active_route is None):
+            return
+        else:
+
+            try:
+                self.traversed_path, self.projected_path, self.active_route = cut_route(self.active_route, elapsed_time)
+            except Exception as e:
+                logging.exception(traceback.format_exc())
+                return
+
+            try:
+                if type(self.projected_path) == LineString:
+                    self.current_loc = mapping(Point(self.projected_path.boundary[0]))
+                elif type(self.projected_path) == Point:
+                    self.current_loc = mapping(self.projected_path)
+                # print(moved_distance, self.current_loc) #, self.projected_path)
+            except Exception as e:
+                logging.info(elapsed_time)
+                # print(e)
+                logging.exception(str(e))
+
+            # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
+            # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
+            self.app.ping(self.get_current_time_str(), current_loc=self.current_loc,
+                        traversed_path=list(self.traversed_path.coords),
+                        projected_path=list(self.projected_path.coords))
+
     def consume_messages(self):
         ''' Consume messages. This ensures all the messages recieved between the two ticks are processed appropriately
                 - workflows as a consequence of events must be handled here.
@@ -207,7 +262,6 @@ class DriverAgentIndie(ORSimAgent):
                 #         logging.exception(str(e))
                 #         # print(e)
                 #         raise e
-
                 # elif payload['action'] == 'passenger_workflow_event':
                 if payload['action'] == 'passenger_workflow_event':
                     if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
@@ -291,7 +345,7 @@ class DriverAgentIndie(ORSimAgent):
 
 
             if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_pickedup.identifier) and \
-                (time_since_last_event >= self.behavior['TrTime_pickup']):
+                (time_since_last_event >= self.behavior['transition_time_pickup']):
                     self.app.trip.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
 
             if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier):
@@ -302,7 +356,7 @@ class DriverAgentIndie(ORSimAgent):
                     self.app.trip.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
 
             if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_droppedoff.identifier) and \
-                (time_since_last_event >= self.behavior['TrTime_dropoff']):
+                (time_since_last_event >= self.behavior['transition_time_dropoff']):
 
                     self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
@@ -310,6 +364,7 @@ class DriverAgentIndie(ORSimAgent):
                     # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+
 
 if __name__ == '__main__':
 

@@ -5,6 +5,7 @@ from shapely.geometry import Point, linestring, mapping
 import polyline
 
 from apps.config import settings
+import haversine as hs
 
 # from one_map_auth import OneMapAuth
 
@@ -62,6 +63,13 @@ class OSRMClient:
         return route_coords
 
     @classmethod
+    def get_coords_from_geometry(cls, geometry):
+        route_coords = polyline.decode(geometry.rstrip())
+        route_coords = [(x[1], x[0]) for x in route_coords]
+
+        return route_coords
+
+    @classmethod
     def get_distance_matrix(cls, supply_locs, demand_locs, units='duration'):
         '''
         NOTE: Ensure no bugs due to Dict-List conversions.
@@ -95,7 +103,7 @@ class OSRMClient:
 from geopy.distance import Distance
 
 from shapely.geometry import LineString, Point
-from math import atan2,degrees
+from math import atan2,degrees, floor
 
 
 def cut(line, distance):
@@ -139,6 +147,51 @@ def cut(line, distance):
             return [LineString(coords[:i] + [(cp.x, cp.y)]),
                     LineString([(cp.x, cp.y)] + coords[i:])]
 
+def cut_route(route, duration):
+
+    # print(f"{duration=}")
+    # Assuming only one leg in route (i.e. routing between 2 waypoints only)
+    steps = route['legs'][0]['steps']
+    traversed_path_list = [steps[0]['maneuver']['location']] # NOTE This might throw exception if steps is empty
+    projected_path = Point(steps[-1]['maneuver']['location'])
+    new_route = None
+
+    cum_duration = 0
+    step_count = 0
+    for step in steps:
+        cum_duration += step['duration']
+        step_coords = OSRMClient.get_coords_from_geometry(step['geometry'])
+
+        if duration > cum_duration:
+            traversed_path_list.extend(step_coords)
+            continue
+        else:
+            step_residue = 1 - ((cum_duration - duration)/step['duration'])
+            step_coords_residue = step_coords[:max(1, floor(len(step_coords)*step_residue))]
+            traversed_path_list.extend(step_coords_residue)
+
+            # print(f"{step_residue=}")
+            # print(f"{floor(len(step_coords)*step_residue)=}")
+            # print(f"{step_coords=}")
+            # print(f"{traversed_path_list=}")
+            # print(f"{step_coords_residue=}")
+            new_route_start = { 'type': "Point", 'coordinates': step_coords_residue[-1] }
+            new_route_end = { 'type': "Point", 'coordinates': steps[-1]['maneuver']['location'] }
+
+            dist = hs.haversine(new_route_start['coordinates'][:2], new_route_end['coordinates'][:2], unit=hs.Unit.METERS)
+            if dist > 30: # some arbitrarily small distance
+                new_route = OSRMClient.get_route(new_route_start, new_route_end)
+                projected_path = LineString(OSRMClient.get_coords_from_route(new_route))
+
+            break # IMPORTANT
+
+    if len(traversed_path_list) > 1:
+        traversed_path = LineString(traversed_path_list)
+    elif len(traversed_path_list) == 1:
+        traversed_path = Point(traversed_path_list[-1])
+
+
+    return traversed_path, projected_path, new_route
 
 
 def get_angle(p1, p2):

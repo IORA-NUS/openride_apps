@@ -27,7 +27,8 @@ class GreedyDriverMatching(AbstractSolver):
 
         for i in range(len(driver_list)):
             nearest_idx = -1
-            nearest_dist = 9999999999
+            # nearest_dist = 9999999999
+            nearest_dist = self._params['max_travel_time_pickup'] + 1
             for j in range(len(passenger_trip_list)):
                 # get nearest passenger
                 if not assigned_passenger_idx[j]:
@@ -47,7 +48,7 @@ class GreedyDriverMatching(AbstractSolver):
 
 
 
-    def update_online_params(self, clock_tick, driver_list, passenger_list, matched_pairs, offline_params, online_params):
+    def update_online_params(self, clock_tick, STEPS_PER_ACTION, driver_list, passenger_list, matched_pairs, offline_params, online_params):
         ''' '''
         # if matched_pairs is not None:
         #     if len(matched_pairs) !=0:
