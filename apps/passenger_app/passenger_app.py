@@ -54,20 +54,25 @@ class PassengerApp:
 
     def logout(self, sim_clock, current_loc):
         ''' '''
-        logging.info(f'logging out Passenger {self.passenger.get_id()}')
+        logging.debug(f'logging out Passenger {self.passenger.get_id()}')
         try:
             # self.trip.end_trip(sim_clock, current_loc, force_quit=True, shutdown=True)
             self.trip.force_quit(sim_clock, current_loc)
-            self.passenger.logout(sim_clock)
-            self.exited_market = True
         except Exception as e:
             logging.exception(str(e))
+
+        try:
+            self.passenger.logout(sim_clock)
+        except Exception as e:
+            logging.exception(str(e))
+
+        self.exited_market = True
 
 
     def ping(self, sim_clock, current_loc, **kwargs):
         ''' '''
-        self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
+        # self.latest_sim_clock = sim_clock
+        # self.latest_loc = current_loc
 
         self.trip.ping(sim_clock, current_loc, **kwargs)
 

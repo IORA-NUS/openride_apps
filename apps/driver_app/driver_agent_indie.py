@@ -59,13 +59,14 @@ class DriverAgentIndie(ORSimAgent):
     def process_payload(self, payload):
         ''' '''
         self.timeout_error = False
+        did_step = False
 
         if payload.get('action') == 'step':
             self.entering_market(payload.get('time_step'))
 
             if self.is_active():
                 try:
-                    self.step(payload.get('time_step'))
+                    did_step = self.step(payload.get('time_step'))
                     self.failure_count = 0
                 except Exception as e:
                     logging.exception(str(e))
@@ -75,6 +76,7 @@ class DriverAgentIndie(ORSimAgent):
         else:
             logging.error(f"{payload = }")
 
+        return did_step
 
     def get_random_location(self):
         return GenerateBehavior.get_random_location(self.behavior['coverage_area_name'])
@@ -105,7 +107,9 @@ class DriverAgentIndie(ORSimAgent):
             self.shutdown()
             return True
         else:
-            if self.app.get_trip() is None:
+            # if self.app.get_trip() is None:
+            #     return False
+            if self.app.exited_market:
                 return False
             elif (self.current_time_step > self.behavior['shift_end_time']) and \
                     (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
@@ -121,6 +125,15 @@ class DriverAgentIndie(ORSimAgent):
         self.projected_path = OSRMClient.get_coords_from_route(self.active_route)
         self.traversed_path = []
 
+    def get_tentative_travel_time(self, from_loc, to_loc):
+        ''' find a Feasible route using some routeing engine'''
+        tentative_route = OSRMClient.get_route(from_loc, to_loc)
+        try:
+            return tentative_route['duration']
+        except:
+            return 3600 # Some arbitrarily large number in Seconds
+
+
     def logout(self):
         self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
 
@@ -129,7 +142,7 @@ class DriverAgentIndie(ORSimAgent):
         next_event_time =  min(self.app.driver.estimate_next_event_time(self.current_time),
                                 self.app.trip.estimate_next_event_time(self.current_time))
 
-        logging.debug(f'{self.unique_id} estimates {next_event_time=}')
+        # logging.debug(f'{self.unique_id} estimates {next_event_time=}')
 
         return next_event_time
 
@@ -150,51 +163,55 @@ class DriverAgentIndie(ORSimAgent):
                 # 2. based on current state, perform any workflow actions according to Agent behavior
                 self.perform_workflow_actions()
 
-    def update_location(self):
-        ''' - Update self.current_loc based on:
-                - last known current_loc
-                - driver.state (waiting ==> no change in current_loc)
-                - route
-                - elapsed time
-                - speed (average estimated speed)
-            - Ping Waypoint. This restores the current state of the driver
-                - Workflow events will be processed in the next step
-        '''
-
-        speed = 40 * 1000/3600 # 40 Km/H --> m/sec
-
-        current_trip = self.app.get_trip()
-
-        if RidehailDriverTripStateMachine.is_moving(current_trip['state']) == False:
-            return
+                return True
         else:
-            step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
-            elapsed_time = self.elapsed_duration_steps * step_size ## Make sure the stepSize is appropriately handled
+            return False
 
-            moved_distance = speed * elapsed_time
+    # def update_location(self):
+    #     ''' - Update self.current_loc based on:
+    #             - last known current_loc
+    #             - driver.state (waiting ==> no change in current_loc)
+    #             - route
+    #             - elapsed time
+    #             - speed (average estimated speed)
+    #         - Ping Waypoint. This restores the current state of the driver
+    #             - Workflow events will be processed in the next step
+    #     '''
 
-            # self.projected_path = cut(self.projected_path, moved_distance)[-1]
-            self.traversed_path, self.projected_path = cut(self.projected_path, moved_distance)
+    #     speed = 40 * 1000/3600 # 40 Km/H --> m/sec
 
-            try:
-                if type(self.projected_path) == LineString:
-                    self.current_loc = mapping(Point(self.projected_path.boundary[0]))
-                elif type(self.projected_path) == Point:
-                    self.current_loc = mapping(self.projected_path)
-                # print(moved_distance, self.current_loc) #, self.projected_path)
-            except Exception as e:
-                logging.info(moved_distance)
-                # print(e)
-                logging.exception(str(e))
+    #     current_trip = self.app.get_trip()
 
-        # print(self.projected_path)
-        # print(list(self.projected_path.coords))
+    #     if RidehailDriverTripStateMachine.is_moving(current_trip['state']) == False:
+    #         return
+    #     else:
+    #         step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
+    #         elapsed_time = self.elapsed_duration_steps * step_size ## Make sure the stepSize is appropriately handled
 
-        # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
-        # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
-        self.app.ping(self.get_current_time_str(), current_loc=self.current_loc,
-                      traversed_path=list(self.traversed_path.coords),
-                      projected_path=list(self.projected_path.coords))
+    #         moved_distance = speed * elapsed_time
+
+    #         # self.projected_path = cut(self.projected_path, moved_distance)[-1]
+    #         self.traversed_path, self.projected_path = cut(self.projected_path, moved_distance)
+
+    #         try:
+    #             if type(self.projected_path) == LineString:
+    #                 self.current_loc = mapping(Point(self.projected_path.boundary[0]))
+    #             elif type(self.projected_path) == Point:
+    #                 self.current_loc = mapping(self.projected_path)
+    #             # print(moved_distance, self.current_loc) #, self.projected_path)
+    #         except Exception as e:
+    #             logging.info(moved_distance)
+    #             # print(e)
+    #             logging.exception(str(e))
+
+    #     # print(self.projected_path)
+    #     # print(list(self.projected_path.coords))
+
+    #     # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
+    #     # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
+    #     self.app.ping(self.get_current_time_str(), current_loc=self.current_loc,
+    #                   traversed_path=list(self.traversed_path.coords),
+    #                   projected_path=list(self.projected_path.coords))
 
 
     def update_location_by_route(self):
@@ -229,9 +246,9 @@ class DriverAgentIndie(ORSimAgent):
                     self.current_loc = mapping(self.projected_path)
                 # print(moved_distance, self.current_loc) #, self.projected_path)
             except Exception as e:
-                logging.info(elapsed_time)
+                logging.warning(f"{elapsed_time=}")
                 # print(e)
-                logging.exception(str(e))
+                logging.exception(traceback.format_exc())
 
             # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
             # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
@@ -327,7 +344,8 @@ class DriverAgentIndie(ORSimAgent):
 
             if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_received_trip.identifier:
                 if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
-                    self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc,)
+                    estimated_time_to_arrive = self.get_tentative_travel_time(self.current_loc, self.app.get_trip()['pickup_loc'])
+                    self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
                 else:
                     self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
                     # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)

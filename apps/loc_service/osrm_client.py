@@ -19,7 +19,7 @@ class OSRMClient:
     #     self.route = None
 
     @classmethod
-    def get_route(cls, start, end):
+    def get_route(cls, start, end, overview='full', steps='true'):
         '''
         start, end: Geojson geometry dict for Point
         return: list of tuples representing a route
@@ -33,9 +33,9 @@ class OSRMClient:
         url = f"{settings['ROUTING_SERVER']}/route/v1/{cls.profile}/{start_lon_lat};{end_lon_lat}"
 
         params = {
-            "overview": "full",
+            "overview": overview,
             "alternatives": "false",
-            "steps": "true",
+            "steps": steps,
             # "hints": "false"
         }
         try:

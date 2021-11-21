@@ -33,10 +33,12 @@ class AssignmentAgentIndie(ORSimAgent):
 
 
     def process_payload(self, payload):
+        did_step = False
         if payload.get('action') == 'step':
             # time.sleep(1)
-            self.step(payload.get('time_step'))
+            did_step = self.step(payload.get('time_step'))
 
+        return did_step
 
     def logout(self):
         pass
@@ -49,9 +51,12 @@ class AssignmentAgentIndie(ORSimAgent):
         ''' '''
         # if self.current_time_step % assignment_settings['STEPS_PER_ACTION'] == 0:
         if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
-                    (random() <= self.behavior['RESPONSE_RATE']) and \
-                    (self.next_event_time <= self.current_time):
+                    (random() <= self.behavior['RESPONSE_RATE']): # and \
+                    # (self.next_event_time <= self.current_time):
 
             result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
             self.assignment_app.publish(result)
             # Do not update next_event time for this agent
+            return True
+        else:
+            return False

@@ -4,8 +4,9 @@ current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
-import logging, time, json, traceback
+import logging, time, json, traceback, requests
 from pprint import pprint
+from datetime import datetime
 
 from analytics_app.analytics_agent_indie import AnalyticsAgentIndie
 from assignment_app.assignment_agent_indie import AssignmentAgentIndie
@@ -14,7 +15,7 @@ from passenger_app import PassengerAgentIndie
 from assignment_app import AssignmentAgentIndie
 from analytics_app import AnalyticsAgentIndie
 
-from utils import id_generator
+from utils import id_generator, is_success
 # from utils.generate_behavior import GenerateBehavior
 from apps.scenario import ScenarioManager
 
@@ -30,53 +31,40 @@ import asyncio
 from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
 
 from orsim import ORSimScheduler
-from apps.config import settings, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+from apps.config import settings #, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+from apps.utils.user_registry import UserRegistry
+from apps.utils import time_to_str, str_to_time
 
 class DistributedOpenRideSimRandomised():
 
 
-    def __init__(self, scenario):
+    def __init__(self, scenario_name):
         self.run_id = id_generator(12)
-        self.start_time = datetime(2020,1,1,8,0,0)
-        self.current_time = self.start_time
+        self.reference_time = datetime(2020,1,1,8,0,0)
+        self.current_time = self.reference_time
+        self.scenario_name = scenario_name
+        self.scenario = ScenarioManager(scenario_name)
 
         self.agent_scheduler = ORSimScheduler(self.run_id, 'agent_scheduler')
         self.service_scheduler = ORSimScheduler(self.run_id, 'service_scheduler')
-        self.agent_registry = {i:[] for i in range(orsim_settings['SIMULATION_LENGTH_IN_STEPS'])}
+        self.agent_registry = {i:[] for i in range(self.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'])}
+
+        self.user = self.setup_user()
+        self.run_record = self.init_run_config()
+
+        self.execution_start_time = time.time()
 
 
         output_dir = f"{os.path.dirname(os.path.abspath(__file__))}/output/{self.run_id}"
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
 
-        # driver_collection = {}
-        # for i in range(driver_settings['NUM_DRIVERS']):
-        #     agent_id = f"d_{i:06d}"
-        #     behavior = GenerateBehavior.ridehail_driver(agent_id)
 
-        #     spec = {
-        #         'unique_id': agent_id,
-        #         'run_id': self.run_id,
-        #         'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
-        #         'behavior': behavior
-        #     }
-
-        #     self.agent_registry[behavior['shift_start_time']].append({
-        #                                                         'unique_id': agent_id,
-        #                                                         'method': start_driver,
-        #                                                         'spec': spec
-        #                                                     })
-
-        #     driver_collection[agent_id] = behavior
-
-        # with open(f"{output_dir}/driver_behavior.json", "w") as fp:
-        #     json.dump(driver_collection, fp, indent=4, sort_keys=True)
-
-        for agent_id, behavior in scenario.driver_collection.items():
+        for agent_id, behavior in self.scenario.driver_collection.items():
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
-                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'behavior': behavior
             }
 
@@ -86,31 +74,11 @@ class DistributedOpenRideSimRandomised():
                                                                 'spec': spec
                                                             })
 
-        # passenger_collection = {}
-        # for i in range(passenger_settings['NUM_PASSENGERS']):
-        #     agent_id = f"p_{i:06d}"
-        #     behavior = GenerateBehavior.ridehail_passenger(agent_id)
-        #     spec = {
-        #         'unique_id': agent_id,
-        #         'run_id': self.run_id,
-        #         'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
-        #         'behavior': behavior
-        #     }
-
-        #     self.agent_registry[behavior['trip_request_time']].append({
-        #                                                         'unique_id': agent_id,
-        #                                                         'method': start_passenger,
-        #                                                         'spec': spec
-        #                                                     })
-        #     passenger_collection[agent_id] = behavior
-
-        # with open(f"{output_dir}/passenger_behavior.json", "w") as fp:
-        #     json.dump(passenger_collection, fp, indent=4, sort_keys=True)
-        for agent_id, behavior in scenario.passenger_collection.items():
+        for agent_id, behavior in self.scenario.passenger_collection.items():
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
-                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'behavior': behavior
             }
 
@@ -120,70 +88,120 @@ class DistributedOpenRideSimRandomised():
                                                                 'spec': spec
                                                             })
 
-        # assignment_collection = {}
-        # for coverage_area in assignment_settings['COVERAGE_AREA']: # Support for multiple solvers
-        #     agent_id = f"assignment_{coverage_area['name']}"
-        #     behavior = GenerateBehavior.ridehail_assignment(agent_id, coverage_area)
-        #     spec = {
-        #         'unique_id': agent_id,
-        #         'run_id': self.run_id,
-        #         'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
-        #         'behavior': behavior
-        #     }
-        #     self.service_scheduler.add_agent(agent_id, start_assignment, spec)
 
-        #     assignment_collection[agent_id] = behavior
-
-        # with open(f"{output_dir}/assignment_behavior.json", "w") as fp:
-        #     json.dump(assignment_collection, fp, indent=4, sort_keys=True)
-        for agent_id, behavior in scenario.assignment_collection.items():
+        for agent_id, behavior in self.scenario.assignment_collection.items():
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
-                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'behavior': behavior
             }
 
             self.service_scheduler.add_agent(agent_id, start_assignment, spec)
 
-
-        # analytics_collection = {}
-        # for i in range(1): # Only one Analytics agent for the moment.
-        #     agent_id = f"analytics_{i:03d}"
-        #     behavior = GenerateBehavior.ridehail_analytics(agent_id)
-        #     spec = {
-        #         'unique_id': agent_id,
-        #         'run_id': self.run_id,
-        #         'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
-        #         'behavior': behavior
-        #     }
-        #     self.service_scheduler.add_agent(agent_id, start_analytics, spec)
-        #     analytics_collection[agent_id] = behavior
-
-        # with open(f"{output_dir}/analytics_behavior.json", "w") as fp:
-        #     json.dump(analytics_collection, fp, indent=4, sort_keys=True)
-        for agent_id, behavior in scenario.analytics_collection.items():
+        for agent_id, behavior in self.scenario.analytics_collection.items():
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
-                'reference_time': datetime.strftime(self.start_time, '%Y%m%d%H%M%S'),
+                'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'behavior': behavior
             }
 
             self.service_scheduler.add_agent(agent_id, start_analytics, spec)
 
-
     def step(self, i):
-        print(f"Simulation Step: {self.agent_scheduler.time} of {orsim_settings['SIMULATION_LENGTH_IN_STEPS']}")
+        step_start_time = time.time()
+        print(f"Simulation Step: {self.agent_scheduler.time} of {self.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS']}")
 
         # IMPORTANT Make sure agents are added into the scheduler before step
         # add_agent is a blocking process and ensures the agent is ready to listen to step()
+        agent_scheduler_start_time = time.time()
         for item in self.agent_registry[i]:
             self.agent_scheduler.add_agent(**item)
-
         # step() assumes all agents will be ready to respond to step message
         asyncio.run(self.agent_scheduler.step())
+        agent_scheduler_run_time = time.time() - agent_scheduler_start_time
+
+        service_scheduler_start_time = time.time()
         asyncio.run(self.service_scheduler.step())
+        service_scheduler_run_time = time.time() - service_scheduler_start_time
+
+
+        step_metric = {
+            i: {
+                'agents': {
+                    'stat': self.agent_scheduler.agent_stat[i],
+                    'run_time': agent_scheduler_run_time,
+                },
+                'services': {
+                    'stat': self.service_scheduler.agent_stat[i],
+                    'run_time': service_scheduler_run_time,
+                }
+            }
+        }
+
+        total_run_time = time.time() - self.execution_start_time
+        self.run_record = self.update_status('In Progress', total_run_time, step_metric)
+
+    def setup_user(self):
+        credentials = {
+            'email': 'sim_admin@test.com',
+            'password': 'password',
+        }
+        user = UserRegistry(time_to_str(datetime.now()), credentials, role='admin')
+        return user
+
+    def init_run_config(self):
+
+        run_config_url = f"{settings['OPENRIDE_SERVER_URL']}/run_config"
+
+        data = {
+            "run_id": self.run_id,
+            "name": self.scenario_name,
+            "meta": {
+                'num_driver_agents': len(self.scenario.driver_collection),
+                'num_passenger_agents': len(self.scenario.passenger_collection),
+                'num_analytics_agents': len(self.scenario.analytics_collection),
+                'num_assignment_agents': len(self.scenario.assignment_collection),
+
+                'simulation_settings': self.scenario.orsim_settings,
+                'services': {
+                    'assignment_agents': self.scenario.assignment_collection,
+                    'analytics_agents': self.scenario.analytics_collection,
+                }
+            },
+            'step_metrics': {},
+        }
+
+        response = requests.post(run_config_url, headers=self.user.get_headers(), data=json.dumps(data))
+
+        if is_success(response.status_code):
+            return response.json()
+        else:
+            raise Exception(f"{response.url}, {response.text}")
+
+    def update_status(self, status, execution_time=0, step_metric=None):
+        run_config_item_url = f"{settings['OPENRIDE_SERVER_URL']}/run_config/{self.run_record['_id']}"
+
+        data = {
+            'status': status,
+            'execution_time': execution_time,
+        }
+        if step_metric is not None:
+            for k, v in step_metric.items():
+                data[f'step_metrics.{k}'] = v
+                break # expecting only one item
+
+        response = requests.patch(run_config_item_url,
+                                  headers=self.user.get_headers(etag=self.run_record['_etag']),
+                                  data=json.dumps(data))
+        # print('on patch', response.json())
+
+        if is_success(response.status_code):
+            return response.json()
+        else:
+            raise Exception(f"{response.url}, {response.text}")
+
 
 
 if __name__ == '__main__':
@@ -194,26 +212,39 @@ if __name__ == '__main__':
 
     logging.basicConfig(filename=f'{log_dir}/app.log', level=settings['LOG_LEVEL'], filemode='w')
 
-    # scenario = ScenarioManager('20211117_D200_P1000_3HX15s_clementi_compromise')
-    scenario = ScenarioManager('20211117_D200_P1000_3HX15s_clementi_greedy')
-    # scenario = ScenarioManager('20211117_D200_P1000_3HX15s_clementi_random')
-    sim = DistributedOpenRideSimRandomised(scenario)
+    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_random'
+    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_pickup'
+    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_revenue'
+    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_servicescore'
 
-    print(f"Initializing Simulation for scenario {scenario.dataset = } with {sim.run_id = }")
+    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_random'
+    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_pickup'
+    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_revenue'
+    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_servicescore'
+    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_compromise'
 
-    start_time = time.time()
-    # strategy = 'CELERY' # 'MULTIPROCESSING'
+    scenario_name = '20211117_D200_P4000_8Hx60s_P_singapore_greedy_pickup'
+    # scenario_name = '20211117_D500_P10000_12Hx60s_P_singapore_compromise'
+
+    # scenario_name = '20211117_D10_P20_1Hx60s_P_singapore_compromise'
+
+    sim = DistributedOpenRideSimRandomised(scenario_name)
+
+    print(f"Initializing Simulation for scenario {scenario_name = } with {sim.run_id = }")
+
+    execution_start_time = time.time()
+
     if settings['EXECUTION_STRATEGY'] == 'CELERY':
 
-        for i in range(orsim_settings['SIMULATION_LENGTH_IN_STEPS']):
+        for i in range(sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS']):
             try:
-                sim.step(i)
+                step_metric = sim.step(i)
             except Exception as e:
                 print(e)
                 break
 
-    # elif settings['EXECUTION_STRATEGY'] == 'MULTIPROCESSING':
-    #     sim.run()
-    run_time = time.time() - start_time
+    run_time = time.time() - execution_start_time
+    sim.update_status('success', run_time)
+
     print(f"Completed {sim.run_id = } with run time {run_time}")
 

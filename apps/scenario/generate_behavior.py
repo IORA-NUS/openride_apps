@@ -1,6 +1,8 @@
 
-from random import randint, choice
+from random import randint, choice, random
 from shapely.geometry import Point, mapping
+from numpy.random import default_rng
+
 
 from apps.loc_service import BusStop, PlanningArea
 # from apps.config import settings
@@ -9,6 +11,7 @@ from apps.config import (assignment_settings, orsim_settings,
                          driver_settings, passenger_settings,
                          analytics_settings
                         )
+import haversine as hs
 
 class GenerateBehavior():
 
@@ -16,6 +19,7 @@ class GenerateBehavior():
         coverage_area['name']: BusStop().get_locations_within(coverage_area['districts']) # NOTE need to pass a list
                                             for coverage_area in assignment_settings['COVERAGE_AREA']
     }
+    rng = default_rng()
 
     @classmethod
     def get_random_location(cls, coverage_area_name):
@@ -41,7 +45,8 @@ class GenerateBehavior():
             empty_dest_loc = cls.get_random_location(coverage_area_name)
 
             patience = 150
-            service_score = randint(1, 1000)
+            # service_score = randint(1, 1000)
+            service_score = 100 * cls.rng.weibull(5)
 
         else:
             shift_start_time = record['Start_Time']
@@ -106,7 +111,8 @@ class GenerateBehavior():
             pickup_loc = cls.get_random_location(coverage_area_name)
             dropoff_loc = cls.get_random_location(coverage_area_name)
 
-            trip_price = randint(0, 100)
+            # trip_price = randint(0, 100)
+            trip_price = max(3, hs.haversine(pickup_loc['coordinates'][:2], dropoff_loc['coordinates'][:2], unit=hs.Unit.KILOMETERS)) + random()
             patience = 600
 
 
@@ -201,27 +207,52 @@ class GenerateBehavior():
                     'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['districts'])),
                 },
 
-                'max_travel_time_pickup': coverage_area.get('max_travel_time_pickup', 99999),
+                'max_travel_time_pickup': coverage_area.get('max_travel_time_pickup', 600), # NOTE This is in sync with reverse paremater for compromise matching
 
-                'offline_params': {
-                    'reverseParameter': 480,  # 480;
-                    'reverseParameter2': 2.5,
-                    'gamma': 1.2,     # the target below is estimated from historical data
+                "offline_params": {
+                    "ub_pickup_time": 600,
 
-                    # KPI Targets
-                    'targetReversePickupTime': 4915 * 1.2, # gamma
-                    'targetServiceScore': 5439 * 1.2, # gamma
-                    'targetRevenue': 4185 * 1.2, # gamma
+                    "scale_factor_revenue": 1,
+                    "scale_factor_reverse_pickup_time": 10,
+                    "scale_factor_service_score": 10,
+
+                    "target_revenue": 41.44, # including gamma
+                    "target_reverse_pickup_time": 40.98, # including gamma
+                    "target_service_score": 32.89, # including gamma
                 },
-                'online_params': {
-                    'realtimePickupTime': 0,
-                    'realtimeRevenue': 0,
-                    'realtimeServiceScore': 0,
+                "online_params": {
+                    "realtime_reverse_pickup_time_cum": 0,
+                    "realtime_revenue_cum": 0,
+                    "realtime_service_score_cum": 0,
 
-                    'weightPickupTime': 1,
-                    'weightRevenue': 1,
-                    'weightServiceScore': 1,
+                    "weight_pickup_time": 1,
+                    "weight_revenue": 1,
+                    "weight_service_score": 1
                 },
+
+                # 'offline_params': {
+                #     'pickupTime_UpperBound': 480,  # 480; # TO be used as a modleing trick to convert pickuptime into a maximization objective max(UpperBound - pickuptime)
+                #     # 'reverseParameter2': 1, # 2.5,
+                #     # 'gamma': 1.2,     # the target below is estimated from historical data
+
+                #     # KPI Targets
+                #     'targetReversePickupTime': 4915, #* 1.2, # gamma
+                #     'targetServiceScore': 5439, #* 1.2, # gamma
+                #     'targetRevenue': 4185, #* 1.2, # gamma
+
+                #     'reversePickuptime_ScaleFactor': 1,
+                #     'revenue_ScaleFactor': 1,
+                #     'serviceScore_ScaleFactor': 1,
+                # },
+                # 'online_params': {
+                #     'realtimePickupTime': 0,
+                #     'realtimeRevenue': 0,
+                #     'realtimeServiceScore': 0,
+
+                #     'weightPickupTime': 1,
+                #     'weightRevenue': 1,
+                #     'weightServiceScore': 1,
+                # },
             },
             'STEPS_PER_ACTION': assignment_settings['STEPS_PER_ACTION'],
             'RESPONSE_RATE': assignment_settings['RESPONSE_RATE'],

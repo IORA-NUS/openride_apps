@@ -22,6 +22,8 @@ from apps.messenger_service import Messenger
 
 class DriverApp:
 
+    exited_market = False
+
     def __init__(self, run_id, sim_clock, current_loc, credentials, profile):
         self.run_id = run_id
         self.credentials = credentials
@@ -59,12 +61,18 @@ class DriverApp:
 
     def logout(self, sim_clock, current_loc):
         ''' '''
-        logging.info(f'logging out Driver {self.driver.get_id()}')
+        logging.debug(f'logging out Driver {self.driver.get_id()}')
         try:
             self.trip.end_trip(sim_clock, current_loc, force_quit=True)
+        except Exception as e:
+            logging.exception(str(e))
+
+        try:
             self.driver.logout(sim_clock)
         except Exception as e:
             logging.exception(str(e))
+
+        self.exited_market = True
 
     def refresh(self):
         ''' Sync ALL inMemory State with the db State'''
@@ -77,8 +85,8 @@ class DriverApp:
 
     def ping(self, sim_clock, current_loc, publish=False, **kwargs):
         ''' '''
-        self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
+        # self.latest_sim_clock = sim_clock
+        # self.latest_loc = current_loc
 
         self.trip.ping(sim_clock, current_loc, **kwargs) # Raises exception if ping fails
 

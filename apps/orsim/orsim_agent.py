@@ -57,10 +57,12 @@ class ORSimAgent(ABC):
                         'agent_id': self.unique_id,
                         'time_step': self.current_time_step,
                         'action': 'ready', # 'completed',
+                        'did_step': True,
+                        'run_time': time.time() - self.start_time,
                     }
                 elif payload.get('action') == 'step':
 
-                    self.process_payload(payload)
+                    did_step = self.process_payload(payload)
 
                     self.next_event_time = self.estimate_next_event_time()
 
@@ -68,6 +70,8 @@ class ORSimAgent(ABC):
                         'agent_id': self.unique_id,
                         'time_step': self.current_time_step,
                         'action': 'completed' if self._shutdown==False else 'shutdown',
+                        'did_step': did_step,
+                        'run_time': time.time() - self.start_time,
                     }
                 elif payload.get('action') == 'shutdown':
                     ''' '''
@@ -76,6 +80,8 @@ class ORSimAgent(ABC):
                         'agent_id': self.unique_id,
                         'time_step': self.current_time_step,
                         'action': 'shutdown',
+                        'did_step': True,
+                        'run_time': time.time() - self.start_time,
                     }
             else:
                 logging.warning(f'Unprocessed Message: {message.topic = }')
@@ -83,13 +89,17 @@ class ORSimAgent(ABC):
                     'agent_id': self.unique_id,
                     'time_step': self.current_time_step,
                     'action': 'unprocessed',
+                    'did_step': False,
+                    'run_time': time.time() - self.start_time,
                 }
         except Exception as e:
             response_payload = {
                 'agent_id': self.unique_id,
                 'time_step': self.current_time_step,
                 'action': 'error',
-                'details': traceback.format_exc() # str(e)
+                'did_step': False,
+                'run_time': time.time() - self.start_time,
+                'details': traceback.format_exc(), # str(e)
             }
             logging.exception(f"{self.unique_id} raised {str(e)}")
 
@@ -98,18 +108,19 @@ class ORSimAgent(ABC):
         self.end_time = time.time()
         self.message_processing_active = False
 
-        logging.info(f"Runtime for {self.unique_id} at {self.current_time_step}: {self.end_time - self.start_time:0.2f} secs ")
+        logging.debug(f"Runtime for {self.unique_id} at {self.current_time_step}: {self.end_time - self.start_time:0.2f} secs ")
 
     @abstractmethod
     def process_payload(self, payload):
         pass
 
     def start_listening(self):
+        start_time_for_ready = time.time() # NOTE Local start time NOT a class variable
 
         self.agent_messenger = Messenger(self.agent_credentials, f"{self.run_id}/{self.scheduler_id}/ORSimAgent", self.on_receive_message)
 
         if settings['CONCURRENCY_STRATEGY'] == 'ASYNCIO':
-            logging.info(f'Agent {self.unique_id} is Listening for Messages')
+            logging.debug(f'Agent {self.unique_id} is Listening for Messages')
             loop = asyncio.get_event_loop()
             try:
                 loop.run_forever()
@@ -135,6 +146,7 @@ class ORSimAgent(ABC):
             'agent_id': self.unique_id,
             'time_step': -1,
             'action': 'ready',
+            'run_time': time.time() - start_time_for_ready,
         }
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
 
@@ -161,9 +173,9 @@ class ORSimAgent(ABC):
         self.current_time = self.reference_time + relativedelta(seconds = time_step * orsim_settings['STEP_INTERVAL'])
 
     def shutdown(self):
-        logging.info(f'Shutting down {self.unique_id = }')
-        self.logout()
+        logging.debug(f'Shutting down {self.unique_id = }')
         self.stop_listening()
+        self.logout()
         self.active = False
         self._shutdown = True
 

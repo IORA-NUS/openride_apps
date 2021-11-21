@@ -32,9 +32,11 @@ class AnalyticsAgentIndie(ORSimAgent):
         self.analytics_app = AnalyticsApp(self.run_id, self.get_current_time_str(), self.credentials)
 
     def process_payload(self, payload):
+        did_step = False
         if payload.get('action') == 'step':
-            self.step(payload.get('time_step'))
+            did_step = self.step(payload.get('time_step'))
 
+        return did_step
 
     def logout(self):
         self.step(self.current_time_step)
@@ -79,7 +81,7 @@ class AnalyticsAgentIndie(ORSimAgent):
                 if (((self.current_time_step + 1) * orsim_settings['STEP_INTERVAL']) % analytics_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
                     timewindow_end = self.current_time
                     timewindow_start = timewindow_end - relativedelta(seconds=analytics_settings['PATHS_HISTORY_TIME_WINDOW']+orsim_settings['STEP_INTERVAL'])
-                    logging.info(f"{timewindow_start}, {timewindow_end}")
+                    logging.debug(f"{timewindow_start}, {timewindow_end}")
 
                     paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
                     # print(publish_dict)
@@ -91,6 +93,10 @@ class AnalyticsAgentIndie(ORSimAgent):
 
                         with open(f"{rest_output_dir}/{self.current_time_step}.paths_history.json", 'w') as publish_file:
                             publish_file.write(json.dumps(paths_history))
+
+            return True
+        else:
+            return False
 
 
     def compute_all_metrics(self):
@@ -113,7 +119,16 @@ class AnalyticsAgentIndie(ORSimAgent):
         self.analytics_app.save_kpi(self.get_current_time_str(), 'served', num_served)
 
         # Compute and Store Waiting_time (sum)
-        wait_time_driver_confirm, wait_time_total, wait_time_assignment = self.analytics_app.compute_waiting_time()
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_driver_confirm', wait_time_driver_confirm)
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_total', wait_time_total)
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_assignment', wait_time_assignment)
+        waiting_time = self.analytics_app.compute_waiting_time()
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_driver_confirm', waiting_time['wait_time_driver_confirm'])
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_total', waiting_time['wait_time_total'])
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_assignment', waiting_time['wait_time_assignment'])
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_pickup', waiting_time['wait_time_pickup'])
+
+        # # Compute and Store Served
+        # num_accepted = self.analytics_app.compute_accepted()
+        # self.analytics_app.save_kpi(self.get_current_time_str(), 'num_accepted', num_accepted)
+
+        # compute Service Score
+        service_score = self.analytics_app.compute_service_score()
+        self.analytics_app.save_kpi(self.get_current_time_str(), 'service_score', service_score)

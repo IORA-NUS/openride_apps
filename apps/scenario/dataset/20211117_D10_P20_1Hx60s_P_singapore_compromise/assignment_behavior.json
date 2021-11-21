@@ -1,0 +1,100 @@
+{
+    "assignment_Singapore_SG": {
+        "RESPONSE_RATE": 1,
+        "STEPS_PER_ACTION": 1,
+        "STEP_ONLY_ON_EVENTS": false,
+        "email": "assignment_Singapore_SG@test.com",
+        "password": "password",
+        "solver": "CompromiseMatching",
+        "solver_params": {
+            "max_travel_time_pickup": 600,
+            "offline_params": {
+                "scale_factor_revenue": 1,
+                "scale_factor_reverse_pickup_time": 10,
+                "scale_factor_serviceScore": 10,
+                "target_revenue": 34.53,
+                "target_reverse_pickup_time": 34.14,
+                "target_service_score": 27.4,
+                "ub_pickup_time": 600
+            },
+            "online_params": {
+                "realtime_reverse_pickup_time_cum": 0,
+                "realtime_revenue_cum": 0,
+                "realtime_service_score_cum": 0,
+                "weight_pickup_time": 1,
+                "weight_revenue": 1,
+                "weight_service_score": 1
+            },
+            "planning_area": {
+                "geometry": {
+                    "coordinates": [
+                        [
+                            [
+                                103.7158957,
+                                1.4601313
+                            ],
+                            [
+                                103.7131491,
+                                1.4587585
+                            ],
+                            [
+                                103.6211387,
+                                1.3324532
+                            ],
+                            [
+                                103.6540976,
+                                1.2816547
+                            ],
+                            [
+                                103.7392417,
+                                1.28646
+                            ],
+                            [
+                                103.8312522,
+                                1.2521361
+                            ],
+                            [
+                                104.0084067,
+                                1.2974435
+                            ],
+                            [
+                                104.0317527,
+                                1.3564792
+                            ],
+                            [
+                                104.0010053,
+                                1.3988333
+                            ],
+                            [
+                                103.9735395,
+                                1.390596
+                            ],
+                            [
+                                103.9232627,
+                                1.414827
+                            ],
+                            [
+                                103.868331,
+                                1.4512078
+                            ],
+                            [
+                                103.8040538,
+                                1.4770514
+                            ],
+                            [
+                                103.7543479,
+                                1.4491485
+                            ],
+                            [
+                                103.7158957,
+                                1.4601313
+                            ]
+                        ]
+                    ],
+                    "type": "Polygon"
+                },
+                "name": "Singapore_SG"
+            }
+        }
+    }
+}

@@ -48,7 +48,7 @@ class RidehailPassengerTripStateMachine(StateMachine):
                                             passenger_moving_for_pickup,
                                             passenger_waiting_for_pickup)
 
-    force_quit =passenger_cancelled_trip.from_(
+    force_quit = passenger_cancelled_trip.from_(
                                 passenger_requested_trip,
                                 passenger_assigned_trip,
                                 passenger_received_trip_confirmation,
@@ -89,3 +89,12 @@ class RidehailPassengerTripStateMachine(StateMachine):
             return True
         else:
             return False
+
+    def on_end_trip(self, doc=None):
+        if doc is not None:
+            doc['is_active'] = False
+
+    def on_cancel(self, doc=None):
+        if doc is not None:
+            doc['is_active'] = False
+

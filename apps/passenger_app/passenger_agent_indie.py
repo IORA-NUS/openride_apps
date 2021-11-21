@@ -59,13 +59,14 @@ class PassengerAgentIndie(ORSimAgent):
     def process_payload(self, payload):
 
         self.timeout_error = False
+        did_step = False
 
         if payload.get('action') == 'step':
             self.entering_market(payload.get('time_step'))
 
             if self.is_active():
                 try:
-                    self.step(payload.get('time_step'))
+                    did_step = self.step(payload.get('time_step'))
                     self.failure_count = 0
                 except Exception as e:
                     logging.exception(traceback.format_exc())
@@ -76,6 +77,7 @@ class PassengerAgentIndie(ORSimAgent):
         else:
             logging.error(f"{payload = }")
 
+        return did_step
 
     def entering_market(self, time_step):
         if time_step == self.behavior['trip_request_time']:
@@ -115,7 +117,11 @@ class PassengerAgentIndie(ORSimAgent):
 
     def estimate_next_event_time(self):
         ''' '''
-        return self.current_time
+        # return self.current_time
+        next_event_time =  min(self.app.passenger.estimate_next_event_time(self.current_time),
+                                self.app.trip.estimate_next_event_time(self.current_time))
+
+        return next_event_time
 
     def step(self, time_step):
         self.app.update_current(self.get_current_time_str(), self.current_loc)
@@ -131,6 +137,10 @@ class PassengerAgentIndie(ORSimAgent):
             self.consume_messages()
             # 2. based on current state, perform any workflow actions according to Agent behavior
             self.perform_workflow_actions()
+
+            return True
+        else:
+            return False
 
 
     def consume_messages(self):
@@ -162,7 +172,7 @@ class PassengerAgentIndie(ORSimAgent):
                             driver_data = payload['data']
 
                             if driver_data.get('event') == "driver_confirmed_trip":
-                                self.app.trip.driver_confirmed_trip(self.get_current_time_str(), self.current_loc) #, driver_data.get('driver_trip_id'))
+                                self.app.trip.driver_confirmed_trip(self.get_current_time_str(), self.current_loc, driver_data.get('estimated_time_to_arrive', 0)) #, driver_data.get('driver_trip_id'))
 
                             elif driver_data.get('location') is not None:
                                 self.current_loc = driver_data.get('location')
@@ -205,7 +215,7 @@ class PassengerAgentIndie(ORSimAgent):
                                 datetime.strptime(self.app.get_trip()['_updated'], "%a, %d %b %Y %H:%M:%S GMT")
                                 ).total_seconds()
         except Exception as e:
-            logging.info(self.behavior)
+            # logging.warning(self.behavior)
             logging.exception(str(e))
             raise e
 
@@ -217,7 +227,7 @@ class PassengerAgentIndie(ORSimAgent):
 
         elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier) and \
                 (self.behavior['trip_request_time'] + (self.behavior['profile']['patience']/self.step_size) < self.current_time_step):
-            logging.info(f"Passenger {self.app.get_passenger()['_id']} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps")
+            logging.info(f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps")
             self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
 
         else:

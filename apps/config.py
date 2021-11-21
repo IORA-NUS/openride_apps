@@ -26,8 +26,8 @@ settings = {
 }
 
 orsim_settings = {
-    'SIMULATION_LENGTH_IN_STEPS': 720, # 960, # 600,    # 60 # Num Steps
-    'STEP_INTERVAL': 15, # 15, # 6,     # 60   # seconds in Simulation Universe
+    'SIMULATION_LENGTH_IN_STEPS': 480, # 960, # 600,    # 60 # Num Steps
+    'STEP_INTERVAL': 60, # 15, # 6,     # 60   # seconds in Simulation Universe
 
     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
     'STEP_TIMEOUT_TOLERANCE': 0.05,
@@ -47,47 +47,53 @@ analytics_settings = {
 }
 
 assignment_settings = {
-    'STEPS_PER_ACTION': 2, #2,
+    'STEPS_PER_ACTION': 1, #2,
     'RESPONSE_RATE': 1,  # Keep this 1 to regularly update stats
     'STEP_ONLY_ON_EVENTS': False,
 
     'COVERAGE_AREA': [
-        {
-            'name': 'Clementi',
-            'districts': ['CLEMENTI'],
-            'strategy': 'CompromiseMatching', # 'GreedyDriverMatching', # 'CompromiseMatching',
-            'max_travel_time_pickup': 300
-        },
+        # {
+        #     'name': 'Clementi',
+        #     'districts': ['CLEMENTI'],
+        #     'strategy': 'CompromiseMatching', # 'GreedyMinPickupMatching', # 'CompromiseMatching',
+        #     'max_travel_time_pickup': 300
+        # },
         # {
         #     'name': 'Westside',
         #     'districts': ['CLEMENTI', 'JURONG EAST', 'QUEENSTOWN'],
         #     'strategy': 'CompromiseMatching',
+        #     'max_travel_time_pickup': 300 # seconds
         # },
         # {
         #     'name': 'NorthEast',
         #     'districts': ['PUNGGOL', 'SELETAR', 'HOUGANG'],
         #     'strategy': 'CompromiseMatching',
+        #     'max_travel_time_pickup': 300 # seconds
         # },
         # {
         #     'name': 'East',
         #     'districts': ['CHANGI', 'PASIR RIS', 'TAMPINES', 'BEDOK'],
         #     'strategy': 'CompromiseMatching',
+        #     'max_travel_time_pickup': 300 # seconds
         # },
         # {
         #     'name': 'RoundIsland',
         #     'districts': ['PUNGGOL', 'SELETAR', 'HOUGANG', 'CLEMENTI', 'JURONG EAST', 'QUEENSTOWN',  'DOWNTOWN CORE', 'NEWTON', 'ORCHARD', 'KALLANG', 'CHOA CHU KANG', 'MANDAI',],
-        #     'strategy': 'GreedyDriverMatching' # 'CompromiseMatching',
+        #     'strategy': 'GreedyMinPickupMatching' # 'CompromiseMatching',
+        #     'max_travel_time_pickup': 300 # seconds
         # },
         # {
         #     'name': 'Singapore',
         #     'districts': ['SIMPANG', 'SUNGEI KADUT', 'DOWNTOWN CORE', 'NEWTON', 'ORCHARD', 'KALLANG', 'LIM CHU KANG', 'PASIR RIS',  'MARINA SOUTH', 'SERANGOON', 'BOON LAY', 'BEDOK', 'BUKIT MERAH', 'BUKIT PANJANG', 'JURONG EAST', 'BUKIT TIMAH', 'CHANGI', 'CHOA CHU KANG', 'QUEENSTOWN', 'SELETAR', 'MANDAI', 'ANG MO KIO', 'BISHAN', 'BUKIT BATOK',  'JURONG WEST', 'CLEMENTI', 'GEYLANG', 'HOUGANG', 'PIONEER', 'PUNGGOL', 'SEMBAWANG', 'SENGKANG', 'TAMPINES', 'TANGLIN', 'TOA PAYOH', 'WOODLANDS', 'YISHUN', 'OUTRAM', 'MARINE PARADE', 'NOVENA', 'PAYA LEBAR', 'RIVER VALLEY', 'ROCHOR',],
         #     'strategy': 'CompromiseMatching',
+        #     'max_travel_time_pickup': 300 # seconds
         # },
-        # {
-        #     'name': 'Singapore_SG',
-        #     'districts': ['SINGAPORE',],
-        #     'strategy': 'CompromiseMatching',
-        # },
+        {
+            'name': 'Singapore_SG',
+            'districts': ['SINGAPORE',],
+            'strategy': 'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
+            'max_travel_time_pickup': 600 # seconds
+        },
     ],
 }
 
@@ -96,7 +102,7 @@ driver_settings = {
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,
-    'RESPONSE_RATE': 0.25, # 0.25
+    'RESPONSE_RATE': 1, # 0.25
     'STEP_ONLY_ON_EVENTS': True,
 
     # 'LOCATION_PING_INTERVAL': 15,  # seconds in Simulation Universe
@@ -105,11 +111,11 @@ driver_settings = {
 }
 
 passenger_settings = {
-    'NUM_PASSENGERS': 1000,       # 100,
+    'NUM_PASSENGERS': 4000,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,
-    'RESPONSE_RATE': 0.25, # 0.25
+    'RESPONSE_RATE': 1, # 0.25
     'STEP_ONLY_ON_EVENTS': True
 }
 

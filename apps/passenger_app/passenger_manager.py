@@ -1,12 +1,13 @@
 import logging, traceback
 import requests, json
 from http import HTTPStatus
+from dateutil.relativedelta import relativedelta
 
 from apps.config import settings
 from apps.utils import id_generator, is_success
 from apps.state_machine import WorkflowStateMachine
 
-from apps.utils.user_registry import UserRegistry
+# from apps.utils.user_registry import UserRegistry
 
 class PassengerManager():
 
@@ -24,6 +25,11 @@ class PassengerManager():
     def get_id(self):
         return self.passenger['_id']
 
+    def estimate_next_event_time(self, current_time):
+        ''' Return a distant future data as a placeholder'''
+        # Ideally checkdriver status and return a distant future if logged out and a realistic value if logged in
+        return current_time + relativedelta(years=1)
+
     def init_passenger(self, sim_clock):
         passenger_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger"
 
@@ -38,7 +44,7 @@ class PassengerManager():
             else:
                 passenger = response.json()['_items'][0]
         else:
-            raise Exception(response.text)
+            raise Exception(f"{response.url}, {response.text}")
 
         return passenger
 
@@ -91,7 +97,10 @@ class PassengerManager():
                                     data=json.dumps(data))
 
                     response = requests.get(passenger_item_url, headers=self.user.get_headers())
-                    self.passenger = response.json()
+                    if is_success(response.status_code):
+                        self.passenger = response.json()
+                    else:
+                        raise Exception(f"{response.url}, {response.text}")
 
                     return self.login(sim_clock)
         elif self.passenger['state'] == 'online': #'offline':
@@ -115,7 +124,7 @@ class PassengerManager():
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(response.text)
+            raise Exception(f"{response.url}, {response.text}")
 
     def refresh(self):
         passenger_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/{self.passenger['_id']}"

@@ -36,7 +36,8 @@ class AnalyticsApp:
         self.messenger = Messenger(credentials)
         self.server_max_results = 50 # make sure this is in sync with server
 
-        self.passenger_trips_ended = None
+        self.passenger_trips_for_metric = None
+        self.driver_trips_for_metric = None
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''
@@ -275,10 +276,15 @@ class AnalyticsApp:
 
     def prep_metric_computation_queries(self, start_time, end_time):
         ''' '''
+        self.get_passenger_trips_for_metric(start_time, end_time)
+        self.get_driver_trips_for_metric(start_time, end_time)
+
+    def get_passenger_trips_for_metric(self, start_time, end_time):
+
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
 
         got_results = True
-        self.passenger_trips_ended = []
+        self.passenger_trips_for_metric = []
         page = 1
         while got_results:
             params = {
@@ -287,7 +293,8 @@ class AnalyticsApp:
                         {"run_id": self.run_id},
                         {"state": {
                             '$in': [RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,
-                                   RidehailPassengerTripStateMachine.passenger_pickedup.identifier]
+                                #    RidehailPassengerTripStateMachine.passenger_pickedup.identifier]
+                                   RidehailPassengerTripStateMachine.passenger_completed_trip.identifier]
                             }},
                         {"sim_clock": {
                             "$gte": datetime.strftime(start_time, "%a, %d %b %Y %H:%M:%S GMT"),
@@ -304,20 +311,55 @@ class AnalyticsApp:
                 got_results = False
                 break
             else:
-                self.passenger_trips_ended.extend(response.json()['_items'])
+                self.passenger_trips_for_metric.extend(response.json()['_items'])
                 page += 1
+
+    def get_driver_trips_for_metric(self, start_time, end_time):
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
+
+        got_results = True
+        self.driver_trips_for_metric = []
+        page = 1
+        while got_results:
+            params = {
+                "where": json.dumps({
+                    "$and": [
+                        {"run_id": self.run_id},
+                        {"state": {
+                            '$in': [RidehailDriverTripStateMachine.driver_completed_trip.identifier,]
+                            }},
+                        {'is_occupied': True},
+                        {"sim_clock": {
+                            "$gte": datetime.strftime(start_time, "%a, %d %b %Y %H:%M:%S GMT"),
+                            "$lt": datetime.strftime(end_time, "%a, %d %b %Y %H:%M:%S GMT"),
+                        }}
+                ]}),
+                'page': page,
+                "max_results": self.server_max_results
+            }
+
+            response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
+            # response_items = response.json()['_items']
+            if response.json()['_items'] == []:
+                got_results = False
+                break
+            else:
+                self.driver_trips_for_metric.extend(response.json()['_items'])
+                page += 1
+
 
     def compute_revenue(self):
         step_revenue = 0
-        for item in self.passenger_trips_ended:
-            if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+        for item in self.passenger_trips_for_metric:
+            # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.identifier:
                 step_revenue += item['trip_price']
 
         return step_revenue
 
     def compute_cancelled(self):
         num_cancelled = 0
-        for item in self.passenger_trips_ended:
+        for item in self.passenger_trips_for_metric:
             if item['state'] == RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier:
                 num_cancelled += 1
 
@@ -325,28 +367,53 @@ class AnalyticsApp:
 
     def compute_served(self):
         num_served = 0
-        for item in self.passenger_trips_ended:
-            if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+        for item in self.passenger_trips_for_metric:
+            # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.identifier:
                 num_served += 1
 
         return num_served
 
+    # def compute_accepted(self):
+    #     num_accepted = 0
+    #     for item in self.passenger_trips_for_metric:
+    #         if item['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
+    #             num_accepted += 1
+
+    #     return num_accepted
 
     def compute_waiting_time(self):
         wait_time_assignment = 0
         wait_time_driver_confirm = 0
         wait_time_total = 0
-        for item in self.passenger_trips_ended:
+        wait_time_pickup = 0
+        for item in self.passenger_trips_for_metric:
             try:
-                if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+                # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
+                if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.identifier:
                     wait_time_driver_confirm += item['stats']['wait_time_driver_confirm']
                     wait_time_total += item['stats']['wait_time_total']
                     wait_time_assignment += item['stats']['wait_time_assignment']
+                    wait_time_pickup += item['stats']['wait_time_pickup']
             except Exception as e:
                 logging.warning(item)
                 logging.warning(str(e))
 
-        return wait_time_driver_confirm, wait_time_total, wait_time_assignment
+        return {
+            'wait_time_driver_confirm': wait_time_driver_confirm,
+            'wait_time_total': wait_time_total,
+            'wait_time_assignment': wait_time_assignment,
+            'wait_time_pickup': wait_time_pickup,
+        }
+
+    def compute_service_score(self):
+        service_score = 0
+        for item in self.driver_trips_for_metric:
+            # if item['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
+            if item['state'] == RidehailDriverTripStateMachine.driver_completed_trip.identifier:
+                service_score += item['meta']['profile']['service_score']
+
+        return service_score
 
 
     def save_kpi(self, sim_clock, metric, value):
@@ -363,6 +430,6 @@ class AnalyticsApp:
                                  data=json.dumps(data))
 
         if not is_success(response.status_code):
-            raise Exception(response.text)
+            raise Exception(f"{response.url}, {response.text}")
         # return response.json()
 

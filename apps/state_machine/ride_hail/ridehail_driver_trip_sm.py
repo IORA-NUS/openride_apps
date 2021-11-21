@@ -73,3 +73,15 @@ class RidehailDriverTripStateMachine(StateMachine):
             return True
         else:
             return False
+
+    def on_end_trip(self, doc=None):
+        if doc is not None:
+            doc['is_active'] = False
+
+    def on_reject(self, doc=None):
+        if doc is not None:
+            doc['is_active'] = False
+
+    def on_cancel(self, doc=None):
+        if doc is not None:
+            doc['is_active'] = False

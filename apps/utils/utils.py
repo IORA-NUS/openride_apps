@@ -1,6 +1,6 @@
 import string
 import random
-import collections
+from  collections import Mapping
 
 from datetime import datetime
 
@@ -18,8 +18,8 @@ def deep_update(source, overrides):
     Update a nested dictionary or similar mapping.
     Modify ``source`` in place.
     """
-    for key, value in overrides.iteritems():
-        if isinstance(value, collections.Mapping) and value:
+    for key, value in overrides.items():
+        if isinstance(value, Mapping) and value:
             returned = deep_update(source.get(key, {}), value)
             source[key] = returned
         else:

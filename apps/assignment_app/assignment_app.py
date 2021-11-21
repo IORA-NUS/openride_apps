@@ -38,7 +38,7 @@ class AssignmentApp:
         self.server_max_results = 50 # make sure this is in sync with server
 
 
-    def assign(self, sim_clock, clock_tick):
+    def assign(self, sim_clock, time_step):
         ''' '''
 
         driver_trip = self.get_driver_trip()
@@ -66,7 +66,7 @@ class AssignmentApp:
         end = time.time()
         # print('after Solve')
 
-        online_params = self.solver.update_online_params(clock_tick, self.STEPS_PER_ACTION, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
+        online_params = self.solver.update_online_params(time_step, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
         # print('after update_online_params')
         result = [{
             # 'driver': item[0]['_id'],

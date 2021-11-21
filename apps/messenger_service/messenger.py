@@ -37,16 +37,31 @@ class Messenger:
         if isinstance(channel_id, str):
             self.client.loop_start()
             self.client.subscribe(channel_id, qos=0)
-            logging.info(f"Channel: {channel_id}")
+            logging.debug(f"Channel: {channel_id}")
         elif isinstance(channel_id, list):
             self.client.loop_start()
             self.client.subscribe([(cid, 0) for cid in channel_id])
-            logging.info(f"Channel: {channel_id}")
+            logging.debug(f"Channel: {channel_id}")
 
 
     def disconnect(self):
-        if self.channel_id is not None:
+        try:
             self.client.unsubscribe(self.channel_id)
+        except Exception as e:
+            logging.exception(str(e))
+
+        if self.channel_id is not None:
+            try:
+                self.client.loop_stop(force=True)
+            except Exception as e:
+                logging.exception(str(e))
+
+        try:
+            self.client.disconnect()
+        except Exception as e:
+            logging.exception(str(e))
+
+
 
 
     @classmethod

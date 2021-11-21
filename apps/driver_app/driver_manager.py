@@ -143,7 +143,7 @@ class DriverManager():
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(response.text)
+            raise Exception(f"{response.url}, {response.text}")
 
 
     def init_vehicle(self, sim_clock):

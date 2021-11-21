@@ -22,5 +22,5 @@ class AbstractSolver(ABC):
         pass
 
     @abstractmethod
-    def update_online_params(self, clock_tick, STEPS_PER_ACTION, driver_list, passenger_list, matched_pairs, offline_params, online_params):
+    def update_online_params(self, time_step, driver_list, passenger_list, matched_pairs, offline_params, online_params):
         pass

@@ -51,6 +51,7 @@ class ScenarioManager():
             with open(f"{output_dir}/driver_behavior.json", "w") as fp:
                 json.dump(self.driver_collection, fp, indent=4, sort_keys=True)
 
+
             self.passenger_collection = {}
             for i in range(passenger_settings['NUM_PASSENGERS']):
                 agent_id = f"p_{i:06d}"
@@ -59,6 +60,7 @@ class ScenarioManager():
 
             with open(f"{output_dir}/passenger_behavior.json", "w") as fp:
                 json.dump(self.passenger_collection, fp, indent=4, sort_keys=True)
+
 
             self.assignment_collection = {}
             for coverage_area in assignment_settings['COVERAGE_AREA']: # Support for multiple solvers
@@ -79,6 +81,10 @@ class ScenarioManager():
             with open(f"{output_dir}/analytics_behavior.json", "w") as fp:
                 json.dump(self.analytics_collection, fp, indent=4, sort_keys=True)
 
+            self.orsim_settings = orsim_settings
+            with open(f"{output_dir}/orsim_settings.json", "w") as fp:
+                json.dump(self.orsim_settings, fp, indent=4, sort_keys=True)
+
         else:
             # logging.debug('Reading from folder')
             with open(f"{output_dir}/driver_behavior.json", "r") as fp:
@@ -93,6 +99,8 @@ class ScenarioManager():
             with open(f"{output_dir}/analytics_behavior.json", "r") as fp:
                 self.analytics_collection = json.load(fp)
 
+            with open(f"{output_dir}/orsim_settings.json", "r") as fp:
+                self.orsim_settings = json.load(fp)
 
 if __name__ == '__main__':
 
