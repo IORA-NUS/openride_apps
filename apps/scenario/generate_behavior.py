@@ -5,12 +5,10 @@ from numpy.random import default_rng
 
 
 from apps.loc_service import BusStop, PlanningArea
-# from apps.config import settings
 
-from apps.config import (assignment_settings, orsim_settings,
-                         driver_settings, passenger_settings,
-                         analytics_settings
-                        )
+from apps.config import settings
+from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+
 import haversine as hs
 
 class GenerateBehavior():
@@ -36,6 +34,7 @@ class GenerateBehavior():
             # shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//4))
             # shift_end_time = randint(orsim_settings['SIMULATION_LENGTH_IN_STEPS']//2, orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1)
             shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//10))
+            # shift_start_time = 0
             shift_end_time = orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1
 
             coverage_area = choice(assignment_settings['COVERAGE_AREA'])
@@ -49,16 +48,16 @@ class GenerateBehavior():
             service_score = 100 * cls.rng.weibull(5)
 
         else:
-            shift_start_time = record['Start_Time']
-            shift_end_time = record['End_Time']
+            shift_start_time = record['start_time_step'] # Convert to steps... Need reference time
+            shift_end_time = record['end_time_step']
 
-            coverage_area_name = record['coverage_area_name']
+            coverage_area_name = record['coverage_area']
 
-            init_loc = mapping(Point(record["Start_Longitude"], record["Start_Latitude"]))
-            empty_dest_loc = mapping(Point(record["End_Longitude"], record["End_Latitude"]))
+            init_loc = mapping(Point(record["start_lon"], record["start_lat"]))
+            empty_dest_loc = mapping(Point(record["end_lon"], record["end_lat"]))
 
             patience = 150
-            service_score = record['Service_Quality']
+            service_score = record['service_score']
 
 
         behavior = {
@@ -95,6 +94,7 @@ class GenerateBehavior():
             'STEPS_PER_ACTION': driver_settings['STEPS_PER_ACTION'],
             'RESPONSE_RATE': driver_settings['RESPONSE_RATE'],
             'STEP_ONLY_ON_EVENTS': driver_settings['STEP_ONLY_ON_EVENTS'],
+            'UPDATE_PASSENGER_LOCATION': driver_settings['UPDATE_PASSENGER_LOCATION']
         }
 
         return behavior
@@ -119,12 +119,12 @@ class GenerateBehavior():
         else:
             trip_request_time = record['trip_request_time']
 
-            pickup_loc = mapping(Point(record["Start_Longitude"], record["Start_Latitude"]))
-            dropoff_loc = mapping(Point(record["End_Longitude"], record["End_Latitude"]))
+            pickup_loc = mapping(Point(record["start_lon"], record["start_lat"]))
+            dropoff_loc = mapping(Point(record["end_lon"], record["end_lat"]))
 
-            trip_price = record["Fare"]
+            trip_price = record["trip_price"]
 
-            patience = record['Patience_Level']
+            patience = record['patience']
 
 
         behavior = {
@@ -189,6 +189,14 @@ class GenerateBehavior():
             'STEPS_PER_ACTION': analytics_settings['STEPS_PER_ACTION'],
             'RESPONSE_RATE': analytics_settings['RESPONSE_RATE'],
             'STEP_ONLY_ON_EVENTS': analytics_settings['STEP_ONLY_ON_EVENTS'],
+
+            'PUBLISH_REALTIME_DATA': analytics_settings['PUBLISH_REALTIME_DATA'],
+            'WRITE_WS_OUTPUT_TO_FILE': analytics_settings['WRITE_WS_OUTPUT_TO_FILE'],
+
+            'PUBLISH_PATHS_HISTORY': analytics_settings['PUBLISH_PATHS_HISTORY'],
+            'WRITE_PH_OUTPUT_TO_FILE': analytics_settings['WRITE_PH_OUTPUT_TO_FILE'],
+            'PATHS_HISTORY_TIME_WINDOW': analytics_settings['PATHS_HISTORY_TIME_WINDOW'],
+
         }
 
         return behavior
@@ -201,12 +209,14 @@ class GenerateBehavior():
 
             'solver': coverage_area['strategy'],
 
+
             'solver_params': {
                 'planning_area':{
                     'name': coverage_area['name'],
                     'geometry': mapping(PlanningArea().get_planning_area_geometry(coverage_area['districts'])),
                 },
 
+                'online_metric_scale_strategy': coverage_area['online_metric_scale_strategy'],
                 'max_travel_time_pickup': coverage_area.get('max_travel_time_pickup', 600), # NOTE This is in sync with reverse paremater for compromise matching
 
                 "offline_params": {

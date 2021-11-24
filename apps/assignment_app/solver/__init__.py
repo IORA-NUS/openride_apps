@@ -4,3 +4,7 @@ from .compromise_matching import CompromiseMatching
 from .greedy_min_pickup_matching import GreedyMinPickupMatching
 from .greedy_max_revenue_matching import GreedyMaxRevenueMatching
 from .greedy_max_service_score_matching import GreedyMaxServiceScoreMatching
+
+from .pickup_optimal_matching import PickupOptimalMatching
+from .revenue_optimal_matching import RevenueOptimalMatching
+from .service_optimal_matching import ServiceOptimalMatching

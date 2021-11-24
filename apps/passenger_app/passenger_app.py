@@ -1,4 +1,4 @@
-import requests, json, polyline
+import requests, json, polyline, traceback
 from random import choice
 from http import HTTPStatus
 import shapely
@@ -25,14 +25,19 @@ class PassengerApp:
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, current_loc, credentials, passenger_profile):
+    def __init__(self, run_id, sim_clock, current_loc, credentials, passenger_profile, messenger):
         self.run_id = run_id
         self.credentials = credentials
 
         self.user = UserRegistry(sim_clock, credentials)
 
         self.passenger = PassengerManager(run_id, sim_clock, self.user, passenger_profile)
-        self.messenger = Messenger(credentials, f"{self.run_id}/{self.passenger.get_id()}", self.on_receive_message)
+        # self.messenger = Messenger(credentials, f"{self.run_id}/{self.passenger.get_id()}", self.on_receive_message)
+        self.messenger = messenger
+        self.topic_params = {
+            f"{self.run_id}/{self.passenger.get_id()}": self.message_handler
+        }
+
         self.message_queue = []
         self.trip = PassengerTripManager(run_id, sim_clock, self.user, self.messenger)
 
@@ -66,6 +71,8 @@ class PassengerApp:
         except Exception as e:
             logging.exception(str(e))
 
+        # self.messenger.disconnect()
+
         self.exited_market = True
 
 
@@ -93,7 +100,6 @@ class PassengerApp:
                                 'data': {
                                     'event': 'passenger_rejected_trip'
                                 }
-
                             })
                         )
     ################
@@ -103,11 +109,33 @@ class PassengerApp:
         self.latest_sim_clock = sim_clock
         self.latest_loc = current_loc
 
-    def on_receive_message(self, client, userdata, message):
+    # def on_receive_message(self, client, userdata, message):
+    #     ''' Push message to a personal RabbitMQ Queue
+    #     - At every step (simulation), pull items from queue and process them in sequence until Queue is empty
+    #     '''
+    #     payload = json.loads(message.payload.decode('utf-8'))
+
+    #     if payload['action'] == 'assigned':
+    #         if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
+    #             try:
+    #                 self.trip.assign(self.latest_sim_clock,
+    #                                 current_loc=self.latest_loc,
+    #                                 driver=payload['driver_id'])
+    #             except Exception as e:
+    #                 logging.exception(str(e))
+    #                 raise e
+    #         else:
+    #             self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
+    #             # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
+    #     else:
+    #         self.enqueue_message(payload)
+
+    def message_handler(self, payload):
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), pull items from queue and process them in sequence until Queue is empty
         '''
-        payload = json.loads(message.payload.decode('utf-8'))
+        # payload = json.loads(message.payload.decode('utf-8'))
+        # print('passenger_app received_message', payload)
 
         if payload['action'] == 'assigned':
             if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
@@ -116,8 +144,11 @@ class PassengerApp:
                                     current_loc=self.latest_loc,
                                     driver=payload['driver_id'])
                 except Exception as e:
-                    logging.exception(str(e))
-                    raise e
+                    # logging.exception(traceback.format_exc())
+                    logging.warning(f"Assignment failed for {payload=}: {str(e)}")
+                    self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
+                    # Mesage driver of failure
+                    # raise e
             else:
                 self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
                 # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")

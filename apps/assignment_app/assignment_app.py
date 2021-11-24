@@ -1,5 +1,7 @@
 import logging
 import os, sys, time
+
+from apps.utils.utils import is_success
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
@@ -21,7 +23,7 @@ from .engine_manager import EngineManager
 class AssignmentApp:
     ''' '''
 
-    def __init__(self, run_id, sim_clock, credentials, solver_str, solver_params, STEPS_PER_ACTION):
+    def __init__(self, run_id, sim_clock, credentials, solver_name, solver_params, STEPS_PER_ACTION, messenger):
         ''' '''
         self.run_id = run_id
         self.credentials = credentials
@@ -30,13 +32,37 @@ class AssignmentApp:
 
         self.user = UserRegistry(sim_clock, credentials, role='admin')
 
-        self.solver = globals()[solver_str](self.solver_params)
+        self.solver = globals()[solver_name](self.solver_params)
 
         self.engine = EngineManager(self.run_id, sim_clock, self.user, self.solver)
 
-        self.messenger = Messenger(credentials)
+        # self.messenger = Messenger(credentials)
+        self.messenger = messenger
         self.server_max_results = 50 # make sure this is in sync with server
 
+    def get_scale_factor(self, time_step):
+        if self.solver_params.get('online_metric_scale_strategy') == 'demand':
+            try:
+                passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count" # NOTE Absence of run_id in URL
+                params = {
+                    "aggregate": json.dumps({
+                        "$run_id": self.run_id,
+                        "$state": {},
+                    }), # The format above is critical. Must match OpenRoad Server API Specs.
+                }
+
+                response = requests.get(passenger_trip_count_url, headers=self.user.get_headers(), params=params)
+                if is_success(response.status_code):
+                    result = response.json()["_items"][0]
+                    return result.get('num_trips', time_step)
+                else:
+                    logging.warning(f"Failed to generate scale factor. returning {time_step=}")
+                    return time_step
+            except Exception as e:
+                logging.exception(str(e))
+                return time_step
+        else: # 'time'
+            return time_step
 
     def assign(self, sim_clock, time_step):
         ''' '''
@@ -63,11 +89,16 @@ class AssignmentApp:
             assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.engine.as_dict().get('online_params'))
         except Exception as e:
             logging.exception(traceback.format_exc())
+            assignment = []
+            matched_pairs = []
+
         end = time.time()
         # print('after Solve')
+        scale_factor = self.get_scale_factor(time_step)
+        # print(f"{scale_factor = }")
 
-        online_params = self.solver.update_online_params(time_step, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
-        # print('after update_online_params')
+        online_params = self.solver.update_online_params(scale_factor, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
+        # print(f'{online_params=}')
         result = [{
             # 'driver': item[0]['_id'],
             'driver': item[0]['driver'],
@@ -76,9 +107,9 @@ class AssignmentApp:
         } for item in assignment]
 
         performance =  {
-            "Runtime": end-start,
-            "Num Drivers": len(driver_list),
-            "Num Passenger Trips": len(passenger_trip_list),
+            "run_time": end-start,
+            "num_drivers": len(driver_list),
+            "num_passenger_trips": len(passenger_trip_list),
             "result": result
         }
         self.engine.update_engine(sim_clock, online_params, performance)
@@ -204,6 +235,13 @@ class AssignmentApp:
 
         return distance_matrix
 
+    def logout(self): #, sim_clock, current_loc):
+        ''' '''
+        logging.debug(f'logging out Assignmenta Service {self.engine.get_id()}')
+
+        # self.messenger.disconnect()
+
+        self.exited_market = True
 
 if __name__ == "__main__":
 

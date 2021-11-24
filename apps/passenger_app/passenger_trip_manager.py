@@ -107,7 +107,7 @@ class PassengerTripManager:
             "trip_price": self.compute_trip_price(pickup_loc, dropoff_loc) if trip_price is None else trip_price,
         }
 
-        response = requests.post(passenger_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
+        response = requests.post(passenger_trip_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             # passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{response.json()['_id']}"
@@ -137,7 +137,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
         if is_success(response.status_code):
             self.refresh()
         else:
@@ -158,7 +158,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -181,7 +181,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -199,7 +199,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -228,7 +228,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -257,7 +257,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -291,7 +291,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -313,7 +313,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -342,7 +342,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -378,7 +378,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -404,7 +404,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -426,7 +426,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -456,7 +456,7 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         # # # WATCH THIS
         # if is_success(response.status_code):
@@ -481,7 +481,8 @@ class PassengerTripManager:
 
         response = requests.patch(passenger_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data), )
+                                # timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         # if is_success(response.status_code):
         #     logging.info('force quit trip')
@@ -493,7 +494,7 @@ class PassengerTripManager:
         if self.trip is not None:
             passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}"
 
-            response = requests.get(passenger_trip_item_url, headers=self.user.get_headers())
+            response = requests.get(passenger_trip_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
             if is_success(response.status_code):
                 self.trip = response.json()

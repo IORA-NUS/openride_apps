@@ -1,4 +1,4 @@
-import os, sys, json, time
+import os, sys, json, time, logging
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
@@ -15,21 +15,31 @@ from dateutil.relativedelta import relativedelta
 from apps.messenger_service import Messenger
 
 from apps.orsim import ORSimAgent
-from apps.config import assignment_settings, orsim_settings
+# from apps.config import assignment_settings, orsim_settings
 
 class AssignmentAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
+    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
 
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
+        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
 
         self.credentials = {
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
         }
 
-        self.assignment_app = AssignmentApp(self.run_id, self.get_current_time_str(), self.credentials, self.behavior['solver'], self.behavior['solver_params'], self.behavior['STEPS_PER_ACTION'])
+        try:
+            self.app = AssignmentApp(self.run_id,
+                                 self.get_current_time_str(),
+                                 self.credentials,
+                                 self.behavior['solver'],
+                                 self.behavior['solver_params'],
+                                 self.behavior['STEPS_PER_ACTION'],
+                                 messenger=self.messenger)
+        except Exception as e:
+            logging.exception(f"{self.unique_id = }: {str(e)}")
+            self.agent_failed = True
 
 
     def process_payload(self, payload):
@@ -41,7 +51,8 @@ class AssignmentAgentIndie(ORSimAgent):
         return did_step
 
     def logout(self):
-        pass
+        self.app.logout()
+        # pass
 
     def estimate_next_event_time(self):
         ''' '''
@@ -54,8 +65,8 @@ class AssignmentAgentIndie(ORSimAgent):
                     (random() <= self.behavior['RESPONSE_RATE']): # and \
                     # (self.next_event_time <= self.current_time):
 
-            result = self.assignment_app.assign(self.get_current_time_str(), self.current_time_step)
-            self.assignment_app.publish(result)
+            result = self.app.assign(self.get_current_time_str(), self.current_time_step)
+            self.app.publish(result)
             # Do not update next_event time for this agent
             return True
         else:

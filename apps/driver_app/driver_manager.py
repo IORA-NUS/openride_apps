@@ -14,10 +14,10 @@ class DriverManager():
         self.user = user
         self.profile = profile
 
-        try:
-            self.driver = self.init_driver(sim_clock)
-        except Exception as e:
-            logging.exception(str(e))
+        # try:
+        self.driver = self.init_driver(sim_clock)
+        # except Exception as e:
+        #     logging.exception(traceback.format_exc())
             # print(e)
 
         self.vehicle = self.init_vehicle(sim_clock)
@@ -34,15 +34,25 @@ class DriverManager():
 
         driver_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver"
 
-        response = requests.get(driver_url, headers=self.user.get_headers())
+        response = requests.get(driver_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
         # print(response.json())
 
-        if len(response.json()['_items']) == 0:
-            # Need to register and actvate driver
-            response = self.create_driver(sim_clock)
-            return self.init_driver(sim_clock)
+        if is_success(response.status_code):
+            if len(response.json()['_items']) == 0:
+                # Need to register and actvate driver
+                response = self.create_driver(sim_clock)
+                return self.init_driver(sim_clock)
+            else:
+                driver = response.json()['_items'][0]
         else:
-            driver = response.json()['_items'][0]
+            raise Exception(f"{response.url}, {response.text}")
+
+        # if len(response.json()['_items']) == 0:
+        #     # Need to register and actvate driver
+        #     response = self.create_driver(sim_clock)
+        #     return self.init_driver(sim_clock)
+        # else:
+        #     driver = response.json()['_items'][0]
 
         return driver
 
@@ -64,7 +74,7 @@ class DriverManager():
             "sim_clock": sim_clock,
         }
 
-        return requests.post(create_driver_url, headers=self.user.get_headers(), data=json.dumps(data))
+        return requests.post(create_driver_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
 
     def login(self, sim_clock):
@@ -92,9 +102,10 @@ class DriverManager():
 
                     response = requests.patch(driver_item_url,
                                 headers=self.user.get_headers(etag=self.driver['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
                     # print(response.json())
-                    response = requests.get(driver_item_url, headers=self.user.get_headers())
+                    response = requests.get(driver_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
                     self.driver = response.json()
 
                     return self.login(sim_clock)
@@ -113,9 +124,10 @@ class DriverManager():
 
                     response = requests.patch(driver_item_url,
                                                 headers=self.user.get_headers(self.driver['_etag']),
-                                                data=json.dumps(data))
+                                                data=json.dumps(data),
+                                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
                     # print(response.json())
-                    response = requests.get(driver_item_url, headers=self.user.get_headers())
+                    response = requests.get(driver_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
                     self.driver = response.json()
 
                     return self.login(sim_clock)
@@ -138,7 +150,7 @@ class DriverManager():
 
         response = requests.patch(item_url,
                         headers=self.user.get_headers(etag=self.driver['_etag']),
-                        data=json.dumps(data))
+                        data=json.dumps(data)) # no timeout
 
         if is_success(response.status_code):
             self.refresh()
@@ -149,7 +161,7 @@ class DriverManager():
     def init_vehicle(self, sim_clock):
         vehicle_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/vehicle"
 
-        response = requests.get(vehicle_url, headers=self.user.get_headers())
+        response = requests.get(vehicle_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if len(response.json()['_items']) == 0:
             # Need to register and actvate vehicle
@@ -176,7 +188,8 @@ class DriverManager():
 
                     requests.patch(vehicle_item_url,
                                     headers=self.user.get_headers(vehicle['_etag']),
-                                    data=json.dumps(data))
+                                    data=json.dumps(data),
+                                    timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
                     return self.init_vehicle(sim_clock)
 
     def create_vehicle(self, sim_clock):
@@ -192,14 +205,14 @@ class DriverManager():
             "sim_clock": sim_clock,
         }
 
-        response =  requests.post(vehicle_url, headers=self.user.get_headers(), data=json.dumps(data))
+        response =  requests.post(vehicle_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
         # print(response.text)
         return response
 
     def refresh(self):
         driver_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/{self.driver['_id']}"
 
-        response = requests.get(driver_item_url, headers=self.user.get_headers())
+        response = requests.get(driver_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.driver = response.json()

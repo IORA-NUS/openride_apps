@@ -15,21 +15,27 @@ from apps.messenger_service import Messenger
 
 from apps.orsim import ORSimAgent
 
-from apps.config import analytics_settings, orsim_settings
+# from apps.config import analytics_settings, orsim_settings
 
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
+    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
         # # NOTE, model should include run_id and start_time
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
+        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
 
         self.credentials = {
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
         }
 
-        self.analytics_app = AnalyticsApp(self.run_id, self.get_current_time_str(), self.credentials)
+        try:
+            self.app = AnalyticsApp(self.run_id, self.get_current_time_str(),
+                                self.credentials,
+                                messenger=self.messenger)
+        except Exception as e:
+            logging.exception(f"{self.unique_id = }: {str(e)}")
+            self.agent_failed = True
 
     def process_payload(self, payload):
         did_step = False
@@ -40,6 +46,7 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     def logout(self):
         self.step(self.current_time_step)
+        self.app.logout()
 
     def estimate_next_event_time(self):
         ''' '''
@@ -60,11 +67,11 @@ class AnalyticsAgentIndie(ORSimAgent):
             output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
 
             # Publish Active trips using websocket Protocol
-            if analytics_settings['PUBLISH_REALTIME_DATA']:
-                location_stream, route_stream = self.analytics_app.publish_active_trips(self.get_current_time_str())
+            if self.behavior['PUBLISH_REALTIME_DATA']:
+                location_stream, route_stream = self.app.publish_active_trips(self.get_current_time_str())
                 # print(publish_dict)
 
-                if analytics_settings['WRITE_WS_OUTPUT_TO_FILE']:
+                if self.behavior['WRITE_WS_OUTPUT_TO_FILE']:
                     stream_output_dir = f"{output_dir}/stream"
                     if not os.path.exists(stream_output_dir):
                         os.makedirs(stream_output_dir)
@@ -77,16 +84,16 @@ class AnalyticsAgentIndie(ORSimAgent):
 
 
             # Gather history in timewindow as paths for visualization
-            if analytics_settings['PUBLISH_PATHS_HISTORY']:
-                if (((self.current_time_step + 1) * orsim_settings['STEP_INTERVAL']) % analytics_settings['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
+            if self.behavior['PUBLISH_PATHS_HISTORY']:
+                if (((self.current_time_step + 1) * self.orsim_settings['STEP_INTERVAL']) % self.behavior['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
                     timewindow_end = self.current_time
-                    timewindow_start = timewindow_end - relativedelta(seconds=analytics_settings['PATHS_HISTORY_TIME_WINDOW']+orsim_settings['STEP_INTERVAL'])
+                    timewindow_start = timewindow_end - relativedelta(seconds=self.behavior['PATHS_HISTORY_TIME_WINDOW']+self.orsim_settings['STEP_INTERVAL'])
                     logging.debug(f"{timewindow_start}, {timewindow_end}")
 
-                    paths_history = self.analytics_app.get_history_as_paths(timewindow_start, timewindow_end)
+                    paths_history = self.app.get_history_as_paths(timewindow_start, timewindow_end)
                     # print(publish_dict)
 
-                    if analytics_settings['WRITE_PH_OUTPUT_TO_FILE']:
+                    if self.behavior['WRITE_PH_OUTPUT_TO_FILE']:
                         rest_output_dir = f"{output_dir}/rest"
                         if not os.path.exists(rest_output_dir):
                             os.makedirs(rest_output_dir)
@@ -102,33 +109,33 @@ class AnalyticsAgentIndie(ORSimAgent):
     def compute_all_metrics(self):
         # METRICS COMPUTATION
         # start_time = self.current_time - relativedelta(seconds=(analytics_settings['STEPS_PER_ACTION'] * orsim_settings['STEP_INTERVAL'] ))
-        start_time = self.current_time - relativedelta(seconds=(self.behavior['STEPS_PER_ACTION'] * orsim_settings['STEP_INTERVAL'] ))
+        start_time = self.current_time - relativedelta(seconds=(self.behavior['STEPS_PER_ACTION'] * self.orsim_settings['STEP_INTERVAL'] ))
         end_time = self.current_time
-        self.analytics_app.prep_metric_computation_queries(start_time, end_time)
+        self.app.prep_metric_computation_queries(start_time, end_time)
 
         # Compute and Store platform revenue
-        step_revenue = self.analytics_app.compute_revenue()
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'revenue', step_revenue)
+        step_revenue = self.app.compute_revenue()
+        self.app.save_kpi(self.get_current_time_str(), 'revenue', step_revenue)
 
         # Compute and Store cancellation
-        num_cancelled = self.analytics_app.compute_cancelled()
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'cancelled', num_cancelled)
+        num_cancelled = self.app.compute_cancelled()
+        self.app.save_kpi(self.get_current_time_str(), 'cancelled', num_cancelled)
 
         # Compute and Store Served
-        num_served = self.analytics_app.compute_served()
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'served', num_served)
+        num_served = self.app.compute_served()
+        self.app.save_kpi(self.get_current_time_str(), 'served', num_served)
 
         # Compute and Store Waiting_time (sum)
-        waiting_time = self.analytics_app.compute_waiting_time()
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_driver_confirm', waiting_time['wait_time_driver_confirm'])
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_total', waiting_time['wait_time_total'])
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_assignment', waiting_time['wait_time_assignment'])
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'wait_time_pickup', waiting_time['wait_time_pickup'])
+        waiting_time = self.app.compute_waiting_time()
+        self.app.save_kpi(self.get_current_time_str(), 'wait_time_driver_confirm', waiting_time['wait_time_driver_confirm'])
+        self.app.save_kpi(self.get_current_time_str(), 'wait_time_total', waiting_time['wait_time_total'])
+        self.app.save_kpi(self.get_current_time_str(), 'wait_time_assignment', waiting_time['wait_time_assignment'])
+        self.app.save_kpi(self.get_current_time_str(), 'wait_time_pickup', waiting_time['wait_time_pickup'])
 
         # # Compute and Store Served
-        # num_accepted = self.analytics_app.compute_accepted()
-        # self.analytics_app.save_kpi(self.get_current_time_str(), 'num_accepted', num_accepted)
+        # num_accepted = self.app.compute_accepted()
+        # self.app.save_kpi(self.get_current_time_str(), 'num_accepted', num_accepted)
 
         # compute Service Score
-        service_score = self.analytics_app.compute_service_score()
-        self.analytics_app.save_kpi(self.get_current_time_str(), 'service_score', service_score)
+        service_score = self.app.compute_service_score()
+        self.app.save_kpi(self.get_current_time_str(), 'service_score', service_score)

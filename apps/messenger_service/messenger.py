@@ -19,7 +19,7 @@ class Messenger:
         self.channel_id = channel_id
 
         if transport is None:
-            self.client = paho.Client(credentials['email'])
+            self.client = paho.Client(credentials['email'],  clean_session=True)
             self.client.username_pw_set(username=self.credentials['email'], password=self.credentials['password'])
             Messenger.register_user(self.credentials['email'], self.credentials['password'])
 
@@ -35,20 +35,23 @@ class Messenger:
 
         # if channel_id is not None:
         if isinstance(channel_id, str):
-            self.client.loop_start()
+            # self.client.loop_start()
             self.client.subscribe(channel_id, qos=0)
             logging.debug(f"Channel: {channel_id}")
         elif isinstance(channel_id, list):
-            self.client.loop_start()
+            # self.client.loop_start()
             self.client.subscribe([(cid, 0) for cid in channel_id])
             logging.debug(f"Channel: {channel_id}")
 
+        self.client.loop_start()
+
+
 
     def disconnect(self):
-        try:
-            self.client.unsubscribe(self.channel_id)
-        except Exception as e:
-            logging.exception(str(e))
+        # try:
+        #     self.client.unsubscribe(self.channel_id)
+        # except Exception as e:
+        #     logging.exception(str(e))
 
         if self.channel_id is not None:
             try:
@@ -80,7 +83,7 @@ class Messenger:
                                     )
             except Exception as e:
                 logging.exception(str(e))
-                raise(e)
+                raise e
 
         # reset the user and set appropriate permissions as needed
         quoted_slash = '%2F'

@@ -14,10 +14,11 @@ class EngineManager():
         self.user = user
         self.solver = solver
 
-        try:
-            self.engine = self.init_engine(sim_clock)
-        except Exception as e:
-            logging.exception(str(e))
+        # try:
+        self.engine = self.init_engine(sim_clock)
+        # except Exception as e:
+        #     logging.exception(str(e))
+        #     raise e
             # print(e)
 
     def as_dict(self):
@@ -71,6 +72,9 @@ class EngineManager():
             "sim_clock": sim_clock,
         }
         response = requests.patch(engine_url, headers=self.user.get_headers(etag=self.engine['_etag']), data=json.dumps(data))
+
+        if not is_success(response.status_code):
+            logging.warning(f"Update Engine Failed, {response.text}")
         # print(response.text)
 
 

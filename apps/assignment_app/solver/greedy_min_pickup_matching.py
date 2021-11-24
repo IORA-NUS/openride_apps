@@ -12,7 +12,7 @@ from .abstract_solver import AbstractSolver
 # from pyomo.environ import *
 
 # from apps.config import settings
-from apps.config import assignment_settings
+# from apps.config import assignment_settings
 
 class GreedyMinPickupMatching(AbstractSolver):
     ''' '''
@@ -48,7 +48,7 @@ class GreedyMinPickupMatching(AbstractSolver):
 
 
 
-    def update_online_params(self, time_step, driver_list, passenger_list, matched_pairs, offline_params, online_params):
+    def update_online_params(self, scale_factor, driver_list, passenger_list, matched_pairs, offline_params, online_params):
         ''' '''
         return online_params
 

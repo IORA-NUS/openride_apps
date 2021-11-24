@@ -33,7 +33,7 @@ class PassengerManager():
     def init_passenger(self, sim_clock):
         passenger_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger"
 
-        response = requests.get(passenger_url, headers=self.user.get_headers())
+        response = requests.get(passenger_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             if len(response.json()['_items']) == 0:
@@ -56,7 +56,7 @@ class PassengerManager():
             "sim_clock": sim_clock
         }
 
-        return requests.post(create_passenger_url, headers=self.user.get_headers(), data=json.dumps(data))
+        return requests.post(create_passenger_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
     def login(self, sim_clock):
         passenger_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger"
@@ -74,9 +74,10 @@ class PassengerManager():
 
                     requests.patch(passenger_item_url,
                                     headers=self.user.get_headers(etag=self.passenger['_etag']),
-                                    data=json.dumps(data))
+                                    data=json.dumps(data),
+                                    timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
-                    response = requests.get(passenger_item_url, headers=self.user.get_headers())
+                    response = requests.get(passenger_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
                     self.passenger = response.json()
 
                     return self.login(sim_clock)
@@ -94,9 +95,9 @@ class PassengerManager():
 
                     requests.patch(passenger_item_url,
                                     headers=self.user.get_headers(etag=self.passenger['_etag']),
-                                    data=json.dumps(data))
+                                    data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
-                    response = requests.get(passenger_item_url, headers=self.user.get_headers())
+                    response = requests.get(passenger_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
                     if is_success(response.status_code):
                         self.passenger = response.json()
                     else:
@@ -119,7 +120,7 @@ class PassengerManager():
 
         response = requests.patch(item_url,
                         headers=self.user.get_headers(etag=self.passenger['_etag']),
-                        data=json.dumps(data))
+                        data=json.dumps(data)) # no timeout
 
         if is_success(response.status_code):
             self.refresh()
@@ -129,7 +130,7 @@ class PassengerManager():
     def refresh(self):
         passenger_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/{self.passenger['_id']}"
 
-        response = requests.get(passenger_item_url, headers=self.user.get_headers())
+        response = requests.get(passenger_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.passenger = response.json()

@@ -21,5 +21,5 @@ class RandomAssignment(AbstractSolver):
         return assignment, []
 
 
-    def update_online_params(self, time_step, driver_list, passenger_list, matched_pairs, offline_params, online_params):
+    def update_online_params(self, scale_factor, driver_list, passenger_list, matched_pairs, offline_params, online_params):
         return online_params

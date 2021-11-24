@@ -26,7 +26,7 @@ from apps.messenger_service import Messenger
 # Passenger agent will be called to apply behavior at every step
 # At each step, the Agent will process list of collected messages in the app.
 from apps.orsim import ORSimAgent
-from apps.config import orsim_settings, passenger_settings
+# from apps.config import orsim_settings, passenger_settings
 
 class PassengerAgentIndie(ORSimAgent):
 
@@ -36,12 +36,11 @@ class PassengerAgentIndie(ORSimAgent):
     elapsed_duration_steps = None
     # projected_path = None # shapely.geometry.LineString
 
-    step_size = orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
-
-
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
+    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
         ''' '''
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
+        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
+
+        self.step_size = self.orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
 
         self.current_loc = self.behavior['pickup_loc']
         self.pickup_loc = self.behavior['pickup_loc']
@@ -51,28 +50,49 @@ class PassengerAgentIndie(ORSimAgent):
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
         }
-        self.timeout_error = False
+        # self.timeout_error = False
         self.failure_count = 0
+        self.failure_log = {}
 
-        self.app = PassengerApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, passenger_profile=self.behavior['profile'])
+        try:
+            self.app = PassengerApp(self.run_id,
+                                    self.get_current_time_str(),
+                                    self.current_loc,
+                                    credentials=self.credentials,
+                                    passenger_profile=self.behavior['profile'],
+                                    messenger=self.messenger)
+
+            for topic, method in self.app.topic_params.items():
+                self.register_message_handler(topic=topic, method=method)
+        except Exception as e:
+            logging.exception(f"{self.unique_id = }: {str(e)}")
+            self.agent_failed = True
 
     def process_payload(self, payload):
 
-        self.timeout_error = False
+        # self.timeout_error = False
         did_step = False
 
         if payload.get('action') == 'step':
+            self.add_step_log(f'Before entering_market')
             self.entering_market(payload.get('time_step'))
+            self.add_step_log(f'After entering_market')
 
             if self.is_active():
                 try:
+                    self.add_step_log(f'Before step')
                     did_step = self.step(payload.get('time_step'))
+                    self.add_step_log(f'After step')
                     self.failure_count = 0
+                    self.failure_log = {}
                 except Exception as e:
-                    logging.exception(traceback.format_exc())
+                    # logging.exception(traceback.format_exc())
+                    self.failure_log[self.failure_count] = traceback.format_exc()
                     self.failure_count += 1
 
+            self.add_step_log(f'Before exiting_market')
             self.exiting_market()
+            self.add_step_log(f'After exiting_market')
 
         else:
             logging.error(f"{payload = }")
@@ -93,12 +113,12 @@ class PassengerAgentIndie(ORSimAgent):
         failure_threshold = 3
 
         if self.failure_count > failure_threshold:
-            logging.warning(f'Shutting down {self.unique_id} due to too many failures')
+            logging.warning(f'Shutting down {self.unique_id} due to too many failures', self.failure_log)
             self.shutdown()
             return True
-        elif self.timeout_error:
-            self.shutdown()
-            return True
+        # elif self.timeout_error:
+        #     self.shutdown()
+        #     return True
         else:
             if self.app.exited_market:
                 return False
@@ -124,6 +144,7 @@ class PassengerAgentIndie(ORSimAgent):
         return next_event_time
 
     def step(self, time_step):
+        self.add_step_log(f'In step')
         self.app.update_current(self.get_current_time_str(), self.current_loc)
 
         if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
@@ -131,11 +152,14 @@ class PassengerAgentIndie(ORSimAgent):
                     (self.next_event_time <= self.current_time):
 
             # 1. Always refresh trip manager to sync InMemory States with DB
+            self.add_step_log(f'Before refresh')
             self.app.refresh() # Raises exception if unable to refresh
 
             # 1. DeQueue all messages and process them in sequence
+            self.add_step_log(f'Before consume_messages')
             self.consume_messages()
             # 2. based on current state, perform any workflow actions according to Agent behavior
+            self.add_step_log(f'Before perform_workflow_actions')
             self.perform_workflow_actions()
 
             return True
@@ -216,14 +240,15 @@ class PassengerAgentIndie(ORSimAgent):
                                 ).total_seconds()
         except Exception as e:
             # logging.warning(self.behavior)
-            logging.exception(str(e))
+            # logging.exception(str(e))
             raise e
 
         if passenger['state'] != WorkflowStateMachine.online.identifier:
-            try:
-                raise Exception(f"{passenger['state'] = } is not valid")
-            except Exception as e:
-                logging.exception(str(e))
+            # try:
+            raise Exception(f"{passenger['state'] = } is not valid")
+            # except Exception as e:
+            #     # logging.exception(str(e))
+            #     raise e
 
         elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier) and \
                 (self.behavior['trip_request_time'] + (self.behavior['profile']['patience']/self.step_size) < self.current_time_step):

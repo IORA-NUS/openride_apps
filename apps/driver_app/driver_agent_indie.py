@@ -30,7 +30,7 @@ from apps.loc_service import TaxiStop, BusStop, cut, cut_route
 from apps.messenger_service import Messenger
 
 from apps.orsim import ORSimAgent
-from apps.config import driver_settings, orsim_settings
+# from apps.config import driver_settings, orsim_settings
 
 class DriverAgentIndie(ORSimAgent):
 
@@ -39,9 +39,9 @@ class DriverAgentIndie(ORSimAgent):
     projected_path = None # shapely.geometry.LineString
 
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior):
+    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
 
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior)
+        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
 
         self.current_loc = self.behavior['init_loc']
 
@@ -50,29 +50,51 @@ class DriverAgentIndie(ORSimAgent):
             'password': self.behavior.get('password'),
         }
 
-        self.timeout_error = False
+        # self.timeout_error = False
         self.failure_count = 0
+        self.failure_log = {}
 
-        self.app = DriverApp(self.run_id, self.get_current_time_str(), self.current_loc, credentials=self.credentials, profile=self.behavior['profile'])
+        try:
+            self.app = DriverApp(self.run_id,
+                                self.get_current_time_str(),
+                                self.current_loc,
+                                credentials=self.credentials,
+                                profile=self.behavior['profile'],
+                                messenger=self.messenger)
+
+            for topic, method in self.app.topic_params.items():
+                self.register_message_handler(topic=topic, method=method)
+        except Exception as e:
+            logging.exception(f"{self.unique_id = }: {str(e)}")
+            self.agent_failed = True
+
 
 
     def process_payload(self, payload):
         ''' '''
-        self.timeout_error = False
+        # self.timeout_error = False
         did_step = False
 
         if payload.get('action') == 'step':
+            self.add_step_log('Before entering_market')
             self.entering_market(payload.get('time_step'))
+            self.add_step_log('After entering_market')
 
             if self.is_active():
                 try:
+                    self.add_step_log('Before Step')
                     did_step = self.step(payload.get('time_step'))
+                    self.add_step_log('After Step')
                     self.failure_count = 0
+                    self.failure_log = {}
                 except Exception as e:
-                    logging.exception(str(e))
+                    # logging.exception(str(e))
+                    self.failure_log[self.failure_count] = traceback.format_exc()
                     self.failure_count += 1
 
+            self.add_step_log('Before exiting_market')
             self.exiting_market()
+            self.add_step_log('After exiting_market')
         else:
             logging.error(f"{payload = }")
 
@@ -100,12 +122,12 @@ class DriverAgentIndie(ORSimAgent):
         ''' '''
         failure_threshold = 3
         if self.failure_count > failure_threshold:
-            logging.warning(f'Shutting down {self.unique_id} due to too many failures')
+            logging.warning(f'Shutting down {self.unique_id} due to too many failures', self.failure_log)
             self.shutdown()
             return True
-        elif self.timeout_error:
-            self.shutdown()
-            return True
+        # elif self.timeout_error:
+        #     self.shutdown()
+        #     return True
         else:
             # if self.app.get_trip() is None:
             #     return False
@@ -154,13 +176,17 @@ class DriverAgentIndie(ORSimAgent):
                     (random() <= self.behavior['RESPONSE_RATE']) and \
                     (self.next_event_time <= self.current_time):
                 # 1. Always refresh trip manager to sync InMemory States with DB
+                self.add_step_log('Before refresh')
                 self.app.refresh() # Raises exception if unable to refresh
                 ### Driver has likely moved between the ticks, so update their current loc
                 # self.update_location()
+                self.add_step_log('Before update_location_by_route')
                 self.update_location_by_route()
                 # 1. DeQueue all messages and process them in sequence
+                self.add_step_log('Before consume_messages')
                 self.consume_messages()
                 # 2. based on current state, perform any workflow actions according to Agent behavior
+                self.add_step_log('Before perform_workflow_actions')
                 self.perform_workflow_actions()
 
                 return True
@@ -239,22 +265,29 @@ class DriverAgentIndie(ORSimAgent):
                 logging.exception(traceback.format_exc())
                 return
 
-            try:
-                if type(self.projected_path) == LineString:
-                    self.current_loc = mapping(Point(self.projected_path.boundary[0]))
-                elif type(self.projected_path) == Point:
-                    self.current_loc = mapping(self.projected_path)
-                # print(moved_distance, self.current_loc) #, self.projected_path)
-            except Exception as e:
-                logging.warning(f"{elapsed_time=}")
-                # print(e)
-                logging.exception(traceback.format_exc())
+            # try:
+            if type(self.projected_path) == LineString:
+                self.current_loc = mapping(Point(self.projected_path.boundary[0]))
+            elif type(self.projected_path) == Point:
+                self.current_loc = mapping(self.projected_path)
+            # print(moved_distance, self.current_loc) #, self.projected_path)
+            # except Exception as e:
+            #     logging.warning(f"{elapsed_time=}")
+            #     # print(e)
+            #     logging.exception(traceback.format_exc())
 
             # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
             # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
+            # try:
             self.app.ping(self.get_current_time_str(), current_loc=self.current_loc,
-                        traversed_path=list(self.traversed_path.coords),
-                        projected_path=list(self.projected_path.coords))
+                    traversed_path=list(self.traversed_path.coords),
+                    projected_path=list(self.projected_path.coords))
+            # except Exception as e:
+            #     # logging.exception(traceback.format_exc())
+            #     # logging.exception(str(e))
+            #     logging.warning(str(e))
+            #     raise e
+
 
     def consume_messages(self):
         ''' Consume messages. This ensures all the messages recieved between the two ticks are processed appropriately
@@ -292,10 +325,9 @@ class DriverAgentIndie(ORSimAgent):
                             if passenger_data.get('event') == "passenger_rejected_trip":
                                 # logging.warning('Overbooking handling is working ok')
                                 self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-                                # self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
-                                self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=True)
-                                # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                                # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+
+                                # self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=True)
+                                self.app.trip.force_quit(self.get_current_time_str(), current_loc=self.current_loc)
                                 self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
                             if passenger_data.get('event') == "passenger_acknowledge_pickup":
@@ -336,11 +368,7 @@ class DriverAgentIndie(ORSimAgent):
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
 
                     self.set_route(self.current_loc, self.get_random_location())
-                    # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-                    # No need to reset route, continue moving on previous route
 
             if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_received_trip.identifier:
                 if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
@@ -348,11 +376,7 @@ class DriverAgentIndie(ORSimAgent):
                     self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
                 else:
                     self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
-                    # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-                    # No need to reset route, continue moving on previous route
 
             if self.app.get_trip()['state'] in RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
                 ''''''
@@ -377,11 +401,10 @@ class DriverAgentIndie(ORSimAgent):
                 (time_since_last_event >= self.behavior['transition_time_dropoff']):
 
                     self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-                    self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
-                    # self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc)
-                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+
+                    # self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
+                    self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-                    # self.app.trip.look_for_job(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
 
 if __name__ == '__main__':

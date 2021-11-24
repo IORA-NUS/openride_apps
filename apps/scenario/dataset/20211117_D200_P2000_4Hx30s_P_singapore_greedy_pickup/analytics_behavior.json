@@ -1,9 +1,0 @@
-{
-    "analytics_000": {
-        "RESPONSE_RATE": 1,
-        "STEPS_PER_ACTION": 1,
-        "STEP_ONLY_ON_EVENTS": false,
-        "email": "analytics_000@test.com",
-        "password": "password"
-    }
-}

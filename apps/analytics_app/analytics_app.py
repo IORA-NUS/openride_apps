@@ -1,5 +1,6 @@
 import logging
 import os, sys
+import traceback
 
 from dateutil.relativedelta import relativedelta
 
@@ -26,18 +27,27 @@ import websockets, asyncio
 class AnalyticsApp:
     ''' '''
 
-    def __init__(self, run_id, sim_clock, credentials):
+    def __init__(self, run_id, sim_clock, credentials, messenger):
         ''' '''
         self.run_id = run_id
         self.credentials = credentials
 
         self.user = UserRegistry(sim_clock, credentials, role='admin')
 
-        self.messenger = Messenger(credentials)
+        # self.messenger = Messenger(credentials)
+        self.messenger = messenger
         self.server_max_results = 50 # make sure this is in sync with server
 
         self.passenger_trips_for_metric = None
         self.driver_trips_for_metric = None
+
+    def logout(self): #, sim_clock, current_loc):
+        ''' '''
+        logging.debug(f'logging out Analytics Service ')
+
+        # self.messenger.disconnect()
+
+        self.exited_market = True
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''
@@ -396,8 +406,9 @@ class AnalyticsApp:
                     wait_time_assignment += item['stats']['wait_time_assignment']
                     wait_time_pickup += item['stats']['wait_time_pickup']
             except Exception as e:
-                logging.warning(item)
-                logging.warning(str(e))
+                logging.exception(str(e))
+                # logging.exception(f"{traceback.format_exc()}, {item}")
+                # logging.warning()
 
         return {
             'wait_time_driver_confirm': wait_time_driver_confirm,

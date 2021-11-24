@@ -1,5 +1,5 @@
 
-import requests, json, polyline
+import requests, json, polyline, traceback
 from random import choice
 from http import HTTPStatus
 from datetime import datetime
@@ -24,7 +24,7 @@ class DriverApp:
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, current_loc, credentials, profile):
+    def __init__(self, run_id, sim_clock, current_loc, credentials, profile, messenger):
         self.run_id = run_id
         self.credentials = credentials
 
@@ -32,7 +32,11 @@ class DriverApp:
 
         self.driver = DriverManager(run_id, sim_clock, self.user, profile)
 
-        self.messenger = Messenger(credentials, f"{self.run_id}/{self.driver.get_id()}", self.on_receive_message)
+        # self.messenger = Messenger(credentials, f"{self.run_id}/{self.driver.get_id()}", self.on_receive_message)
+        self.messenger = messenger
+        self.topic_params = {
+            f"{self.run_id}/{self.driver.get_id()}": self.message_handler
+        }
 
         self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
 
@@ -63,7 +67,8 @@ class DriverApp:
         ''' '''
         logging.debug(f'logging out Driver {self.driver.get_id()}')
         try:
-            self.trip.end_trip(sim_clock, current_loc, force_quit=True)
+            # self.trip.end_trip(sim_clock, current_loc, force_quit=True)
+            self.trip.force_quit(sim_clock, current_loc)
         except Exception as e:
             logging.exception(str(e))
 
@@ -71,6 +76,8 @@ class DriverApp:
             self.driver.logout(sim_clock)
         except Exception as e:
             logging.exception(str(e))
+
+        # self.messenger.disconnect()
 
         self.exited_market = True
 
@@ -113,12 +120,12 @@ class DriverApp:
         '''
 
         if self.trip.as_dict()['is_occupied'] == False:
-            self.trip.end_trip(sim_clock, current_loc, force_quit=False)
+            # self.trip.end_trip(sim_clock, current_loc, force_quit=False)
+            self.trip.end_trip(sim_clock, current_loc)
 
             self.trip.create_new_occupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle, requested_trip)
         else:
             logging.warning(f'Ignoring Assignment request: Driver {self.driver.get_id()} is already engaged in an Occupied trip')
-            pass
 
 
     ################
@@ -127,11 +134,34 @@ class DriverApp:
         self.latest_sim_clock = sim_clock
         self.latest_loc = current_loc
 
-    def on_receive_message(self, client, userdata, message):
+    # def on_receive_message(self, client, userdata, message):
+    #     ''' Push message to a personal RabbitMQ Queue
+    #     - At every step (simulation), The agent will pull items from queue and process them in sequence until Queue is empty
+    #     '''
+    #     payload = json.loads(message.payload.decode('utf-8'))
+
+    #     if payload['action'] == 'requested_trip':
+    #         passenger_id = payload['passenger_id']
+    #         requested_trip = payload['requested_trip']
+
+    #         try:
+    #             self.handle_requested_trip(self.latest_sim_clock,
+    #                                         current_loc=self.latest_loc,
+    #                                         requested_trip=requested_trip)
+    #         except Exception as e:
+    #             logging.exception(str(e))
+    #             # raise e
+
+    #     else:
+    #         self.enqueue_message(payload)
+
+
+    def message_handler(self, payload):
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), The agent will pull items from queue and process them in sequence until Queue is empty
         '''
-        payload = json.loads(message.payload.decode('utf-8'))
+
+        # print('driver_app received_message', payload)
 
         if payload['action'] == 'requested_trip':
             passenger_id = payload['passenger_id']
@@ -142,7 +172,8 @@ class DriverApp:
                                             current_loc=self.latest_loc,
                                             requested_trip=requested_trip)
             except Exception as e:
-                logging.exception(str(e))
+                # logging.exception(traceback.format_exc())
+                logging.warning(f"Driver failed to respond to trip Request {payload=}: {str(e)}")
                 # raise e
 
         else:

@@ -1,7 +1,7 @@
 from dateutil.relativedelta import relativedelta
 import requests, json, logging, traceback
 
-from apps.config import settings, driver_settings
+from apps.config import settings #, driver_settings
 from apps.utils import id_generator, is_success, deep_update, str_to_time
 
 from apps.state_machine import RidehailDriverTripStateMachine
@@ -12,10 +12,11 @@ class DriverTripManager:
     ''' '''
     trip = None
 
-    def __init__(self, run_id, sim_clock, user, messenger):
+    def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False):
         self.run_id = run_id
         self.user = user
         self.messenger = messenger
+        self.update_passenger_loc = update_passenger_loc
 
     def as_dict(self):
         return self.trip
@@ -97,7 +98,7 @@ class DriverTripManager:
             "sim_clock": sim_clock,
         }
 
-        response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
+        response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             # driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
@@ -130,7 +131,7 @@ class DriverTripManager:
         }
 
 
-        response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data))
+        response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             # driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
@@ -158,7 +159,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -195,7 +197,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -224,7 +227,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -260,7 +264,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -316,7 +321,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -338,7 +344,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -374,7 +381,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -395,12 +403,14 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
 
-            if first_ping or driver_settings['UPDATE_PASSENGER_LOCATION']:
+            # if first_ping or driver_settings['UPDATE_PASSENGER_LOCATION']:
+            if first_ping or self.update_passenger_loc:
                 self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
                                     'action': 'driver_workflow_event',
@@ -430,7 +440,8 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
@@ -463,14 +474,16 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
         else:
             raise Exception(f"{response.url}, {response.text}")
 
-    def end_trip(self, sim_clock, current_loc, force_quit=False):
+    # def end_trip(self, sim_clock, current_loc, force_quit=False):
+    def end_trip(self, sim_clock, current_loc):
         '''
         Send an end_trip signal to the current trip.
         - Force Quit implies that the trip shall be terminated regardless of the current state (i.e. set is_active=False directly)
@@ -480,17 +493,10 @@ class DriverTripManager:
             -- When Driver Logs off, then no new trip should be created. Shutdown signal handles this case.
             -- Hence use with Care.
         '''
-        # try:
-        #     if force_quit == True:
-        #         driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
-        #     else:
-        #         driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
-        # except Exception as e:
-        #     raise e
-        if force_quit == True:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
-        else:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
+        # if force_quit == True:
+        #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
+        # else:
+        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
 
         data = {
             'sim_clock': sim_clock,
@@ -499,7 +505,36 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+
+        if is_success(response.status_code):
+            self.trip = None
+        else:
+            raise Exception(f"{response.url}, {response.text}")
+
+
+    def force_quit(self, sim_clock, current_loc):
+        '''
+        Send an end_trip signal to the current trip.
+        - Force Quit implies that the trip shall be terminated regardless of the current state (i.e. set is_active=False directly)
+            -- This will result in inconsistent states and should be used carefully
+        - Shutdown signal indicates if a new empty trip should be initiated
+            -- Driver should always have an active trip while logged on.
+            -- When Driver Logs off, then no new trip should be created. Shutdown signal handles this case.
+            -- Hence use with Care.
+        '''
+        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
+
+        data = {
+            'sim_clock': sim_clock,
+            'current_loc': current_loc,
+        }
+
+        response = requests.patch(driver_trip_item_url,
+                                headers=self.user.get_headers(etag=self.trip['_etag']),
+                                data=json.dumps(data),)
+                                # timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.trip = None
@@ -580,19 +615,20 @@ class DriverTripManager:
 
         response = requests.patch(driver_trip_item_url,
                                 headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+                                data=json.dumps(data),
+                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
         if is_success(response.status_code):
             self.refresh()
         else:
-            # raise Exception(f"{response.url}, {response.text}")
-            logging.exception(f"Unable to Ping: {response.text}")
+            raise Exception(f"{response.url}, {response.text}")
+            # logging.exception(f"Unable to Ping: {response.text}")
 
     def refresh(self): #, from_server=True):
         if (self.trip is not None): # and from_server:
             driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}"
 
-            response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
+            response = requests.get(driver_trip_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
             if is_success(response.status_code):
                 self.trip = response.json()

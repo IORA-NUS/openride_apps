@@ -2,6 +2,8 @@
 archive/
 results/
 output/
+dataset/
+log/
 nohup*
 
 # user_db.py

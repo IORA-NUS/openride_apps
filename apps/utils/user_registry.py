@@ -94,13 +94,17 @@ class UserRegistry():
             'where': json.dumps({"email": self.email})
         }
         response = requests.get(user_url, headers=self.get_headers(), params=params)
-        user = response.json()['_items'][0]
 
-        if user['role'] != self.role:
-            user_item_url = f"{user_url}/{user['_id']}"
-            response = requests.patch(user_item_url,
-                                    headers=self.get_headers(etag=user['_etag']),
-                                    data=json.dumps({"role": self.role}))
+        if is_success(response.status_code):
+            user = response.json()['_items'][0]
 
-            if not is_success(response.status_code):
-                raise Exception(f"Unable to update User Role. Got {response.text}")
+            if user['role'] != self.role:
+                user_item_url = f"{user_url}/{user['_id']}"
+                response = requests.patch(user_item_url,
+                                        headers=self.get_headers(etag=user['_etag']),
+                                        data=json.dumps({"role": self.role}))
+
+                if not is_success(response.status_code):
+                    raise Exception(f"Unable to update User Role. Got {response.text}")
+        else:
+            raise Exception(f"{response.url}, {response.text}")

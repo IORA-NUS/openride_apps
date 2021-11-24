@@ -7,7 +7,7 @@ from .abstract_solver import AbstractSolver
 from pyomo.environ import *
 
 # from apps.config import settings
-from apps.config import assignment_settings
+# from apps.config import assignment_settings
 
 class CompromiseMatching(AbstractSolver):
     ''' '''
@@ -19,7 +19,12 @@ class CompromiseMatching(AbstractSolver):
         The solver needs it in the reversed order i.e [passenger, driver]
         '''
 
-        matched_pairs = self.doMatching(driver_list, passenger_trip_list, distance_matrix, online_params)
+        try:
+            matched_pairs = self.doMatching(driver_list, passenger_trip_list, distance_matrix, online_params)
+        except Exception as e:
+            raise e
+            # logging.exception(traceback.format_exc())
+            # matched_pairs = []
         # print(f"{matched_pairs=}")
 
         if (len(driver_list) > 0) and (len(passenger_trip_list) > 0):
@@ -138,18 +143,17 @@ class CompromiseMatching(AbstractSolver):
             except Exception as e:
                 # print(e)
                 # print(traceback.format_exc())
-                logging.exception(str(e))
-
+                # logging.exception(str(e))
                 raise e
 
         return matchedPairs
 
-    def update_online_params(self, time_step, driver_list, passenger_list, matched_pairs, offline_params, online_params):
+    def update_online_params(self, scale_factor, driver_list, passenger_list, matched_pairs, offline_params, online_params):
         ''' '''
-        # logging.warning(time_step)
-        online_params['exp_target_reverse_pickup_time'] = (time_step + 1) * offline_params['target_reverse_pickup_time']
-        online_params['exp_target_revenue'] = (time_step + 1) * offline_params['target_revenue']
-        online_params['exp_target_service_score'] = (time_step + 1) * offline_params['target_service_score']
+        # logging.warning(scale_factor)
+        online_params['exp_target_reverse_pickup_time'] = (scale_factor + 1) * offline_params['target_reverse_pickup_time']
+        online_params['exp_target_revenue'] = (scale_factor + 1) * offline_params['target_revenue']
+        online_params['exp_target_service_score'] = (scale_factor + 1) * offline_params['target_service_score']
 
         reverse_pickup_time_step = 0
         revenue_step = 0
@@ -184,8 +188,8 @@ class CompromiseMatching(AbstractSolver):
         online_params['realtime_revenue_cum'] += revenue_step
         online_params['realtime_service_score_cum'] += service_score_step
 
-        online_params['weight_pickup_time'] = max(online_params['exp_target_reverse_pickup_time'] - online_params['realtime_reverse_pickup_time_cum'], 1.0) / (time_step + 1)
-        online_params['weight_revenue'] = max(online_params['exp_target_revenue'] - online_params['realtime_revenue_cum'], 1.0) / (time_step + 1)
-        online_params['weight_service_score'] = max(online_params['exp_target_service_score'] - online_params['realtime_service_score_cum'], 1.0) / (time_step + 1)
+        online_params['weight_pickup_time'] = max(online_params['exp_target_reverse_pickup_time'] - online_params['realtime_reverse_pickup_time_cum'], 1.0) / (scale_factor + 1)
+        online_params['weight_revenue'] = max(online_params['exp_target_revenue'] - online_params['realtime_revenue_cum'], 1.0) / (scale_factor + 1)
+        online_params['weight_service_score'] = max(online_params['exp_target_service_score'] - online_params['realtime_service_score_cum'], 1.0) / (scale_factor + 1)
 
         return online_params

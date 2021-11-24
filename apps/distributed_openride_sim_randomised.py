@@ -38,15 +38,16 @@ from apps.utils import time_to_str, str_to_time
 class DistributedOpenRideSimRandomised():
 
 
-    def __init__(self, scenario_name):
-        self.run_id = id_generator(12)
-        self.reference_time = datetime(2020,1,1,8,0,0)
-        self.current_time = self.reference_time
+    def __init__(self, run_id, scenario_name):
+        self.run_id = run_id
         self.scenario_name = scenario_name
         self.scenario = ScenarioManager(scenario_name)
 
-        self.agent_scheduler = ORSimScheduler(self.run_id, 'agent_scheduler')
-        self.service_scheduler = ORSimScheduler(self.run_id, 'service_scheduler')
+        self.reference_time = self.scenario.reference_time
+        self.current_time = self.reference_time
+
+        self.agent_scheduler = ORSimScheduler(self.run_id, 'agent_scheduler', self.scenario.orsim_settings)
+        self.service_scheduler = ORSimScheduler(self.run_id, 'service_scheduler', self.scenario.orsim_settings, init_failure_handler='hard')
         self.agent_registry = {i:[] for i in range(self.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'])}
 
         self.user = self.setup_user()
@@ -54,18 +55,13 @@ class DistributedOpenRideSimRandomised():
 
         self.execution_start_time = time.time()
 
-
-        output_dir = f"{os.path.dirname(os.path.abspath(__file__))}/output/{self.run_id}"
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-
         for agent_id, behavior in self.scenario.driver_collection.items():
             spec = {
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
-                'behavior': behavior
+                'behavior': behavior,
+                'orsim_settings': self.scenario.orsim_settings
             }
 
             self.agent_registry[behavior['shift_start_time']].append({
@@ -79,7 +75,8 @@ class DistributedOpenRideSimRandomised():
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
-                'behavior': behavior
+                'behavior': behavior,
+                'orsim_settings': self.scenario.orsim_settings
             }
 
             self.agent_registry[behavior['trip_request_time']].append({
@@ -94,7 +91,8 @@ class DistributedOpenRideSimRandomised():
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
-                'behavior': behavior
+                'behavior': behavior,
+                'orsim_settings': self.scenario.orsim_settings
             }
 
             self.service_scheduler.add_agent(agent_id, start_assignment, spec)
@@ -104,7 +102,8 @@ class DistributedOpenRideSimRandomised():
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
-                'behavior': behavior
+                'behavior': behavior,
+                'orsim_settings': self.scenario.orsim_settings
             }
 
             self.service_scheduler.add_agent(agent_id, start_analytics, spec)
@@ -206,29 +205,60 @@ class DistributedOpenRideSimRandomised():
 
 if __name__ == '__main__':
 
-    log_dir = f"{os.path.dirname(os.path.abspath(__file__))}/log"
-    if not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    run_id = id_generator(12)
 
-    logging.basicConfig(filename=f'{log_dir}/app.log', level=settings['LOG_LEVEL'], filemode='w')
+    # log_dir = f"{os.path.dirname(os.path.abspath(__file__))}/log"
+    # if not os.path.exists(log_dir):
+    #     os.makedirs(log_dir)
+    output_dir = f"{os.path.dirname(os.path.abspath(__file__))}/output/{run_id}"
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
 
-    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_random'
-    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_pickup'
-    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_revenue'
-    # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_servicescore'
+    logging.basicConfig(filename=f'{output_dir}/app.log', level=settings['LOG_LEVEL'], filemode='w')
 
-    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_random'
-    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_pickup'
-    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_revenue'
-    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_servicescore'
-    # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_compromise'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_random'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_pickup'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_revenue'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_servicescore'
 
-    scenario_name = '20211117_D200_P4000_8Hx60s_P_singapore_greedy_pickup'
-    # scenario_name = '20211117_D500_P10000_12Hx60s_P_singapore_compromise'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_random'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_pickup'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_revenue'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_greedy_servicescore'
+    # # scenario_name = '20211117_D200_P2000_4Hx30s_P_singapore_compromise'
+
+    # # scenario_name = '20211117_D200_P4000_8Hx60s_P_singapore_greedy_pickup'
+    # scenario_name = '20211117_D200_P4000_8Hx60s_P_singapore_greedy_revenue'
+
+    # scenario_name = '20211117_D300_P4000_8Hx30s_P_singapore_greedy_pickup'
+    # scenario_name = '20211117_D300_P4000_8Hx30s_P_singapore_greedy_revenue'
+
+    # scenario_name = '20211117_D300_P5000_8Hx30s_P_singapore_greedy_pickup'
 
     # scenario_name = '20211117_D10_P20_1Hx60s_P_singapore_compromise'
 
-    sim = DistributedOpenRideSimRandomised(scenario_name)
+    # scenario_name = '20211117_D300_P5000_8Hx30s_P_singapore_greedy_pickup'
+    # scenario_name = '20211117_D300_P5000_8Hx30s_P_singapore_greedy_revenue'
+    # scenario_name = '20211117_D300_P5000_8Hx30s_P_singapore_compromise'
+
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211122_a_greedy_pickup'
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211122_a_greedy_revenue'
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211122_a_compromise'
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211122_a_compromise_2'
+
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_service_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_compromise'
+
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_compromise_demand'
+    scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_compromise_demand_prop'
+
+    try:
+        sim = DistributedOpenRideSimRandomised(run_id, scenario_name)
+    except Exception as e:
+        print(f"Failed to launch Simulation model... got: {str(e)}")
+        raise e
 
     print(f"Initializing Simulation for scenario {scenario_name = } with {sim.run_id = }")
 
@@ -245,6 +275,11 @@ if __name__ == '__main__':
 
     run_time = time.time() - execution_start_time
     sim.update_status('success', run_time)
+
+    print(f"Generating Visualization output")
+    from utils.viz_data import dump
+    dump(sim.run_id, sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'], sim.scenario.orsim_settings['STEP_INTERVAL'])
+
 
     print(f"Completed {sim.run_id = } with run time {run_time}")
 
