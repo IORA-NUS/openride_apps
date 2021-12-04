@@ -624,7 +624,7 @@ class DriverTripManager:
             raise Exception(f"{response.url}, {response.text}")
             # logging.exception(f"Unable to Ping: {response.text}")
 
-    def refresh(self): #, from_server=True):
+    def refresh(self, project=None): #, from_server=True):
         if (self.trip is not None): # and from_server:
             driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}"
 

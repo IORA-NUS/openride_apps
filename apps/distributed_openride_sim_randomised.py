@@ -60,6 +60,7 @@ class DistributedOpenRideSimRandomised():
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
+                'init_time_step': behavior['shift_start_time'],
                 'behavior': behavior,
                 'orsim_settings': self.scenario.orsim_settings
             }
@@ -75,6 +76,7 @@ class DistributedOpenRideSimRandomised():
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
+                'init_time_step': behavior['trip_request_time'],
                 'behavior': behavior,
                 'orsim_settings': self.scenario.orsim_settings
             }
@@ -91,6 +93,7 @@ class DistributedOpenRideSimRandomised():
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
+                'init_time_step': 0,
                 'behavior': behavior,
                 'orsim_settings': self.scenario.orsim_settings
             }
@@ -102,6 +105,7 @@ class DistributedOpenRideSimRandomised():
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
+                'init_time_step': 0,
                 'behavior': behavior,
                 'orsim_settings': self.scenario.orsim_settings
             }
@@ -191,15 +195,18 @@ class DistributedOpenRideSimRandomised():
                 data[f'step_metrics.{k}'] = v
                 break # expecting only one item
 
-        response = requests.patch(run_config_item_url,
-                                  headers=self.user.get_headers(etag=self.run_record['_etag']),
-                                  data=json.dumps(data))
-        # print('on patch', response.json())
+        try:
+            response = requests.patch(run_config_item_url,
+                                    headers=self.user.get_headers(etag=self.run_record['_etag']),
+                                    data=json.dumps(data))
+            # print('on patch', response.json())
 
-        if is_success(response.status_code):
-            return response.json()
-        else:
-            raise Exception(f"{response.url}, {response.text}")
+            if is_success(response.status_code):
+                return response.json()
+            else:
+                print(f"{response.url}, {response.text}")
+        except Exception as e:
+            print(str(e))
 
 
 
@@ -252,7 +259,36 @@ if __name__ == '__main__':
     # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_compromise'
 
     # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_compromise_demand'
-    scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_compromise_demand_prop'
+    # scenario_name = 'comfort_delgro_sampled_10pct_20211123_b_compromise_demand_prop'
+
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211124_a_pickup_greedy'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211124_a_revenue_greedy'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211124_a_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211124_a_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211124_a_compromise'
+
+    # scenario_name = 'comfort_delgro_sampled_10p_08d_20211125_a_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_08d_20211125_a_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_08d_20211125_a_service_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_08d_20211125_a_compromise'
+
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211126_a_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211126_a_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211126_a_service_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211126_a_compromise'
+
+    scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_service_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P1.2_S1.2'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P1.0_S1.0'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P0.9_S0.9'
+
+    # scenario_name = 'comfort_delgro_sampled_15p_06d_20211202_svcdist2_streethail_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_15p_06d_20211202_svcdist2_streethail_revenue_optimal'
+
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211203_svcdist2_16H_pickup_optimal'
 
     try:
         sim = DistributedOpenRideSimRandomised(run_id, scenario_name)
@@ -278,7 +314,12 @@ if __name__ == '__main__':
 
     print(f"Generating Visualization output")
     from utils.viz_data import dump
-    dump(sim.run_id, sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'], sim.scenario.orsim_settings['STEP_INTERVAL'])
+    dump(sim.run_id,
+         sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+         sim.scenario.orsim_settings['STEP_INTERVAL'],
+         sim.reference_time,
+         True if 'compromise' in scenario_name else False
+         )
 
 
     print(f"Completed {sim.run_id = } with run time {run_time}")

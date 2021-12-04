@@ -70,7 +70,6 @@ class ScenarioManager():
         if self.orsim_settings.get('REFERENCE_TIME') is not None:
             self.reference_time = datetime.strptime(self.orsim_settings.get('REFERENCE_TIME'), '%Y-%m-%d %H:%M:%S')
 
-
     def load_behavior_from_disk(self, behavior_dir):
         with open(f"{behavior_dir}/driver_behavior.json", "r") as fp:
             self.driver_collection = json.load(fp)
@@ -226,4 +225,4 @@ class ScenarioManager():
 
 if __name__ == '__main__':
 
-    gen = ScenarioManager('comfort_delgro_sampled_10pct_20211123_b')
+    gen = ScenarioManager('comfort_delgro_sampled_10p_06d_20211203_svcdist2_16H')

@@ -223,12 +223,12 @@ class GenerateBehavior():
                     "ub_pickup_time": 600,
 
                     "scale_factor_revenue": 1,
-                    "scale_factor_reverse_pickup_time": 10,
-                    "scale_factor_service_score": 10,
+                    "scale_factor_reverse_pickup_time": 1,
+                    "scale_factor_service_score": 1,
 
-                    "target_revenue": 41.44, # including gamma
-                    "target_reverse_pickup_time": 40.98, # including gamma
-                    "target_service_score": 32.89, # including gamma
+                    "target_revenue": 0, # including gamma
+                    "target_reverse_pickup_time": 0, # including gamma
+                    "target_service_score": 0, # including gamma
                 },
                 "online_params": {
                     "realtime_reverse_pickup_time_cum": 0,

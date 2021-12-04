@@ -69,7 +69,7 @@ class PassengerApp:
         try:
             self.passenger.logout(sim_clock)
         except Exception as e:
-            logging.exception(str(e))
+            logging.warning(str(e))
 
         # self.messenger.disconnect()
 

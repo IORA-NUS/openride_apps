@@ -20,13 +20,23 @@ from apps.orsim import ORSimAgent
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
         # # NOTE, model should include run_id and start_time
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
 
         self.credentials = {
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
+        }
+        self.kpi_collection = {
+            'revenue': 0,
+            'num_cancelled': 0,
+            'num_served': 0,
+            'wait_time_driver_confirm': 0,
+            'wait_time_total': 0,
+            'wait_time_assignment': 0,
+            'wait_time_pickup': 0,
+            'service_score': 0,
         }
 
         try:
@@ -114,28 +124,22 @@ class AnalyticsAgentIndie(ORSimAgent):
         self.app.prep_metric_computation_queries(start_time, end_time)
 
         # Compute and Store platform revenue
-        step_revenue = self.app.compute_revenue()
-        self.app.save_kpi(self.get_current_time_str(), 'revenue', step_revenue)
+        self.kpi_collection['revenue'] = self.app.compute_revenue()
 
         # Compute and Store cancellation
-        num_cancelled = self.app.compute_cancelled()
-        self.app.save_kpi(self.get_current_time_str(), 'cancelled', num_cancelled)
+        self.kpi_collection['num_cancelled'] = self.app.compute_cancelled()
 
         # Compute and Store Served
-        num_served = self.app.compute_served()
-        self.app.save_kpi(self.get_current_time_str(), 'served', num_served)
+        self.kpi_collection['num_served'] = self.app.compute_served()
 
         # Compute and Store Waiting_time (sum)
         waiting_time = self.app.compute_waiting_time()
-        self.app.save_kpi(self.get_current_time_str(), 'wait_time_driver_confirm', waiting_time['wait_time_driver_confirm'])
-        self.app.save_kpi(self.get_current_time_str(), 'wait_time_total', waiting_time['wait_time_total'])
-        self.app.save_kpi(self.get_current_time_str(), 'wait_time_assignment', waiting_time['wait_time_assignment'])
-        self.app.save_kpi(self.get_current_time_str(), 'wait_time_pickup', waiting_time['wait_time_pickup'])
-
-        # # Compute and Store Served
-        # num_accepted = self.app.compute_accepted()
-        # self.app.save_kpi(self.get_current_time_str(), 'num_accepted', num_accepted)
+        self.kpi_collection['wait_time_driver_confirm'] = waiting_time['wait_time_driver_confirm']
+        self.kpi_collection['wait_time_total'] = waiting_time['wait_time_total']
+        self.kpi_collection['wait_time_assignment'] = waiting_time['wait_time_assignment']
+        self.kpi_collection['wait_time_pickup'] = waiting_time['wait_time_pickup']
 
         # compute Service Score
-        service_score = self.app.compute_service_score()
-        self.app.save_kpi(self.get_current_time_str(), 'service_score', service_score)
+        self.kpi_collection['service_score'] = self.app.compute_service_score()
+
+        self.app.save_kpi(self.get_current_time_str(), self.kpi_collection)

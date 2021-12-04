@@ -427,15 +427,17 @@ class AnalyticsApp:
         return service_score
 
 
-    def save_kpi(self, sim_clock, metric, value):
+    def save_kpi(self, sim_clock, kpi_collection):
         ''' '''
         kpi_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/kpi"
 
-        data = {
-            'metric': metric,
-            'value': value,
-            'sim_clock': sim_clock,
-        }
+        data = []
+        for metric, value in kpi_collection.items():
+            data.append({
+                'metric': metric,
+                'value': value,
+                'sim_clock': sim_clock,
+            })
 
         response = requests.post(kpi_url, headers=self.user.get_headers(),
                                  data=json.dumps(data))

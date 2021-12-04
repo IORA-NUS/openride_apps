@@ -20,9 +20,9 @@ from apps.orsim import ORSimAgent
 class AssignmentAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
 
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
 
         self.credentials = {
             'email': self.behavior.get('email'),

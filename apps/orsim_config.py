@@ -1,14 +1,15 @@
 
 
 orsim_settings = {
-    'SIMULATION_LENGTH_IN_STEPS': 960, # 960, # 600,    # 60 # Num Steps
+    # 'SIMULATION_LENGTH_IN_STEPS': 960, # 960, # 600,    # 60 # Num Steps
+    'SIMULATION_LENGTH_IN_STEPS': 1920, # 960, # 600,    # 60 # Num Steps
     'STEP_INTERVAL': 30, # 15, # 6,     # 60   # seconds in Simulation Universe
 
     'AGENT_LAUNCH_TIMEOUT': 15,
     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
     'STEP_TIMEOUT_TOLERANCE': 0.1,
 
-    'REFERENCE_TIME': '2020-01-01 08:00:00',
+    'REFERENCE_TIME': '2020-01-01 04:00:00',
 }
 
 analytics_settings = {
@@ -75,7 +76,7 @@ assignment_settings = {
         {
             'name': 'Singapore_SG',
             'districts': ['SINGAPORE',],
-            'strategy': 'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
+            'strategy': 'PickupOptimalMatching', #'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
             'max_travel_time_pickup': 600, # seconds
             'online_metric_scale_strategy': 'time', # Allowed: time | demand
         },
