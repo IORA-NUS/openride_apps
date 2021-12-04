@@ -17,7 +17,7 @@ from .abstract_solver import AbstractSolver
 class GreedyMinPickupMatching(AbstractSolver):
     ''' '''
 
-    def solve(self, driver_list, passenger_trip_list, distance_matrix, online_params):
+    def solve(self, driver_list, passenger_trip_list, distance_matrix, offline_params, online_params):
         '''
         NOTE: Input distance_matrix is Indexed by [driver, passenger]
         The solver needs it in the reversed order i.e [passenger, driver]

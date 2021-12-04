@@ -13,14 +13,14 @@ class PickupOptimalMatching(AbstractSolver):
     ''' '''
 
 
-    def solve(self, driver_list, passenger_trip_list, distance_matrix, online_params):
+    def solve(self, driver_list, passenger_trip_list, distance_matrix, offline_params, online_params):
         '''
         NOTE: Input distance_matrix is Indexed by [driver, passenger]
         The solver needs it in the reversed order i.e [passenger, driver]
         '''
 
         try:
-            matched_pairs = self.doMatching(driver_list, passenger_trip_list, distance_matrix, online_params)
+            matched_pairs = self.doMatching(driver_list, passenger_trip_list, distance_matrix, offline_params, online_params)
         except Exception as e:
             raise e
             # logging.exception(traceback.format_exc())
@@ -39,7 +39,7 @@ class PickupOptimalMatching(AbstractSolver):
         return assignment, matched_pairs
 
 
-    def doMatching(self, driverList, paxList, pickupTime, online_params):
+    def doMatching(self, driverList, paxList, pickupTime, offline_params, online_params):
         ''' '''
 
         # print(f"{online_params=}")

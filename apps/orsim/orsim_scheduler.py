@@ -51,30 +51,27 @@ class ORSimScheduler(ABC):
         kwargs['scheduler_id'] = self.scheduler_id
         method.delay(**kwargs) # NOTE This starts the Celery Task in a new worker thread
 
-        launch_start = time.time()
-        while True:
-            # if self.agent_collection[unique_id]['step_response'] == 'ready':
-            if self.agent_collection[unique_id]['step_response'][self.time]['reaction'] == 'ready':
-                logging.info(f'agent {unique_id} is ready')
-                print(f'agent {unique_id} is ready')
-                break
-            elif (self.agent_collection[unique_id]['step_response'][self.time]['reaction'] == 'init_error') or \
-                                ((time.time() - launch_start) > self.orsim_settings['AGENT_LAUNCH_TIMEOUT']):
-                logging.exception(f'Failed to Launch agent {unique_id}')
-                print(f'Failed to Launch agent {unique_id}')
-                self.remove_agent(unique_id)
-                if self.init_failure_handler == 'soft':
-                    break
-                else:
-                    raise Exception(f"Shutdown {self.scheduler_id} due to {self.init_failure_handler=}. Agent {unique_id} failed to launch.")
-            else:
-                time.sleep(0.1)
-                # if (time.time() - launch_start) > self.orsim_settings['AGENT_LAUNCH_TIMEOUT']:
-                #     # NOTE THis will create Orphan connections and memory leak. Keep an eye out for issues
-                #     logging.exception(f'Failed to Launch agent {unique_id}')
-                #     print(f'Failed to Launch agent {unique_id}')
-                #     self.remove_agent(unique_id)
-                #     break
+        logging.info(f'agent {unique_id} entering market')
+        print(f'agent {unique_id} entering market')
+
+        # launch_start = time.time()
+        # while True:
+        #     # if self.agent_collection[unique_id]['step_response'] == 'ready':
+        #     if self.agent_collection[unique_id]['step_response'][self.time]['reaction'] == 'ready':
+        #         logging.info(f'agent {unique_id} is ready')
+        #         print(f'agent {unique_id} is ready')
+        #         break
+        #     elif (self.agent_collection[unique_id]['step_response'][self.time]['reaction'] == 'init_error') or \
+        #                         ((time.time() - launch_start) > self.orsim_settings['AGENT_LAUNCH_TIMEOUT']):
+        #         logging.exception(f'Failed to Launch agent {unique_id}')
+        #         print(f'Failed to Launch agent {unique_id}')
+        #         self.remove_agent(unique_id)
+        #         if self.init_failure_handler == 'soft':
+        #             break
+        #         else:
+        #             raise Exception(f"Shutdown {self.scheduler_id} due to {self.init_failure_handler=}. Agent {unique_id} failed to launch.")
+        #     else:
+        #         time.sleep(0.1)
 
 
     def remove_agent(self, unique_id):
@@ -110,12 +107,14 @@ class ORSimScheduler(ABC):
         start_time = time.time()
         base = 0
         completed = 0
+        ready = 0
         shutdown = 0
         error = 0
         waiting = len(self.agent_collection)
 
         while waiting > 0:
             completed = 0
+            ready = 0
             shutdown = 0
             error = 0
             waiting = 0
@@ -124,6 +123,8 @@ class ORSimScheduler(ABC):
                 response = self.agent_collection[agent_id]['step_response'][self.time]
                 if (response['reaction'] == 'completed'):
                     completed += 1
+                elif (response['reaction'] == 'ready'):
+                    ready += 1
                 elif (response['reaction'] == 'error'):
                     error += 1
                 elif (response['reaction'] == 'shutdown'):
@@ -136,6 +137,7 @@ class ORSimScheduler(ABC):
 
             self.agent_stat[self.time] = {
                 'completed': completed,
+                'ready': ready,
                 'error': error,
                 'shutdown': shutdown,
                 'waiting': waiting,
@@ -155,7 +157,7 @@ class ORSimScheduler(ABC):
     async def step(self):
 
         logging.info(f"{self.scheduler_id} Step: {self.time}")
-
+        start_time = time.time()
 
         if self.time == self.orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1:
             message = {'action': 'shutdown', 'time_step': self.time}
@@ -172,11 +174,11 @@ class ORSimScheduler(ABC):
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
 
         try:
-            start_time = time.time()
+            # start_time = time.time()
             await asyncio.wait_for(self.confirm_responses(), timeout=self.orsim_settings['STEP_TIMEOUT'])
             # end_time = time.time()
             logging.info(f'{self.agent_stat[self.time] = }')
-            logging.info(f'{self.scheduler_id} Runtime: {(time.time()-start_time):0.2f} sec')
+            # logging.info(f'{self.scheduler_id} Runtime: {(time.time()-start_time):0.2f} sec')
 
         except asyncio.TimeoutError as e:
             logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.orsim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.')
@@ -202,6 +204,8 @@ class ORSimScheduler(ABC):
         if self.time == self.orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1:
             sim_stat['end_sim'] = True
 
+
+        logging.info(f'{self.scheduler_id} Runtime: {(time.time()-start_time):0.2f} sec')
         return sim_stat
 
 

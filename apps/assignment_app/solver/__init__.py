@@ -8,3 +8,6 @@ from .greedy_max_service_score_matching import GreedyMaxServiceScoreMatching
 from .pickup_optimal_matching import PickupOptimalMatching
 from .revenue_optimal_matching import RevenueOptimalMatching
 from .service_optimal_matching import ServiceOptimalMatching
+
+from .compromise_servicebias_matching import CompromiseServiceBiasMatching
+from .compromise_scaled_matching import CompromiseScaledMatching

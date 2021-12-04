@@ -17,7 +17,7 @@ class ORSimAgent(ABC):
     payload_cache = None
     step_log = {}
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
         self.unique_id = unique_id
         self.run_id = run_id
         self.scheduler_id = scheduler_id
@@ -46,6 +46,7 @@ class ORSimAgent(ABC):
         self.message_processing_active = False
 
         self.message_handlers = {}
+        self.bootstrap_step(init_time_step)
 
         self.register_message_handler(topic=f"{self.run_id}/{self.scheduler_id}/ORSimAgent",
                                  method=self.handle_orsim_agent_message)
@@ -62,6 +63,10 @@ class ORSimAgent(ABC):
     def add_step_log(self, message):
         self.step_log[datetime.now().isoformat()] = message
 
+    def take_first_step(self, dummy_payload):
+        self.message_processing_active = True
+        self.handle_orsim_agent_message(dummy_payload)
+
     def handle_orsim_agent_message(self, payload):
         # print('Inside handle_orsim_agent_message')
         self.add_step_log('In handle_orsim_agent_message')
@@ -72,22 +77,20 @@ class ORSimAgent(ABC):
             if payload.get('action') == 'init':
                 ''' NOTE This is unused block of code at the moment'''
                 # print(f"{self.unique_id} received {payload=}")
+                did_step = self.process_payload(payload)
+                self.next_event_time = self.estimate_next_event_time()
+
                 response_payload = {
                     'agent_id': self.unique_id,
                     'time_step': self.current_time_step,
                     'action': 'ready', # 'completed',
-                    'did_step': True,
+                    'did_step': did_step,
                     'run_time': time.time() - self.start_time,
                 }
             elif payload.get('action') == 'step':
 
-                self.add_step_log('Before process_payload')
                 did_step = self.process_payload(payload)
-                self.add_step_log('After process_payload')
-
-                self.add_step_log('Before estimate_next_event_time')
                 self.next_event_time = self.estimate_next_event_time()
-                self.add_step_log('After estimate_next_event_time')
 
                 response_payload = {
                     'agent_id': self.unique_id,
@@ -143,84 +146,10 @@ class ORSimAgent(ABC):
         logging.debug(f"Runtime for {self.unique_id} at {self.current_time_step}: {self.end_time - self.start_time:0.2f} secs ")
 
 
-    # def on_receive_message(self, client, userdata, message):
-    #     ''' '''
-    #     self.start_time = time.time()
-    #     self.message_processing_active = True
-
-    #     payload = json.loads(message.payload.decode('utf-8'))
-    #     logging.debug(f"Agent {self.unique_id} received {payload.get('action')}")
-
-    #     try:
-    #         if message.topic == f"{self.run_id}/{self.scheduler_id}/ORSimAgent":
-    #             self.bootstrap_step(payload['time_step'])
-
-    #             if payload.get('action') == 'init':
-    #                 ''' NOTE This is unused block of code at the moment'''
-    #                 # print(f"{self.unique_id} received {payload=}")
-    #                 response_payload = {
-    #                     'agent_id': self.unique_id,
-    #                     'time_step': self.current_time_step,
-    #                     'action': 'ready', # 'completed',
-    #                     'did_step': True,
-    #                     'run_time': time.time() - self.start_time,
-    #                 }
-    #             elif payload.get('action') == 'step':
-
-    #                 did_step = self.process_payload(payload)
-
-    #                 self.next_event_time = self.estimate_next_event_time()
-
-    #                 response_payload = {
-    #                     'agent_id': self.unique_id,
-    #                     'time_step': self.current_time_step,
-    #                     'action': 'completed' if self._shutdown==False else 'shutdown',
-    #                     'did_step': did_step,
-    #                     'run_time': time.time() - self.start_time,
-    #                 }
-    #             elif payload.get('action') == 'shutdown':
-    #                 ''' '''
-    #                 # self.shutdown()
-    #                 response_payload = {
-    #                     'agent_id': self.unique_id,
-    #                     'time_step': self.current_time_step,
-    #                     'action': 'shutdown',
-    #                     'did_step': True,
-    #                     'run_time': time.time() - self.start_time,
-    #                 }
-    #         # else:
-    #         #     logging.warning(f'Unprocessed Message: {message.topic = }')
-    #         #     response_payload = {
-    #         #         'agent_id': self.unique_id,
-    #         #         'time_step': self.current_time_step,
-    #         #         'action': 'unprocessed',
-    #         #         'did_step': False,
-    #         #         'run_time': time.time() - self.start_time,
-    #         #     }
-    #     except Exception as e:
-    #         response_payload = {
-    #             'agent_id': self.unique_id,
-    #             'time_step': self.current_time_step,
-    #             'action': 'error',
-    #             'did_step': False,
-    #             'run_time': time.time() - self.start_time,
-    #             'details': traceback.format_exc(), # str(e)
-    #         }
-    #         logging.exception(f"{self.unique_id} raised {str(e)}")
-
-    #     self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
-
-    #     if payload.get('action') == 'shutdown':
-    #         self.shutdown()
-
-    #     self.end_time = time.time()
-    #     self.message_processing_active = False
-
-    #     logging.debug(f"Runtime for {self.unique_id} at {self.current_time_step}: {self.end_time - self.start_time:0.2f} secs ")
-
     @abstractmethod
     def process_payload(self, payload):
-        pass
+        raise NotImplementedError
+
 
     def start_listening(self):
         start_time_for_ready = time.time() # NOTE Local start time NOT a class variable
@@ -271,7 +200,12 @@ class ORSimAgent(ABC):
                 'run_time': time.time() - start_time_for_ready,
             }
 
-        self.messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
+        self.take_first_step({
+            'action': 'init',
+            'time_step': self.current_time_step
+        })
+
+        # self.messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(response_payload))
 
     def stop_listening(self):
         self.messenger.disconnect()
@@ -296,11 +230,12 @@ class ORSimAgent(ABC):
         self.current_time = self.reference_time + relativedelta(seconds = time_step * self.orsim_settings['STEP_INTERVAL'])
 
     def shutdown(self):
-        logging.debug(f'Shutting down {self.unique_id = }')
-        # self.stop_listening()
-        self.logout()
-        self.active = False
-        self._shutdown = True
+        if not self._shutdown:
+            logging.info(f'Shutting down {self.unique_id = }')
+            # self.stop_listening()
+            self.logout()
+            self.active = False
+            self._shutdown = True
 
     def handle_heartbeat_failure(self):
         if self.message_processing_active:
@@ -308,21 +243,21 @@ class ORSimAgent(ABC):
             threshold = self.orsim_settings['STEP_TIMEOUT']
             if (now - self.start_time) > threshold:
                 logging.warning(f"Auto Shutdown Agent {self.unique_id}. Exceeded heartbeat threshold {threshold} sec while processing...")
-                logging.warning(f"{self.payload_cache = }")
-                logging.warning(f"{self.step_log}")
+                # logging.warning(f"{self.payload_cache = }")
+                logging.warning(f"{json.dumps(self.step_log, indent=2)}")
                 # self.stop_listening()
                 self.active = False
                 self._shutdown = True
 
     @abstractmethod
     def estimate_next_event_time(self):
-        pass
+        raise NotImplementedError
 
     @abstractmethod
     def logout(self):
         ''' process any logout processes needed in the agent.
         '''
-        pass
+        raise NotImplementedError
 
     def get_transition_probability(self, condition, default):
         try:

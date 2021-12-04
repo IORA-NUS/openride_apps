@@ -39,9 +39,9 @@ class DriverAgentIndie(ORSimAgent):
     projected_path = None # shapely.geometry.LineString
 
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
 
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
 
         self.current_loc = self.behavior['init_loc']
 
@@ -64,6 +64,7 @@ class DriverAgentIndie(ORSimAgent):
 
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
+
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
@@ -75,7 +76,8 @@ class DriverAgentIndie(ORSimAgent):
         # self.timeout_error = False
         did_step = False
 
-        if payload.get('action') == 'step':
+        # if payload.get('action') == 'step':
+        if (payload.get('action') == 'step') or (payload.get('action') == 'init'):
             self.add_step_log('Before entering_market')
             self.entering_market(payload.get('time_step'))
             self.add_step_log('After entering_market')
@@ -106,7 +108,8 @@ class DriverAgentIndie(ORSimAgent):
 
     def entering_market(self, time_step):
         ''' '''
-        if time_step == self.behavior['shift_start_time']:
+        # if time_step == self.behavior['shift_start_time']:
+        if (self.active == False) and (time_step == self.behavior['shift_start_time']):
             self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
             self.app.login(self.get_current_time_str(), self.current_loc, self.active_route)
 
@@ -122,7 +125,8 @@ class DriverAgentIndie(ORSimAgent):
         ''' '''
         failure_threshold = 3
         if self.failure_count > failure_threshold:
-            logging.warning(f'Shutting down {self.unique_id} due to too many failures', self.failure_log)
+            logging.warning(f'Shutting down driver {self.app.driver.get_id()} due to too many failures')
+            logging.warning(json.dumps(self.failure_log, indent=2))
             self.shutdown()
             return True
         # elif self.timeout_error:
@@ -134,7 +138,11 @@ class DriverAgentIndie(ORSimAgent):
             if self.app.exited_market:
                 return False
             elif (self.current_time_step > self.behavior['shift_end_time']) and \
-                    (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
+                        (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
+                    # (
+                    #     (self.app.get_trip() is None) or \
+                    #     (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier)
+                    # ):
 
                 self.shutdown()
                 return True

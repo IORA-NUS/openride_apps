@@ -5,7 +5,7 @@ from .abstract_solver import AbstractSolver
 class RandomAssignment(AbstractSolver):
     ''' '''
 
-    def solve(self, driver_list, passenger_list, distance_matrix, online_params={}):
+    def solve(self, driver_list, passenger_list, distance_matrix, offline_params, online_params={}):
         ''' '''
         assignment = []
 

@@ -277,13 +277,15 @@ if __name__ == '__main__':
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211126_a_service_optimal'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211126_a_compromise'
 
-    scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_pickup_optimal'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_revenue_optimal'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_service_optimal'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P1.2_S1.2'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P1.0_S1.0'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P0.9_S0.9'
+    scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_servicebias'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_scaled'
 
     # scenario_name = 'comfort_delgro_sampled_15p_06d_20211202_svcdist2_streethail_pickup_optimal'
     # scenario_name = 'comfort_delgro_sampled_15p_06d_20211202_svcdist2_streethail_revenue_optimal'

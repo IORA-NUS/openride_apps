@@ -9,7 +9,7 @@ from pyomo.environ import *
 # from apps.config import settings
 # from apps.config import assignment_settings
 
-class ServiceOptimalMatching(AbstractSolver):
+class CompromiseScaledMatching(AbstractSolver):
     ''' '''
 
 
@@ -89,10 +89,9 @@ class ServiceOptimalMatching(AbstractSolver):
                     for p in paxList:
                         reducedPickupTime[p['_id'],d['driver']] = pickupTime[driverPositionMap[j]][i] #pickupTime[i][j]
                         if reducedPickupTime[p['_id'],d['driver']] < self._params['max_travel_time_pickup']:
-                            # c[p['_id'],d['driver']] = (online_params['weight_revenue'] * p['trip_price']) + \
-                            #                             (online_params['weight_pickup_time'] * (self._params['offline_params']['ub_pickup_time'] - reducedPickupTime[p['_id'],d['driver']]) / 2) + \
-                            #                             (online_params['weight_service_score'] * d['meta']['profile']['service_score'])
-                            c[p['_id'],d['driver']] = d['meta']['profile']['service_score']
+                            c[p['_id'],d['driver']] = (online_params['weight_revenue'] * p['trip_price']/ offline_params['scale_factor_revenue']) + \
+                                                        (online_params['weight_pickup_time'] * (self._params['offline_params']['ub_pickup_time'] - reducedPickupTime[p['_id'],d['driver']]) / (2 * offline_params['scale_factor_reverse_pickup_time'])) + \
+                                                        (online_params['weight_service_score'] * d['meta']['profile']['service_score'] / offline_params['scale_factor_service_score'])
                         else:
                             c[p['_id'],d['driver']] = 0
                             compModel.x[p['_id'],d['driver']].fix(0)
@@ -189,8 +188,8 @@ class ServiceOptimalMatching(AbstractSolver):
         online_params['realtime_revenue_cum'] += revenue_step
         online_params['realtime_service_score_cum'] += service_score_step
 
-        # online_params['weight_pickup_time'] = max(online_params['exp_target_reverse_pickup_time'] - online_params['realtime_reverse_pickup_time_cum'], 1.0) / (scale_factor + 1)
-        # online_params['weight_revenue'] = max(online_params['exp_target_revenue'] - online_params['realtime_revenue_cum'], 1.0) / (scale_factor + 1)
-        # online_params['weight_service_score'] = max(online_params['exp_target_service_score'] - online_params['realtime_service_score_cum'], 1.0) / (scale_factor + 1)
+        online_params['weight_pickup_time'] = max(online_params['exp_target_reverse_pickup_time'] - online_params['realtime_reverse_pickup_time_cum'], 1.0) / (scale_factor + 1)
+        online_params['weight_revenue'] = max(online_params['exp_target_revenue'] - online_params['realtime_revenue_cum'], 1.0) / (scale_factor + 1)
+        online_params['weight_service_score'] = max(online_params['exp_target_service_score'] - online_params['realtime_service_score_cum'], 1.0) / (scale_factor + 1)
 
         return online_params

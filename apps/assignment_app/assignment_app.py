@@ -86,7 +86,7 @@ class AssignmentApp:
         # print('Before Solve')
         start = time.time()
         try:
-            assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.engine.as_dict().get('online_params'))
+            assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
         except Exception as e:
             logging.exception(traceback.format_exc())
             assignment = []

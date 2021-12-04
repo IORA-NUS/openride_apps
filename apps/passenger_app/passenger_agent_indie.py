@@ -36,9 +36,9 @@ class PassengerAgentIndie(ORSimAgent):
     elapsed_duration_steps = None
     # projected_path = None # shapely.geometry.LineString
 
-    def __init__(self, unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings):
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
         ''' '''
-        super().__init__(unique_id, run_id, reference_time, scheduler_id, behavior, orsim_settings)
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
 
         self.step_size = self.orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
 
@@ -64,6 +64,7 @@ class PassengerAgentIndie(ORSimAgent):
 
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
+
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
@@ -73,7 +74,8 @@ class PassengerAgentIndie(ORSimAgent):
         # self.timeout_error = False
         did_step = False
 
-        if payload.get('action') == 'step':
+        # if payload.get('action') == 'step':
+        if (payload.get('action') == 'step') or (payload.get('action') == 'init'):
             self.add_step_log(f'Before entering_market')
             self.entering_market(payload.get('time_step'))
             self.add_step_log(f'After entering_market')
@@ -100,7 +102,8 @@ class PassengerAgentIndie(ORSimAgent):
         return did_step
 
     def entering_market(self, time_step):
-        if time_step == self.behavior['trip_request_time']:
+        # if time_step == self.behavior['trip_request_time']:
+        if (self.active == False) and (time_step == self.behavior['trip_request_time']):
             # print('Enter Market')
             # print(self.behavior)
             self.app.login(self.get_current_time_str(), self.current_loc, self.pickup_loc, self.dropoff_loc, trip_price=self.behavior.get('trip_price'))
@@ -113,7 +116,8 @@ class PassengerAgentIndie(ORSimAgent):
         failure_threshold = 3
 
         if self.failure_count > failure_threshold:
-            logging.warning(f'Shutting down {self.unique_id} due to too many failures', self.failure_log)
+            logging.warning(f'Shutting down passenger {self.app.passenger.get_id()} due to too many failures')
+            logging.warning(json.dumps(self.failure_log, indent=2))
             self.shutdown()
             return True
         # elif self.timeout_error:

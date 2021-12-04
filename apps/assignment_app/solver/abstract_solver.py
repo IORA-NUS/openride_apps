@@ -18,7 +18,7 @@ class AbstractSolver(ABC):
         return self._params
 
     @abstractmethod
-    def solve(self, driver_list, passenger_trip_list, distance_matrix, online_params={}):
+    def solve(self, driver_list, passenger_trip_list, distance_matrix, offline_params={}, online_params={}):
         pass
 
     @abstractmethod
