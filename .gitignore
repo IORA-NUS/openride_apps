@@ -2,6 +2,7 @@
 archive/
 results/
 output/
+notebook/
 dataset/
 log/
 nohup*

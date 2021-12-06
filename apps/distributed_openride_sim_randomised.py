@@ -315,14 +315,27 @@ if __name__ == '__main__':
     sim.update_status('success', run_time)
 
     print(f"Generating Visualization output")
-    from utils.viz_data import dump
-    dump(sim.run_id,
-         sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
-         sim.scenario.orsim_settings['STEP_INTERVAL'],
-         sim.reference_time,
-         True if 'compromise' in scenario_name else False
-         )
+    from utils.viz_data import *
+    # dump(sim.run_id,
+    #      sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+    #      sim.scenario.orsim_settings['STEP_INTERVAL'],
+    #      sim.reference_time,
+    #      True if 'compromise' in scenario_name else False
+    #      )
+    dump_paths(
+        sim.run_id,
+        sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+        sim.scenario.orsim_settings['STEP_INTERVAL'],
+        sim.reference_time,
+    )
+    dump_kpi_metrics({sim.run_id: sim.run_id})
 
+    dump_active_agents(
+        {sim.run_id: sim.run_id},
+        sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+        sim.scenario.orsim_settings['STEP_INTERVAL'],
+        sim.reference_time,
+    )
 
     print(f"Completed {sim.run_id = } with run time {run_time}")
 
