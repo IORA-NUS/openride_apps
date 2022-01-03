@@ -7,6 +7,8 @@ from apps.utils import id_generator, is_success, deep_update, str_to_time
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.utils import time_to_str, str_to_time
 
+from apps.utils.excepions import WriteFailedException, RefreshException
+
 
 class DriverTripManager:
     ''' '''
@@ -108,7 +110,7 @@ class DriverTripManager:
             self.refresh()
             self.look_for_job(sim_clock, current_loc, route)
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def create_new_occupied_trip(self, sim_clock, current_loc, driver, vehicle, passenger_ride_hail_trip):
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
@@ -141,7 +143,7 @@ class DriverTripManager:
             self.refresh()
             self.recieve(sim_clock, current_loc)
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def look_for_job(self, sim_clock, current_loc, route):
 
@@ -179,7 +181,7 @@ class DriverTripManager:
             # }
             # deep_update(self.trip, updates)
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
 
     def recieve(self, sim_clock, current_loc):
@@ -210,7 +212,7 @@ class DriverTripManager:
                                             }))
 
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def confirm(self, sim_clock, current_loc, estimated_time_to_arrive):
 
@@ -247,7 +249,7 @@ class DriverTripManager:
                                 })
                             )
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def reject(self, sim_clock, current_loc):
 
@@ -270,7 +272,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def cancel(self, sim_clock, current_loc):
 
@@ -303,7 +305,7 @@ class DriverTripManager:
                                 })
                             )
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def passenger_confirmed_trip(self, sim_clock, current_loc, route):
 
@@ -327,7 +329,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def wait_to_pickup(self, sim_clock, current_loc):
 
@@ -363,7 +365,7 @@ class DriverTripManager:
                                 })
                             )
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def passenger_acknowledge_pickup(self, sim_clock, current_loc, route):
 
@@ -387,7 +389,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def move_to_dropoff(self, sim_clock, current_loc):
 
@@ -423,7 +425,7 @@ class DriverTripManager:
                                 })
                             )
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def wait_to_dropoff(self, sim_clock, current_loc):
 
@@ -457,7 +459,7 @@ class DriverTripManager:
                                 })
                             )
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     def passenger_acknowledge_dropoff(self, sim_clock, current_loc):
 
@@ -480,7 +482,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
     # def end_trip(self, sim_clock, current_loc, force_quit=False):
     def end_trip(self, sim_clock, current_loc):
@@ -511,7 +513,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.trip = None
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
 
     def force_quit(self, sim_clock, current_loc):
@@ -539,7 +541,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.trip = None
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
 
 
     # def end_trip(self, sim_clock, current_loc):
@@ -621,7 +623,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            raise WriteFailedException(f"{response.url}, {response.text}")
             # logging.exception(f"Unable to Ping: {response.text}")
 
     def refresh(self, project=None): #, from_server=True):
@@ -633,5 +635,5 @@ class DriverTripManager:
             if is_success(response.status_code):
                 self.trip = response.json()
             else:
-                raise Exception(f'DriverTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
+                raise RefreshException(f'DriverTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
 

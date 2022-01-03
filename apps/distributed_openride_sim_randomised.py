@@ -284,13 +284,29 @@ if __name__ == '__main__':
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P1.2_S1.2'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P1.0_S1.0'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_R1.5_P0.9_S0.9'
-    scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_servicebias'
+    # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_servicebias'
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211127_svcdist2_compromise_scaled'
 
     # scenario_name = 'comfort_delgro_sampled_15p_06d_20211202_svcdist2_streethail_pickup_optimal'
     # scenario_name = 'comfort_delgro_sampled_15p_06d_20211202_svcdist2_streethail_revenue_optimal'
 
     # scenario_name = 'comfort_delgro_sampled_10p_06d_20211203_svcdist2_16H_pickup_optimal'
+
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211223_svcdist2_8H_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211223_svcdist2_8H_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211223_svcdist2_8H_service_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211223_svcdist2_8H_compromise_servicebias'
+
+    # scenario_name = 'comfort_delgro_sampled_10p_30d_20211228_svcdist2_8H_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_30d_20211228_svcdist2_8H_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_30d_20211228_svcdist2_8H_service_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_30d_20211228_svcdist2_8H_compromise_servicebias'
+
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_pickup_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_revenue_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_service_optimal'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_compromise_servicebias'
+    scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_compromise_servicebias_R1.2_P1.2_S1.0'
 
     try:
         sim = DistributedOpenRideSimRandomised(run_id, scenario_name)
@@ -316,6 +332,12 @@ if __name__ == '__main__':
 
     print(f"Generating Visualization output")
     from utils.viz_data import *
+
+    target = {
+        'revenue': 77.5802,
+        'wait_time_pickup': 2491.5625,
+        'service_score': 416.38645,
+    }
     # dump(sim.run_id,
     #      sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
     #      sim.scenario.orsim_settings['STEP_INTERVAL'],
@@ -324,11 +346,20 @@ if __name__ == '__main__':
     #      )
     dump_paths(
         sim.run_id,
+        sim.run_id,
         sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
         sim.scenario.orsim_settings['STEP_INTERVAL'],
         sim.reference_time,
     )
-    dump_kpi_metrics({sim.run_id: sim.run_id})
+    dump_demand_coords(
+        sim.run_id,
+        sim.run_id,
+        sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+        sim.scenario.orsim_settings['STEP_INTERVAL'],
+        sim.reference_time,
+    )
+
+    dump_kpi_metrics({sim.run_id: sim.run_id}, target)
 
     dump_active_agents(
         {sim.run_id: sim.run_id},
@@ -336,6 +367,10 @@ if __name__ == '__main__':
         sim.scenario.orsim_settings['STEP_INTERVAL'],
         sim.reference_time,
     )
+
+    dump_solver_params({sim.run_id: sim.run_id})
+
+    dump_trip_metrics({sim.run_id: sim.run_id})
 
     print(f"Completed {sim.run_id = } with run time {run_time}")
 

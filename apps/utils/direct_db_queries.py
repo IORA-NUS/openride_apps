@@ -8,6 +8,8 @@ import json, math, time
 
 import numpy as np
 import pandas as pd
+import geopandas as gpd
+import shapely
 from pymongo import MongoClient
 import plotly.express as px
 from dateutil.relativedelta import relativedelta
@@ -30,10 +32,14 @@ def _connect_mongo(host, port, username, password, db):
     return conn[db]
 
 db = _connect_mongo(host='localhost', port=27017, username=None, password=None, db='OpenRoadDB')
+# db = _connect_mongo(host='localhost', port=27017, username=None, password=None, db='OpenRoadDB_20211228')
 
 
-def get_trip_metrics(run_id_dict):
-    collection = db.driver_ride_hail_trip
+def get_trip_metrics(run_id_dict, db_option=None):
+    if db_option is not None:
+        collection = db_option.driver_ride_hail_trip
+    else:
+        collection = db.driver_ride_hail_trip
 
     results = collection.aggregate(
         [
@@ -89,9 +95,12 @@ def get_trip_metrics(run_id_dict):
     df.run_id.replace(run_id_dict,inplace=True)
     return df
 
-# def get_pivot(collection, run_id_meta, metric):
-def get_kpi_time_series(run_id_dict, metric_list):
-    collection = db.kpi
+def get_kpi_time_series(run_id_dict, metric_list, db_option=None):
+    if db_option is not None:
+        collection = db_option.kpi
+    else:
+        collection = db.kpi
+
     if 'num_served' not in metric_list:
         metric_list.append('num_served')
 
@@ -112,21 +121,27 @@ def get_kpi_time_series(run_id_dict, metric_list):
     time_step = None
     for run_id in [k for k, v in run_id_dict.items()]:
         num_served = df[(df['run_id'] == run_id) & (df['metric'] == 'num_served')]['value'].cumsum().tolist()
+        if time_step is None:
+            time_step = list(range(1, len(num_served)+1))
+
         for metric in metric_list:
             slice = (df['run_id'] == run_id) & (df['metric'] == metric)
-            if time_step is None:
-                time_step = list(range(1, len(df[slice])+1))
 
+            if metric.find('wait_time') >= 0:
+                df.loc[slice, 'value'] = df[slice]['value'] / 60
+
+            # print(len(df[slice]['cumulative']), len(slice), len(time_step[:len(slice)-1]))
+            # print(run_id, metric, len(time_step))
             df.loc[slice, 'cumulative'] = df[slice]['value'].cumsum()
-            df.loc[slice, 'avg_by_time'] = df[slice]['cumulative'] / time_step
-            df.loc[slice, 'avg_by_trip'] = df[slice]['cumulative'] / num_served
+            df.loc[slice, 'avg_by_time'] = df[slice]['cumulative'] / time_step[:len(df[slice]['cumulative'])]
+            df.loc[slice, 'avg_by_trip'] = df[slice]['cumulative'] / num_served[:len(df[slice]['cumulative'])]
 
     df.run_id.replace(run_id_dict,inplace=True)
     return df
 
-def get_active_user_time_series(run_id_dict, num_steps, sim_step_size, sim_start_time):
+def get_active_user_time_series(run_id_dict, num_steps, sim_step_size, sim_start_time, db_option=None):
 
-    sim_clock_ticks = [sim_start_time + relativedelta(seconds=(step*sim_step_size)) for step in range(num_steps+1)]
+    sim_clock_ticks = [sim_start_time + relativedelta(seconds=(step*sim_step_size)) for step in range(num_steps)]
 
     query = [
         {
@@ -149,40 +164,75 @@ def get_active_user_time_series(run_id_dict, num_steps, sim_step_size, sim_start
         }
     ]
 
-    driver_collection = db.driver_ride_hail_trip
+    if db_option is not None:
+        driver_collection = db_option.driver_ride_hail_trip
+    else:
+        driver_collection = db.driver_ride_hail_trip
     driver_cursor = driver_collection.aggregate(query)
     driver_docs = list(driver_cursor)
 
-    pax_collection = db.passenger_ride_hail_trip
+    if db_option is not None:
+        pax_collection = db_option.passenger_ride_hail_trip
+    else:
+        pax_collection = db.passenger_ride_hail_trip
     pax_cursor = pax_collection.aggregate(query)
     pax_docs = list(pax_cursor)
 
     df = pd.DataFrame(columns=['sim_clock', 'run_id', 'metric', 'value']).astype({'value': 'int32'})
 
-    for sim_clock in sim_clock_ticks:
-        for run_id in [k for k, v in run_id_dict.items()]:
-            d_value = 0
-            for doc in driver_docs:
-                if (doc['_id']['run_id'] == run_id) and (doc['entered_market'] <= sim_clock) and (doc['exit_market'] >= sim_clock):
-                    d_value += 1
 
-            p_value = 0
-            for doc in pax_docs:
-                if (doc['_id']['run_id'] == run_id) and (doc['entered_market'] <= sim_clock) and (doc['exit_market'] >= sim_clock):
-                    p_value += 1
+    # for sim_clock in sim_clock_ticks:
+    #     for run_id in [k for k, v in run_id_dict.items()]:
+    #         d_value = 0
+    #         for doc in driver_docs:
+    #             if (doc['_id']['run_id'] == run_id) and (doc['entered_market'] <= sim_clock) and (doc['exit_market'] >= sim_clock):
+    #                 d_value += 1
 
-            df = pd.concat([pd.DataFrame([[sim_clock, run_id, 'driver_count', d_value],
-                                          [sim_clock, run_id, 'passenger_count', p_value]
-                                          ], columns=df.columns),
-                            df],ignore_index=True)
+    #         p_value = 0
+    #         for doc in pax_docs:
+    #             if (doc['_id']['run_id'] == run_id) and (doc['entered_market'] <= sim_clock) and (doc['exit_market'] >= sim_clock):
+    #                 p_value += 1
+
+    #         df = pd.concat([pd.DataFrame([[sim_clock, run_id, 'driver_count', d_value],
+    #                                       [sim_clock, run_id, 'passenger_count', p_value]
+    #                                       ], columns=df.columns),
+    #                         df],ignore_index=True)
+    # for sim_clock in sim_clock_ticks:
+    metric_collection = {(sim_clock, run_id, metric): 0 for sim_clock in sim_clock_ticks for run_id, _ in run_id_dict.items() for metric in ['driver_count', 'passenger_count']}
+    for run_id in [k for k, v in run_id_dict.items()]:
+        d_value = 0
+        for doc in driver_docs:
+            # if (doc['_id']['run_id'] == run_id) and (doc['entered_market'] <= sim_clock) and (doc['exit_market'] >= sim_clock):
+            #     d_value += 1
+            metric_collection[(doc['entered_market'], run_id, 'driver_count')] += 1
+            metric_collection[(doc['exit_market'], run_id, 'driver_count')] -= 1
+
+        p_value = 0
+        for doc in pax_docs:
+            # if (doc['_id']['run_id'] == run_id) and (doc['entered_market'] <= sim_clock) and (doc['exit_market'] >= sim_clock):
+            #     p_value += 1
+            metric_collection[(doc['entered_market'], run_id, 'passenger_count')] += 1
+            metric_collection[(doc['exit_market'], run_id, 'passenger_count')] -= 1
+
+
+    df = pd.concat([pd.DataFrame([[k[0], k[1], k[2], v] for k, v in metric_collection.items()
+                                    ], columns=df.columns),
+                    df],ignore_index=True)
+
+    df = df.groupby(['metric', 'run_id', 'sim_clock']).sum() \
+                                 .groupby(level=1).cumsum().reset_index()
+
 
     df.run_id.replace(run_id_dict, inplace=True)
     df.sort_values(['run_id', 'metric', 'sim_clock'], inplace=True)
 
     return df
 
-def get_engine_perf(run_id_dict):
-    collection = db.engine_history
+def get_engine_perf(run_id_dict, db_option=None):
+    if db_option is not None:
+        collection = db_option.engine_history
+    else:
+        collection = db.engine_history
 
     cursor = collection.find({
             'run_id': {'$in': [k for k, v in run_id_dict.items()]},
@@ -205,8 +255,11 @@ def get_engine_perf(run_id_dict):
     return metric_df
 
 
-def get_paths(run_id, time_args, time_shift=0):
-    collection = db.waypoint
+def get_paths(run_id, time_args, time_shift=0, db_option=None):
+    if db_option is not None:
+        collection = db_option.waypoint
+    else:
+        collection = db.waypoint
 
     print(f"get_paths_from_cursor: {time_args=}")
     # print(args)
@@ -321,11 +374,43 @@ def get_paths(run_id, time_args, time_shift=0):
     # print('Completed path generation')
     return paths
 
+def paths_to_geojson(paths, reference_time):
 
-def get_demand_coords(run_id, num_steps, sim_step_size, sim_start_time):
+    df = pd.DataFrame.from_records(paths)
+    # print(df)
+
+    gdf = gpd.GeoDataFrame(df, geometry=df['path'].apply(lambda x: shapely.geometry.LineString(x)))
+    gdf.drop(columns='path', inplace=True)
+    geojson = json.loads(gdf.to_json())
+
+    # print(geojson['features'][0])
+
+    epoch_time = int(reference_time.timestamp()) + (8*3600)
+    for i in range(len(geojson['features'])):
+        geojson['features'][i]['geometry']['coordinates'] = \
+                [[x[0], x[1], 0, epoch_time+t] for x, t in zip(geojson['features'][i]['geometry']['coordinates'], geojson['features'][i]['properties'].pop('timestamps'))]
+
+    return geojson
+
+def coords_to_df(coords):
+    coord_collection = []
+    for ts, demand in coords.items():
+        for item in demand:
+            coord_collection.append({
+                'timestamp': int(ts.timestamp()) + (8*3600),
+                'lon': item['COORDINATES'][0],
+                'lat': item['COORDINATES'][1],
+            })
+    return pd.DataFrame.from_records(coord_collection)
+
+
+def get_demand_coords(run_id, num_steps, sim_step_size, sim_start_time, retval='heatmap', db_option=None):
 
     sim_clock_ticks = [sim_start_time + relativedelta(seconds=(step*sim_step_size)) for step in range(num_steps+1)]
-    collection = db.waypoint
+    if db_option is not None:
+        collection = db_option.waypoint
+    else:
+        collection = db.waypoint
 
     print(f"get_demand_coords")
     # print(args)
@@ -375,6 +460,10 @@ def get_demand_coords(run_id, num_steps, sim_step_size, sim_start_time):
 
         if document['event']['state'] == 'passenger_requested_trip':
             start_ts = document['sim_clock'].replace(tzinfo=None)
+            for i in range(len(sim_clock_ticks) - 1):
+                if (start_ts >= sim_clock_ticks[i]) and (start_ts < sim_clock_ticks[i+1]):
+                    start_ts = sim_clock_ticks[i]
+                    break
             # start_event = document['event']['state']
             start_trip_id = str(document['trip'])
             coord = [round(x, 5) for x in document['event']['location']['coordinates']]
@@ -387,14 +476,14 @@ def get_demand_coords(run_id, num_steps, sim_step_size, sim_start_time):
                     coord_timeseries[ts].append({'COORDINATES': coord})
                     ts += relativedelta(seconds=sim_step_size)
 
+    if retval == 'heatmap':
+        coordinates = {
+            "heatmap_timeseries_data": [
+                [datetime.strftime(ts, "%H:%M:%S"), coord_timeseries[ts]] for ts in sim_clock_ticks
+            ]
+        }
 
-    coordinates = {
-        "heatmap_timeseries_data": [
-            [datetime.strftime(ts, "%H:%M:%S"), coord_timeseries[ts]] for ts in sim_clock_ticks
-        ]
-    }
+        return coordinates
+    elif retval == 'raw':
+        return coord_timeseries
 
-    # print(coord_timeseries)
-
-    # print(coordinates)
-    return coordinates

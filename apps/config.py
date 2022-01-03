@@ -1,7 +1,7 @@
 import logging
 
 settings = {
-    'OPENRIDE_SERVER_URL': 'http://192.168.10.135:11654', #'http://127.0.0.1:11654',
+    'OPENRIDE_SERVER_URL': 'http://localhost:11654', #'http://192.168.10.135:11654', #'http://127.0.0.1:11654',
 
     'ROUTING_SERVER': 'http://localhost:50001', # 'http://192.168.10.135:50001', #'http://localhost:50001',
 

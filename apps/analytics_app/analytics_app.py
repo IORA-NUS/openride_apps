@@ -357,6 +357,48 @@ class AnalyticsApp:
                 self.driver_trips_for_metric.extend(response.json()['_items'])
                 page += 1
 
+    def active_driver_count(self):
+        ''' NOTE: no run_id in url
+        '''
+        driver_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/driver/ride_hail/trip/count_active"
+
+        params = {
+            "aggregate": json.dumps({
+                "$run_id": self.run_id,
+                "$is_active": True,
+            })
+        }
+
+        response = requests.get(driver_trip_count_url, headers=self.user.get_headers(), params=params)
+
+        try:
+            if response.json()['_items'] == []:
+                return 0
+            else:
+                return response.json()['_items'][0].get('num_trips', 0)
+        except:
+            logging.error(response.status_code, response.text)
+
+    def active_passenger_count(self):
+        ''' NOTE: no run_id in url
+        '''
+        passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count_active"
+
+        params = {
+            "aggregate": json.dumps({
+                "$run_id": self.run_id,
+                "$is_active": True,
+            })
+        }
+
+        response = requests.get(passenger_trip_count_url, headers=self.user.get_headers(), params=params)
+        try:
+            if response.json()['_items'] == []:
+                return 0
+            else:
+                return response.json()['_items'][0].get('num_trips', 0)
+        except:
+            logging.error(response.status_code, response.text)
 
     def compute_revenue(self):
         step_revenue = 0

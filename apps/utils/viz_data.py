@@ -42,7 +42,8 @@ def dump_paths(run_id, run_id_name, num_steps, sim_step_size, reference_time):
 
         paths = get_paths(run_id, args, (t-start_hour)*3600)
 
-        all_paths.append(paths)
+        # all_paths.append(paths)
+        all_paths.extend(paths)
 
     with open(f"{output_dir}/paths_20200101{start_hour:02}0000_20200101{end_hour:02}0000.json", 'w') as file:
         json.dump(all_paths, file, indent=2)
@@ -61,12 +62,21 @@ def dump_demand_coords(run_id, run_id_name, num_steps, sim_step_size, reference_
 
 def dump_kpi_metrics(run_id_dict, target):
 
+    metric_list = [
+        'num_served',
+        'num_cancelled',
+        'revenue',
+        'wait_time_pickup',
+        'service_score',
+        'active_driver_count',
+        'active_passenger_count',
+    ]
     sum_metric = [
         'num_served',
         'num_cancelled',
         'revenue',
         'wait_time_pickup',
-        'service_score'
+        'service_score',
     ]
     avg_metric = [
         'revenue',
@@ -74,7 +84,7 @@ def dump_kpi_metrics(run_id_dict, target):
         'service_score',
     ]
 
-    df = get_kpi_time_series(run_id_dict, sum_metric)
+    df = get_kpi_time_series(run_id_dict, metric_list)
     df['sim_clock'] = df['sim_clock'].dt.time
 
     df.to_csv(f'{data_folder}/kpi_time_series.csv', index=False)
@@ -183,21 +193,23 @@ def dump_solver_params(run_id_dict):
     df.replace([np.inf, -np.inf], np.nan, inplace=True)
     df.dropna(inplace=True)
     df['sim_clock'] = df['sim_clock'].dt.time
+    # print(df)
 
 
     for run_id, run_id_name in run_id_dict.items():
         output_dir = f"{data_folder}/{run_id_name}"
 
-        metric_df = df[(df['run_id'] == run_id_name)][['sim_clock', 'weight_pickup_time', 'weight_revenue', 'weight_service_score']]
+        metric_df = df[(df['run_id'] == run_id)][['sim_clock', 'weight_pickup_time', 'weight_revenue', 'weight_service_score']]
         metrics = {
             'column_names': list(metric_df.columns),
             'graph_data': metric_df.round(2).fillna(0).values.tolist()
         }
+        # print(metrics)
         with open (f"{output_dir}/solver_weights.json", 'w') as file:
             json.dump(metrics, file, default=str, indent=2)
 
 
-        metric_df = df[(df['run_id'] == run_id_name)][['sim_clock', 'pickup_perf', 'revenue_perf', 'service_perf']]
+        metric_df = df[(df['run_id'] == run_id)][['sim_clock', 'pickup_perf', 'revenue_perf', 'service_perf']]
         metrics = {
             'column_names': list(metric_df.columns),
             'graph_data': metric_df.round(2).fillna(0).values.tolist()
@@ -216,29 +228,38 @@ def dump_trip_metrics(run_id_dict):
 if __name__ == '__main__':
 
     run_id_dict = {
-        'r0kZnIvJqUWg': 'pickup_optimal', # 'PickupOpt',
-        'sROLL5zudXBx': 'revenue_optimal', # 'RevenueOpt',
-        '6OnGpMZ19V0k': 'service_optimal', # 'ServiceOpt',
-        'GhWlSdbFp8fD': 'compromise_base', # 'Compromise',
-        '9YOUfrgBKvdO': 'compromise_servicebias', # 'CompromiseSvcBias',
+        # 'r0kZnIvJqUWg': 'pickup_optimal', # 'PickupOpt',
+        # 'sROLL5zudXBx': 'revenue_optimal', # 'RevenueOpt',
+        # '6OnGpMZ19V0k': 'service_optimal', # 'ServiceOpt',
+        # 'GhWlSdbFp8fD': 'compromise_base', # 'Compromise',
+        # '9YOUfrgBKvdO': 'compromise_servicebias', # 'CompromiseSvcBias',
+
+        '039u1iZAFyI0': 'pickup_optimal',
+        'd9Ubn85rhnlq': 'revenue_optimal',
+        'E2MQNKalZ74k': 'service_optimal',
+        'juyxDLTucfQj': 'compromise_servicebias',
+
     } # Comfort Data Set Sampled (10p 06d) Svc Dist 2,
 
     target = {
-        'revenue': 27.4223229,
-        'wait_time_pickup': 731.75,
-        'service_score': 124.801,
+        # 'revenue': 27.4223229,
+        # 'wait_time_pickup': 731.75,
+        # 'service_score': 124.801,
+        'revenue': 77.5802,
+        'wait_time_pickup': 2491.5625,
+        'service_score': 416.38645,
     }
 
 
-    for run_id, name in run_id_dict.items():
-        dump_paths(run_id, name, 960, 30, datetime(2020, 1, 1, 4, 0, 0))
-        dump_demand_coords(run_id, name, 960, 30, datetime(2020, 1, 1, 4, 0, 0))
+    # for run_id, name in run_id_dict.items():
+    #     dump_paths(run_id, name, 960, 30, datetime(2020, 1, 1, 4, 0, 0))
+    #     dump_demand_coords(run_id, name, 960, 300, datetime(2020, 1, 1, 4, 0, 0))
 
     dump_kpi_metrics(run_id_dict, target)
 
-    dump_active_agents(run_id_dict, 960, 30, datetime(2020, 1, 1, 4, 0, 0))
+    # # dump_active_agents(run_id_dict, 960, 30, datetime(2020, 1, 1, 4, 0, 0))
 
-    dump_solver_params(run_id_dict)
+    # dump_solver_params(run_id_dict)
 
     dump_trip_metrics(run_id_dict)
 

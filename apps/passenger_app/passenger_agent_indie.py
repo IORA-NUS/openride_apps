@@ -26,6 +26,8 @@ from apps.messenger_service import Messenger
 # Passenger agent will be called to apply behavior at every step
 # At each step, the Agent will process list of collected messages in the app.
 from apps.orsim import ORSimAgent
+
+from apps.utils.excepions import WriteFailedException, RefreshException
 # from apps.config import orsim_settings, passenger_settings
 
 class PassengerAgentIndie(ORSimAgent):
@@ -229,9 +231,13 @@ class PassengerAgentIndie(ORSimAgent):
                         logging.warning(f"WARNING: Passenger will not listen to Driver workflow events when {self.app.get_trip()['state']=}")
 
                 payload = self.app.dequeue_message()
-            except Exception as e:
+            except WriteFailedException as e:
                 # push message back into fornt of queue for processing in next step
                 self.app.enfront_message(payload)
+                raise e # Important do not allow the while loop to continue
+            except RefreshException as e:
+                raise e # Important do not allow the while loop to continue
+            except Exception as e:
                 raise e # Important do not allow the while loop to continue
 
     def perform_workflow_actions(self):

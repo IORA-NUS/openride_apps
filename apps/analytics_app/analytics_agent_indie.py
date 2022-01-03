@@ -142,4 +142,10 @@ class AnalyticsAgentIndie(ORSimAgent):
         # compute Service Score
         self.kpi_collection['service_score'] = self.app.compute_service_score()
 
+        # active_driver_count
+        self.kpi_collection['active_driver_count'] = self.app.active_driver_count()
+        # passenger_count
+        self.kpi_collection['active_passenger_count'] = self.app.active_passenger_count()
+
+
         self.app.save_kpi(self.get_current_time_str(), self.kpi_collection)

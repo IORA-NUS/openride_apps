@@ -188,7 +188,7 @@ class ScenarioManager():
                 'end_lon': row['End_Longitude'],
                 'trip_price': row['Fare'],
                 # 'patience': row['Patience_Level'],
-                'patience': 600,
+                'patience': 300, # 600,
             }
 
             behavior = GenerateBehavior.ridehail_passenger(agent_id, record)
@@ -225,4 +225,4 @@ class ScenarioManager():
 
 if __name__ == '__main__':
 
-    gen = ScenarioManager('comfort_delgro_sampled_10p_06d_20211203_svcdist2_16H')
+    gen = ScenarioManager('comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H')
