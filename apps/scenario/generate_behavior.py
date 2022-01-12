@@ -31,10 +31,10 @@ class GenerateBehavior():
     def ridehail_driver(cls, id, record=None):
 
         if record is None:
-            # shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//4))
-            # shift_end_time = randint(orsim_settings['SIMULATION_LENGTH_IN_STEPS']//2, orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1)
-            shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//10))
-            # shift_start_time = 0
+            # # shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//4))
+            # # shift_end_time = randint(orsim_settings['SIMULATION_LENGTH_IN_STEPS']//2, orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1)
+            # shift_start_time = randint(0, (orsim_settings['SIMULATION_LENGTH_IN_STEPS']//10))
+            shift_start_time = 0
             shift_end_time = orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1
 
             coverage_area = choice(assignment_settings['COVERAGE_AREA'])
@@ -94,7 +94,8 @@ class GenerateBehavior():
             'STEPS_PER_ACTION': driver_settings['STEPS_PER_ACTION'],
             'RESPONSE_RATE': driver_settings['RESPONSE_RATE'],
             'STEP_ONLY_ON_EVENTS': driver_settings['STEP_ONLY_ON_EVENTS'],
-            'UPDATE_PASSENGER_LOCATION': driver_settings['UPDATE_PASSENGER_LOCATION']
+            'UPDATE_PASSENGER_LOCATION': driver_settings['UPDATE_PASSENGER_LOCATION'],
+            'ACTION_WHEN_FREE': driver_settings['ACTION_WHEN_FREE']
         }
 
         return behavior

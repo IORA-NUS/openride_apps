@@ -372,12 +372,12 @@ if __name__ == '__main__':
     #     json.dump(dashboard, file, default=str, indent=2)
 
     primary_run_id = 'qO7HWJEAEngT' #'TyJszk5F2yxO'
-    primary_run_id_dict = {primary_run_id: "Plaform Policy (Gazing)"}
+    primary_run_id_dict = {primary_run_id: "a. Plaform Policy (Gazing)"}
     run_id_dict = primary_run_id_dict.copy()
     run_id_dict.update({
-        '3m6YeNAegnji': 'Pickup Optimal',
-        'HIRxOWvYN1hb': 'Revenue Optimal',
-        'lQKlTodJMtIh': 'Service Optimal',
+        '3m6YeNAegnji': 'b. Pickup Optimal',
+        'HIRxOWvYN1hb': 'c. Revenue Optimal',
+        'lQKlTodJMtIh': 'd. Service Optimal',
         # 'TyJszk5F2yxO': 'Online Targeting (Gazing Heuristic)',
     }) # Comfort Data Set Sampled (10p 06d) Svc Dist 2,
 
@@ -397,39 +397,40 @@ if __name__ == '__main__':
         json.dump(paths, file, default=str, indent=2)
 
     # platform revenue (graph (1,1))
-    graph_1_1 = get_chart(run_id_dict, 'revenue', 'cumulative', title='Platform Revenue'),
+    graph_1_1 = get_chart(run_id_dict, 'revenue', 'cumulative', title='Platform Revenue')
     with open (f"{output_dir}/graph_1_1.json", 'w') as file:
         json.dump(graph_1_1, file, default=str, indent=2)
 
     # Trip Waiting Time (graph (1,2))
-    graph_1_2 = get_chart(run_id_dict, 'wait_time_pickup', 'avg_by_trip', title='Customer Waiting Time'),
+    graph_1_2 = get_chart(run_id_dict, 'wait_time_pickup', 'avg_by_trip', title='Customer Waiting Time')
     with open (f"{output_dir}/graph_1_2.json", 'w') as file:
         json.dump(graph_1_2, file, default=str, indent=2)
 
     # customer Satisfaction (graph (1,3))
-    graph_1_3 = get_chart(run_id_dict, 'service_score', 'cumulative', title='Customer Satisfaction Score'),
+    graph_1_3 = get_chart(run_id_dict, 'service_score', 'cumulative', title='Customer Satisfaction Score')
     with open (f"{output_dir}/graph_1_3.json", 'w') as file:
         json.dump(graph_1_3, file, default=str, indent=2)
 
     # driver revenue (graph (2,1))
-    graph_2_1 = get_chart(run_id_dict, 'revenue', 'avg_by_trip', title='Driver Revenue (per Trip)'),
+    graph_2_1 = get_chart(run_id_dict, 'revenue', 'avg_by_trip', title='Driver Revenue (per Trip)')
     with open (f"{output_dir}/graph_2_1.json", 'w') as file:
         json.dump(graph_2_1, file, default=str, indent=2)
 
     # # customers Served (graph (2,2))
     # graph_2_2 = get_chart(run_id_dict, 'num_served', 'cumulative', title='Service Rate'),
     # Answer rate (graph (2,2))
-    graph_2_2 = get_answer_rate(run_id_dict, title='Customer Service Rate'),
+    graph_2_2 = get_answer_rate(run_id_dict, title='Customer Service Rate')
     with open (f"{output_dir}/graph_2_2.json", 'w') as file:
         json.dump(graph_2_2, file, default=str, indent=2)
 
 
-    # Priority Service (graph (2,3))
-    priority_service_run_id_dict = primary_run_id_dict.copy()
-    priority_service_run_id_dict.update({
-        'lQKlTodJMtIh': 'Service Optimal',
-    })
-    graph_2_3 = get_static_chart(priority_service_run_id_dict, 'service_score', 'trip_price', 'mean', title='Service based Reward'),
+    # # Priority Service (graph (2,3))
+    # priority_service_run_id_dict = primary_run_id_dict.copy()
+    # priority_service_run_id_dict.update({
+    #     'lQKlTodJMtIh': 'Service Optimal',
+    # })
+    # graph_2_3 = get_static_chart(priority_service_run_id_dict, 'service_score', 'trip_price', 'mean', title='Service based Reward')
+    graph_2_3 = get_static_chart(run_id_dict, 'service_score', 'trip_price', 'mean', title='Service based Reward')
     with open (f"{output_dir}/graph_2_3.json", 'w') as file:
         json.dump(graph_2_3, file, default=str, indent=2)
 
@@ -440,7 +441,7 @@ if __name__ == '__main__':
         'weight_revenue': 'Revenue (Control)',
         'weight_service_score': 'Service (Control)',
     }
-    graph_3_1 = get_solver_metric_chart(primary_run_id_dict, metric_dict, title='Realtime Control (Tuning parameters)'),
+    graph_3_1 = get_solver_metric_chart(primary_run_id_dict, metric_dict, title='Realtime Control (Tuning parameters)')
     with open (f"{output_dir}/graph_3_1.json", 'w') as file:
         json.dump(graph_3_1, file, default=str, indent=2)
 
@@ -450,6 +451,6 @@ if __name__ == '__main__':
         'revenue_perf': 'Revenue (Performance)',
         'service_perf': 'Service (Performance)'
     }
-    graph_3_2 = get_solver_metric_chart(primary_run_id_dict, metric_dict, target=100, title='Realtime performance (target=100)'),
+    graph_3_2 = get_solver_metric_chart(primary_run_id_dict, metric_dict, target=100, title='Realtime performance (target=100)')
     with open (f"{output_dir}/graph_3_2.json", 'w') as file:
         json.dump(graph_3_2, file, default=str, indent=2)

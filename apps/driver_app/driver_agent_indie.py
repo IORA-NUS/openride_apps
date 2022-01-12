@@ -46,6 +46,7 @@ class DriverAgentIndie(ORSimAgent):
         super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
 
         self.current_loc = self.behavior['init_loc']
+        self.action_when_free = behavior.get('ACTION_WHEN_FREE', 'random_walk')
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -112,7 +113,13 @@ class DriverAgentIndie(ORSimAgent):
         ''' '''
         # if time_step == self.behavior['shift_start_time']:
         if (self.active == False) and (time_step == self.behavior['shift_start_time']):
-            self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+            # self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+
+            if self.action_when_free == 'random_walk':
+                self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+            elif self.action_when_free == 'stay':
+                self.set_route(self.current_loc, None)
+
             self.app.login(self.get_current_time_str(), self.current_loc, self.active_route)
 
             self.active = True
@@ -153,9 +160,15 @@ class DriverAgentIndie(ORSimAgent):
 
     def set_route(self, from_loc, to_loc):
         ''' find a Feasible route using some routeing engine'''
-        self.active_route = OSRMClient.get_route(from_loc, to_loc)
-        self.projected_path = OSRMClient.get_coords_from_route(self.active_route)
-        self.traversed_path = []
+        if to_loc is not None:
+            self.active_route = OSRMClient.get_route(from_loc, to_loc)
+            self.projected_path = OSRMClient.get_coords_from_route(self.active_route)
+            self.traversed_path = []
+        else:
+            self.active_route = None
+            self.projected_path = []
+            self.traversed_path = []
+
 
     def get_tentative_travel_time(self, from_loc, to_loc):
         ''' find a Feasible route using some routeing engine'''
@@ -334,10 +347,14 @@ class DriverAgentIndie(ORSimAgent):
 
                             if passenger_data.get('event') == "passenger_rejected_trip":
                                 # logging.warning('Overbooking handling is working ok')
-                                self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-
-                                # self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=True)
                                 self.app.trip.force_quit(self.get_current_time_str(), current_loc=self.current_loc)
+
+                                # self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
+                                if self.action_when_free == 'random_walk':
+                                    self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+                                elif self.action_when_free == 'stay':
+                                    self.set_route(self.current_loc, None)
+
                                 self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
                             if passenger_data.get('event') == "passenger_acknowledge_pickup":
@@ -414,10 +431,13 @@ class DriverAgentIndie(ORSimAgent):
             if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_droppedoff.identifier) and \
                 (time_since_last_event >= self.behavior['transition_time_dropoff']):
 
-                    self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-
-                    # self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc, force_quit=False)
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
+
+                    if self.action_when_free == 'random_walk':
+                        self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+                    elif self.action_when_free == 'stay':
+                        self.set_route(self.current_loc, None)
+
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
 

@@ -119,7 +119,9 @@ class DistributedOpenRideSimRandomised():
         # IMPORTANT Make sure agents are added into the scheduler before step
         # add_agent is a blocking process and ensures the agent is ready to listen to step()
         agent_scheduler_start_time = time.time()
+        # print(self.agent_registry[0])
         for item in self.agent_registry[i]:
+            # print(f"{item}")
             self.agent_scheduler.add_agent(**item)
         # step() assumes all agents will be ready to respond to step message
         asyncio.run(self.agent_scheduler.step())
@@ -306,7 +308,10 @@ if __name__ == '__main__':
     # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_revenue_optimal'
     # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_service_optimal'
     # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_compromise_servicebias'
-    scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_compromise_servicebias_R1.2_P1.2_S1.0'
+    # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_compromise_servicebias_R1.2_P1.2_S1.0'
+
+    # scenario_name = 'stay_or_leave_test'
+    scenario_name = 'stay_or_leave_test_changi'
 
     try:
         sim = DistributedOpenRideSimRandomised(run_id, scenario_name)
@@ -330,47 +335,47 @@ if __name__ == '__main__':
     run_time = time.time() - execution_start_time
     sim.update_status('success', run_time)
 
-    print(f"Generating Visualization output")
-    from utils.viz_data import *
+    # print(f"Generating Visualization output")
+    # from utils.viz_data import *
 
-    target = {
-        'revenue': 77.5802,
-        'wait_time_pickup': 2491.5625,
-        'service_score': 416.38645,
-    }
-    # dump(sim.run_id,
-    #      sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
-    #      sim.scenario.orsim_settings['STEP_INTERVAL'],
-    #      sim.reference_time,
-    #      True if 'compromise' in scenario_name else False
-    #      )
-    dump_paths(
-        sim.run_id,
-        sim.run_id,
-        sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
-        sim.scenario.orsim_settings['STEP_INTERVAL'],
-        sim.reference_time,
-    )
-    dump_demand_coords(
-        sim.run_id,
-        sim.run_id,
-        sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
-        sim.scenario.orsim_settings['STEP_INTERVAL'],
-        sim.reference_time,
-    )
+    # target = {
+    #     'revenue': 77.5802,
+    #     'wait_time_pickup': 2491.5625,
+    #     'service_score': 416.38645,
+    # }
+    # # dump(sim.run_id,
+    # #      sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+    # #      sim.scenario.orsim_settings['STEP_INTERVAL'],
+    # #      sim.reference_time,
+    # #      True if 'compromise' in scenario_name else False
+    # #      )
+    # dump_paths(
+    #     sim.run_id,
+    #     sim.run_id,
+    #     sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+    #     sim.scenario.orsim_settings['STEP_INTERVAL'],
+    #     sim.reference_time,
+    # )
+    # dump_demand_coords(
+    #     sim.run_id,
+    #     sim.run_id,
+    #     sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+    #     sim.scenario.orsim_settings['STEP_INTERVAL'],
+    #     sim.reference_time,
+    # )
 
-    dump_kpi_metrics({sim.run_id: sim.run_id}, target)
+    # dump_kpi_metrics({sim.run_id: sim.run_id}, target)
 
-    dump_active_agents(
-        {sim.run_id: sim.run_id},
-        sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
-        sim.scenario.orsim_settings['STEP_INTERVAL'],
-        sim.reference_time,
-    )
+    # dump_active_agents(
+    #     {sim.run_id: sim.run_id},
+    #     sim.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS'],
+    #     sim.scenario.orsim_settings['STEP_INTERVAL'],
+    #     sim.reference_time,
+    # )
 
-    dump_solver_params({sim.run_id: sim.run_id})
+    # dump_solver_params({sim.run_id: sim.run_id})
 
-    dump_trip_metrics({sim.run_id: sim.run_id})
+    # dump_trip_metrics({sim.run_id: sim.run_id})
 
-    print(f"Completed {sim.run_id = } with run time {run_time}")
+    # print(f"Completed {sim.run_id = } with run time {run_time}")
 

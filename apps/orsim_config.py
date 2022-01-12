@@ -73,9 +73,16 @@ assignment_settings = {
         #     'max_travel_time_pickup': 300, # seconds
         #     'online_metric_scale_strategy': 'time', # Allowed: time | demand
         # },
+        # {
+        #     'name': 'Singapore_SG',
+        #     'districts': ['SINGAPORE',],
+        #     'strategy': 'PickupOptimalMatching', #'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
+        #     'max_travel_time_pickup': 600, # seconds
+        #     'online_metric_scale_strategy': 'time', # Allowed: time | demand
+        # },
         {
-            'name': 'Singapore_SG',
-            'districts': ['SINGAPORE',],
+            'name': 'Changi',
+            'districts': ['CHANGI',],
             'strategy': 'PickupOptimalMatching', #'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
             'max_travel_time_pickup': 600, # seconds
             'online_metric_scale_strategy': 'time', # Allowed: time | demand
@@ -84,12 +91,14 @@ assignment_settings = {
 }
 
 driver_settings = {
-    'NUM_DRIVERS': 300,       # 100,
+    'NUM_DRIVERS': 10,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,
     'RESPONSE_RATE': 1, # 0.25
     'STEP_ONLY_ON_EVENTS': True,
+
+    'ACTION_WHEN_FREE': 'random_walk', # 'random_walk', 'stay'
 
     # 'LOCATION_PING_INTERVAL': 15,  # seconds in Simulation Universe
     # NOTE LOCATION_PING_INTERVAL must be Less than STEP_INTERVAL
@@ -97,7 +106,7 @@ driver_settings = {
 }
 
 passenger_settings = {
-    'NUM_PASSENGERS': 5000,       # 100,
+    'NUM_PASSENGERS': 50,       # 100,
     'BEHAVIOR': 'random',       # 100,
 
     'STEPS_PER_ACTION': 1, #2,

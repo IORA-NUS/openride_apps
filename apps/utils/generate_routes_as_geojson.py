@@ -19,7 +19,8 @@ if __name__ == '__main__':
     reference_time = datetime(2020, 1, 1, 4, 0, 0)
     # primary_run_id = '9YOUfrgBKvdO'
     # primary_run_id = 'juyxDLTucfQj'
-    primary_run_id = 'qO7HWJEAEngT'
+    # primary_run_id = 'qO7HWJEAEngT'
+    primary_run_id = 'Oq2TzyY3HnnR'
 
     paths = get_all_paths(primary_run_id, num_steps, sim_step_size, reference_time)
     geojson = paths_to_geojson(paths, reference_time)
