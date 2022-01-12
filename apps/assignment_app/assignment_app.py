@@ -10,7 +10,7 @@ import json, requests, traceback
 import paho.mqtt.client as paho
 from datetime import datetime
 
-from apps.messenger_service import Messenger
+# from apps.messenger_service import Messenger
 from apps.loc_service import OSRMClient
 
 from apps.utils.user_registry import UserRegistry

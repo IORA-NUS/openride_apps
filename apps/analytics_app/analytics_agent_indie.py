@@ -11,9 +11,11 @@ from .analytics_app import AnalyticsApp
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from apps.messenger_service import Messenger
+# from apps.messenger_service import Messenger
 
-from apps.orsim import ORSimAgent
+# from apps.orsim import ORSimAgent
+
+from orsim import ORSimAgent
 
 # from apps.config import analytics_settings, orsim_settings
 

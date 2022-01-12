@@ -13,7 +13,7 @@ import json, requests
 import paho.mqtt.client as paho
 from datetime import datetime
 
-from apps.messenger_service import Messenger
+# from apps.messenger_service import Messenger
 
 # from apps.utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
 from apps.loc_service import transform_lonlat_webmercator, itransform_lonlat_webmercator

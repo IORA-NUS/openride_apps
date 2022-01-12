@@ -17,7 +17,7 @@ import paho.mqtt.client as paho
 from apps.state_machine import RidehailPassengerTripStateMachine
 
 
-from apps.messenger_service import Messenger
+# from apps.messenger_service import Messenger
 
 
 

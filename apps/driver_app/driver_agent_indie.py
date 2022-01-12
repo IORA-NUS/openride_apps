@@ -27,9 +27,11 @@ from apps.scenario import GenerateBehavior
 
 from apps.loc_service import TaxiStop, BusStop, cut, cut_route
 
-from apps.messenger_service import Messenger
+# from apps.messenger_service import Messenger
 
-from apps.orsim import ORSimAgent
+# from apps.orsim import ORSimAgent
+# from orsim import ORSimAgent
+from orsim import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 # from apps.config import driver_settings, orsim_settings

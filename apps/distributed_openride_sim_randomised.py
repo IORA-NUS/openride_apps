@@ -24,14 +24,14 @@ from dateutil.relativedelta import relativedelta
 import pytest
 from unittest import mock
 
-from messenger_service import Messenger
+# from messenger_service import Messenger
 
 import asyncio
 
 from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
 
-from orsim import ORSimScheduler
-from apps.config import settings #, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+from orsim import ORSimScheduler, ORSimEnv
+from apps.config import settings, messenger_backend #, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
 from apps.utils.user_registry import UserRegistry
 from apps.utils import time_to_str, str_to_time
 
@@ -39,6 +39,9 @@ class DistributedOpenRideSimRandomised():
 
 
     def __init__(self, run_id, scenario_name):
+
+        ORSimEnv.set_backend(messenger_backend)
+
         self.run_id = run_id
         self.scenario_name = scenario_name
         self.scenario = ScenarioManager(scenario_name)

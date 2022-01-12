@@ -21,11 +21,12 @@ from apps.loc_service import OSRMClient, cut
 
 from apps.loc_service import TaxiStop, BusStop
 
-from apps.messenger_service import Messenger
+# from apps.messenger_service import Messenger
 
 # Passenger agent will be called to apply behavior at every step
 # At each step, the Agent will process list of collected messages in the app.
-from apps.orsim import ORSimAgent
+# from apps.orsim import ORSimAgent
+from orsim import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 # from apps.config import orsim_settings, passenger_settings
