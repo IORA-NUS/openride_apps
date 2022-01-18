@@ -103,7 +103,7 @@ nest-asyncio==1.5.1
 networkx==2.6.3
 notebook==6.3.0
 numpy==1.20.2
-orsim==0.1.1
+orsim==0.2.1
 packaging==20.9
 paho-mqtt==1.6.1
 pandas==1.2.4

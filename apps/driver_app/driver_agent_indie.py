@@ -43,12 +43,13 @@ class DriverAgentIndie(ORSimAgent):
     projected_path = None # shapely.geometry.LineString
 
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
-
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    # def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
+    #     super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior): #, orsim_settings):
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior) #, orsim_settings)
 
         self.current_loc = self.behavior['init_loc']
-        self.action_when_free = behavior.get('ACTION_WHEN_FREE', 'random_walk')
+        self.action_when_free = behavior.get('action_when_free', 'random_walk')
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -197,8 +198,8 @@ class DriverAgentIndie(ORSimAgent):
         # # The agent's step will go here.
         self.app.update_current(self.get_current_time_str(), self.current_loc)
 
-        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
-                    (random() <= self.behavior['RESPONSE_RATE']) and \
+        if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
+                    (random() <= self.behavior['response_rate']) and \
                     (self.next_event_time <= self.current_time):
                 # 1. Always refresh trip manager to sync InMemory States with DB
                 self.add_step_log('Before refresh')

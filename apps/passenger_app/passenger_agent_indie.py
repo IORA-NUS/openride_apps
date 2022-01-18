@@ -39,9 +39,10 @@ class PassengerAgentIndie(ORSimAgent):
     elapsed_duration_steps = None
     # projected_path = None # shapely.geometry.LineString
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
-        ''' '''
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    # def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
+    #     super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior): #, orsim_settings):
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior) #, orsim_settings)
 
         self.step_size = self.orsim_settings['STEP_INTERVAL'] # NumSeconds per each step.
 
@@ -154,8 +155,8 @@ class PassengerAgentIndie(ORSimAgent):
         self.add_step_log(f'In step')
         self.app.update_current(self.get_current_time_str(), self.current_loc)
 
-        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
-                    (random() <= self.behavior['RESPONSE_RATE']) and \
+        if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
+                    (random() <= self.behavior['response_rate']) and \
                     (self.next_event_time <= self.current_time):
 
             # 1. Always refresh trip manager to sync InMemory States with DB

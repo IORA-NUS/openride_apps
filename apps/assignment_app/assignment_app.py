@@ -23,12 +23,12 @@ from .engine_manager import EngineManager
 class AssignmentApp:
     ''' '''
 
-    def __init__(self, run_id, sim_clock, credentials, solver_name, solver_params, STEPS_PER_ACTION, messenger):
+    def __init__(self, run_id, sim_clock, credentials, solver_name, solver_params, steps_per_action, messenger):
         ''' '''
         self.run_id = run_id
         self.credentials = credentials
         self.solver_params = solver_params
-        self.STEPS_PER_ACTION = STEPS_PER_ACTION
+        self.steps_per_action = steps_per_action
 
         self.user = UserRegistry(sim_clock, credentials, role='admin')
 
