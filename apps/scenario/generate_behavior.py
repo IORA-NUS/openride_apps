@@ -7,7 +7,9 @@ from numpy.random import default_rng
 from apps.loc_service import BusStop, PlanningArea
 
 from apps.config import settings
-from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+# from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+from apps.scenario.scenario_config import driver_settings, passenger_settings, analytics_settings, assignment_settings
+from apps.orsim_config import orsim_settings
 
 import haversine as hs
 
@@ -15,7 +17,7 @@ class GenerateBehavior():
 
     stop_locations = {
         coverage_area['name']: BusStop().get_locations_within(coverage_area['districts']) # NOTE need to pass a list
-                                            for coverage_area in assignment_settings['COVERAGE_AREA']
+                                            for coverage_area in assignment_settings['coverage_area']
     }
     rng = default_rng()
 
@@ -37,7 +39,7 @@ class GenerateBehavior():
             shift_start_time = 0
             shift_end_time = orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1
 
-            coverage_area = choice(assignment_settings['COVERAGE_AREA'])
+            coverage_area = choice(assignment_settings['coverage_area'])
             coverage_area_name = coverage_area['name']
 
             init_loc = cls.get_random_location(coverage_area_name)
@@ -91,11 +93,11 @@ class GenerateBehavior():
             'transition_time_pickup': 0, # NOTE This should be embedded in Passenger behavior (may recieve this via message or requested_trip dict?)
             'transition_time_dropoff': 0,
 
-            'STEPS_PER_ACTION': driver_settings['STEPS_PER_ACTION'],
-            'RESPONSE_RATE': driver_settings['RESPONSE_RATE'],
-            'STEP_ONLY_ON_EVENTS': driver_settings['STEP_ONLY_ON_EVENTS'],
-            'UPDATE_PASSENGER_LOCATION': driver_settings['UPDATE_PASSENGER_LOCATION'],
-            'ACTION_WHEN_FREE': driver_settings['ACTION_WHEN_FREE']
+            'steps_per_action': driver_settings['steps_per_action'],
+            'response_rate': driver_settings['response_rate'],
+            'step_only_on_events': driver_settings['step_only_on_events'],
+            'update_passenger_location': driver_settings['update_passenger_location'],
+            'action_when_free': driver_settings['action_when_free']
         }
 
         return behavior
@@ -106,7 +108,7 @@ class GenerateBehavior():
         if record is None:
             trip_request_time = randint(0, orsim_settings['SIMULATION_LENGTH_IN_STEPS']-1)
 
-            coverage_area = choice(assignment_settings['COVERAGE_AREA'])
+            coverage_area = choice(assignment_settings['coverage_area'])
             coverage_area_name = coverage_area['name']
 
             pickup_loc = cls.get_random_location(coverage_area_name)
@@ -172,9 +174,9 @@ class GenerateBehavior():
                 [('end_trip', 'passenger_droppedoff'), 1.0],
             ],
 
-            'STEPS_PER_ACTION': passenger_settings['STEPS_PER_ACTION'],
-            'RESPONSE_RATE': passenger_settings['RESPONSE_RATE'],
-            'STEP_ONLY_ON_EVENTS': passenger_settings['STEP_ONLY_ON_EVENTS'],
+            'steps_per_action': passenger_settings['steps_per_action'],
+            'response_rate': passenger_settings['response_rate'],
+            'step_only_on_events': passenger_settings['step_only_on_events'],
 
         }
 
@@ -187,16 +189,16 @@ class GenerateBehavior():
             'email': f'{id}@test.com',
             'password': 'password',
 
-            'STEPS_PER_ACTION': analytics_settings['STEPS_PER_ACTION'],
-            'RESPONSE_RATE': analytics_settings['RESPONSE_RATE'],
-            'STEP_ONLY_ON_EVENTS': analytics_settings['STEP_ONLY_ON_EVENTS'],
+            'steps_per_action': analytics_settings['steps_per_action'],
+            'response_rate': analytics_settings['response_rate'],
+            'step_only_on_events': analytics_settings['step_only_on_events'],
 
-            'PUBLISH_REALTIME_DATA': analytics_settings['PUBLISH_REALTIME_DATA'],
-            'WRITE_WS_OUTPUT_TO_FILE': analytics_settings['WRITE_WS_OUTPUT_TO_FILE'],
+            'publish_realtime_data': analytics_settings['publish_realtime_data'],
+            'write_ws_output_to_file': analytics_settings['write_ws_output_to_file'],
 
-            'PUBLISH_PATHS_HISTORY': analytics_settings['PUBLISH_PATHS_HISTORY'],
-            'WRITE_PH_OUTPUT_TO_FILE': analytics_settings['WRITE_PH_OUTPUT_TO_FILE'],
-            'PATHS_HISTORY_TIME_WINDOW': analytics_settings['PATHS_HISTORY_TIME_WINDOW'],
+            'publish_paths_history': analytics_settings['publish_paths_history'],
+            'write_ph_output_to_file': analytics_settings['write_ph_output_to_file'],
+            'paths_history_time_window': analytics_settings['paths_history_time_window'],
 
         }
 
@@ -265,9 +267,9 @@ class GenerateBehavior():
                 #     'weightServiceScore': 1,
                 # },
             },
-            'STEPS_PER_ACTION': assignment_settings['STEPS_PER_ACTION'],
-            'RESPONSE_RATE': assignment_settings['RESPONSE_RATE'],
-            'STEP_ONLY_ON_EVENTS': assignment_settings['STEP_ONLY_ON_EVENTS'],
+            'steps_per_action': assignment_settings['steps_per_action'],
+            'response_rate': assignment_settings['response_rate'],
+            'step_only_on_events': assignment_settings['step_only_on_events'],
 
         }
 

@@ -32,7 +32,9 @@ import asyncio
 
 # from orsim import ORSimScheduler
 from apps.config import settings
-from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+# from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+from apps.scenario.scenario_config import driver_settings, passenger_settings, analytics_settings, assignment_settings
+from apps.orsim_config import orsim_settings
 
 def to_sec(tm):
     return (tm.hour*3600) + (tm.minute*60) + tm.second
@@ -90,7 +92,7 @@ class ScenarioManager():
     def generate_random_data_from_orsim_config(self, behavior_dir):
 
         self.driver_collection = {}
-        for i in range(driver_settings['NUM_DRIVERS']):
+        for i in range(driver_settings['num_drivers']):
             agent_id = f"d_{i:06d}"
             behavior = GenerateBehavior.ridehail_driver(agent_id)
             self.driver_collection[agent_id] = behavior
@@ -100,7 +102,7 @@ class ScenarioManager():
 
 
         self.passenger_collection = {}
-        for i in range(passenger_settings['NUM_PASSENGERS']):
+        for i in range(passenger_settings['num_passengers']):
             agent_id = f"p_{i:06d}"
             behavior = GenerateBehavior.ridehail_passenger(agent_id)
             self.passenger_collection[agent_id] = behavior
@@ -110,7 +112,7 @@ class ScenarioManager():
 
 
         self.assignment_collection = {}
-        for coverage_area in assignment_settings['COVERAGE_AREA']: # Support for multiple solvers
+        for coverage_area in assignment_settings['coverage_area']: # Support for multiple solvers
             agent_id = f"assignment_{coverage_area['name']}"
             behavior = GenerateBehavior.ridehail_assignment(agent_id, coverage_area)
             self.assignment_collection[agent_id] = behavior
@@ -140,7 +142,7 @@ class ScenarioManager():
 
         driver_df = pd.read_csv(f'{processed_input_dir}/driver.csv', parse_dates=['Start_Time', 'End_Time'])
         self.driver_collection = {}
-        # for i in range(driver_settings['NUM_DRIVERS']):
+        # for i in range(driver_settings['num_drivers']):
         for index, row in driver_df.iterrows():
             agent_id = f"d_{row['No']:06d}"
 
@@ -175,7 +177,7 @@ class ScenarioManager():
 
         passenger_df = pd.read_csv(f'{processed_input_dir}/passenger.csv', parse_dates=['Trip_start_DT', 'Trip_end_DT', 'Start_Time', 'End_Time'])
         self.passenger_collection = {}
-        # for i in range(passenger_settings['NUM_PASSENGERS']):
+        # for i in range(passenger_settings['num_passengers']):
         for index, row in passenger_df.iterrows():
             agent_id = f"p_{row['No']:06d}"
 
@@ -200,7 +202,7 @@ class ScenarioManager():
 
 
         self.assignment_collection = {}
-        for coverage_area in assignment_settings['COVERAGE_AREA']: # Support for multiple solvers
+        for coverage_area in assignment_settings['coverage_area']: # Support for multiple solvers
             agent_id = f"assignment_{coverage_area['name']}"
             behavior = GenerateBehavior.ridehail_assignment(agent_id, coverage_area)
             self.assignment_collection[agent_id] = behavior

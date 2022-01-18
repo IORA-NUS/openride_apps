@@ -22,9 +22,11 @@ from orsim import ORSimAgent
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
-        # # NOTE, model should include run_id and start_time
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    # def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
+    #     # # NOTE, model should include run_id and start_time
+    #     super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior): #, orsim_settings):
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior) #, orsim_settings)
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -66,9 +68,9 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     def step(self, time_step):
         ''' '''
-        # if self.current_time_step % analytics_settings['STEPS_PER_ACTION'] == 0:
-        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
-                    (random() <= self.behavior['RESPONSE_RATE']) and \
+        # if self.current_time_step % analytics_settings['steps_per_action'] == 0:
+        if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
+                    (random() <= self.behavior['response_rate']) and \
                     (self.next_event_time <= self.current_time):
             # Do not update next_event time for this agent
 
@@ -79,11 +81,11 @@ class AnalyticsAgentIndie(ORSimAgent):
             output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
 
             # Publish Active trips using websocket Protocol
-            if self.behavior['PUBLISH_REALTIME_DATA']:
+            if self.behavior['publish_realtime_data']:
                 location_stream, route_stream = self.app.publish_active_trips(self.get_current_time_str())
                 # print(publish_dict)
 
-                if self.behavior['WRITE_WS_OUTPUT_TO_FILE']:
+                if self.behavior['write_ws_output_to_file']:
                     stream_output_dir = f"{output_dir}/stream"
                     if not os.path.exists(stream_output_dir):
                         os.makedirs(stream_output_dir)
@@ -96,16 +98,16 @@ class AnalyticsAgentIndie(ORSimAgent):
 
 
             # Gather history in timewindow as paths for visualization
-            if self.behavior['PUBLISH_PATHS_HISTORY']:
-                if (((self.current_time_step + 1) * self.orsim_settings['STEP_INTERVAL']) % self.behavior['PATHS_HISTORY_TIME_WINDOW'] ) == 0:
+            if self.behavior['publish_paths_history']:
+                if (((self.current_time_step + 1) * self.orsim_settings['STEP_INTERVAL']) % self.behavior['paths_history_time_window'] ) == 0:
                     timewindow_end = self.current_time
-                    timewindow_start = timewindow_end - relativedelta(seconds=self.behavior['PATHS_HISTORY_TIME_WINDOW']+self.orsim_settings['STEP_INTERVAL'])
+                    timewindow_start = timewindow_end - relativedelta(seconds=self.behavior['paths_history_time_window']+self.orsim_settings['STEP_INTERVAL'])
                     logging.debug(f"{timewindow_start}, {timewindow_end}")
 
                     paths_history = self.app.get_history_as_paths(timewindow_start, timewindow_end)
                     # print(publish_dict)
 
-                    if self.behavior['WRITE_PH_OUTPUT_TO_FILE']:
+                    if self.behavior['write_ph_output_to_file']:
                         rest_output_dir = f"{output_dir}/rest"
                         if not os.path.exists(rest_output_dir):
                             os.makedirs(rest_output_dir)
@@ -120,8 +122,8 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     def compute_all_metrics(self):
         # METRICS COMPUTATION
-        # start_time = self.current_time - relativedelta(seconds=(analytics_settings['STEPS_PER_ACTION'] * orsim_settings['STEP_INTERVAL'] ))
-        start_time = self.current_time - relativedelta(seconds=(self.behavior['STEPS_PER_ACTION'] * self.orsim_settings['STEP_INTERVAL'] ))
+        # start_time = self.current_time - relativedelta(seconds=(analytics_settings['steps_per_action'] * orsim_settings['STEP_INTERVAL'] ))
+        start_time = self.current_time - relativedelta(seconds=(self.behavior['steps_per_action'] * self.orsim_settings['STEP_INTERVAL'] ))
         end_time = self.current_time
         self.app.prep_metric_computation_queries(start_time, end_time)
 

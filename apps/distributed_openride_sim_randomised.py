@@ -3,6 +3,7 @@ import os, sys
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
+# print(parent_path)
 
 import logging, time, json, traceback, requests
 from pprint import pprint
@@ -28,7 +29,7 @@ from unittest import mock
 
 import asyncio
 
-from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
+# from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
 
 from orsim import ORSimScheduler, ORSimEnv
 from apps.config import settings, messenger_backend #, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
@@ -65,13 +66,16 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': behavior['shift_start_time'],
                 'behavior': behavior,
-                'orsim_settings': self.scenario.orsim_settings
+                # 'orsim_settings': self.scenario.orsim_settings
             }
 
             self.agent_registry[behavior['shift_start_time']].append({
-                                                                'unique_id': agent_id,
-                                                                'method': start_driver,
-                                                                'spec': spec
+                                                                'spec': spec,
+                                                                # 'unique_id': agent_id,
+                                                                # 'method': start_driver,
+                                                                'project_path': f'{parent_path}',
+                                                                'agent_class': 'apps.driver_app.DriverAgentIndie',
+                                                                # 'agent_class_name': 'DriverAgentIndie',
                                                             })
 
         for agent_id, behavior in self.scenario.passenger_collection.items():
@@ -81,13 +85,16 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': behavior['trip_request_time'],
                 'behavior': behavior,
-                'orsim_settings': self.scenario.orsim_settings
+                # 'orsim_settings': self.scenario.orsim_settings
             }
 
             self.agent_registry[behavior['trip_request_time']].append({
-                                                                'unique_id': agent_id,
-                                                                'method': start_passenger,
-                                                                'spec': spec
+                                                                'spec': spec,
+                                                                # 'unique_id': agent_id,
+                                                                # 'method': start_passenger,
+                                                                'project_path': f'{parent_path}',
+                                                                'agent_class': 'apps.passenger_app.PassengerAgentIndie',
+                                                                # 'agent_class_name': 'PassengerAgentIndie',
                                                             })
 
 
@@ -98,10 +105,16 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': 0,
                 'behavior': behavior,
-                'orsim_settings': self.scenario.orsim_settings
+                # 'orsim_settings': self.scenario.orsim_settings
             }
 
-            self.service_scheduler.add_agent(agent_id, start_assignment, spec)
+            # self.service_scheduler.add_agent(agent_id, start_assignment, spec)
+            self.service_scheduler.add_agent(#agent_id,
+                                            spec=spec,
+                                            project_path=f'{parent_path}',
+                                            agent_class='apps.assignment_app.AssignmentAgentIndie',
+                                            # agent_class_name='AssignmentAgentIndie',
+                                            )
 
         for agent_id, behavior in self.scenario.analytics_collection.items():
             spec = {
@@ -110,10 +123,16 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': 0,
                 'behavior': behavior,
-                'orsim_settings': self.scenario.orsim_settings
+                # 'orsim_settings': self.scenario.orsim_settings
             }
 
-            self.service_scheduler.add_agent(agent_id, start_analytics, spec)
+            # self.service_scheduler.add_agent(agent_id, start_analytics, spec)
+            self.service_scheduler.add_agent(#agent_id,
+                                             spec=spec,
+                                            project_path=f'{parent_path}',
+                                            agent_class='apps.analytics_app.AnalyticsAgentIndie',
+                                            # agent_class_name='AnalyticsAgentIndie',
+                                            )
 
     def step(self, i):
         step_start_time = time.time()

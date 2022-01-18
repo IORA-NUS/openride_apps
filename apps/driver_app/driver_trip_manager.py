@@ -411,7 +411,7 @@ class DriverTripManager:
         if is_success(response.status_code):
             self.refresh()
 
-            # if first_ping or driver_settings['UPDATE_PASSENGER_LOCATION']:
+            # if first_ping or driver_settings['update_passenger_location']:
             if first_ping or self.update_passenger_loc:
                 self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({

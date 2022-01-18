@@ -22,9 +22,10 @@ from orsim import ORSimAgent
 class AssignmentAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
-
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    # def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
+    #     super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior): #, orsim_settings):
+        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior) #, orsim_settings)
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -37,7 +38,7 @@ class AssignmentAgentIndie(ORSimAgent):
                                  self.credentials,
                                  self.behavior['solver'],
                                  self.behavior['solver_params'],
-                                 self.behavior['STEPS_PER_ACTION'],
+                                 self.behavior['steps_per_action'],
                                  messenger=self.messenger)
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
@@ -62,9 +63,9 @@ class AssignmentAgentIndie(ORSimAgent):
 
     def step(self, time_step):
         ''' '''
-        # if self.current_time_step % assignment_settings['STEPS_PER_ACTION'] == 0:
-        if (self.current_time_step % self.behavior['STEPS_PER_ACTION'] == 0) and \
-                    (random() <= self.behavior['RESPONSE_RATE']): # and \
+        # if self.current_time_step % assignment_settings['steps_per_action'] == 0:
+        if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
+                    (random() <= self.behavior['response_rate']): # and \
                     # (self.next_event_time <= self.current_time):
 
             result = self.app.assign(self.get_current_time_str(), self.current_time_step)
