@@ -8,15 +8,16 @@
 ## Prerequisites:
 1. Routing Service: Currently only supports [OSRM](http://project-osrm.org). The instructions for downloading open source routing datasets are provided in the link.
    The codes have been tested with the "malaysia-singapore-brunei" Open Street map data set with OSRM service running on docker. If OSRM is not installed on the localhost, apprpriately modify the `ROUTING_SERVER` value in `config.py`
-2. [RabbitMQ](https://www.rabbitmq.com) is the Message broker of choice. Ensure the following details are appropriately modified in the `config.py`
+2. [RabbitMQ](https://www.rabbitmq.com) is the Message broker of choice. The docker-compose.yml provides necessary instructions to start a rabbitMQ service. `docker-compose up` will start a fully configured RabbitMQ server on localhost.
+3. Ensure the following details are appropriately modified in the `config.py`
     - `RABBITMQ_MANAGEMENT_SERVER`
     - `RABBITMQ_ADMIN_USER`
     - `RABBITMQ_ADMIN_PASSWORD`
     - `MQTT_BROKER`
     - `WEB_MQTT_PORT`
-3. Ensure the [OpenRide Server](https://github.com/IORA-NUS/openride_server) is running and provide the server url in the `OPENRIDE_SERVER_URL`.
+4. Ensure the [OpenRide Server](https://github.com/IORA-NUS/openride_server) is running and provide the server url in the `OPENRIDE_SERVER_URL`.
    1. OpenRIde Server depends on [MongoDB](https://www.mongodb.com) as the data backend. Details on running the OpenRide Server is given in that repo.
-
+5. Assignment App currently needs GLPK to be installed (if using a different solver, install that appropriately). Instructions for installing glpk can be found here [glpk](https://www.gnu.org/software/glpk/).
 
 ## Running with Celery:
 - set `EXECUTION_STRATEGY`: `CELERY`

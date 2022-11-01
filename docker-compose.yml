@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  rabbit:
+    image: "rabbitmq"
+    container_name: rabbit
+    ports:
+    - "5671:5671"
+    - "5672:5672"
+    - "15671:15671"
+    - "15672:15672"
+    - "15675:15675"
+    - "15692:15692"
+    - "1883:1883"
+    - "8883:8883"
+    volumes:
+    - "$PWD/rabbit_enabled_plugins:/etc/rabbitmq/enabled_plugins"
