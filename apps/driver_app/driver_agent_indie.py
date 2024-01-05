@@ -88,6 +88,7 @@ class DriverAgentIndie(ORSimAgent):
             self.entering_market(payload.get('time_step'))
             self.add_step_log('After entering_market')
 
+            # print(f"{self.unique_id}: {self.is_active()=}")
             if self.is_active():
                 try:
                     self.add_step_log('Before Step')
@@ -106,6 +107,7 @@ class DriverAgentIndie(ORSimAgent):
         else:
             logging.error(f"{payload = }")
 
+        # print(f"{self.unique_id}: {did_step}")
         return did_step
 
     def get_random_location(self):
@@ -150,10 +152,10 @@ class DriverAgentIndie(ORSimAgent):
             if self.app.exited_market:
                 return False
             elif (self.current_time_step > self.behavior['shift_end_time']) and \
-                        (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier):
+                        (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.name):
                     # (
                     #     (self.app.get_trip() is None) or \
-                    #     (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.identifier)
+                    #     (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_init_trip.name)
                     # ):
 
                 self.shutdown()
@@ -197,6 +199,7 @@ class DriverAgentIndie(ORSimAgent):
     def step(self, time_step):
         # # The agent's step will go here.
         self.app.update_current(self.get_current_time_str(), self.current_loc)
+        # print(f"driver_agent_indie.step: {self.unique_id}")
 
         if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
                     (random() <= self.behavior['response_rate']) and \
@@ -293,7 +296,7 @@ class DriverAgentIndie(ORSimAgent):
 
             # try:
             if type(self.projected_path) == LineString:
-                self.current_loc = mapping(Point(self.projected_path.boundary[0]))
+                self.current_loc = mapping(Point(self.projected_path.boundary.geoms[0]))
             elif type(self.projected_path) == Point:
                 self.current_loc = mapping(self.projected_path)
             # print(moved_distance, self.current_loc) #, self.projected_path)
@@ -392,19 +395,19 @@ class DriverAgentIndie(ORSimAgent):
                                 ).total_seconds()
         # print(time_since_last_event)
 
-        if driver['state'] != WorkflowStateMachine.online.identifier:
+        if driver['state'] != WorkflowStateMachine.online.name:
             raise Exception(f"{driver['state'] = } is not valid")
         else:
             # NOTE The following statements are executed in sequence and each update might affect the execution of the following statements.
             # The order matters.
-            if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_looking_for_job.identifier:
+            if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_looking_for_job.name:
                 if type(self.projected_path) == Point:
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
 
                     self.set_route(self.current_loc, self.get_random_location())
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-            if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_received_trip.identifier:
+            if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_received_trip.name:
                 if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
                     estimated_time_to_arrive = self.get_tentative_travel_time(self.current_loc, self.app.get_trip()['pickup_loc'])
                     self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
@@ -412,26 +415,26 @@ class DriverAgentIndie(ORSimAgent):
                     self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
                     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-            if self.app.get_trip()['state'] in RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
+            if self.app.get_trip()['state'] in RidehailDriverTripStateMachine.driver_moving_to_pickup.name:
                 ''''''
-                distance = hs.haversine(self.current_loc['coordinates'][:2], self.app.get_trip()['pickup_loc']['coordinates'][:2], unit=hs.Unit.METERS)
+                distance = hs.haversine(reversed(self.current_loc['coordinates'][:2]), reversed(self.app.get_trip()['pickup_loc']['coordinates'][:2]), unit=hs.Unit.METERS)
 
                 if (distance < 100):
                     self.app.trip.wait_to_pickup(self.get_current_time_str(), current_loc=self.current_loc,)
 
 
-            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_pickedup.identifier) and \
+            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_pickedup.name) and \
                 (time_since_last_event >= self.behavior['transition_time_pickup']):
                     self.app.trip.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
 
-            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier):
+            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.name):
 
-                distance = hs.haversine(self.current_loc['coordinates'][:2], self.app.get_trip()['dropoff_loc']['coordinates'][:2], unit=hs.Unit.METERS)
+                distance = hs.haversine(reversed(self.current_loc['coordinates'][:2]), reversed(self.app.get_trip()['dropoff_loc']['coordinates'][:2]), unit=hs.Unit.METERS)
 
                 if (distance < 100):
                     self.app.trip.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
 
-            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_droppedoff.identifier) and \
+            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_droppedoff.name) and \
                 (time_since_last_event >= self.behavior['transition_time_dropoff']):
 
                     self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)

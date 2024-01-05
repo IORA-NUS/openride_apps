@@ -75,7 +75,7 @@ class DriverApp:
         try:
             self.driver.logout(sim_clock)
         except Exception as e:
-            logging.exception(str(e))
+            logging.warning(str(e))
 
         # self.messenger.disconnect()
 
@@ -98,7 +98,7 @@ class DriverApp:
         self.trip.ping(sim_clock, current_loc, **kwargs) # Raises exception if ping fails
 
         if publish:
-            if self.get_trip()['state'] in [RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier]:
+            if self.get_trip()['state'] in [RidehailDriverTripStateMachine.driver_moving_to_dropoff.name]:
                 self.messenger.client.publish(f'{self.run_id}/{self.get_trip()["passenger"]}',
                                     json.dumps({
                                         'action': 'driver_workflow_event',

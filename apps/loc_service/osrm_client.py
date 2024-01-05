@@ -178,7 +178,9 @@ def cut_route(route, duration):
             new_route_start = { 'type': "Point", 'coordinates': step_coords_residue[-1] }
             new_route_end = { 'type': "Point", 'coordinates': steps[-1]['maneuver']['location'] }
 
-            dist = hs.haversine(new_route_start['coordinates'][:2], new_route_end['coordinates'][:2], unit=hs.Unit.METERS)
+            # print(f"{new_route_start=}, {new_route_end=}")
+
+            dist = hs.haversine(reversed(new_route_start['coordinates'][:2]), reversed(new_route_end['coordinates'][:2]), unit=hs.Unit.METERS)
             if dist > 30: # some arbitrarily small distance
                 new_route = OSRMClient.get_route(new_route_start, new_route_end)
                 projected_path = LineString(OSRMClient.get_coords_from_route(new_route))

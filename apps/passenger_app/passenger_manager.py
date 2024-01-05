@@ -65,9 +65,11 @@ class PassengerManager():
             machine = WorkflowStateMachine(start_value=self.passenger['state'])
             s = machine.current_state
             for t in s.transitions:
-                if t.destinations[0].name == 'offline': #'offline':
+                # if t.destinations[0].name == 'offline': #'offline':
+                if t.target.name == 'offline': #'offline':
                     data = {
-                        "transition": t.identifier,
+                        # "transition": t.identifier,
+                        "transition": t.event,
                         "sim_clock": sim_clock
                     }
                     passenger_item_url = passenger_url + f"/{self.passenger['_id']}"
@@ -85,9 +87,11 @@ class PassengerManager():
             machine = WorkflowStateMachine(start_value=self.passenger['state'])
             s = machine.current_state
             for t in s.transitions:
-                if t.destinations[0].name == 'online': #'offline':
+                # if t.destinations[0].name == 'online': #'offline':
+                if t.target.name == 'online': #'offline':
                     data = {
-                        "transition": t.identifier,
+                        # "transition": t.identifier,
+                        "transition": t.event,
                         "sim_clock": sim_clock
                     }
 

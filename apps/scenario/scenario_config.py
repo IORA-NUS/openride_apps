@@ -60,25 +60,25 @@ assignment_settings = {
         #     'max_travel_time_pickup': 300, # seconds
         #     'online_metric_scale_strategy': 'time', # Allowed: time | demand
         # },
+        {
+            'name': 'Singapore_SG',
+            'districts': ['SINGAPORE',],
+            'strategy': 'CompromiseMatching', # 'PickupOptimalMatching', #'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
+            'max_travel_time_pickup': 6000, # 600, # seconds
+            'online_metric_scale_strategy': 'time', # Allowed: time | demand
+        },
         # {
-        #     'name': 'Singapore_SG',
-        #     'districts': ['SINGAPORE',],
+        #     'name': 'Changi',
+        #     'districts': ['CHANGI',],
         #     'strategy': 'PickupOptimalMatching', #'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
         #     'max_travel_time_pickup': 600, # seconds
         #     'online_metric_scale_strategy': 'time', # Allowed: time | demand
         # },
-        {
-            'name': 'Changi',
-            'districts': ['CHANGI',],
-            'strategy': 'PickupOptimalMatching', #'GreedyMinPickupMatching',  #'CompromiseMatching',  # 'RandomAssignment'
-            'max_travel_time_pickup': 600, # seconds
-            'online_metric_scale_strategy': 'time', # Allowed: time | demand
-        },
     ],
 }
 
 driver_settings = {
-    'num_drivers': 10,       # 100,
+    'num_drivers': 10, # 10,       # 100,
     # 'BEHAVIOR': 'random',       # 100,
 
     'steps_per_action': 1, #2,
@@ -93,7 +93,7 @@ driver_settings = {
 }
 
 passenger_settings = {
-    'num_passengers': 50,       # 100,
+    'num_passengers': 500, #1000,       # 100,
     # 'BEHAVIOR': 'random',       # 100,
 
     'steps_per_action': 1, #2,

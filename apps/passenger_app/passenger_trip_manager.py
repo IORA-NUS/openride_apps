@@ -34,7 +34,7 @@ class PassengerTripManager:
         current_time is datetime
         '''
         try:
-            if self.trip['state'] in RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
+            if self.trip['state'] in RidehailPassengerTripStateMachine.passenger_requested_trip.name:
                 try:
                     patience = self.trip['meta']['profile']['patience']
                 except Exception as e:
@@ -51,8 +51,8 @@ class PassengerTripManager:
 
                 next_waypoint_time = max((trip_created_time + relativedelta(seconds=patience)), current_time)
 
-            elif self.trip['state'] in [RidehailPassengerTripStateMachine.passenger_accepted_trip.identifier,
-                                        RidehailPassengerTripStateMachine.passenger_waiting_for_pickup.identifier]:
+            elif self.trip['state'] in [RidehailPassengerTripStateMachine.passenger_accepted_trip.name,
+                                        RidehailPassengerTripStateMachine.passenger_waiting_for_pickup.name]:
                 try:
                     estimated_time_to_arrive = self.trip['stats']['estimated_time_to_arrive']
                 except Exception as e:
@@ -68,7 +68,7 @@ class PassengerTripManager:
 
                 next_waypoint_time = max((last_waypoint_time + relativedelta(seconds=estimated_time_to_arrive)), current_time)
 
-            elif self.trip['state'] == RidehailPassengerTripStateMachine.passenger_moving_for_dropoff.identifier:
+            elif self.trip['state'] == RidehailPassengerTripStateMachine.passenger_moving_for_dropoff.name:
                 try:
                     estimated_time_to_dropoff = self.trip['stats']['estimated_time_to_dropoff']
                 except Exception as e:
@@ -470,8 +470,8 @@ class PassengerTripManager:
 
     def force_quit(self, sim_clock, current_loc):
 
-        if (self.trip is None) or  (self.trip['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.identifier,
-                                                            RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,]):
+        if (self.trip is None) or  (self.trip['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.name,
+                                                            RidehailPassengerTripStateMachine.passenger_cancelled_trip.name,]):
             return
 
         passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/force_quit"

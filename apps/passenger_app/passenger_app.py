@@ -116,7 +116,7 @@ class PassengerApp:
     #     payload = json.loads(message.payload.decode('utf-8'))
 
     #     if payload['action'] == 'assigned':
-    #         if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
+    #         if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name:
     #             try:
     #                 self.trip.assign(self.latest_sim_clock,
     #                                 current_loc=self.latest_loc,
@@ -138,7 +138,7 @@ class PassengerApp:
         # print('passenger_app received_message', payload)
 
         if payload['action'] == 'assigned':
-            if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
+            if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name:
                 try:
                     self.trip.assign(self.latest_sim_clock,
                                     current_loc=self.latest_loc,

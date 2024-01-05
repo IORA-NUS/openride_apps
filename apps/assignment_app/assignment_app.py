@@ -151,7 +151,7 @@ class AssignmentApp:
                 "where": json.dumps({
                     "is_active": True,
                     "is_occupied": False,
-                    "state": {"$in": [RidehailDriverTripStateMachine.driver_looking_for_job.identifier] },
+                    "state": {"$in": [RidehailDriverTripStateMachine.driver_looking_for_job.name] },
                     "current_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
                 }),
                 # "embedded": json.dumps({
@@ -194,7 +194,7 @@ class AssignmentApp:
             params = {
                 "where": json.dumps({
                     "is_active": True,
-                    "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier]},
+                    "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.name]},
                     # "pickup_loc": {"$near": {"$geometry": self.solver.params['area']['center'], "$maxDistance": self.solver.params['area']['radius']}}
                     "pickup_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
                 }),

@@ -28,7 +28,7 @@ class DriverTripManager:
         current_time is datetime
         '''
         try:
-            if self.trip['state'] in RidehailDriverTripStateMachine.driver_looking_for_job.identifier:
+            if self.trip['state'] in RidehailDriverTripStateMachine.driver_looking_for_job.name:
                 try:
                     trip_duration = self.trip['routes']['planned']['looking_for_job']['duration']
                 except Exception as e:
@@ -44,7 +44,7 @@ class DriverTripManager:
 
                 next_waypoint_time = max((last_waypoint_time + relativedelta(seconds=trip_duration)), current_time)
 
-            elif self.trip['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
+            elif self.trip['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.name:
                 try:
                     trip_duration = self.trip['routes']['planned']['moving_to_pickup']['duration']
                 except Exception as e:
@@ -60,7 +60,7 @@ class DriverTripManager:
 
                 next_waypoint_time = max((last_waypoint_time + relativedelta(seconds=trip_duration)), current_time)
 
-            elif self.trip['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.identifier:
+            elif self.trip['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.name:
                 try:
                     trip_duration = self.trip['routes']['planned']['moving_to_dropoff']['duration']
                 except Exception as e:
@@ -177,7 +177,7 @@ class DriverTripManager:
             #         'planned': {
             #             'looking_for_job': route,
             #         }},
-            #     'state': machine.current_state.identifier
+            #     'state': machine.current_state.name
             # }
             # deep_update(self.trip, updates)
         else:
@@ -526,22 +526,23 @@ class DriverTripManager:
             -- When Driver Logs off, then no new trip should be created. Shutdown signal handles this case.
             -- Hence use with Care.
         '''
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
+        if self.trip is not None:
+            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
 
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
+            data = {
+                'sim_clock': sim_clock,
+                'current_loc': current_loc,
+            }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),)
-                                # timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+            response = requests.patch(driver_trip_item_url,
+                                    headers=self.user.get_headers(etag=self.trip['_etag']),
+                                    data=json.dumps(data),)
+                                    # timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
 
-        if is_success(response.status_code):
-            self.trip = None
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
+            if is_success(response.status_code):
+                self.trip = None
+            else:
+                raise WriteFailedException(f"{response.url}, {response.text}")
 
 
     # def end_trip(self, sim_clock, current_loc):

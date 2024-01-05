@@ -118,13 +118,13 @@ class AnalyticsApp:
                         {"run_id": self.run_id},
                         # {"is_active": True},
                         {"$or": [
-                            {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.identifier,
-                                               RidehailPassengerTripStateMachine.passenger_assigned_trip.identifier,
-                                               RidehailPassengerTripStateMachine.passenger_accepted_trip.identifier,
-                                               RidehailPassengerTripStateMachine.passenger_waiting_for_pickup.identifier,]} },
+                            {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.name,
+                                               RidehailPassengerTripStateMachine.passenger_assigned_trip.name,
+                                               RidehailPassengerTripStateMachine.passenger_accepted_trip.name,
+                                               RidehailPassengerTripStateMachine.passenger_waiting_for_pickup.name,]} },
                             {"$and": [
-                                {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_completed_trip.identifier,
-                                                RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,
+                                {"state": {"$in": [RidehailPassengerTripStateMachine.passenger_completed_trip.name,
+                                                RidehailPassengerTripStateMachine.passenger_cancelled_trip.name,
                                                 ]}},
                                 {"sim_clock": {"$gte": datetime.strftime(display_expiry_time, "%a, %d %b %Y %H:%M:%S GMT")}},
                                 ],
@@ -302,9 +302,9 @@ class AnalyticsApp:
                     "$and": [
                         {"run_id": self.run_id},
                         {"state": {
-                            '$in': [RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,
-                                #    RidehailPassengerTripStateMachine.passenger_pickedup.identifier]
-                                   RidehailPassengerTripStateMachine.passenger_completed_trip.identifier]
+                            '$in': [RidehailPassengerTripStateMachine.passenger_cancelled_trip.name,
+                                #    RidehailPassengerTripStateMachine.passenger_pickedup.name]
+                                   RidehailPassengerTripStateMachine.passenger_completed_trip.name]
                             }},
                         {"sim_clock": {
                             "$gte": datetime.strftime(start_time, "%a, %d %b %Y %H:%M:%S GMT"),
@@ -336,7 +336,7 @@ class AnalyticsApp:
                     "$and": [
                         {"run_id": self.run_id},
                         {"state": {
-                            '$in': [RidehailDriverTripStateMachine.driver_completed_trip.identifier,]
+                            '$in': [RidehailDriverTripStateMachine.driver_completed_trip.name,]
                             }},
                         {'is_occupied': True},
                         {"sim_clock": {
@@ -403,8 +403,8 @@ class AnalyticsApp:
     def compute_revenue(self):
         step_revenue = 0
         for item in self.passenger_trips_for_metric:
-            # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
-            if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.identifier:
+            # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.name:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.name:
                 step_revenue += item['trip_price']
 
         return step_revenue
@@ -412,7 +412,7 @@ class AnalyticsApp:
     def compute_cancelled(self):
         num_cancelled = 0
         for item in self.passenger_trips_for_metric:
-            if item['state'] == RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_cancelled_trip.name:
                 num_cancelled += 1
 
         return num_cancelled
@@ -420,8 +420,8 @@ class AnalyticsApp:
     def compute_served(self):
         num_served = 0
         for item in self.passenger_trips_for_metric:
-            # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
-            if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.identifier:
+            # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.name:
+            if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.name:
                 num_served += 1
 
         return num_served
@@ -429,7 +429,7 @@ class AnalyticsApp:
     # def compute_accepted(self):
     #     num_accepted = 0
     #     for item in self.passenger_trips_for_metric:
-    #         if item['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
+    #         if item['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.name:
     #             num_accepted += 1
 
     #     return num_accepted
@@ -441,8 +441,8 @@ class AnalyticsApp:
         wait_time_pickup = 0
         for item in self.passenger_trips_for_metric:
             try:
-                # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.identifier:
-                if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.identifier:
+                # if item['state'] == RidehailPassengerTripStateMachine.passenger_pickedup.name:
+                if item['state'] == RidehailPassengerTripStateMachine.passenger_completed_trip.name:
                     wait_time_driver_confirm += item['stats']['wait_time_driver_confirm']
                     wait_time_total += item['stats']['wait_time_total']
                     wait_time_assignment += item['stats']['wait_time_assignment']
@@ -462,8 +462,8 @@ class AnalyticsApp:
     def compute_service_score(self):
         service_score = 0
         for item in self.driver_trips_for_metric:
-            # if item['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.identifier:
-            if item['state'] == RidehailDriverTripStateMachine.driver_completed_trip.identifier:
+            # if item['state'] == RidehailDriverTripStateMachine.driver_moving_to_pickup.name:
+            if item['state'] == RidehailDriverTripStateMachine.driver_completed_trip.name:
                 service_score += item['meta']['profile']['service_score']
 
         return service_score

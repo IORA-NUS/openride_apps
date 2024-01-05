@@ -91,10 +91,12 @@ class DriverManager():
             machine = WorkflowStateMachine(start_value=self.driver['state'])
             s = machine.current_state
             for t in s.transitions:
-                if t.destinations[0].name == 'offline':
+                # if t.destinations[0].name == 'offline':
+                if t.target.name == 'offline':
                     # print(t)
                     data = {
-                        "transition": t.identifier,
+                        # "transition": t.identifier,
+                        "transition": t.event,
                         "sim_clock": sim_clock
                     }
                     # print(data)
@@ -113,10 +115,12 @@ class DriverManager():
             machine = WorkflowStateMachine(start_value=self.driver['state'])
             s = machine.current_state
             for t in s.transitions:
-                if t.destinations[0].name == 'online':
+                # if t.destinations[0].name == 'online':
+                if t.target.name == 'online':
                     # print(t)
                     data = {
-                        "transition": t.identifier,
+                        # "transition": t.identifier,
+                        "transition": t.event,
                         "sim_clock": sim_clock
                     }
                     # print(data)
@@ -178,9 +182,11 @@ class DriverManager():
             machine = WorkflowStateMachine(start_value=vehicle['state'])
             s = machine.current_state
             for t in s.transitions:
-                if t.destinations[0].name == 'offline':
+                # if t.destinations[0].name == 'offline':
+                if t.target.name == 'offline':
                     data = {
-                        "transition": t.identifier,
+                        # "transition": t.identifier,
+                        "transition": t.event,
                         "sim_clock": sim_clock,
                     }
                     # print(data)

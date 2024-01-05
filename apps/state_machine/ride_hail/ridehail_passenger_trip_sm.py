@@ -63,13 +63,13 @@ class RidehailPassengerTripStateMachine(StateMachine):
 
     @classmethod
     def is_moving(cls, state):
-        if state in [cls.passenger_requested_trip.identifier,
-                    cls.passenger_assigned_trip.identifier,
-                    cls.passenger_accepted_trip.identifier,
-                    cls.passenger_cancelled_trip.identifier,
-                    cls.passenger_waiting_for_dropoff.identifier,
-                    cls.passenger_droppedoff.identifier,
-                    cls.passenger_completed_trip,
+        if state in [cls.passenger_requested_trip.name,
+                    cls.passenger_assigned_trip.name,
+                    cls.passenger_accepted_trip.name,
+                    cls.passenger_cancelled_trip.name,
+                    cls.passenger_waiting_for_dropoff.name,
+                    cls.passenger_droppedoff.name,
+                    cls.passenger_completed_trip.name,
                     ]:
             return False
         else:
@@ -78,13 +78,13 @@ class RidehailPassengerTripStateMachine(StateMachine):
 
     @classmethod
     def is_driver_channel_open(cls, state):
-        if state in [cls.passenger_assigned_trip.identifier,
-                    cls.passenger_accepted_trip.identifier,
-                    cls.passenger_moving_for_pickup.identifier,
-                    cls.passenger_waiting_for_pickup.identifier,
-                    cls.passenger_pickedup.identifier,
-                    cls.passenger_moving_for_dropoff.identifier,
-                    cls.passenger_waiting_for_dropoff.identifier,
+        if state in [cls.passenger_assigned_trip.name,
+                    cls.passenger_accepted_trip.name,
+                    cls.passenger_moving_for_pickup.name,
+                    cls.passenger_waiting_for_pickup.name,
+                    cls.passenger_pickedup.name,
+                    cls.passenger_moving_for_dropoff.name,
+                    cls.passenger_waiting_for_dropoff.name,
                     ]:
             return True
         else:
@@ -93,7 +93,7 @@ class RidehailPassengerTripStateMachine(StateMachine):
     def on_force_quit(self, doc=None):
         if doc is not None:
             doc['is_active'] = False
-            
+
     def on_end_trip(self, doc=None):
         if doc is not None:
             doc['is_active'] = False

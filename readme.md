@@ -39,3 +39,7 @@
 
 ## Managing the Simulation:
 - Simulation settings can be managed wia the `config.py` module.
+
+## Troubleshooting
+
+MacOS has a limit on the number of concurrently open files. The celery process amy crash if this limit is not changed appropriately. make sure to run `ulimit -n 100000` to increase this limit. make sure the number is larger than the number of agents being created.

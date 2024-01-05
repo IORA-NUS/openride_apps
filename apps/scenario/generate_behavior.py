@@ -45,7 +45,7 @@ class GenerateBehavior():
             init_loc = cls.get_random_location(coverage_area_name)
             empty_dest_loc = cls.get_random_location(coverage_area_name)
 
-            patience = 150
+            patience = 1500 # 150
             # service_score = randint(1, 1000)
             service_score = 100 * cls.rng.weibull(5)
 
@@ -58,7 +58,7 @@ class GenerateBehavior():
             init_loc = mapping(Point(record["start_lon"], record["start_lat"]))
             empty_dest_loc = mapping(Point(record["end_lon"], record["end_lat"]))
 
-            patience = 150
+            patience = 1500 # 150
             service_score = record['service_score']
 
 
@@ -115,8 +115,8 @@ class GenerateBehavior():
             dropoff_loc = cls.get_random_location(coverage_area_name)
 
             # trip_price = randint(0, 100)
-            trip_price = max(3, hs.haversine(pickup_loc['coordinates'][:2], dropoff_loc['coordinates'][:2], unit=hs.Unit.KILOMETERS)) + random()
-            patience = 600
+            trip_price = max(3, hs.haversine(reversed(pickup_loc['coordinates'][:2]), reversed(dropoff_loc['coordinates'][:2]), unit=hs.Unit.KILOMETERS)) + random()
+            patience = 6000 # 600
 
 
         else:

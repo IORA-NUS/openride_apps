@@ -2,7 +2,7 @@
 
 orsim_settings = {
     # 'SIMULATION_LENGTH_IN_STEPS': 960, # 960, # 600,    # 60 # Num Steps
-    'SIMULATION_LENGTH_IN_STEPS': 960, # 960, # 600,    # 60 # Num Steps
+    'SIMULATION_LENGTH_IN_STEPS': 600, #960, # 960, # 600,    # 60 # Num Steps
     'STEP_INTERVAL': 30, # 15, # 6,     # 60   # seconds in Simulation Universe
 
     'AGENT_LAUNCH_TIMEOUT': 15,

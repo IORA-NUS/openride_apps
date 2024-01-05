@@ -55,20 +55,20 @@ class RidehailDriverTripStateMachine(StateMachine):
 
     @classmethod
     def is_moving(cls, state):
-        if state  in [cls.driver_waiting_to_pickup.identifier, cls.driver_waiting_to_dropoff.identifier]:
+        if state  in [cls.driver_waiting_to_pickup.name, cls.driver_waiting_to_dropoff.name]:
             return False
         else:
             return True
 
     @classmethod
     def is_passenger_channel_open(cls, state):
-        if state in [cls.driver_received_trip.identifier,
-                    cls.driver_accepted_trip.identifier,
-                    cls.driver_moving_to_pickup.identifier,
-                    cls.driver_waiting_to_pickup.identifier,
-                    cls.driver_pickedup.identifier,
-                    cls.driver_moving_to_dropoff.identifier,
-                    cls.driver_waiting_to_dropoff.identifier,
+        if state in [cls.driver_received_trip.name,
+                    cls.driver_accepted_trip.name,
+                    cls.driver_moving_to_pickup.name,
+                    cls.driver_waiting_to_pickup.name,
+                    cls.driver_pickedup.name,
+                    cls.driver_moving_to_dropoff.name,
+                    cls.driver_waiting_to_dropoff.name,
                     ]:
             return True
         else:

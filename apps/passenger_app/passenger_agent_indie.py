@@ -103,6 +103,7 @@ class PassengerAgentIndie(ORSimAgent):
         else:
             logging.error(f"{payload = }")
 
+        # print(f"{self.unique_id}: {did_step}")
         return did_step
 
     def entering_market(self, time_step):
@@ -132,8 +133,8 @@ class PassengerAgentIndie(ORSimAgent):
                 return False
             elif (self.current_time_step > self.behavior['trip_request_time']) and \
                     (self.app.get_trip() is not None) and \
-                    (self.app.get_trip()['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.identifier,
-                                                    RidehailPassengerTripStateMachine.passenger_cancelled_trip.identifier,]):
+                    (self.app.get_trip()['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.name,
+                                                    RidehailPassengerTripStateMachine.passenger_cancelled_trip.name,]):
                 self.shutdown()
                 return True
 
@@ -183,7 +184,7 @@ class PassengerAgentIndie(ORSimAgent):
             try:
                 # process message
                 # if payload['action'] == 'assigned':
-                #     if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier:
+                #     if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name:
                 #         try:
                 #             self.app.trip.assign(self.get_current_time_str(),
                 #                                         current_loc=self.current_loc,
@@ -255,30 +256,30 @@ class PassengerAgentIndie(ORSimAgent):
             # logging.exception(str(e))
             raise e
 
-        if passenger['state'] != WorkflowStateMachine.online.identifier:
+        if passenger['state'] != WorkflowStateMachine.online.name:
             # try:
             raise Exception(f"{passenger['state'] = } is not valid")
             # except Exception as e:
             #     # logging.exception(str(e))
             #     raise e
 
-        elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.identifier) and \
+        elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name) and \
                 (self.behavior['trip_request_time'] + (self.behavior['profile']['patience']/self.step_size) < self.current_time_step):
             logging.info(f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps")
             self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
 
         else:
-            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.identifier:
+            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name:
                 if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
                     self.app.trip.accept(self.get_current_time_str(), current_loc=self.current_loc,)
                 else:
                     self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc,)
 
             # move for pickup not implemenetd
-            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_accepted_trip.identifier:
+            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_accepted_trip.name:
                 self.app.trip.wait_for_pickup(self.get_current_time_str(), current_loc=self.current_loc,)
 
-            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_droppedoff.identifier:
+            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_droppedoff.name:
                 self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc,)
 
 

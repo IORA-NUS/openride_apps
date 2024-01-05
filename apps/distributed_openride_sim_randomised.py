@@ -331,9 +331,10 @@ if __name__ == '__main__':
     # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_service_optimal'
     # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_compromise_servicebias'
     # scenario_name = 'comfort_delgro_sampled_10p_20d_20211229_svcdist2_8H_compromise_servicebias_R1.2_P1.2_S1.0'
+    # scenario_name = 'comfort_delgro_sampled_15p_06d_20211202_svcdist2_streethail'
 
-    # scenario_name = 'stay_or_leave_test'
-    scenario_name = 'stay_or_leave_test_changi'
+    scenario_name = 'stay_or_leave_test'
+    # scenario_name = 'stay_or_leave_test_changi'
 
     try:
         sim = DistributedOpenRideSimRandomised(run_id, scenario_name)
