@@ -1,13 +1,1 @@
-from .random_assignment import RandomAssignment
-from .compromise_matching import CompromiseMatching
-
-from .greedy_min_pickup_matching import GreedyMinPickupMatching
-from .greedy_max_revenue_matching import GreedyMaxRevenueMatching
-from .greedy_max_service_score_matching import GreedyMaxServiceScoreMatching
-
-from .pickup_optimal_matching import PickupOptimalMatching
-from .revenue_optimal_matching import RevenueOptimalMatching
-from .service_optimal_matching import ServiceOptimalMatching
-
-from .compromise_servicebias_matching import CompromiseServiceBiasMatching
-from .compromise_scaled_matching import CompromiseScaledMatching
+from apps.ride_hail.assignment.solver import *
