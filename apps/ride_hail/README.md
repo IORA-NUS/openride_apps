@@ -13,6 +13,13 @@ Current adapter entrypoints:
 - `RideHailDriverAdapter` -> `DriverApp`, `DriverAgentIndie`
 - `RideHailPassengerAdapter` -> `PassengerApp`, `PassengerAgentIndie`
 
+Role package entrypoints (compatibility shims):
+
+- `apps.ride_hail.driver` -> exports `DriverApp`, `DriverAgentIndie`, `DriverManager`, `DriverTripManager`
+- `apps.ride_hail.passenger` -> exports `PassengerApp`, `PassengerAgentIndie`, `PassengerManager`, `PassengerTripManager`
+- `apps.ride_hail.assignment` -> exports `AssignmentApp`, `AssignmentAgentIndie`
+- `apps.ride_hail.analytics` -> exports `AnalyticsApp`, `AnalyticsAgentIndie`
+
 ## Should driver/passenger/assignment/analytics be consolidated here?
 
 Short answer: yes, but incrementally.

@@ -17,6 +17,10 @@ from .adapters import (
 	RideHailDriverAdapter,
 	RideHailPassengerAdapter,
 )
+from .analytics import AnalyticsAgentIndie, AnalyticsApp
+from .assignment import AssignmentAgentIndie, AssignmentApp
+from .driver import DriverAgentIndie, DriverApp, DriverManager, DriverTripManager
+from .passenger import PassengerAgentIndie, PassengerApp, PassengerManager, PassengerTripManager
 
 __all__ = [
 	"RideHailActions",
@@ -33,4 +37,16 @@ __all__ = [
 	"RideHailAnalyticsAdapter",
 	"RideHailDriverAdapter",
 	"RideHailPassengerAdapter",
+	"DriverApp",
+	"DriverAgentIndie",
+	"DriverManager",
+	"DriverTripManager",
+	"PassengerApp",
+	"PassengerAgentIndie",
+	"PassengerManager",
+	"PassengerTripManager",
+	"AssignmentApp",
+	"AssignmentAgentIndie",
+	"AnalyticsApp",
+	"AnalyticsAgentIndie",
 ]
