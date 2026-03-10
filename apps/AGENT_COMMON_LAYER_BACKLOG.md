@@ -311,3 +311,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 54: completed (added ordered `__all__` contract tests for key canonical and legacy package surfaces)
 - Ride-hail physical consolidation slice 55: completed (added direct legacy-package `__getattr__` dispatch and unknown-attribute error contract tests)
 - Ride-hail physical consolidation slice 56: completed (expanded assignment legacy `__getattr__` dispatch coverage to include `AssignmentAgentIndie`)
+- Ride-hail physical consolidation slice 57: completed (added ride_hail adapter target-module contract tests for app/agent resolution)
