@@ -1,6 +1,4 @@
-import apps.assignment_app as legacy_assignment_pkg
-import apps.driver_app as legacy_driver_pkg
-import apps.passenger_app as legacy_passenger_pkg
+
 import apps.ride_hail as ride_hail
 import apps.ride_hail.adapters as ride_hail_adapters
 import apps.ride_hail.analytics as canonical_analytics_pkg
@@ -72,22 +70,3 @@ def test_canonical_role_package_all_order_is_stable():
         "AnalyticsAgentIndie",
     ]
 
-
-def test_legacy_role_package_all_order_is_stable():
-    assert legacy_driver_pkg.__all__ == [
-        "DriverManager",
-        "DriverTripManager",
-        "DriverApp",
-        "DriverAgentIndie",
-    ]
-    assert legacy_passenger_pkg.__all__ == [
-        "PassengerApp",
-        "PassengerManager",
-        "PassengerTripManager",
-        "PassengerAgentIndie",
-    ]
-    assert legacy_assignment_pkg.__all__ == [
-        "AssignmentAgentIndie",
-        "AssignmentManager",
-        "EngineManager",
-    ]

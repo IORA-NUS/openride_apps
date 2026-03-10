@@ -286,7 +286,7 @@ def test_exhaustive_driver_state_interactions_execute_expected_side_effects(stat
     agent.get_transition_probability = lambda *_: accept_prob
 
     # Ensure distance-based handlers trigger deterministically.
-    monkeypatch.setattr("apps.driver_app.driver_agent_indie.hs.haversine", lambda *args, **kwargs: 0)
+    monkeypatch.setattr("apps.ride_hail.driver.agent.hs.haversine", lambda *args, **kwargs: 0)
 
     if state == RidehailDriverTripStateMachine.driver_looking_for_job.name:
         agent.projected_path = Point(1, 1)

@@ -1,6 +1,3 @@
-import apps.assignment_app as legacy_assignment_pkg
-import apps.driver_app as legacy_driver_pkg
-import apps.passenger_app as legacy_passenger_pkg
 import apps.ride_hail as ride_hail
 import apps.ride_hail.adapters as ride_hail_adapters
 import apps.ride_hail.analytics as canonical_analytics_pkg
@@ -26,7 +23,3 @@ def test_canonical_role_package_export_lists_have_unique_symbols():
     _assert_all_entries_are_unique(canonical_analytics_pkg)
 
 
-def test_legacy_role_package_export_lists_have_unique_symbols():
-    _assert_all_entries_are_unique(legacy_driver_pkg)
-    _assert_all_entries_are_unique(legacy_passenger_pkg)
-    _assert_all_entries_are_unique(legacy_assignment_pkg)

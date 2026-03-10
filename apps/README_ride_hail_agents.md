@@ -1,6 +1,7 @@
 # Ride-Hail Agent Architecture (Driver + Passenger)
 
-This document describes the high-level design of `apps/driver_app` and `apps/passenger_app`, how they fit together at runtime, and where the architecture can be streamlined.
+This document describes the high-level design of `apps/driver_app` and `apps/passenger_app`, which have now been archived. All core logic is now in `apps/ride_hail`. The archived folders remain for reference and legacy compatibility.
+
 
 For cross-domain reuse (including container logistics), see `apps/README_agent_common_layer.md`.
 
