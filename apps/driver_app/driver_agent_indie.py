@@ -34,6 +34,7 @@ from apps.loc_service import TaxiStop, BusStop, cut, cut_route
 from orsim import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
+from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
 # from apps.config import driver_settings, orsim_settings
 
 class DriverAgentIndie(ORSimAgent):
@@ -70,6 +71,8 @@ class DriverAgentIndie(ORSimAgent):
 
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
+
+            self._register_interaction_callbacks()
 
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
@@ -346,29 +349,14 @@ class DriverAgentIndie(ORSimAgent):
                     if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
                         if self.app.get_trip()['passenger'] == payload['passenger_id']:
                             passenger_data = payload['data']
-
-                            if passenger_data.get('event') == "passenger_confirmed_trip":
-                                self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-                                self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-
-                            if passenger_data.get('event') == "passenger_rejected_trip":
-                                # logging.warning('Overbooking handling is working ok')
-                                self.app.trip.force_quit(self.get_current_time_str(), current_loc=self.current_loc)
-
-                                # self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-                                if self.action_when_free == 'random_walk':
-                                    self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-                                elif self.action_when_free == 'stay':
-                                    self.set_route(self.current_loc, None)
-
-                                self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-
-                            if passenger_data.get('event') == "passenger_acknowledge_pickup":
-                                self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
-                                self.app.trip.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-
-                            if passenger_data.get('event') == "passenger_acknowledge_dropoff":
-                                self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
+                            self._interaction_plugin.on_message(
+                                InteractionContext(
+                                    action='passenger_workflow_event',
+                                    event=passenger_data.get('event'),
+                                    payload=payload,
+                                    data=passenger_data,
+                                )
+                            )
 
                         else:
                             logging.warning(f"Ignore Message due to Mismatch {self.app.get_trip()['passenger']=} and {payload['passenger_id']=}")
@@ -400,51 +388,98 @@ class DriverAgentIndie(ORSimAgent):
         else:
             # NOTE The following statements are executed in sequence and each update might affect the execution of the following statements.
             # The order matters.
-            if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_looking_for_job.name:
-                if type(self.projected_path) == Point:
-                    self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
-
-                    self.set_route(self.current_loc, self.get_random_location())
-                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-
-            if self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_received_trip.name:
-                if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
-                    estimated_time_to_arrive = self.get_tentative_travel_time(self.current_loc, self.app.get_trip()['pickup_loc'])
-                    self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
-                else:
-                    self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
-                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
-
-            if self.app.get_trip()['state'] in RidehailDriverTripStateMachine.driver_moving_to_pickup.name:
-                ''''''
-                distance = hs.haversine(reversed(self.current_loc['coordinates'][:2]), reversed(self.app.get_trip()['pickup_loc']['coordinates'][:2]), unit=hs.Unit.METERS)
-
-                if (distance < 100):
-                    self.app.trip.wait_to_pickup(self.get_current_time_str(), current_loc=self.current_loc,)
+            self._interaction_plugin.on_state(
+                InteractionContext(
+                    state=self.app.get_trip()['state'],
+                    extra={'time_since_last_event': time_since_last_event},
+                )
+            )
 
 
-            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_pickedup.name) and \
-                (time_since_last_event >= self.behavior['transition_time_pickup']):
-                    self.app.trip.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+    def _register_interaction_callbacks(self):
+        self._interaction_plugin = CallbackRouterInteractionPlugin()
+        # Backward compatibility for tests and any code still reading this attribute.
+        self._interaction_callbacks = self._interaction_plugin.router
 
-            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_moving_to_dropoff.name):
+        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_confirmed_trip', self._on_passenger_confirmed_trip)
+        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_rejected_trip', self._on_passenger_rejected_trip)
+        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_acknowledge_pickup', self._on_passenger_acknowledge_pickup)
+        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_acknowledge_dropoff', self._on_passenger_acknowledge_dropoff)
 
-                distance = hs.haversine(reversed(self.current_loc['coordinates'][:2]), reversed(self.app.get_trip()['dropoff_loc']['coordinates'][:2]), unit=hs.Unit.METERS)
+        self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_looking_for_job.name, self._on_state_looking_for_job)
+        self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_received_trip.name, self._on_state_received_trip)
+        self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_moving_to_pickup.name, self._on_state_moving_to_pickup)
+        self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_pickedup.name, self._on_state_pickedup)
+        self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_moving_to_dropoff.name, self._on_state_moving_to_dropoff)
+        self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_droppedoff.name, self._on_state_droppedoff)
 
-                if (distance < 100):
-                    self.app.trip.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc,)
+    def _on_passenger_confirmed_trip(self, payload, data):
+        self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
+        self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-            if (self.app.get_trip()['state'] == RidehailDriverTripStateMachine.driver_droppedoff.name) and \
-                (time_since_last_event >= self.behavior['transition_time_dropoff']):
+    def _on_passenger_rejected_trip(self, payload, data):
+        self.app.trip.force_quit(self.get_current_time_str(), current_loc=self.current_loc)
 
-                    self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
+        if self.action_when_free == 'random_walk':
+            self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+        elif self.action_when_free == 'stay':
+            self.set_route(self.current_loc, None)
 
-                    if self.action_when_free == 'random_walk':
-                        self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-                    elif self.action_when_free == 'stay':
-                        self.set_route(self.current_loc, None)
+        self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-                    self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+    def _on_passenger_acknowledge_pickup(self, payload, data):
+        self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
+        self.app.trip.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+
+    def _on_passenger_acknowledge_dropoff(self, payload, data):
+        self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+
+    def _on_state_looking_for_job(self, time_since_last_event):
+        if type(self.projected_path) == Point:
+            self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
+            self.set_route(self.current_loc, self.get_random_location())
+            self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+
+    def _on_state_received_trip(self, time_since_last_event):
+        if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
+            estimated_time_to_arrive = self.get_tentative_travel_time(self.current_loc, self.app.get_trip()['pickup_loc'])
+            self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
+        else:
+            self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
+            self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+
+    def _on_state_moving_to_pickup(self, time_since_last_event):
+        distance = hs.haversine(
+            reversed(self.current_loc['coordinates'][:2]),
+            reversed(self.app.get_trip()['pickup_loc']['coordinates'][:2]),
+            unit=hs.Unit.METERS,
+        )
+        if distance < 100:
+            self.app.trip.wait_to_pickup(self.get_current_time_str(), current_loc=self.current_loc)
+
+    def _on_state_pickedup(self, time_since_last_event):
+        if time_since_last_event >= self.behavior['transition_time_pickup']:
+            self.app.trip.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+
+    def _on_state_moving_to_dropoff(self, time_since_last_event):
+        distance = hs.haversine(
+            reversed(self.current_loc['coordinates'][:2]),
+            reversed(self.app.get_trip()['dropoff_loc']['coordinates'][:2]),
+            unit=hs.Unit.METERS,
+        )
+        if distance < 100:
+            self.app.trip.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+
+    def _on_state_droppedoff(self, time_since_last_event):
+        if time_since_last_event >= self.behavior['transition_time_dropoff']:
+            self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
+
+            if self.action_when_free == 'random_walk':
+                self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+            elif self.action_when_free == 'stay':
+                self.set_route(self.current_loc, None)
+
+            self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
 
 if __name__ == '__main__':

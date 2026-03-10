@@ -29,6 +29,7 @@ from apps.loc_service import TaxiStop, BusStop
 from orsim import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
+from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
 # from apps.config import orsim_settings, passenger_settings
 
 class PassengerAgentIndie(ORSimAgent):
@@ -68,6 +69,8 @@ class PassengerAgentIndie(ORSimAgent):
 
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
+
+            self._register_interaction_callbacks()
 
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
@@ -182,51 +185,22 @@ class PassengerAgentIndie(ORSimAgent):
 
         while payload is not None:
             try:
-                # process message
-                # if payload['action'] == 'assigned':
-                #     if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name:
-                #         try:
-                #             self.app.trip.assign(self.get_current_time_str(),
-                #                                         current_loc=self.current_loc,
-                #                                         driver=payload['driver_id'])
-                #         except Exception as e:
-                #             logging.exception(str(e))
-                #             raise e
-                #     else:
-                #         self.app.handle_overbooking(self.get_current_time_str(), driver=payload['driver_id'])
-                #         # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
-
-                # elif payload['action'] == 'driver_workflow_event':
                 if payload['action'] == 'driver_workflow_event':
                     if RidehailPassengerTripStateMachine.is_driver_channel_open(self.app.get_trip()['state']):
-                        ''' '''
-                        # Some sort of authentication must be present to allow only actie driver to message the passenger
                         if self.app.get_trip()['driver'] == payload['driver_id']:
                             driver_data = payload['data']
+                            handled = self._interaction_plugin.on_message(
+                                InteractionContext(
+                                    action='driver_workflow_event',
+                                    event=driver_data.get('event'),
+                                    payload=payload,
+                                    data=driver_data,
+                                )
+                            )
 
-                            if driver_data.get('event') == "driver_confirmed_trip":
-                                self.app.trip.driver_confirmed_trip(self.get_current_time_str(), self.current_loc, driver_data.get('estimated_time_to_arrive', 0)) #, driver_data.get('driver_trip_id'))
-
-                            elif driver_data.get('location') is not None:
+                            if (handled == False) and (driver_data.get('location') is not None):
                                 self.current_loc = driver_data.get('location')
-
-                                if driver_data.get('event') == "driver_arrived_for_pickup":
-                                    self.app.trip.driver_arrived_for_pickup(self.get_current_time_str(), self.current_loc, driver_data.get('driver_trip_id'))
-
-                                elif driver_data.get('event') == "driver_move_for_dropoff":
-                                    self.app.trip.driver_move_for_dropoff(self.get_current_time_str(), self.current_loc, route=driver_data['planned_route'])
-
-                                elif driver_data.get('event') == "driver_arrived_for_dropoff":
-                                    self.app.trip.driver_arrived_for_dropoff(self.get_current_time_str(), self.current_loc)
-
-                                elif driver_data.get('event') == "driver_waiting_for_dropoff":
-                                    self.app.trip.driver_waiting_for_dropoff(self.get_current_time_str(), self.current_loc)
-
-                                elif driver_data.get('event') == "driver_cancelled_trip":
-                                    self.app.trip.driver_cancelled_trip(self.get_current_time_str(), self.current_loc)
-
-                                else:
-                                    self.app.ping(self.get_current_time_str(), current_loc=self.current_loc)
+                                self.app.ping(self.get_current_time_str(), current_loc=self.current_loc)
 
                         else:
                             logging.warning(f"WARNING: Mismatch {self.app.get_trip()['driver']=} and {payload['driver_id']=}")
@@ -269,18 +243,75 @@ class PassengerAgentIndie(ORSimAgent):
             self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
 
         else:
-            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name:
-                if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
-                    self.app.trip.accept(self.get_current_time_str(), current_loc=self.current_loc,)
-                else:
-                    self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc,)
+            self._interaction_plugin.on_state(
+                InteractionContext(state=self.app.get_trip()['state'])
+            )
 
-            # move for pickup not implemenetd
-            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_accepted_trip.name:
-                self.app.trip.wait_for_pickup(self.get_current_time_str(), current_loc=self.current_loc,)
 
-            if self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_droppedoff.name:
-                self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc,)
+    def _register_interaction_callbacks(self):
+        self._interaction_plugin = CallbackRouterInteractionPlugin()
+        # Backward compatibility for tests and any code still reading this attribute.
+        self._interaction_callbacks = self._interaction_plugin.router
+
+        self._interaction_plugin.register_message('driver_workflow_event', 'driver_confirmed_trip', self._on_driver_confirmed_trip)
+        self._interaction_plugin.register_message('driver_workflow_event', 'driver_arrived_for_pickup', self._on_driver_arrived_for_pickup)
+        self._interaction_plugin.register_message('driver_workflow_event', 'driver_move_for_dropoff', self._on_driver_move_for_dropoff)
+        self._interaction_plugin.register_message('driver_workflow_event', 'driver_arrived_for_dropoff', self._on_driver_arrived_for_dropoff)
+        self._interaction_plugin.register_message('driver_workflow_event', 'driver_waiting_for_dropoff', self._on_driver_waiting_for_dropoff)
+        self._interaction_plugin.register_message('driver_workflow_event', 'driver_cancelled_trip', self._on_driver_cancelled_trip)
+
+        self._interaction_plugin.register_state(RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name, self._on_state_received_trip_confirmation)
+        self._interaction_plugin.register_state(RidehailPassengerTripStateMachine.passenger_accepted_trip.name, self._on_state_accepted_trip)
+        self._interaction_plugin.register_state(RidehailPassengerTripStateMachine.passenger_droppedoff.name, self._on_state_droppedoff)
+
+    def _on_driver_confirmed_trip(self, payload, data):
+        self.app.trip.driver_confirmed_trip(
+            self.get_current_time_str(),
+            self.current_loc,
+            data.get('estimated_time_to_arrive', 0),
+        )
+
+    def _on_driver_arrived_for_pickup(self, payload, data):
+        if data.get('location') is None:
+            return
+        self.current_loc = data.get('location')
+        self.app.trip.driver_arrived_for_pickup(self.get_current_time_str(), self.current_loc, data.get('driver_trip_id'))
+
+    def _on_driver_move_for_dropoff(self, payload, data):
+        if data.get('location') is None:
+            return
+        self.current_loc = data.get('location')
+        self.app.trip.driver_move_for_dropoff(self.get_current_time_str(), self.current_loc, route=data['planned_route'])
+
+    def _on_driver_arrived_for_dropoff(self, payload, data):
+        if data.get('location') is None:
+            return
+        self.current_loc = data.get('location')
+        self.app.trip.driver_arrived_for_dropoff(self.get_current_time_str(), self.current_loc)
+
+    def _on_driver_waiting_for_dropoff(self, payload, data):
+        if data.get('location') is None:
+            return
+        self.current_loc = data.get('location')
+        self.app.trip.driver_waiting_for_dropoff(self.get_current_time_str(), self.current_loc)
+
+    def _on_driver_cancelled_trip(self, payload, data):
+        if data.get('location') is None:
+            return
+        self.current_loc = data.get('location', self.current_loc)
+        self.app.trip.driver_cancelled_trip(self.get_current_time_str(), self.current_loc)
+
+    def _on_state_received_trip_confirmation(self):
+        if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
+            self.app.trip.accept(self.get_current_time_str(), current_loc=self.current_loc)
+        else:
+            self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
+
+    def _on_state_accepted_trip(self):
+        self.app.trip.wait_for_pickup(self.get_current_time_str(), current_loc=self.current_loc)
+
+    def _on_state_droppedoff(self):
+        self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
 
 
 if __name__ == '__main__':

@@ -20,6 +20,26 @@ from orsim import ORSimAgent
 # from apps.config import analytics_settings, orsim_settings
 
 class AnalyticsAgentIndie(ORSimAgent):
+    """
+    AnalyticsAgentIndie is an agent class responsible for collecting, computing, and publishing analytics metrics
+    for a simulation run in the OpenRoad platform. It interacts with the AnalyticsApp to gather KPIs such as
+    revenue, cancellations, served trips, waiting times, and service scores, and can publish real-time data
+    streams and historical paths for visualization.
+
+    Attributes:
+        credentials (dict): Stores agent authentication details (email, password).
+        kpi_collection (dict): Holds computed KPI metrics for the current time step.
+        app (AnalyticsApp): Instance of the analytics application for metric computation and data publishing.
+        agent_failed (bool): Indicates if agent initialization failed.
+
+    Methods:
+        __init__(...): Initializes the agent, sets up credentials, KPI collection, and AnalyticsApp.
+        process_payload(payload): Processes incoming payloads and triggers agent actions.
+        logout(): Performs agent logout and finalizes analytics session.
+        estimate_next_event_time(): Estimates the time of the next agent event.
+        step(time_step): Executes agent logic for a simulation step, computes metrics, and publishes data.
+        compute_all_metrics(): Computes all relevant KPIs for the current time window and saves them.
+    """
     ''' '''
 
     # def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):

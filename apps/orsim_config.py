@@ -8,6 +8,7 @@ orsim_settings = {
     'AGENT_LAUNCH_TIMEOUT': 15,
     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
     'STEP_TIMEOUT_TOLERANCE': 0.1,
+    'HEARTBEAT_INTERVAL': 5, # seconds
 
     'REFERENCE_TIME': '2020-01-01 04:00:00',
 }
