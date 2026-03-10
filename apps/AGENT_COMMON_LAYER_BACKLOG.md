@@ -276,3 +276,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 19: completed (aligned runtime orchestration imports and agent class paths to `apps.ride_hail.*` wrappers)
 - Ride-hail physical consolidation slice 20: completed (repointed ride-hail app implementations to canonical local manager/trip-manager wrappers)
 - Ride-hail physical consolidation slice 21: completed (normalized scenario comment examples to canonical `apps.ride_hail.*` import paths)
+- Ride-hail physical consolidation slice 22: completed (added canonical `ride_hail_*` behavior aliases and switched scenario call sites)
