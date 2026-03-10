@@ -7,6 +7,7 @@ from apps.utils import id_generator, is_success, deep_update, str_to_time
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.utils import time_to_str, str_to_time
 from apps.agent_core.transport import RoleTripManagerBase
+from apps.ride_hail import RideHailActions, RideHailEvents
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 
@@ -84,9 +85,6 @@ class DriverTripManager(RoleTripManagerBase):
 
     # def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle):
     def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle, route):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
-        # print(sim_clock)
-
         data = {
             "driver": f"{driver['_id']}",
             "meta": {
@@ -99,7 +97,7 @@ class DriverTripManager(RoleTripManagerBase):
             "sim_clock": sim_clock,
         }
 
-        response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._post_trip(data)
 
         if is_success(response.status_code):
             # driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
@@ -112,8 +110,6 @@ class DriverTripManager(RoleTripManagerBase):
             raise WriteFailedException(f"{response.url}, {response.text}")
 
     def create_new_occupied_trip(self, sim_clock, current_loc, driver, vehicle, passenger_ride_hail_trip):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
-
         data = {
             "driver": f"{driver['_id']}",
             "meta": {
@@ -132,7 +128,7 @@ class DriverTripManager(RoleTripManagerBase):
         }
 
 
-        response = requests.post(driver_trip_url, headers=self.user.get_headers(), data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._post_trip(data)
 
         if is_success(response.status_code):
             # driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
@@ -208,7 +204,7 @@ class DriverTripManager(RoleTripManagerBase):
 
             self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                             json.dumps({
-                                                "action": "assigned", # NOTE This is not a 'driver_workflow_event but an 'assigned' event
+                                                "action": RideHailActions.ASSIGNED,
                                                 "driver_id": self.trip['driver'],
                                             }))
 
@@ -239,10 +235,10 @@ class DriverTripManager(RoleTripManagerBase):
 
             self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
-                                    'action': 'driver_workflow_event',
+                                    'action': RideHailActions.DRIVER_WORKFLOW_EVENT,
                                     'driver_id': self.trip['driver'],
                                     'data': {
-                                        'event': 'driver_confirmed_trip',
+                                        'event': RideHailEvents.DRIVER_CONFIRMED_TRIP,
                                         'location': current_loc,
                                         'driver_trip_id': self.trip['_id'],
                                         'estimated_time_to_arrive': estimated_time_to_arrive,
@@ -301,10 +297,10 @@ class DriverTripManager(RoleTripManagerBase):
 
             self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
-                                    'action': 'driver_workflow_event',
+                                    'action': RideHailActions.DRIVER_WORKFLOW_EVENT,
                                     'driver_id': self.trip['driver'],
                                     'data': {
-                                        'event': 'driver_cancelled_trip',
+                                        'event': RideHailEvents.DRIVER_CANCELLED_TRIP,
                                     }
 
                                 })
@@ -361,10 +357,10 @@ class DriverTripManager(RoleTripManagerBase):
 
             self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
-                                    'action': 'driver_workflow_event',
+                                    'action': RideHailActions.DRIVER_WORKFLOW_EVENT,
                                     'driver_id': self.trip['driver'],
                                     'data': {
-                                        'event': 'driver_arrived_for_pickup',
+                                        'event': RideHailEvents.DRIVER_ARRIVED_FOR_PICKUP,
                                         'location': current_loc,
                                         'driver_trip_id': self.trip['_id']
                                     }
@@ -424,10 +420,10 @@ class DriverTripManager(RoleTripManagerBase):
             if first_ping or self.update_passenger_loc:
                 self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
-                                    'action': 'driver_workflow_event',
+                                    'action': RideHailActions.DRIVER_WORKFLOW_EVENT,
                                     'driver_id': self.trip['driver'],
                                     'data': {
-                                        'event': 'driver_move_for_dropoff',
+                                        'event': RideHailEvents.DRIVER_MOVE_FOR_DROPOFF,
                                         'location': current_loc,
                                         'planned_route': self.trip['routes']['planned']['moving_to_dropoff']
                                     }
@@ -460,10 +456,10 @@ class DriverTripManager(RoleTripManagerBase):
 
             self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
                                 json.dumps({
-                                    'action': 'driver_workflow_event',
+                                    'action': RideHailActions.DRIVER_WORKFLOW_EVENT,
                                     'driver_id': self.trip['driver'],
                                     'data': {
-                                        'event': 'driver_waiting_for_dropoff',
+                                        'event': RideHailEvents.DRIVER_WAITING_FOR_DROPOFF,
                                         'location': current_loc,
                                     }
                                 })

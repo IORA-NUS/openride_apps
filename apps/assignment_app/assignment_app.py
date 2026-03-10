@@ -17,6 +17,7 @@ from apps.utils.user_registry import UserRegistry
 from apps.config import settings
 
 from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
+from apps.ride_hail import RideHailActions
 from .solver import * # NOTE * is deliberate to load all solvers in globals()
 from .engine_manager import EngineManager
 
@@ -130,7 +131,7 @@ class AssignmentApp:
             #     "driver_id": driver['_id'],
             # }
             passenger_assignment = {
-                "action": "requested_trip",
+                "action": RideHailActions.REQUESTED_TRIP,
                 "passenger_id": passenger_trip['passenger'],
                 "requested_trip": passenger_trip
             }

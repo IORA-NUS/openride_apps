@@ -186,3 +186,20 @@ If step 3 succeeds with minimal domain workarounds, the common layer is validate
 Concrete implementation backlog with effort and risk:
 
 - `apps/AGENT_COMMON_LAYER_BACKLOG.md`
+
+## Current Pilot Status
+
+Implemented lightweight container-logistics scaffold to validate shared-core reuse:
+
+- `apps/container_logistics/events.py`
+- `apps/container_logistics/contracts.py`
+- `apps/container_logistics/adapters/base_interaction_adapter.py`
+- `apps/container_logistics/adapters/haulier_adapter.py`
+- `apps/container_logistics/adapters/facility_adapter.py`
+- `apps/container_logistics/README.md`
+
+Validation coverage:
+
+- `tests/test_container_logistics_scaffold.py`
+
+This scaffold is intentionally minimal and can be rebuilt later without large migration cost.

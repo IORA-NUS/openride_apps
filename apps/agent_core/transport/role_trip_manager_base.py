@@ -31,6 +31,13 @@ class RoleTripManagerBase:
             payload=payload,
         )
 
+    def _post_trip(self, payload):
+        return self._resource_client.post(
+            self._trip_collection_url(),
+            headers=self.user.get_headers(),
+            payload=payload,
+        )
+
     def _get_trip(self):
         return self._resource_client.get(
             self._trip_item_url(),

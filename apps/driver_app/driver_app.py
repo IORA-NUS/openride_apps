@@ -18,6 +18,7 @@ import paho.mqtt.client as paho
 
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.agent_core.runtime import RoleAppBase
+from apps.ride_hail import RideHailActions, validate_requested_trip_payload
 
 # from apps.messenger_service import Messenger
 
@@ -157,8 +158,11 @@ class DriverApp(RoleAppBase):
 
         # print('driver_app received_message', payload)
 
-        if payload['action'] == 'requested_trip':
-            passenger_id = payload['passenger_id']
+        if payload['action'] == RideHailActions.REQUESTED_TRIP:
+            if validate_requested_trip_payload(payload) is False:
+                logging.warning(f"Invalid requested-trip payload ignored: {payload=}")
+                return
+
             requested_trip = payload['requested_trip']
 
             try:

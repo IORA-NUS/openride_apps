@@ -16,6 +16,7 @@ import paho.mqtt.client as paho
 
 from apps.state_machine import RidehailPassengerTripStateMachine
 from apps.agent_core.runtime import RoleAppBase
+from apps.ride_hail import RideHailActions, validate_assigned_payload
 
 
 # from apps.messenger_service import Messenger
@@ -129,7 +130,11 @@ class PassengerApp(RoleAppBase):
         # payload = json.loads(message.payload.decode('utf-8'))
         # print('passenger_app received_message', payload)
 
-        if payload['action'] == 'assigned':
+        if payload['action'] == RideHailActions.ASSIGNED:
+            if validate_assigned_payload(payload) is False:
+                logging.warning(f"Invalid assigned payload ignored: {payload=}")
+                return
+
             if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name:
                 try:
                     self.trip.assign(self.latest_sim_clock,

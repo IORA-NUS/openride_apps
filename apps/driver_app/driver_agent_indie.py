@@ -35,6 +35,7 @@ from orsim import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
+from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
 # from apps.config import driver_settings, orsim_settings
 
 class DriverAgentIndie(ORSimAgent):
@@ -345,13 +346,18 @@ class DriverAgentIndie(ORSimAgent):
                 #         # print(e)
                 #         raise e
                 # elif payload['action'] == 'passenger_workflow_event':
-                if payload['action'] == 'passenger_workflow_event':
+                if payload['action'] == RideHailActions.PASSENGER_WORKFLOW_EVENT:
+                    if validate_passenger_workflow_payload(payload) is False:
+                        logging.warning(f"Invalid passenger workflow payload ignored: {payload=}")
+                        payload = self.app.dequeue_message()
+                        continue
+
                     if RidehailDriverTripStateMachine.is_passenger_channel_open(self.app.get_trip()['state']):
                         if self.app.get_trip()['passenger'] == payload['passenger_id']:
                             passenger_data = payload['data']
                             self._interaction_plugin.on_message(
                                 InteractionContext(
-                                    action='passenger_workflow_event',
+                                    action=RideHailActions.PASSENGER_WORKFLOW_EVENT,
                                     event=passenger_data.get('event'),
                                     payload=payload,
                                     data=passenger_data,
@@ -401,10 +407,10 @@ class DriverAgentIndie(ORSimAgent):
         # Backward compatibility for tests and any code still reading this attribute.
         self._interaction_callbacks = self._interaction_plugin.router
 
-        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_confirmed_trip', self._on_passenger_confirmed_trip)
-        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_rejected_trip', self._on_passenger_rejected_trip)
-        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_acknowledge_pickup', self._on_passenger_acknowledge_pickup)
-        self._interaction_plugin.register_message('passenger_workflow_event', 'passenger_acknowledge_dropoff', self._on_passenger_acknowledge_dropoff)
+        self._interaction_plugin.register_message(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_CONFIRMED_TRIP, self._on_passenger_confirmed_trip)
+        self._interaction_plugin.register_message(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_REJECTED_TRIP, self._on_passenger_rejected_trip)
+        self._interaction_plugin.register_message(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_PICKUP, self._on_passenger_acknowledge_pickup)
+        self._interaction_plugin.register_message(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_DROPOFF, self._on_passenger_acknowledge_dropoff)
 
         self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_looking_for_job.name, self._on_state_looking_for_job)
         self._interaction_plugin.register_state(RidehailDriverTripStateMachine.driver_received_trip.name, self._on_state_received_trip)

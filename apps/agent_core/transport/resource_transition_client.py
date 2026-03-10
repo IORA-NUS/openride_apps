@@ -19,6 +19,14 @@ class ResourceTransitionClient:
             timeout=self.timeout,
         )
 
+    def post(self, item_url: str, headers: dict, payload: dict):
+        return requests.post(
+            item_url,
+            headers=headers,
+            data=json.dumps(payload),
+            timeout=self.timeout,
+        )
+
     def get(self, item_url: str, headers: dict):
         return requests.get(
             item_url,
