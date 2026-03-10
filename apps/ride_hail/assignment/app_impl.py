@@ -17,7 +17,7 @@ from apps.config import settings
 
 from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from apps.ride_hail import RideHailActions
-from apps.assignment_app.solver import *  # NOTE * is deliberate to load all solvers in globals()
+from .solver import *  # NOTE * is deliberate to load all solvers in globals()
 from .manager import AssignmentManager
 
 
