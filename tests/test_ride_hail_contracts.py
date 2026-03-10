@@ -3,6 +3,10 @@ from apps.driver_app.driver_app import DriverApp
 from apps.passenger_app.passenger_agent_indie import PassengerAgentIndie
 from apps.passenger_app.passenger_app import PassengerApp
 from apps.ride_hail import (
+    AssignedPayload,
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
+    RequestedTripPayload,
     RideHailActions,
     RideHailEvents,
     validate_assigned_payload,
@@ -101,11 +105,13 @@ def test_requested_trip_validator():
         "requested_trip": {"pickup_loc": "a"},
     }
     assert validate_requested_trip_payload(valid) is True
+    assert RequestedTripPayload.parse(valid) is not None
     assert validate_requested_trip_payload({"action": RideHailActions.REQUESTED_TRIP}) is False
 
 
 def test_assigned_validator():
     assert validate_assigned_payload({"action": RideHailActions.ASSIGNED, "driver_id": "d1"}) is True
+    assert AssignedPayload.parse({"action": RideHailActions.ASSIGNED, "driver_id": "d1"}) is not None
     assert validate_assigned_payload({"action": RideHailActions.ASSIGNED}) is False
 
 
@@ -117,6 +123,13 @@ def test_workflow_validators():
             "data": {"event": RideHailEvents.PASSENGER_CONFIRMED_TRIP},
         }
     )
+    assert PassengerWorkflowPayload.parse(
+        {
+            "action": RideHailActions.PASSENGER_WORKFLOW_EVENT,
+            "passenger_id": "p1",
+            "data": {"event": RideHailEvents.PASSENGER_CONFIRMED_TRIP},
+        }
+    ) is not None
     assert validate_driver_workflow_payload(
         {
             "action": RideHailActions.DRIVER_WORKFLOW_EVENT,
@@ -124,6 +137,13 @@ def test_workflow_validators():
             "data": {"event": RideHailEvents.DRIVER_CONFIRMED_TRIP},
         }
     )
+    assert DriverWorkflowPayload.parse(
+        {
+            "action": RideHailActions.DRIVER_WORKFLOW_EVENT,
+            "driver_id": "d1",
+            "data": {"event": RideHailEvents.DRIVER_CONFIRMED_TRIP},
+        }
+    ) is not None
     assert validate_passenger_workflow_payload({"action": RideHailActions.PASSENGER_WORKFLOW_EVENT, "data": {}}) is False
     assert validate_driver_workflow_payload({"action": RideHailActions.DRIVER_WORKFLOW_EVENT, "data": {}}) is False
 

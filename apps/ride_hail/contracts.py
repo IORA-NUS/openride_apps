@@ -1,40 +1,22 @@
-from apps.ride_hail.events import RideHailActions
+from apps.ride_hail.models import (
+    AssignedPayload,
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
+    RequestedTripPayload,
+)
 
 
 def validate_requested_trip_payload(payload):
-    return (
-        isinstance(payload, dict)
-        and payload.get("action") == RideHailActions.REQUESTED_TRIP
-        and payload.get("passenger_id") is not None
-        and payload.get("requested_trip") is not None
-    )
+    return RequestedTripPayload.parse(payload) is not None
 
 
 def validate_assigned_payload(payload):
-    return (
-        isinstance(payload, dict)
-        and payload.get("action") == RideHailActions.ASSIGNED
-        and payload.get("driver_id") is not None
-    )
+    return AssignedPayload.parse(payload) is not None
 
 
 def validate_passenger_workflow_payload(payload):
-    data = payload.get("data") if isinstance(payload, dict) else None
-    return (
-        isinstance(payload, dict)
-        and payload.get("action") == RideHailActions.PASSENGER_WORKFLOW_EVENT
-        and payload.get("passenger_id") is not None
-        and isinstance(data, dict)
-        and data.get("event") is not None
-    )
+    return PassengerWorkflowPayload.parse(payload) is not None
 
 
 def validate_driver_workflow_payload(payload):
-    data = payload.get("data") if isinstance(payload, dict) else None
-    return (
-        isinstance(payload, dict)
-        and payload.get("action") == RideHailActions.DRIVER_WORKFLOW_EVENT
-        and payload.get("driver_id") is not None
-        and isinstance(data, dict)
-        and data.get("event") is not None
-    )
+    return DriverWorkflowPayload.parse(payload) is not None

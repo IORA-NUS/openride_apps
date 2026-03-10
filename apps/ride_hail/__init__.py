@@ -5,6 +5,12 @@ from .contracts import (
 	validate_passenger_workflow_payload,
 	validate_requested_trip_payload,
 )
+from .models import (
+	AssignedPayload,
+	DriverWorkflowPayload,
+	PassengerWorkflowPayload,
+	RequestedTripPayload,
+)
 from .adapters import (
 	RideHailAnalyticsAdapter,
 	RideHailAssignmentAdapter,
@@ -19,6 +25,10 @@ __all__ = [
 	"validate_driver_workflow_payload",
 	"validate_passenger_workflow_payload",
 	"validate_requested_trip_payload",
+	"RequestedTripPayload",
+	"AssignedPayload",
+	"PassengerWorkflowPayload",
+	"DriverWorkflowPayload",
 	"RideHailAssignmentAdapter",
 	"RideHailAnalyticsAdapter",
 	"RideHailDriverAdapter",
