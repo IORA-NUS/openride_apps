@@ -1,3 +1,3 @@
-from apps.driver_app.driver_manager import DriverManager
+from .manager_impl import DriverManager
 
 __all__ = ["DriverManager"]
