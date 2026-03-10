@@ -278,3 +278,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 21: completed (normalized scenario comment examples to canonical `apps.ride_hail.*` import paths)
 - Ride-hail physical consolidation slice 22: completed (added canonical `ride_hail_*` behavior aliases and switched scenario call sites)
 - Ride-hail physical consolidation slice 23: completed (ported assignment `EngineManager` to canonical `AssignmentManager` with legacy compatibility shim)
+- Ride-hail physical consolidation slice 24: completed (added canonical assignment solver bridge and switched assignment app implementation to `apps.ride_hail.assignment.solver`)
