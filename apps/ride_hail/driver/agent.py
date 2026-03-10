@@ -1,3 +1,3 @@
-from apps.driver_app.driver_agent_indie import DriverAgentIndie
+from .agent_impl import DriverAgentIndie
 
 __all__ = ["DriverAgentIndie"]
