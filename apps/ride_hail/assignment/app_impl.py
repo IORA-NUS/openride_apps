@@ -18,7 +18,7 @@ from apps.config import settings
 from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from apps.ride_hail import RideHailActions
 from apps.assignment_app.solver import *  # NOTE * is deliberate to load all solvers in globals()
-from apps.assignment_app.engine_manager import EngineManager
+from .manager import AssignmentManager
 
 
 class AssignmentApp:
@@ -35,7 +35,7 @@ class AssignmentApp:
 
         self.solver = globals()[solver_name](self.solver_params)
 
-        self.engine = EngineManager(self.run_id, sim_clock, self.user, self.solver)
+        self.engine = AssignmentManager(self.run_id, sim_clock, self.user, self.solver)
 
         self.messenger = messenger
         self.server_max_results = 50  # make sure this is in sync with server
