@@ -277,3 +277,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 20: completed (repointed ride-hail app implementations to canonical local manager/trip-manager wrappers)
 - Ride-hail physical consolidation slice 21: completed (normalized scenario comment examples to canonical `apps.ride_hail.*` import paths)
 - Ride-hail physical consolidation slice 22: completed (added canonical `ride_hail_*` behavior aliases and switched scenario call sites)
+- Ride-hail physical consolidation slice 23: completed (ported assignment `EngineManager` to canonical `AssignmentManager` with legacy compatibility shim)
