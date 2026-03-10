@@ -1,3 +1,3 @@
-from apps.assignment_app.assignment_agent_indie import AssignmentAgentIndie
+from .agent_impl import AssignmentAgentIndie
 
 __all__ = ["AssignmentAgentIndie"]
