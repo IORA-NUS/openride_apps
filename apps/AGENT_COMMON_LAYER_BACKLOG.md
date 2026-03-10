@@ -289,3 +289,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 32: completed (added explicit test coverage for passenger app/module legacy-shim and package-export parity)
 - Ride-hail physical consolidation slice 33: completed (added explicit test coverage for `apps.driver_app.driver_agent_indie.hs` compatibility patch surface)
 - Ride-hail physical consolidation slice 34: completed (added explicit tests for legacy package lazy-export `__getattr__` contract and unknown-attribute behavior)
+- Ride-hail physical consolidation slice 35: completed (added explicit tests for canonical `apps.ride_hail.*` package export and unknown-attribute contract behavior)
