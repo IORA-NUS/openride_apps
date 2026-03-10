@@ -250,3 +250,8 @@ Execute in this order for best risk-adjusted progress:
 - At least one container-logistics agent pair runs on shared core.
 - Domain-specific behavior remains outside `agent_core`.
 - Documentation reflects new architecture and extension points.
+
+## Progress Snapshot
+
+- Phase 6.1 pilot: completed (`HaulierAgentAdapter` and `FacilityAgentAdapter` on shared runtime)
+- Phase 6.2 proof report: completed (`apps/REPORT_cross_domain_shared_core.md`)

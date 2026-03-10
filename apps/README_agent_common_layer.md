@@ -186,6 +186,7 @@ If step 3 succeeds with minimal domain workarounds, the common layer is validate
 Concrete implementation backlog with effort and risk:
 
 - `apps/AGENT_COMMON_LAYER_BACKLOG.md`
+- `apps/REPORT_cross_domain_shared_core.md`
 
 Architecture decision reference:
 
