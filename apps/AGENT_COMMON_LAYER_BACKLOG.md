@@ -284,3 +284,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 27: completed (added explicit test coverage for assignment solver legacy-shim to canonical-class parity)
 - Ride-hail physical consolidation slice 28: completed (added explicit test coverage for assignment manager legacy-shim and lazy-package export parity)
 - Ride-hail physical consolidation slice 29: completed (added explicit test coverage for assignment app/agent legacy-shim to canonical-class parity)
+- Ride-hail physical consolidation slice 30: completed (added explicit test coverage for analytics app/agent legacy-shim and package-export parity)
