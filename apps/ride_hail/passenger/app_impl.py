@@ -9,8 +9,8 @@ from apps.config import settings
 from apps.utils.utils import is_success
 
 from apps.utils.user_registry import UserRegistry
-from apps.passenger_app.passenger_manager import PassengerManager
-from apps.passenger_app.passenger_trip_manager import PassengerTripManager
+from .manager import PassengerManager
+from .trip_manager import PassengerTripManager
 from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
 

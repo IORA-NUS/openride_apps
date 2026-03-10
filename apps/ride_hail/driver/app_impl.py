@@ -10,8 +10,8 @@ from apps.config import settings
 from apps.utils.utils import is_success
 
 from apps.utils.user_registry import UserRegistry
-from apps.driver_app.driver_manager import DriverManager
-from apps.driver_app.driver_trip_manager import DriverTripManager
+from .manager import DriverManager
+from .trip_manager import DriverTripManager
 from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
 
