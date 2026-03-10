@@ -1,3 +1,3 @@
-from apps.passenger_app.passenger_trip_manager import PassengerTripManager
+from .trip_manager_impl import PassengerTripManager
 
 __all__ = ["PassengerTripManager"]
