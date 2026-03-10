@@ -273,3 +273,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 16: completed (moved driver trip-manager implementation to `apps/ride_hail/driver/trip_manager_impl.py` with old-path shim)
 - Ride-hail physical consolidation slice 17: completed (moved passenger manager implementation to `apps/ride_hail/passenger/manager_impl.py` with old-path shim)
 - Ride-hail physical consolidation slice 18: completed (moved passenger trip-manager implementation to `apps/ride_hail/passenger/trip_manager_impl.py` with old-path shim)
+- Ride-hail physical consolidation slice 19: completed (aligned runtime orchestration imports and agent class paths to `apps.ride_hail.*` wrappers)
