@@ -3,12 +3,12 @@ class RideHailDriverAdapter:
 
     @staticmethod
     def get_app_class():
-        from apps.ride_hail.driver import DriverApp
+        from apps.ride_hail.driver.app import DriverApp
 
         return DriverApp
 
     @staticmethod
     def get_agent_class():
-        from apps.ride_hail.driver import DriverAgentIndie
+        from apps.ride_hail.driver.agent import DriverAgentIndie
 
         return DriverAgentIndie

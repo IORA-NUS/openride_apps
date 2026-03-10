@@ -259,3 +259,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 2: completed (test suite imports switched to `apps.ride_hail.*` role packages)
 - Ride-hail physical consolidation slice 3: completed (adapter lazy imports switched to `apps.ride_hail.*` role packages)
 - Ride-hail physical consolidation slice 4: completed (runtime module import cleanup in `passenger_agent_indie.py`)
+- Ride-hail physical consolidation slice 5: completed (canonical wrapper modules for assignment/analytics and adapter alignment)
