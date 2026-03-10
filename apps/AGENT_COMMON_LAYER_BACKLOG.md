@@ -295,3 +295,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 38: completed (added assignment solver submodule shim parity tests for all canonical class exports)
 - Ride-hail physical consolidation slice 39: completed (added GenerateBehavior alias-identity tests for `ride_hail_*` compatibility method names)
 - Ride-hail physical consolidation slice 40: completed (added strict ride_hail adapter identity tests for adapter exports and resolved class objects)
+- Ride-hail physical consolidation slice 41: completed (added explicit canonical and legacy `EngineManager` alias identity tests)
