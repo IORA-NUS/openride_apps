@@ -187,6 +187,10 @@ Concrete implementation backlog with effort and risk:
 
 - `apps/AGENT_COMMON_LAYER_BACKLOG.md`
 
+Architecture decision reference:
+
+- `apps/ADR_agent_core_boundaries.md`
+
 ## Current Pilot Status
 
 Implemented lightweight container-logistics scaffold to validate shared-core reuse:

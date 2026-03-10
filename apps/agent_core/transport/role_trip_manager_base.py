@@ -31,6 +31,9 @@ class RoleTripManagerBase:
             payload=payload,
         )
 
+    def _patch_trip_transition(self, transition, payload):
+        return self._patch_trip(payload, suffix=transition)
+
     def _post_trip(self, payload):
         return self._resource_client.post(
             self._trip_collection_url(),

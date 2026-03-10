@@ -1,8 +1,8 @@
 from dateutil.relativedelta import relativedelta
-import requests, json, logging, traceback
+import json, logging
 
 from apps.config import settings #, driver_settings
-from apps.utils import id_generator, is_success, deep_update, str_to_time
+from apps.utils import is_success, str_to_time
 
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.utils import time_to_str, str_to_time
@@ -146,19 +146,13 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/look_for_job"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/look_for_job"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
             'routes.planned.looking_for_job': route,
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('look_for_job', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -186,18 +180,12 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/recieve"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/recieve"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('recieve', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -217,18 +205,12 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/confirm"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/confirm"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('confirm', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -255,18 +237,12 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/reject"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/reject"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('reject', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -279,18 +255,12 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/cancel"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/cancel"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('cancel', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -314,19 +284,13 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_confirmed_trip"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_confirmed_trip"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
             "routes.planned.moving_to_pickup": route,
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('passenger_confirmed_trip', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -339,18 +303,12 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/wait_to_pickup"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/wait_to_pickup"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('wait_to_pickup', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -376,19 +334,13 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_acknowledge_pickup"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_acknowledge_pickup"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
             "routes.planned.moving_to_dropoff": route
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('passenger_acknowledge_pickup', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -396,9 +348,6 @@ class DriverTripManager(RoleTripManagerBase):
             raise WriteFailedException(f"{response.url}, {response.text}")
 
     def move_to_dropoff(self, sim_clock, current_loc):
-
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/move_to_dropoff"
-
         if self.trip['state'] != 'driver_moving_to_dropoff':
             first_ping = True
 
@@ -407,11 +356,7 @@ class DriverTripManager(RoleTripManagerBase):
             'current_loc': current_loc,
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('move_to_dropoff', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -438,18 +383,12 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/wait_to_dropoff"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/wait_to_dropoff"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('wait_to_dropoff', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -473,18 +412,12 @@ class DriverTripManager(RoleTripManagerBase):
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_acknowledge_dropoff"
         # except Exception as e:
         #     raise e
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/passenger_acknowledge_dropoff"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('passenger_acknowledge_dropoff', data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -505,18 +438,12 @@ class DriverTripManager(RoleTripManagerBase):
         # if force_quit == True:
         #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
         # else:
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
-
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
         }
 
-        response = self._resource_client.patch(
-            driver_trip_item_url,
-            headers=self.user.get_headers(etag=self.trip['_etag']),
-            payload=data,
-        )
+        response = self._patch_trip_transition('end_trip', data)
 
         if is_success(response.status_code):
             self.trip = None
@@ -535,18 +462,12 @@ class DriverTripManager(RoleTripManagerBase):
             -- Hence use with Care.
         '''
         if self.trip is not None:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
-
             data = {
                 'sim_clock': sim_clock,
                 'current_loc': current_loc,
             }
 
-            response = self._resource_client.patch(
-                driver_trip_item_url,
-                headers=self.user.get_headers(etag=self.trip['_etag']),
-                payload=data,
-            )
+            response = self._patch_trip_transition('force_quit', data)
 
             if is_success(response.status_code):
                 self.trip = None

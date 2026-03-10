@@ -37,6 +37,10 @@ Suggested target structure:
 - Keeps checkpoint commits reviewable.
 - Allows rollback at role boundaries.
 
+Shared-vs-domain boundary decision:
+
+- `apps/ADR_agent_core_boundaries.md`
+
 ## Current status
 
 - Driver/passenger stack already consumes shared ride-hail contracts.
