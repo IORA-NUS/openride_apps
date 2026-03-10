@@ -31,9 +31,10 @@ from orsim import ORSimAgent
 from apps.utils.excepions import WriteFailedException, RefreshException
 from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
 from apps.ride_hail import RideHailActions, RideHailEvents, validate_driver_workflow_payload
+from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import orsim_settings, passenger_settings
 
-class PassengerAgentIndie(ORSimAgent):
+class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
 
     current_loc = None
     current_time_step = None
@@ -76,39 +77,6 @@ class PassengerAgentIndie(ORSimAgent):
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
-
-    def process_payload(self, payload):
-
-        # self.timeout_error = False
-        did_step = False
-
-        # if payload.get('action') == 'step':
-        if (payload.get('action') == 'step') or (payload.get('action') == 'init'):
-            self.add_step_log(f'Before entering_market')
-            self.entering_market(payload.get('time_step'))
-            self.add_step_log(f'After entering_market')
-
-            if self.is_active():
-                try:
-                    self.add_step_log(f'Before step')
-                    did_step = self.step(payload.get('time_step'))
-                    self.add_step_log(f'After step')
-                    self.failure_count = 0
-                    self.failure_log = {}
-                except Exception as e:
-                    # logging.exception(traceback.format_exc())
-                    self.failure_log[self.failure_count] = traceback.format_exc()
-                    self.failure_count += 1
-
-            self.add_step_log(f'Before exiting_market')
-            self.exiting_market()
-            self.add_step_log(f'After exiting_market')
-
-        else:
-            logging.error(f"{payload = }")
-
-        # print(f"{self.unique_id}: {did_step}")
-        return did_step
 
     def entering_market(self, time_step):
         # if time_step == self.behavior['trip_request_time']:

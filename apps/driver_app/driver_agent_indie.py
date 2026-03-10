@@ -36,9 +36,10 @@ from orsim import ORSimAgent
 from apps.utils.excepions import WriteFailedException, RefreshException
 from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
 from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
+from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import driver_settings, orsim_settings
 
-class DriverAgentIndie(ORSimAgent):
+class DriverAgentIndie(AgentRuntimeBase, ORSimAgent):
 
     active_route = None # shapely.geometry.LineString
     traversed_path = None # shapely.geometry.LineString
@@ -78,41 +79,6 @@ class DriverAgentIndie(ORSimAgent):
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
-
-
-
-    def process_payload(self, payload):
-        ''' '''
-        # self.timeout_error = False
-        did_step = False
-
-        # if payload.get('action') == 'step':
-        if (payload.get('action') == 'step') or (payload.get('action') == 'init'):
-            self.add_step_log('Before entering_market')
-            self.entering_market(payload.get('time_step'))
-            self.add_step_log('After entering_market')
-
-            # print(f"{self.unique_id}: {self.is_active()=}")
-            if self.is_active():
-                try:
-                    self.add_step_log('Before Step')
-                    did_step = self.step(payload.get('time_step'))
-                    self.add_step_log('After Step')
-                    self.failure_count = 0
-                    self.failure_log = {}
-                except Exception as e:
-                    # logging.exception(str(e))
-                    self.failure_log[self.failure_count] = traceback.format_exc()
-                    self.failure_count += 1
-
-            self.add_step_log('Before exiting_market')
-            self.exiting_market()
-            self.add_step_log('After exiting_market')
-        else:
-            logging.error(f"{payload = }")
-
-        # print(f"{self.unique_id}: {did_step}")
-        return did_step
 
     def get_random_location(self):
         return GenerateBehavior.get_random_location(self.behavior['coverage_area_name'])
