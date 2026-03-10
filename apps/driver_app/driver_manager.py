@@ -4,10 +4,10 @@ from http import HTTPStatus
 
 from apps.config import settings
 from apps.utils import id_generator, is_success
-from apps.state_machine import WorkflowStateMachine
+from apps.agent_core.lifecycle import LifecycleManagerBase
 
 
-class DriverManager():
+class DriverManager(LifecycleManagerBase):
 
     def __init__(self, run_id, sim_clock, user, profile):
         self.run_id = run_id
@@ -85,57 +85,23 @@ class DriverManager():
         '''
         driver_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver"
 
-        # print(self.driver)
-
         if self.driver['state'] == 'dormant':
-            machine = WorkflowStateMachine(start_value=self.driver['state'])
-            s = machine.current_state
-            for t in s.transitions:
-                # if t.destinations[0].name == 'offline':
-                if t.target.name == 'offline':
-                    # print(t)
-                    data = {
-                        # "transition": t.identifier,
-                        "transition": t.event,
-                        "sim_clock": sim_clock
-                    }
-                    # print(data)
-                    driver_item_url = driver_url + f"/{self.driver['_id']}"
+            self.driver = self._transition_item_to_state(
+                driver_url,
+                self.driver,
+                sim_clock,
+                'offline',
+            )
 
-                    response = requests.patch(driver_item_url,
-                                headers=self.user.get_headers(etag=self.driver['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-                    # print(response.json())
-                    response = requests.get(driver_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-                    self.driver = response.json()
+        if self.driver['state'] == 'offline':
+            self.driver = self._transition_item_to_state(
+                driver_url,
+                self.driver,
+                sim_clock,
+                'online',
+            )
 
-                    return self.login(sim_clock)
-        elif self.driver['state'] == 'offline':
-            machine = WorkflowStateMachine(start_value=self.driver['state'])
-            s = machine.current_state
-            for t in s.transitions:
-                # if t.destinations[0].name == 'online':
-                if t.target.name == 'online':
-                    # print(t)
-                    data = {
-                        # "transition": t.identifier,
-                        "transition": t.event,
-                        "sim_clock": sim_clock
-                    }
-                    # print(data)
-                    driver_item_url = driver_url + f"/{self.driver['_id']}"
-
-                    response = requests.patch(driver_item_url,
-                                                headers=self.user.get_headers(self.driver['_etag']),
-                                                data=json.dumps(data),
-                                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-                    # print(response.json())
-                    response = requests.get(driver_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-                    self.driver = response.json()
-
-                    return self.login(sim_clock)
-        elif self.driver['state'] == 'online':
+        if self.driver['state'] == 'online':
 
             return None
         else:
@@ -175,28 +141,15 @@ class DriverManager():
         else:
             vehicle = response.json()['_items'][0]
 
-        # print(driver)
         if vehicle['state'] == 'offline':
-            return response.json()['_items'][0]
+            return vehicle
         else:
-            machine = WorkflowStateMachine(start_value=vehicle['state'])
-            s = machine.current_state
-            for t in s.transitions:
-                # if t.destinations[0].name == 'offline':
-                if t.target.name == 'offline':
-                    data = {
-                        # "transition": t.identifier,
-                        "transition": t.event,
-                        "sim_clock": sim_clock,
-                    }
-                    # print(data)
-                    vehicle_item_url = vehicle_url + f"/{vehicle['_id']}"
-
-                    requests.patch(vehicle_item_url,
-                                    headers=self.user.get_headers(vehicle['_etag']),
-                                    data=json.dumps(data),
-                                    timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-                    return self.init_vehicle(sim_clock)
+            return self._transition_item_to_state(
+                vehicle_url,
+                vehicle,
+                sim_clock,
+                'offline',
+            )
 
     def create_vehicle(self, sim_clock):
         vehicle_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/vehicle"

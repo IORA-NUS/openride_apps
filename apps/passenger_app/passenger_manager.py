@@ -5,11 +5,11 @@ from dateutil.relativedelta import relativedelta
 
 from apps.config import settings
 from apps.utils import id_generator, is_success
-from apps.state_machine import WorkflowStateMachine
+from apps.agent_core.lifecycle import LifecycleManagerBase
 
 # from apps.utils.user_registry import UserRegistry
 
-class PassengerManager():
+class PassengerManager(LifecycleManagerBase):
 
     def __init__(self, run_id, sim_clock, user, passenger_profile):
         self.run_id = run_id
@@ -61,54 +61,23 @@ class PassengerManager():
     def login(self, sim_clock):
         passenger_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger"
 
-        if self.passenger['state'] == 'dormant': #'offline':
-            machine = WorkflowStateMachine(start_value=self.passenger['state'])
-            s = machine.current_state
-            for t in s.transitions:
-                # if t.destinations[0].name == 'offline': #'offline':
-                if t.target.name == 'offline': #'offline':
-                    data = {
-                        # "transition": t.identifier,
-                        "transition": t.event,
-                        "sim_clock": sim_clock
-                    }
-                    passenger_item_url = passenger_url + f"/{self.passenger['_id']}"
+        if self.passenger['state'] == 'dormant':
+            self.passenger = self._transition_item_to_state(
+                passenger_url,
+                self.passenger,
+                sim_clock,
+                'offline',
+            )
 
-                    requests.patch(passenger_item_url,
-                                    headers=self.user.get_headers(etag=self.passenger['_etag']),
-                                    data=json.dumps(data),
-                                    timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        if self.passenger['state'] == 'offline':
+            self.passenger = self._transition_item_to_state(
+                passenger_url,
+                self.passenger,
+                sim_clock,
+                'online',
+            )
 
-                    response = requests.get(passenger_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-                    self.passenger = response.json()
-
-                    return self.login(sim_clock)
-        elif self.passenger['state'] == 'offline': #'offline':
-            machine = WorkflowStateMachine(start_value=self.passenger['state'])
-            s = machine.current_state
-            for t in s.transitions:
-                # if t.destinations[0].name == 'online': #'offline':
-                if t.target.name == 'online': #'offline':
-                    data = {
-                        # "transition": t.identifier,
-                        "transition": t.event,
-                        "sim_clock": sim_clock
-                    }
-
-                    passenger_item_url = passenger_url + f"/{self.passenger['_id']}"
-
-                    requests.patch(passenger_item_url,
-                                    headers=self.user.get_headers(etag=self.passenger['_etag']),
-                                    data=json.dumps(data), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-
-                    response = requests.get(passenger_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
-                    if is_success(response.status_code):
-                        self.passenger = response.json()
-                    else:
-                        raise Exception(f"{response.url}, {response.text}")
-
-                    return self.login(sim_clock)
-        elif self.passenger['state'] == 'online': #'offline':
+        if self.passenger['state'] == 'online':
             return None
         else:
             raise Exception ("unknown Workflow State")

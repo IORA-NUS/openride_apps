@@ -6,18 +6,17 @@ from apps.utils import id_generator, is_success, deep_update, str_to_time
 
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.utils import time_to_str, str_to_time
+from apps.agent_core.transport import RoleTripManagerBase
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 
 
-class DriverTripManager:
+class DriverTripManager(RoleTripManagerBase):
     ''' '''
     trip = None
 
     def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False):
-        self.run_id = run_id
-        self.user = user
-        self.messenger = messenger
+        super().__init__(run_id, user, messenger, role='driver')
         self.update_passenger_loc = update_passenger_loc
 
     def as_dict(self):
@@ -159,10 +158,11 @@ class DriverTripManager:
             'routes.planned.looking_for_job': route,
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -197,10 +197,11 @@ class DriverTripManager:
             'current_loc': current_loc
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -227,10 +228,11 @@ class DriverTripManager:
             'current_loc': current_loc
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -264,10 +266,11 @@ class DriverTripManager:
             'current_loc': current_loc
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -287,9 +290,11 @@ class DriverTripManager:
             'current_loc': current_loc
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -321,10 +326,11 @@ class DriverTripManager:
             "routes.planned.moving_to_pickup": route,
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -344,10 +350,11 @@ class DriverTripManager:
             'current_loc': current_loc,
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -381,10 +388,11 @@ class DriverTripManager:
             "routes.planned.moving_to_dropoff": route
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -403,10 +411,11 @@ class DriverTripManager:
             'current_loc': current_loc,
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -440,10 +449,11 @@ class DriverTripManager:
             'current_loc': current_loc,
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -474,10 +484,11 @@ class DriverTripManager:
             'current_loc': current_loc,
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.refresh()
@@ -505,10 +516,11 @@ class DriverTripManager:
             'current_loc': current_loc,
         }
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._resource_client.patch(
+            driver_trip_item_url,
+            headers=self.user.get_headers(etag=self.trip['_etag']),
+            payload=data,
+        )
 
         if is_success(response.status_code):
             self.trip = None
@@ -534,10 +546,11 @@ class DriverTripManager:
                 'current_loc': current_loc,
             }
 
-            response = requests.patch(driver_trip_item_url,
-                                    headers=self.user.get_headers(etag=self.trip['_etag']),
-                                    data=json.dumps(data),)
-                                    # timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+            response = self._resource_client.patch(
+                driver_trip_item_url,
+                headers=self.user.get_headers(etag=self.trip['_etag']),
+                payload=data,
+            )
 
             if is_success(response.status_code):
                 self.trip = None
@@ -610,16 +623,11 @@ class DriverTripManager:
         if self.trip is None:
             raise Exception('trip is not set')
 
-        driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}"
-
         data = kwargs
         data['sim_clock'] = sim_clock
         data['current_loc'] = current_loc
 
-        response = requests.patch(driver_trip_item_url,
-                                headers=self.user.get_headers(etag=self.trip['_etag']),
-                                data=json.dumps(data),
-                                timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+        response = self._patch_trip(data)
 
         if is_success(response.status_code):
             self.refresh()
@@ -629,9 +637,7 @@ class DriverTripManager:
 
     def refresh(self, project=None): #, from_server=True):
         if (self.trip is not None): # and from_server:
-            driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}"
-
-            response = requests.get(driver_trip_item_url, headers=self.user.get_headers(), timeout=settings.get('NETWORK_REQUEST_TIMEOUT', 10))
+            response = self._get_trip()
 
             if is_success(response.status_code):
                 self.trip = response.json()

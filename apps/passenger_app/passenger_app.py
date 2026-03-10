@@ -15,34 +15,30 @@ from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
 
 from apps.state_machine import RidehailPassengerTripStateMachine
+from apps.agent_core.runtime import RoleAppBase
 
 
 # from apps.messenger_service import Messenger
 
 
 
-class PassengerApp:
+class PassengerApp(RoleAppBase):
 
     exited_market = False
 
     def __init__(self, run_id, sim_clock, current_loc, credentials, passenger_profile, messenger):
-        self.run_id = run_id
+        super().__init__(run_id, sim_clock, current_loc, messenger)
         self.credentials = credentials
 
         self.user = UserRegistry(sim_clock, credentials)
 
         self.passenger = PassengerManager(run_id, sim_clock, self.user, passenger_profile)
         # self.messenger = Messenger(credentials, f"{self.run_id}/{self.passenger.get_id()}", self.on_receive_message)
-        self.messenger = messenger
         self.topic_params = {
             f"{self.run_id}/{self.passenger.get_id()}": self.message_handler
         }
 
-        self.message_queue = []
         self.trip = PassengerTripManager(run_id, sim_clock, self.user, self.messenger)
-
-        self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
 
     def get_passenger(self):
         return self.passenger.as_dict()
@@ -105,10 +101,6 @@ class PassengerApp:
     ################
     # Message Callbacks and other methods
 
-    def update_current(self, sim_clock, current_loc):
-        self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
-
     # def on_receive_message(self, client, userdata, message):
     #     ''' Push message to a personal RabbitMQ Queue
     #     - At every step (simulation), pull items from queue and process them in sequence until Queue is empty
@@ -154,20 +146,6 @@ class PassengerApp:
                 # logging.warning(f"WARNING: Cannot assign Driver {payload['driver_id']} to passenger_trip {self.app.get_trip()['_id']} with state: {self.app.get_trip()['state']} ")
         else:
             self.enqueue_message(payload)
-
-
-    def enqueue_message(self, payload):
-        ''' '''
-        self.message_queue.append(payload)
-
-    def dequeue_message(self):
-        ''' '''
-        try:
-            return self.message_queue.pop(0)
-        except: return None
-
-    def enfront_message(self, payload):
-        self.message_queue.insert(0, payload)
 
 
 if __name__ == '__main__':
