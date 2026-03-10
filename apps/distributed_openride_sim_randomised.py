@@ -9,12 +9,10 @@ import logging, time, json, traceback, requests
 from pprint import pprint
 from datetime import datetime
 
-from analytics_app.analytics_agent_indie import AnalyticsAgentIndie
-from assignment_app.assignment_agent_indie import AssignmentAgentIndie
-from driver_app import DriverAgentIndie
-from passenger_app import PassengerAgentIndie
-from assignment_app import AssignmentAgentIndie
-from analytics_app import AnalyticsAgentIndie
+from apps.ride_hail.analytics import AnalyticsAgentIndie
+from apps.ride_hail.assignment import AssignmentAgentIndie
+from apps.ride_hail.driver import DriverAgentIndie
+from apps.ride_hail.passenger import PassengerAgentIndie
 
 from utils import id_generator, is_success
 # from utils.generate_behavior import GenerateBehavior
@@ -74,7 +72,7 @@ class DistributedOpenRideSimRandomised():
                                                                 # 'unique_id': agent_id,
                                                                 # 'method': start_driver,
                                                                 'project_path': f'{parent_path}',
-                                                                'agent_class': 'apps.driver_app.DriverAgentIndie',
+                                                                'agent_class': 'apps.ride_hail.driver.DriverAgentIndie',
                                                                 # 'agent_class_name': 'DriverAgentIndie',
                                                             })
 
@@ -93,7 +91,7 @@ class DistributedOpenRideSimRandomised():
                                                                 # 'unique_id': agent_id,
                                                                 # 'method': start_passenger,
                                                                 'project_path': f'{parent_path}',
-                                                                'agent_class': 'apps.passenger_app.PassengerAgentIndie',
+                                                                'agent_class': 'apps.ride_hail.passenger.PassengerAgentIndie',
                                                                 # 'agent_class_name': 'PassengerAgentIndie',
                                                             })
 
@@ -112,7 +110,7 @@ class DistributedOpenRideSimRandomised():
             self.service_scheduler.add_agent(#agent_id,
                                             spec=spec,
                                             project_path=f'{parent_path}',
-                                            agent_class='apps.assignment_app.AssignmentAgentIndie',
+                                            agent_class='apps.ride_hail.assignment.AssignmentAgentIndie',
                                             # agent_class_name='AssignmentAgentIndie',
                                             )
 
@@ -130,7 +128,7 @@ class DistributedOpenRideSimRandomised():
             self.service_scheduler.add_agent(#agent_id,
                                              spec=spec,
                                             project_path=f'{parent_path}',
-                                            agent_class='apps.analytics_app.AnalyticsAgentIndie',
+                                            agent_class='apps.ride_hail.analytics.AnalyticsAgentIndie',
                                             # agent_class_name='AnalyticsAgentIndie',
                                             )
 
