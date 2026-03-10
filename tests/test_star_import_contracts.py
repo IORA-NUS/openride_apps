@@ -32,3 +32,27 @@ def test_legacy_assignment_package_star_import_matches_all():
     import apps.assignment_app as pkg
 
     assert _star_imported_names("apps.assignment_app") == set(pkg.__all__)
+
+
+def test_canonical_driver_package_star_import_matches_all():
+    import apps.ride_hail.driver as pkg
+
+    assert _star_imported_names("apps.ride_hail.driver") == set(pkg.__all__)
+
+
+def test_canonical_passenger_package_star_import_matches_all():
+    import apps.ride_hail.passenger as pkg
+
+    assert _star_imported_names("apps.ride_hail.passenger") == set(pkg.__all__)
+
+
+def test_canonical_assignment_package_star_import_matches_all():
+    import apps.ride_hail.assignment as pkg
+
+    assert _star_imported_names("apps.ride_hail.assignment") == set(pkg.__all__)
+
+
+def test_canonical_analytics_package_star_import_matches_all():
+    import apps.ride_hail.analytics as pkg
+
+    assert _star_imported_names("apps.ride_hail.analytics") == set(pkg.__all__)
