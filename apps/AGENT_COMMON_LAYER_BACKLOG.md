@@ -321,3 +321,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 64: completed (added staged cleanup plan for legacy package archive and optional *_impl.py retirement)
 - Ride-hail physical consolidation slice 65: completed (added guardrail test to block new runtime imports of legacy package paths)
 - Ride-hail physical consolidation slice 66: completed (tightened runtime guardrail to block any legacy package-path references, including dynamic import strings)
+- Ride-hail physical consolidation slice 67: completed (added *_impl import boundary guardrail and normalized assignment wrapper import style)
