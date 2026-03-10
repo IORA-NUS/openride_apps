@@ -3,12 +3,12 @@ class RideHailAnalyticsAdapter:
 
     @staticmethod
     def get_app_class():
-        from apps.ride_hail.analytics import AnalyticsApp
+        from apps.ride_hail.analytics.app import AnalyticsApp
 
         return AnalyticsApp
 
     @staticmethod
     def get_agent_class():
-        from apps.ride_hail.analytics import AnalyticsAgentIndie
+        from apps.ride_hail.analytics.agent import AnalyticsAgentIndie
 
         return AnalyticsAgentIndie
