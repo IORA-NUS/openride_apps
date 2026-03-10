@@ -3,6 +3,7 @@ import pytest
 import apps.assignment_app as assignment_pkg
 import apps.driver_app as driver_pkg
 import apps.passenger_app as passenger_pkg
+from apps.assignment_app.assignment_agent_indie import AssignmentAgentIndie
 from apps.assignment_app.engine_manager import AssignmentManager, EngineManager
 from apps.driver_app.driver_agent_indie import DriverAgentIndie
 from apps.driver_app.driver_app import DriverApp
@@ -29,6 +30,7 @@ def test_passenger_package_getattr_dispatches_to_expected_objects():
 
 
 def test_assignment_package_getattr_dispatches_to_expected_objects():
+    assert assignment_pkg.__getattr__("AssignmentAgentIndie") is AssignmentAgentIndie
     assert assignment_pkg.__getattr__("AssignmentManager") is AssignmentManager
     assert assignment_pkg.__getattr__("EngineManager") is EngineManager
 
