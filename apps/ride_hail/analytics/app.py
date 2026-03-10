@@ -1,3 +1,3 @@
-from apps.analytics_app.analytics_app import AnalyticsApp
+from .app_impl import AnalyticsApp
 
 __all__ = ["AnalyticsApp"]
