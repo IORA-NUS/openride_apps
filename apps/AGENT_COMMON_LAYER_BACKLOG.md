@@ -299,3 +299,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 42: completed (added `apps.ride_hail` root export identity tests for events/contracts/models/adapters re-exports)
 - Ride-hail physical consolidation slice 43: completed (extended `apps.ride_hail` root export identity tests to include role app/agent/manager class re-exports)
 - Ride-hail physical consolidation slice 44: completed (added `apps.ride_hail.adapters` package export and unknown-attribute contract tests)
+- Ride-hail physical consolidation slice 45: completed (added `apps.ride_hail` root unknown-attribute contract test)

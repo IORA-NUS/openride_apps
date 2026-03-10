@@ -1,4 +1,5 @@
 import apps.ride_hail as ride_hail
+import pytest
 from apps.ride_hail.analytics import AnalyticsAgentIndie, AnalyticsApp
 from apps.ride_hail.adapters import (
     RideHailAnalyticsAdapter,
@@ -77,3 +78,8 @@ def test_ride_hail_root_reexports_identity_for_role_class_symbols():
 
     assert ride_hail.AnalyticsApp is AnalyticsApp
     assert ride_hail.AnalyticsAgentIndie is AnalyticsAgentIndie
+
+
+def test_ride_hail_root_unknown_attribute_raises_attribute_error():
+    with pytest.raises(AttributeError):
+        getattr(ride_hail, "DoesNotExist")
