@@ -3,12 +3,12 @@ class RideHailAssignmentAdapter:
 
     @staticmethod
     def get_app_class():
-        from apps.assignment_app.assignment_app import AssignmentApp
+        from apps.ride_hail.assignment import AssignmentApp
 
         return AssignmentApp
 
     @staticmethod
     def get_agent_class():
-        from apps.assignment_app.assignment_agent_indie import AssignmentAgentIndie
+        from apps.ride_hail.assignment import AssignmentAgentIndie
 
         return AssignmentAgentIndie

@@ -256,3 +256,4 @@ Execute in this order for best risk-adjusted progress:
 - Phase 6.1 pilot: completed (`HaulierAgentAdapter` and `FacilityAgentAdapter` on shared runtime)
 - Phase 6.2 proof report: completed (`apps/REPORT_cross_domain_shared_core.md`)
 - Ride-hail physical consolidation slice 1: completed (`apps/ride_hail/{driver,passenger,assignment,analytics}` compatibility packages)
+- Ride-hail physical consolidation slice 2: completed (test suite imports switched to `apps.ride_hail.*` role packages)

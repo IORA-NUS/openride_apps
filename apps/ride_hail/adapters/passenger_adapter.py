@@ -3,12 +3,12 @@ class RideHailPassengerAdapter:
 
     @staticmethod
     def get_app_class():
-        from apps.passenger_app.passenger_app import PassengerApp
+        from apps.ride_hail.passenger import PassengerApp
 
         return PassengerApp
 
     @staticmethod
     def get_agent_class():
-        from apps.passenger_app.passenger_agent_indie import PassengerAgentIndie
+        from apps.ride_hail.passenger import PassengerAgentIndie
 
         return PassengerAgentIndie
