@@ -281,3 +281,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 24: completed (added canonical assignment solver bridge and switched assignment app implementation to `apps.ride_hail.assignment.solver`)
 - Ride-hail physical consolidation slice 25: completed (expanded legacy `apps.assignment_app` lazy exports to include assignment manager compatibility symbols)
 - Ride-hail physical consolidation slice 26: completed (physically moved assignment solver implementations to `apps.ride_hail.assignment.solver` with legacy shims in `apps.assignment_app.solver`)
+- Ride-hail physical consolidation slice 27: completed (added explicit test coverage for assignment solver legacy-shim to canonical-class parity)
