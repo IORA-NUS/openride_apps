@@ -1,7 +1,5 @@
-from apps.driver_app.driver_agent_indie import DriverAgentIndie
-from apps.driver_app.driver_app import DriverApp
-from apps.passenger_app.passenger_agent_indie import PassengerAgentIndie
-from apps.passenger_app.passenger_app import PassengerApp
+from apps.ride_hail.driver import DriverAgentIndie, DriverApp
+from apps.ride_hail.passenger import PassengerAgentIndie, PassengerApp
 from apps.ride_hail import (
     AssignedPayload,
     DriverWorkflowPayload,

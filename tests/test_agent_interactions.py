@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
-from apps.driver_app.driver_agent_indie import DriverAgentIndie
-from apps.passenger_app.passenger_agent_indie import PassengerAgentIndie
+from apps.ride_hail.driver import DriverAgentIndie
+from apps.ride_hail.passenger import PassengerAgentIndie
 from apps.state_machine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine, WorkflowStateMachine
 
 

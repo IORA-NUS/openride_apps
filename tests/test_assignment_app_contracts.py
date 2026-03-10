@@ -1,4 +1,4 @@
-from apps.assignment_app.assignment_app import AssignmentApp
+from apps.ride_hail.assignment import AssignmentApp
 from apps.ride_hail import RideHailActions
 
 
