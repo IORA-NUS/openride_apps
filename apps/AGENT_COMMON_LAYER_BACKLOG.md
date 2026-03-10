@@ -302,3 +302,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 45: completed (added `apps.ride_hail` root unknown-attribute contract test)
 - Ride-hail physical consolidation slice 46: completed (added explicit ride_hail action/event constant literal and uniqueness contract tests)
 - Ride-hail physical consolidation slice 47: completed (added payload model parse edge-case contract tests for invalid input shapes)
+- Ride-hail physical consolidation slice 48: completed (added payload model parse success-shape contract tests for field preservation)
