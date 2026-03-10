@@ -287,3 +287,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 30: completed (added explicit test coverage for analytics app/agent legacy-shim and package-export parity)
 - Ride-hail physical consolidation slice 31: completed (added explicit test coverage for driver app/module legacy-shim and package-export parity)
 - Ride-hail physical consolidation slice 32: completed (added explicit test coverage for passenger app/module legacy-shim and package-export parity)
+- Ride-hail physical consolidation slice 33: completed (added explicit test coverage for `apps.driver_app.driver_agent_indie.hs` compatibility patch surface)
