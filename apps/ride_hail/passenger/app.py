@@ -1,3 +1,3 @@
-from apps.passenger_app.passenger_app import PassengerApp
+from .app_impl import PassengerApp
 
 __all__ = ["PassengerApp"]
