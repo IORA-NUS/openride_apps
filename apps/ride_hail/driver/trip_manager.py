@@ -1,3 +1,3 @@
-from apps.driver_app.driver_trip_manager import DriverTripManager
+from .trip_manager_impl import DriverTripManager
 
 __all__ = ["DriverTripManager"]
