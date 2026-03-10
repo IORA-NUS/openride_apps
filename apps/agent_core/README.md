@@ -127,3 +127,33 @@ sequenceDiagram
 - After processing, the Runtime may publish or emit events back to the Simulation.
 - The Simulation routes events/messages between agents (e.g., driver and passenger), delivering them as new payloads to the respective agent Runtimes.
 - The App, Manager, and Plugin modules work together to process these events and update agent state, enabling rich, modular, and testable agent interactions.
+
+## Declarative Callback Registration
+
+agent_core now supports registering message and state callbacks using decorators, making agent logic more declarative and discoverable.
+
+### Usage Example
+
+```python
+from agent_core.interaction.decorators import message_handler, state_handler
+from agent_core.interaction.plugin import CallbackRouterInteractionPlugin
+
+class MyHandlers:
+    @message_handler("driver_workflow_event", "driver_confirmed_trip")
+    def handle_driver_confirmed_trip(self, payload, data, **kwargs):
+        # handle event
+        pass
+
+    @state_handler("driver_waiting_to_pickup")
+    def handle_waiting_to_pickup(self, **kwargs):
+        # handle state
+        pass
+
+handlers = MyHandlers()
+plugin = CallbackRouterInteractionPlugin(handler_obj=handlers)
+```
+
+- Use `@message_handler(action, event)` to mark a method as a message handler.
+- Use `@state_handler(state)` to mark a method as a state handler.
+- Pass the handler object to `CallbackRouterInteractionPlugin(handler_obj=...)` to auto-register all decorated methods.
+- You can still use `register_message` and `register_state` for imperative registration if needed.
