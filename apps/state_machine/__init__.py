@@ -6,3 +6,9 @@ from .ride_hail import RidehailPassengerTripStateMachine
 
 from .hl_delivery import HLDeliveryDriverTourStateMachine
 from .hl_delivery import HLDeliveryPackageTripStateMachine
+
+from .container_logistics import HaulierContainerWorkflowStateMachine
+from .container_logistics import FacilityAgentInteractionStateMachine
+from .container_logistics import PortAgentInteractionStateMachine
+from .container_logistics import DepotAgentInteractionStateMachine
+from .container_logistics import WarehouseAgentInteractionStateMachine
