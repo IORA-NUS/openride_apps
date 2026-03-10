@@ -16,7 +16,7 @@ ALLOWED_PATH_PARTS = {
 }
 
 
-def test_runtime_code_does_not_import_legacy_package_paths():
+def test_runtime_code_does_not_reference_legacy_package_paths():
     repo_root = Path(__file__).resolve().parents[1]
     apps_root = repo_root / "apps"
     offenders = []
