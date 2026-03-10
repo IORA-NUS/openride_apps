@@ -308,3 +308,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 51: completed (added exact legacy package `__all__` export-surface tests for driver/passenger/assignment)
 - Ride-hail physical consolidation slice 52: completed (added exact canonical role-package `__all__` export-surface tests for driver/passenger/assignment/analytics)
 - Ride-hail physical consolidation slice 53: completed (added exact wrapper-module `__all__` contract tests across legacy shims and canonical wrappers)
+- Ride-hail physical consolidation slice 54: completed (added ordered `__all__` contract tests for key canonical and legacy package surfaces)
