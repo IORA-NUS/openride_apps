@@ -304,3 +304,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 47: completed (added payload model parse edge-case contract tests for invalid input shapes)
 - Ride-hail physical consolidation slice 48: completed (added payload model parse success-shape contract tests for field preservation)
 - Ride-hail physical consolidation slice 49: completed (added validator-to-model parse parity tests across valid and invalid payload shapes)
+- Ride-hail physical consolidation slice 50: completed (added exact `__all__` export-surface contract tests for `apps.ride_hail` and `apps.ride_hail.adapters`)
