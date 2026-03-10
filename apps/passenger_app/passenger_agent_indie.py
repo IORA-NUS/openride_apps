@@ -14,7 +14,7 @@ from random import choice
 from dateutil.relativedelta import relativedelta
 from shapely.geometry import Point, mapping
 
-from apps.passenger_app import PassengerApp
+from .passenger_app import PassengerApp
 from apps.utils.utils import id_generator #, cut
 from apps.state_machine import RidehailPassengerTripStateMachine, WorkflowStateMachine
 from apps.loc_service import OSRMClient, cut
