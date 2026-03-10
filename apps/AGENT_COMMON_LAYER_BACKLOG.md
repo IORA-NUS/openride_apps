@@ -293,3 +293,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 36: completed (added comprehensive assignment solver export-surface parity tests across legacy and canonical packages)
 - Ride-hail physical consolidation slice 37: completed (added canonical wrapper-module to implementation-class parity tests across ride_hail domains)
 - Ride-hail physical consolidation slice 38: completed (added assignment solver submodule shim parity tests for all canonical class exports)
+- Ride-hail physical consolidation slice 39: completed (added GenerateBehavior alias-identity tests for `ride_hail_*` compatibility method names)
