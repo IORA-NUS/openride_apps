@@ -291,3 +291,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 34: completed (added explicit tests for legacy package lazy-export `__getattr__` contract and unknown-attribute behavior)
 - Ride-hail physical consolidation slice 35: completed (added explicit tests for canonical `apps.ride_hail.*` package export and unknown-attribute contract behavior)
 - Ride-hail physical consolidation slice 36: completed (added comprehensive assignment solver export-surface parity tests across legacy and canonical packages)
+- Ride-hail physical consolidation slice 37: completed (added canonical wrapper-module to implementation-class parity tests across ride_hail domains)
