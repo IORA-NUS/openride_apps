@@ -1,3 +1,3 @@
-from apps.assignment_app.assignment_app import AssignmentApp
+from apps.ride_hail.assignment.app_impl import AssignmentApp
 
 __all__ = ["AssignmentApp"]
