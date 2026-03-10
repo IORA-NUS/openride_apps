@@ -261,3 +261,5 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 4: completed (runtime module import cleanup in `passenger_agent_indie.py`)
 - Ride-hail physical consolidation slice 5: completed (canonical wrapper modules for assignment/analytics and adapter alignment)
 - Ride-hail physical consolidation slice 6: completed (canonical wrapper modules for driver/passenger and adapter alignment)
+- Ride-hail physical consolidation slice 7: completed (moved analytics app implementation to `apps/ride_hail/analytics/app_impl.py` with old-path shim)
+- Ride-hail physical consolidation slice 8: completed (moved analytics agent implementation to `apps/ride_hail/analytics/agent_impl.py` with old-path shim)
