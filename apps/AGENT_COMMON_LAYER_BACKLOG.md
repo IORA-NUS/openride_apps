@@ -318,3 +318,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 61: completed (added star-import contract tests to enforce package `__all__` import surfaces)
 - Ride-hail physical consolidation slice 62: completed (extended star-import contract tests to canonical role packages)
 - Ride-hail physical consolidation slice 63: completed (added wrapper-module public symbol hygiene tests across canonical wrappers and legacy shims)
+- Ride-hail physical consolidation slice 64: completed (added staged cleanup plan for legacy package archive and optional *_impl.py retirement)
