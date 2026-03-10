@@ -9,12 +9,10 @@ from pprint import pprint
 import pandas as pd
 from datetime import datetime, time
 
-# from analytics_app.analytics_agent_indie import AnalyticsAgentIndie
-# from assignment_app.assignment_agent_indie import AssignmentAgentIndie
-# from driver_app import DriverAgentIndie
-# from passenger_app import PassengerAgentIndie
-# from assignment_app import AssignmentAgentIndie
-# from analytics_app import AnalyticsAgentIndie
+# from apps.ride_hail.analytics import AnalyticsAgentIndie
+# from apps.ride_hail.assignment import AssignmentAgentIndie
+# from apps.ride_hail.driver import DriverAgentIndie
+# from apps.ride_hail.passenger import PassengerAgentIndie
 
 # from apps.utils import id_generator
 from apps.scenario.generate_behavior import GenerateBehavior
