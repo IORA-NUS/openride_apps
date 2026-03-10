@@ -9,6 +9,13 @@ Included pieces:
 - `adapters/base_interaction_adapter.py`: thin wrapper around shared plugin dispatch.
 - `adapters/haulier_adapter.py`: minimal facility-message ingress for haulier side.
 - `adapters/facility_adapter.py`: minimal haulier-message ingress for facility side.
+- `adapters/haulier_agent_adapter.py`: runtime-connected haulier adapter on `agent_core` runtime.
+- `adapters/facility_agent_adapter.py`: runtime-connected facility adapter on `agent_core` runtime.
+
+Pilot flow support:
+
+- request -> confirm -> arrival -> checkin -> slot -> handoff -> close
+- plus dropoff completion events for haulier-side workflow closure.
 
 Intended use:
 

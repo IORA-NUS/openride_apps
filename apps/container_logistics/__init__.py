@@ -1,6 +1,11 @@
 from .events import ContainerLogisticsActions, ContainerLogisticsEvents
 from .contracts import validate_facility_workflow_payload, validate_haulier_workflow_payload
-from .adapters import FacilityInteractionAdapter, HaulierInteractionAdapter
+from .adapters import (
+    FacilityAgentAdapter,
+    FacilityInteractionAdapter,
+    HaulierAgentAdapter,
+    HaulierInteractionAdapter,
+)
 
 __all__ = [
     "ContainerLogisticsActions",
@@ -9,4 +14,6 @@ __all__ = [
     "validate_facility_workflow_payload",
     "HaulierInteractionAdapter",
     "FacilityInteractionAdapter",
+    "HaulierAgentAdapter",
+    "FacilityAgentAdapter",
 ]

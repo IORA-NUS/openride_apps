@@ -200,10 +200,14 @@ Implemented lightweight container-logistics scaffold to validate shared-core reu
 - `apps/container_logistics/adapters/base_interaction_adapter.py`
 - `apps/container_logistics/adapters/haulier_adapter.py`
 - `apps/container_logistics/adapters/facility_adapter.py`
+- `apps/container_logistics/adapters/haulier_agent_adapter.py`
+- `apps/container_logistics/adapters/facility_agent_adapter.py`
+- `apps/container_logistics/adapters/runtime_agent_adapter_base.py`
 - `apps/container_logistics/README.md`
 
 Validation coverage:
 
 - `tests/test_container_logistics_scaffold.py`
+- `tests/test_container_logistics_agent_adapters.py`
 
 This scaffold is intentionally minimal and can be rebuilt later without large migration cost.
