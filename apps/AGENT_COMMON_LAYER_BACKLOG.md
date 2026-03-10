@@ -306,3 +306,4 @@ Execute in this order for best risk-adjusted progress:
 - Ride-hail physical consolidation slice 49: completed (added validator-to-model parse parity tests across valid and invalid payload shapes)
 - Ride-hail physical consolidation slice 50: completed (added exact `__all__` export-surface contract tests for `apps.ride_hail` and `apps.ride_hail.adapters`)
 - Ride-hail physical consolidation slice 51: completed (added exact legacy package `__all__` export-surface tests for driver/passenger/assignment)
+- Ride-hail physical consolidation slice 52: completed (added exact canonical role-package `__all__` export-surface tests for driver/passenger/assignment/analytics)
