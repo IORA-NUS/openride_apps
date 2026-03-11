@@ -28,7 +28,8 @@ The `agent_core` module provides a set of generic, composable building blocks fo
 - **Runtime:** `DriverAgentIndie` (extends `AgentRuntimeBase`)
 - **App:** `DriverApp` (extends `RoleAppBase`)
 - **Manager:** `DriverManager` (extends `LifecycleManagerBase`)
-- **Trip Manager:** `DriverTripManager` (extends `RoleTripManagerBase`, injected via `extra_components`)
+- **Trip Manager:** `DriverTripManager` (extends `RoleTripManagerBase` from `apps.common`, injected via `extra_components`)
+- **Resource Client:** `ResourceTransitionClient` is now located in `apps.common.resource_client` and used by trip managers for HTTP resource transitions.
 - **Plugin:** `CallbackRouterInteractionPlugin` (implements `InteractionPlugin`)
 
 The agent is assembled using AgentFactory, which wires these components together. The runtime coordinates the agent’s lifecycle, the app manages state and communication, the manager handles workflow transitions, the trip manager manages trip-specific logic, and the plugin handles event-driven interactions.
@@ -157,3 +158,14 @@ plugin = CallbackRouterInteractionPlugin(handler_obj=handlers)
 - Use `@state_handler(state)` to mark a method as a state handler.
 - Pass the handler object to `CallbackRouterInteractionPlugin(handler_obj=...)` to auto-register all decorated methods.
 - You can still use `register_message` and `register_state` for imperative registration if needed.
+
+## Notes
+
+- Trip management, user registry, and resource client utilities have been moved to `apps/common` to keep `agent_core` domain-agnostic and reusable.
+- Update your imports accordingly:
+
+  ```python
+  from apps.common.trip_manager_base import RoleTripManagerBase
+  from apps.common.user_registry import UserRegistry
+  from apps.common.resource_client import ResourceTransitionClient
+  ```

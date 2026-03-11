@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Optional, Dict, Any
 
 import json
 
@@ -19,7 +19,13 @@ class LifecycleManagerBase:
                 return transition.event
         return None
 
-    def _transition_item_to_state(self, collection_url: str, item_doc: dict, sim_clock: str, target_state: str) -> dict:
+    def _transition_item_to_state(
+        self,
+        collection_url: str,
+        item_doc: Dict[str, Any],
+        sim_clock: str,
+        target_state: str
+    ) -> Dict[str, Any]:
         event = self._get_transition_event(item_doc["state"], target_state)
         if event is None:
             raise Exception(f"No transition from {item_doc['state']} to {target_state}")

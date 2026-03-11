@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, Callable, Optional
 
 from .callback_router import InteractionCallbackRouter
 
@@ -10,12 +10,12 @@ from .callback_router import InteractionCallbackRouter
 class InteractionContext:
     """Context passed to interaction plugins during dispatch."""
 
-    action: str | None = None
-    event: str | None = None
-    state: str | None = None
-    payload: dict[str, Any] | None = None
-    data: dict[str, Any] | None = None
-    extra: dict[str, Any] | None = None
+    action: Optional[str] = None
+    event: Optional[str] = None
+    state: Optional[str] = None
+    payload: Optional[dict[str, Any]] = None
+    data: Optional[dict[str, Any]] = None
+    extra: Optional[dict[str, Any]] = None
 
 
 class InteractionPlugin(Protocol):
@@ -33,18 +33,18 @@ class CallbackRouterInteractionPlugin:
     Supports both imperative and declarative (decorator-based) registration.
     """
 
-    def __init__(self, router: InteractionCallbackRouter | None = None, handler_obj=None) -> None:
+    def __init__(self, router: Optional[InteractionCallbackRouter] = None, handler_obj: Any = None) -> None:
         self.router = router or InteractionCallbackRouter()
         if handler_obj is not None:
             self._register_decorated_handlers(handler_obj)
 
-    def register_message(self, action: str, event: str, callback) -> None:
+    def register_message(self, action: str, event: str, callback: Callable[..., Any]) -> None:
         self.router.register_message(action, event, callback)
 
-    def register_state(self, state: str, callback) -> None:
+    def register_state(self, state: str, callback: Callable[..., Any]) -> None:
         self.router.register_state(state, callback)
 
-    def _register_decorated_handlers(self, obj):
+    def _register_decorated_handlers(self, obj: Any) -> None:
         """Scan obj for methods decorated as message/state handlers and register them."""
         for attr_name in dir(obj):
             fn = getattr(obj, attr_name)

@@ -7,7 +7,7 @@ from apps.loc_service import OSRMClient
 
 from apps.state_machine import RidehailPassengerTripStateMachine
 from apps.utils import str_to_time, time_to_str
-from apps.agent_core.transport import RoleTripManagerBase
+from apps.common.role_trip_manager_base import RoleTripManagerBase
 from apps.ride_hail import RideHailActions, RideHailEvents
 
 from apps.utils.excepions import WriteFailedException, RefreshException

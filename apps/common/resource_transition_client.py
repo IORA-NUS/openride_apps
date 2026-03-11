@@ -1,9 +1,6 @@
 import json
-
 import requests
-
 from apps.config import settings
-
 
 class ResourceTransitionClient:
     """Shared thin HTTP client for resource transition requests."""

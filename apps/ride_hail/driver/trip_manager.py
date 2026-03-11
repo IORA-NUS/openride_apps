@@ -6,7 +6,7 @@ from apps.utils import is_success, str_to_time
 
 from apps.state_machine import RidehailDriverTripStateMachine
 from apps.utils import time_to_str, str_to_time
-from apps.agent_core.transport import RoleTripManagerBase
+from apps.common.role_trip_manager_base import RoleTripManagerBase
 from apps.ride_hail import RideHailActions, RideHailEvents
 
 from apps.utils.excepions import WriteFailedException, RefreshException

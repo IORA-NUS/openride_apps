@@ -1,12 +1,13 @@
 import logging
 import traceback
+from typing import Any, Dict
 
 
 class AgentRuntimeBase:
     """Shared step envelope for ORSim role agents."""
 
-    def process_payload(self, payload):
-        did_step = False
+    def process_payload(self, payload: Dict[str, Any]) -> bool:
+        did_step: bool = False
 
         if (payload.get("action") == "step") or (payload.get("action") == "init"):
             self.add_step_log("Before entering_market")
