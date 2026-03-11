@@ -1,18 +1,48 @@
 from apps.config import settings
-from apps.common.resource_transition_client import ResourceTransitionClient
-from typing import Any, Optional
+
+from .resource_transition_client import ResourceTransitionClient
+
 
 class RoleTripManagerBase:
-    def __init__(self, user_id: str, role: str):
-        self.user_id = user_id
-        self.role = role
-        self.client = ResourceTransitionClient(settings.RESOURCE_TRANSITION_CLIENT_URL)
+    """Shared base utilities for ride-hail trip manager implementations."""
 
-    def create_trip(self, trip_data: dict) -> Any:
-        return self.client.create_trip(trip_data)
+    trip = None
 
-    def update_trip(self, trip_data: dict) -> Any:
-        return self.client.update_trip(trip_data)
+    def __init__(self, run_id, user, messenger, role):
+        self.run_id = run_id
+        self.user = user
+        self.messenger = messenger
+        self._role = role
+        self._resource_client = ResourceTransitionClient()
 
-    def delete_trip(self, trip_id: str) -> Any:
-        return self.client.delete_trip(trip_id)
+    def _trip_collection_url(self):
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/{self._role}/ride_hail/trip"
+
+    def _trip_item_url(self, suffix=None):
+        if self.trip is None:
+            raise Exception("trip is not set")
+        base = f"{self._trip_collection_url()}/{self.trip['_id']}"
+        return f"{base}/{suffix}" if suffix else base
+
+    def _patch_trip(self, payload, suffix=None):
+        return self._resource_client.patch(
+            self._trip_item_url(suffix=suffix),
+            headers=self.user.get_headers(etag=self.trip["_etag"]),
+            payload=payload,
+        )
+
+    def _patch_trip_transition(self, transition, payload):
+        return self._patch_trip(payload, suffix=transition)
+
+    def _post_trip(self, payload):
+        return self._resource_client.post(
+            self._trip_collection_url(),
+            headers=self.user.get_headers(),
+            payload=payload,
+        )
+
+    def _get_trip(self):
+        return self._resource_client.get(
+            self._trip_item_url(),
+            headers=self.user.get_headers(),
+        )
