@@ -1,0 +1,29 @@
+{
+  "runtime": {
+    "unique_id": "driver-123",
+    "run_id": "run-001",
+    "reference_time": "2026-03-10T00:00:00Z",
+    "init_time_step": 0,
+    "scheduler": null,
+    "behavior": {
+      "init_loc": {"type": "Point", "coordinates": [103.85, 1.29]},
+      "profile": {},
+      "email": "driver@example.com",
+      "password": "secret"
+    }
+  },
+  "app": {
+    "run_id": "run-001",
+    "sim_clock": "2026-03-10T00:00:00Z",
+    "current_loc": {"type": "Point", "coordinates": [103.85, 1.29]},
+    "credentials": {"email": "driver@example.com", "password": "secret"},
+    "profile": {},
+    "messenger": null
+  },
+  "manager": {
+    "run_id": "run-001",
+    "sim_clock": "2026-03-10T00:00:00Z",
+    "user": null,
+    "profile": {}
+  }
+}
