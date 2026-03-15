@@ -11,17 +11,7 @@ from apps.agent_core.base_manager import BaseManager
 from apps.common.resource_client_mixin import ResourceClientMixin
 
 class AssignmentManager(ResourceClientMixin, BaseManager):
-    def login(self, sim_clock):
-        """
-        AssignmentManager does not require login. This is a no-op for interface compatibility.
-        """
-        pass
 
-    def logout(self, sim_clock):
-        """
-        AssignmentManager does not require logout. This is a no-op for interface compatibility.
-        """
-        pass
 
     def __init__(self, run_id, sim_clock, user, solver):
         self.run_id = run_id
@@ -45,7 +35,17 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
         self.entity = self.init_entity(sim_clock, data=data, params=params)
 
 
+    def login(self, sim_clock):
+        """
+        AssignmentManager does not require login. This is a no-op for interface compatibility.
+        """
+        pass
 
+    def logout(self, sim_clock):
+        """
+        AssignmentManager does not require logout. This is a no-op for interface compatibility.
+        """
+        pass
     # init_engine is now handled by BaseManager's init_entity
 
 

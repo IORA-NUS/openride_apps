@@ -47,7 +47,7 @@ class AssignmentAgentIndie(ORSimAgent):
         return did_step
 
     def logout(self):
-        self.app.logout()
+        self.app.close()
 
     def estimate_next_event_time(self):
         return self.current_time

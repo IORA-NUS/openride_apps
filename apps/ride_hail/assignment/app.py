@@ -35,7 +35,7 @@ class AssignmentApp:
 
         self.solver = globals()[solver_name](self.solver_params)
 
-        self.engine = AssignmentManager(self.run_id, sim_clock, self.user, self.solver)
+        self.manager = AssignmentManager(self.run_id, sim_clock, self.user, self.solver)
 
         self.messenger = messenger
         self.server_max_results = 50  # make sure this is in sync with server
@@ -69,7 +69,7 @@ class AssignmentApp:
 
         driver_trip = self.get_driver_trip()
         passenger_trip = self.get_passenger_trip()
-        self.engine.refresh()
+        self.manager.refresh()
 
         driver_locs = {k: v['current_loc'] for k, v in driver_trip.items()}
         passenger_locs = {k: v['pickup_loc'] for k, v in passenger_trip.items()}
@@ -81,7 +81,7 @@ class AssignmentApp:
 
         start = time.time()
         try:
-            assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
+            assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
         except Exception as e:
             logging.exception(traceback.format_exc())
             assignment = []
@@ -90,7 +90,7 @@ class AssignmentApp:
         end = time.time()
         scale_factor = self.get_scale_factor(time_step)
 
-        online_params = self.solver.update_online_params(scale_factor, driver_list, passenger_trip_list, matched_pairs, self.engine.as_dict().get('offline_params'), self.engine.as_dict().get('online_params'))
+        online_params = self.solver.update_online_params(scale_factor, driver_list, passenger_trip_list, matched_pairs, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
         result = [{
             'driver': item[0]['driver'],
             'passenger': item[1]['passenger'],
@@ -103,8 +103,8 @@ class AssignmentApp:
             "num_passenger_trips": len(passenger_trip_list),
             "result": result
         }
-        # self.engine.update_engine(sim_clock, online_params, performance)
-        self.engine.update_entity({"online_params": online_params, "last_run_performance": performance, "sim_clock": sim_clock})
+        # self.manager.update_engine(sim_clock, online_params, performance)
+        self.manager.update_entity({"online_params": online_params, "last_run_performance": performance, "sim_clock": sim_clock})
 
         return assignment
 
@@ -210,9 +210,9 @@ class AssignmentApp:
 
         return distance_matrix
 
-    def logout(self):
+    def close(self):
         ''' '''
-        logging.debug(f'logging out Assignmenta Service {self.engine.get_id()}')
+        logging.debug(f'logging out Assignmenta Service {self.manager.get_id()}')
 
         self.exited_market = True
 

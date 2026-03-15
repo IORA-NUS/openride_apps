@@ -49,7 +49,7 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     def logout(self):
         self.step(self.current_time_step)
-        self.app.logout()
+        self.app.close()
 
     def estimate_next_event_time(self):
         return self.current_time

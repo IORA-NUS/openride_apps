@@ -42,7 +42,7 @@ class AnalyticsApp:
         self.passenger_trips_for_metric = None
         self.driver_trips_for_metric = None
 
-    def logout(self):  # , sim_clock, current_loc):
+    def close(self):  # , sim_clock, current_loc):
         ''' '''
         logging.debug(f'logging out Analytics Service ')
 

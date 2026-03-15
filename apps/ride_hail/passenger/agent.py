@@ -69,7 +69,7 @@ class PassengerAgentIndie(ORSimAgent):
                                     self.get_current_time_str(),
                                     self.current_loc,
                                     credentials=self.credentials,
-                                    passenger_profile=self.behavior['profile'],
+                                    profile=self.behavior['profile'],
                                     messenger=self.messenger)
             print(f"PassengerApp initialized for {self.unique_id}")
 
@@ -118,7 +118,7 @@ class PassengerAgentIndie(ORSimAgent):
         if (self.active == False) and (time_step == self.behavior['trip_request_time']):
             # print('Enter Market')
             # print(self.behavior)
-            self.app.login(self.get_current_time_str(), self.current_loc, self.pickup_loc, self.dropoff_loc, trip_price=self.behavior.get('trip_price'))
+            self.app.launch(self.get_current_time_str(), self.current_loc, self.pickup_loc, self.dropoff_loc, trip_price=self.behavior.get('trip_price'))
             print(f"PassengerAgentIndie {self.unique_id} entered market at time_step {time_step}")
             self.active = True
             return True
@@ -129,7 +129,7 @@ class PassengerAgentIndie(ORSimAgent):
         failure_threshold = 3
 
         if self.failure_count > failure_threshold:
-            logging.warning(f'Shutting down passenger {self.app.passenger.get_id()} due to too many failures')
+            logging.warning(f'Shutting down passenger {self.app.manager.get_id()} due to too many failures')
             logging.warning(json.dumps(self.failure_log, indent=2))
             self.shutdown()
             return True
@@ -150,12 +150,12 @@ class PassengerAgentIndie(ORSimAgent):
                 return False
 
     def logout(self):
-        self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
+        self.app.close(self.get_current_time_str(), current_loc=self.current_loc)
 
     def estimate_next_event_time(self):
         ''' '''
         # return self.current_time
-        next_event_time =  min(self.app.passenger.estimate_next_event_time(self.current_time),
+        next_event_time =  min(self.app.manager.estimate_next_event_time(self.current_time),
                                 self.app.trip.estimate_next_event_time(self.current_time))
 
         return next_event_time
@@ -236,7 +236,7 @@ class PassengerAgentIndie(ORSimAgent):
         '''
         Executes workflow actions in a strict sequence, allowing state changes between steps.
         '''
-        passenger = self.app.get_passenger()
+        passenger = self.app.get_manager()
         trip = self.app.get_trip()
         now_str = self.get_current_time_str()
 

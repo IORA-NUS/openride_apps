@@ -134,8 +134,8 @@ class DriverAgentIndie(ORSimAgent):
             elif self.action_when_free == 'stay':
                 self.set_route(self.current_loc, None)
 
-            self.app.login(self.get_current_time_str(), self.current_loc, self.active_route)
-            print(f"DriverAgentIndie[{self.unique_id}]: DriverApp login successful")
+            self.app.launch(self.get_current_time_str(), self.current_loc, self.active_route)
+            print(f"DriverAgentIndie[{self.unique_id}]: DriverApp launch successful")
             self.active = True
             return True
         elif self.active == True:
@@ -153,7 +153,7 @@ class DriverAgentIndie(ORSimAgent):
         failure_threshold = 3
         if self.failure_count > failure_threshold:
             print(f"DriverAgentIndie[{self.unique_id}]: Failure count {self.failure_count} exceeded threshold {failure_threshold}. Logging out.")
-            logging.warning(f'Shutting down driver {self.app.driver.get_id()} due to too many failures')
+            logging.warning(f'Shutting down driver {self.app.manager.get_id()} due to too many failures')
             logging.warning(json.dumps(self.failure_log, indent=2))
             self.shutdown()
             return True
@@ -205,11 +205,11 @@ class DriverAgentIndie(ORSimAgent):
 
 
     def logout(self):
-        self.app.logout(self.get_current_time_str(), current_loc=self.current_loc)
+        self.app.close(self.get_current_time_str(), current_loc=self.current_loc)
 
     def estimate_next_event_time(self):
         ''' '''
-        next_event_time =  min(self.app.driver.estimate_next_event_time(self.current_time),
+        next_event_time =  min(self.app.manager.estimate_next_event_time(self.current_time),
                                 self.app.trip.estimate_next_event_time(self.current_time))
 
         # logging.debug(f'{self.unique_id} estimates {next_event_time=}')
@@ -389,7 +389,7 @@ class DriverAgentIndie(ORSimAgent):
         """
         Execute workflow actions in a strict sequence using 'if' statements, not 'if-else', to allow state changes between steps.
         """
-        driver = self.app.get_driver()
+        driver = self.app.get_manager()
         trip = self.app.get_trip()
         time_since_last_event = (
             datetime.strptime(self.get_current_time_str(), "%a, %d %b %Y %H:%M:%S GMT") -
