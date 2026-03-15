@@ -21,6 +21,7 @@ class UserRegistry():
         self.role = role
 
         self.token = self.user_login(sim_clock)
+        print(f"UserRegistry.__init__: Logged in user {self.email} with role {self.role} at sim_clock {sim_clock}. Received token: {self.token}")
 
         # check if user role matches, if not update user role
         self.update_user_role()
@@ -63,7 +64,7 @@ class UserRegistry():
         }
 
         response = requests.post(login_url, headers=self.get_headers(), data=json.dumps(data))
-        # print(response.json())
+        print(f"UserRegistry.user_login: Login response for user {self.email}, {self.password} at sim_clock {sim_clock}: {response.status_code} - {response.text}")
 
         if is_success(response.status_code):
             # Login is successful
@@ -107,4 +108,5 @@ class UserRegistry():
                 if not is_success(response.status_code):
                     raise Exception(f"Unable to update User Role. Got {response.text}")
         else:
-            raise Exception(f"{response.url}, {response.text}")
+            # raise Exception(f"{response.url}, {response.text}")
+            raise Exception(f"Unable to fetch user for role update. Got {response.text = }, {response.url = }, {response.status_code = }\n{self.get_headers() = }")

@@ -115,4 +115,9 @@ class AnalyticsAgentIndie(ORSimAgent):
         self.kpi_collection['active_driver_count'] = self.app.active_driver_count()
         self.kpi_collection['active_passenger_count'] = self.app.active_passenger_count()
 
+        # check if any KPI is None and log a warning if so
+        for kpi_name, kpi_value in self.kpi_collection.items():
+            if kpi_value is None:
+                logging.warning(f"KPI {kpi_name} is None at time {self.get_current_time_str()}")
+
         self.app.save_kpi(self.get_current_time_str(), self.kpi_collection)
