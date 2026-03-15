@@ -4,52 +4,37 @@ from http import HTTPStatus
 import logging
 from apps.config import settings
 from apps.utils import id_generator, is_success
-from apps.state_machine import WorkflowStateMachine
+from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 
-class AssignmentManager():
+from apps.agent_core.base_manager import BaseManager
+from apps.common.resource_client_mixin import ResourceClientMixin
+
+class AssignmentManager(ResourceClientMixin, BaseManager):
+    def login(self, sim_clock):
+        """
+        AssignmentManager does not require login. This is a no-op for interface compatibility.
+        """
+        pass
+
+    def logout(self, sim_clock):
+        """
+        AssignmentManager does not require logout. This is a no-op for interface compatibility.
+        """
+        pass
 
     def __init__(self, run_id, sim_clock, user, solver):
         self.run_id = run_id
         self.user = user
         self.solver = solver
-
-        # try:
-        self.engine = self.init_engine(sim_clock)
-        # except Exception as e:
-        #     logging.exception(str(e))
-        #     raise e
-            # print(e)
-
-    def as_dict(self):
-        return self.engine
-
-    def get_id(self):
-        return self.engine['_id']
-
-
-    def init_engine(self, sim_clock):
-        engine_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/engine"
+        self.entity_type = 'engine'
 
         params = {
             'where': json.dumps({
                 'name': self.solver.params['planning_area']['name']
             })
         }
-        response = requests.get(engine_url, headers=self.user.get_headers(), params=params)
 
-        if len(response.json()['_items']) == 0:
-            # Need to register and actvate engine
-            response = self.create_engine(sim_clock)
-            return self.init_engine(sim_clock)
-
-        else:
-            return response.json()['_items'][0]
-
-
-    def create_engine(self, sim_clock):
-        engine_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/engine"
-        # print(f"{self.solver.__class__.__name__=}")
         data = {
             'name': self.solver.params['planning_area']['name'],
             'strategy': self.solver.__class__.__name__,
@@ -57,34 +42,25 @@ class AssignmentManager():
             'offline_params': self.solver.params['offline_params'],
             'online_params': self.solver.params['online_params'],
         }
-
-        response =  requests.post(engine_url, headers=self.user.get_headers(), data=json.dumps(data))
-        # print(response.text)
-        return response
-
-    def update_engine(self, sim_clock, online_params, performance):
-
-        engine_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/engine/{self.engine['_id']}"
-
-        data = {
-            "online_params": online_params,
-            "last_run_performance": performance,
-            "sim_clock": sim_clock,
-        }
-        response = requests.patch(engine_url, headers=self.user.get_headers(etag=self.engine['_etag']), data=json.dumps(data))
-
-        if not is_success(response.status_code):
-            logging.warning(f"Update Engine Failed, {response.text}")
-        # print(response.text)
+        self.entity = self.init_entity(sim_clock, data=data, params=params)
 
 
-    def refresh(self):
-        engine_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/engine"
-        engine_item_url = engine_url + f"/{self.engine['_id']}"
 
-        response = requests.get(engine_item_url, headers=self.user.get_headers())
+    # init_engine is now handled by BaseManager's init_entity
 
-        self.engine = response.json()
+
+    # create_engine is now handled by BaseManager's create_entity
+
+    # def update_engine(self, sim_clock, online_params, performance):
+    #     data = {
+    #         "online_params": online_params,
+    #         "last_run_performance": performance,
+    #         "sim_clock": sim_clock,
+    #     }
+    #     result = self.resource_patch(entity_id=self.entity['_id'], data=data, etag=self.entity.get('_etag'))
+    #     if not result:
+    #         logging.warning(f"Update Engine Failed")
+
 
 
 

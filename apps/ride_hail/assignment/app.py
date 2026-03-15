@@ -103,7 +103,8 @@ class AssignmentApp:
             "num_passenger_trips": len(passenger_trip_list),
             "result": result
         }
-        self.engine.update_engine(sim_clock, online_params, performance)
+        # self.engine.update_engine(sim_clock, online_params, performance)
+        self.engine.update_entity({"online_params": online_params, "last_run_performance": performance, "sim_clock": sim_clock})
 
         return assignment
 

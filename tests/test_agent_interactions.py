@@ -2,7 +2,8 @@ from types import SimpleNamespace
 
 from apps.ride_hail.driver import DriverAgentIndie
 from apps.ride_hail.passenger import PassengerAgentIndie
-from apps.state_machine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine, WorkflowStateMachine
+from apps.state_machine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+from apps.agent_core.state_machine import WorkflowStateMachine
 
 
 class _FakeTripMethods:

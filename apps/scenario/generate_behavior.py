@@ -275,9 +275,3 @@ class GenerateBehavior():
 
         return behavior
 
-    # Canonical aliases retained alongside legacy names for compatibility.
-    ride_hail_driver = ridehail_driver
-    ride_hail_passenger = ridehail_passenger
-    ride_hail_analytics = ridehail_analytics
-    ride_hail_assignment = ridehail_assignment
-

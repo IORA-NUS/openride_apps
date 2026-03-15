@@ -9,10 +9,12 @@ from pprint import pprint
 import pandas as pd
 from datetime import datetime, time
 
-# from apps.ride_hail.analytics import AnalyticsAgentIndie
-# from apps.ride_hail.assignment import AssignmentAgentIndie
-# from apps.ride_hail.driver import DriverAgentIndie
-# from apps.ride_hail.passenger import PassengerAgentIndie
+# from analytics_app.analytics_agent_indie import AnalyticsAgentIndie
+# from assignment_app.assignment_agent_indie import AssignmentAgentIndie
+# from driver_app import DriverAgentIndie
+# from passenger_app import PassengerAgentIndie
+# from assignment_app import AssignmentAgentIndie
+# from analytics_app import AnalyticsAgentIndie
 
 # from apps.utils import id_generator
 from apps.scenario.generate_behavior import GenerateBehavior
@@ -92,7 +94,7 @@ class ScenarioManager():
         self.driver_collection = {}
         for i in range(driver_settings['num_drivers']):
             agent_id = f"d_{i:06d}"
-            behavior = GenerateBehavior.ride_hail_driver(agent_id)
+            behavior = GenerateBehavior.ridehail_driver(agent_id)
             self.driver_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/driver_behavior.json", "w") as fp:
@@ -102,7 +104,7 @@ class ScenarioManager():
         self.passenger_collection = {}
         for i in range(passenger_settings['num_passengers']):
             agent_id = f"p_{i:06d}"
-            behavior = GenerateBehavior.ride_hail_passenger(agent_id)
+            behavior = GenerateBehavior.ridehail_passenger(agent_id)
             self.passenger_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/passenger_behavior.json", "w") as fp:
@@ -112,7 +114,7 @@ class ScenarioManager():
         self.assignment_collection = {}
         for coverage_area in assignment_settings['coverage_area']: # Support for multiple solvers
             agent_id = f"assignment_{coverage_area['name']}"
-            behavior = GenerateBehavior.ride_hail_assignment(agent_id, coverage_area)
+            behavior = GenerateBehavior.ridehail_assignment(agent_id, coverage_area)
             self.assignment_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/assignment_behavior.json", "w") as fp:
@@ -122,7 +124,7 @@ class ScenarioManager():
         self.analytics_collection = {}
         for i in range(1): # Only one Analytics agent for the moment.
             agent_id = f"analytics_{i:03d}"
-            behavior = GenerateBehavior.ride_hail_analytics(agent_id)
+            behavior = GenerateBehavior.ridehail_analytics(agent_id)
             self.analytics_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/analytics_behavior.json", "w") as fp:
@@ -157,7 +159,7 @@ class ScenarioManager():
                 'patience': 600,
             }
 
-            behavior = GenerateBehavior.ride_hail_driver(agent_id, record)
+            behavior = GenerateBehavior.ridehail_driver(agent_id, record)
             self.driver_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/driver_behavior.json", "w") as fp:
@@ -191,7 +193,7 @@ class ScenarioManager():
                 'patience': 300, # 600,
             }
 
-            behavior = GenerateBehavior.ride_hail_passenger(agent_id, record)
+            behavior = GenerateBehavior.ridehail_passenger(agent_id, record)
             self.passenger_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/passenger_behavior.json", "w") as fp:
@@ -202,7 +204,7 @@ class ScenarioManager():
         self.assignment_collection = {}
         for coverage_area in assignment_settings['coverage_area']: # Support for multiple solvers
             agent_id = f"assignment_{coverage_area['name']}"
-            behavior = GenerateBehavior.ride_hail_assignment(agent_id, coverage_area)
+            behavior = GenerateBehavior.ridehail_assignment(agent_id, coverage_area)
             self.assignment_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/assignment_behavior.json", "w") as fp:
@@ -212,7 +214,7 @@ class ScenarioManager():
         self.analytics_collection = {}
         for i in range(1): # Only one Analytics agent for the moment.
             agent_id = f"analytics_{i:03d}"
-            behavior = GenerateBehavior.ride_hail_analytics(agent_id)
+            behavior = GenerateBehavior.ridehail_analytics(agent_id)
             self.analytics_collection[agent_id] = behavior
 
         with open(f"{behavior_dir}/analytics_behavior.json", "w") as fp:
