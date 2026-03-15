@@ -3,7 +3,7 @@ from http import HTTPStatus
 
 from apps.config import settings
 from apps.common.utils import id_generator, is_success
-from apps.state_machine import WorkflowStateMachine
+# from apps.state_machine import WorkflowStateMachine
 
 class UserRegistry:
     token = None

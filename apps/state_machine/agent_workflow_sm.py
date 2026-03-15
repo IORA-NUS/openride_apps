@@ -13,17 +13,6 @@ class UserStateMachine(StateMachine):
     register = dormant.to(active)
     deregister = active.to(dormant)
 
-class WorkflowStateMachine(StateMachine):
-    ''' '''
-
-    dormant = State('dormant', initial=True)
-    offline = State('offline')
-    online = State('online')
-
-    register = dormant.to(offline)
-    deregister = offline.to(dormant)
-    login = offline.to(online)
-    logout = offline.from_(online)
 
 
 

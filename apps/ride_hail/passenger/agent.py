@@ -13,10 +13,13 @@ import geopandas as gp
 from random import choice
 from dateutil.relativedelta import relativedelta
 from shapely.geometry import Point, mapping
+from typing import Any, Dict
 
 from .app import PassengerApp
 from apps.utils.utils import id_generator #, cut
-from apps.state_machine import RidehailPassengerTripStateMachine, WorkflowStateMachine
+from apps.state_machine import RidehailPassengerTripStateMachine #, WorkflowStateMachine
+from apps.agent_core.state_machine import WorkflowStateMachine
+
 from apps.loc_service import OSRMClient, cut
 
 from apps.loc_service import TaxiStop, BusStop
@@ -31,10 +34,10 @@ from orsim import ORSimAgent
 from apps.utils.excepions import WriteFailedException, RefreshException
 from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
 from apps.ride_hail import RideHailActions, RideHailEvents, validate_driver_workflow_payload
-from apps.agent_core.runtime import AgentRuntimeBase
+# from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import orsim_settings, passenger_settings
 
-class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
+class PassengerAgentIndie(ORSimAgent):
 
     current_loc = None
     current_time_step = None
@@ -68,6 +71,7 @@ class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
                                     credentials=self.credentials,
                                     passenger_profile=self.behavior['profile'],
                                     messenger=self.messenger)
+            print(f"PassengerApp initialized for {self.unique_id}")
 
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
@@ -75,8 +79,39 @@ class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
             self._register_interaction_callbacks()
 
         except Exception as e:
+            print(f"Exception during PassengerAgentIndie initialization: {str(e)}")
+
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
+
+    def process_payload(self, payload: Dict[str, Any]) -> bool:
+        did_step: bool = False
+
+        if (payload.get("action") == "step") or (payload.get("action") == "init"):
+            self.add_step_log("Before entering_market")
+            print(f"Processing step for PassengerAgentIndie {self.unique_id} at time_step {payload.get('time_step')}")
+            self.entering_market(payload.get("time_step"))
+            self.add_step_log("After entering_market")
+            print(f"Finished processing step for PassengerAgentIndie {self.unique_id} at time_step {payload.get('time_step')}")
+
+            if self.is_active():
+                try:
+                    self.add_step_log("Before step")
+                    did_step = self.step(payload.get("time_step"))
+                    self.add_step_log("After step")
+                    self.failure_count = 0
+                    self.failure_log = {}
+                except Exception:
+                    self.failure_log[self.failure_count] = traceback.format_exc()
+                    self.failure_count += 1
+
+            self.add_step_log("Before exiting_market")
+            self.exiting_market()
+            self.add_step_log("After exiting_market")
+        else:
+            logging.error(f"{payload = }")
+
+        return did_step
 
     def entering_market(self, time_step):
         # if time_step == self.behavior['trip_request_time']:
@@ -84,6 +119,7 @@ class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
             # print('Enter Market')
             # print(self.behavior)
             self.app.login(self.get_current_time_str(), self.current_loc, self.pickup_loc, self.dropoff_loc, trip_price=self.behavior.get('trip_price'))
+            print(f"PassengerAgentIndie {self.unique_id} entered market at time_step {time_step}")
             self.active = True
             return True
         else:
@@ -149,7 +185,10 @@ class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
 
 
     def consume_messages(self):
-        ''' '''
+        '''
+        Consume messages. This ensures all the messages received between the two ticks are processed appropriately.
+        Workflows as a consequence of events must be handled here.
+        '''
         payload = self.app.dequeue_message()
 
         while payload is not None:
@@ -160,8 +199,12 @@ class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
                         payload = self.app.dequeue_message()
                         continue
 
-                    if RidehailPassengerTripStateMachine.is_driver_channel_open(self.app.get_trip()['state']):
-                        if self.app.get_trip()['driver'] == payload['driver_id']:
+                    trip = self.app.get_trip()
+                    channel_open = RidehailPassengerTripStateMachine.is_driver_channel_open(trip['state'])
+                    driver_id_match = trip['driver'] == payload['driver_id']
+
+                    if channel_open:
+                        if driver_id_match:
                             driver_data = payload['data']
                             handled = self._interaction_plugin.on_message(
                                 InteractionContext(
@@ -171,19 +214,16 @@ class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
                                     data=driver_data,
                                 )
                             )
-
                             if (handled == False) and (driver_data.get('location') is not None):
                                 self.current_loc = driver_data.get('location')
                                 self.app.ping(self.get_current_time_str(), current_loc=self.current_loc)
-
                         else:
-                            logging.warning(f"WARNING: Mismatch {self.app.get_trip()['driver']=} and {payload['driver_id']=}")
+                            logging.warning(f"WARNING: Mismatch {trip['driver']=} and {payload['driver_id']=}")
                     else:
-                        logging.warning(f"WARNING: Passenger will not listen to Driver workflow events when {self.app.get_trip()['state']=}")
+                        logging.warning(f"WARNING: Passenger will not listen to Driver workflow events when {trip['state']=}")
 
                 payload = self.app.dequeue_message()
             except WriteFailedException as e:
-                # push message back into fornt of queue for processing in next step
                 self.app.enfront_message(payload)
                 raise e # Important do not allow the while loop to continue
             except RefreshException as e:
@@ -191,35 +231,50 @@ class PassengerAgentIndie(AgentRuntimeBase, ORSimAgent):
             except Exception as e:
                 raise e # Important do not allow the while loop to continue
 
+
     def perform_workflow_actions(self):
-        ''' '''
+        '''
+        Executes workflow actions in a strict sequence, allowing state changes between steps.
+        '''
         passenger = self.app.get_passenger()
-        #### NOTE THIS is a mistake. Should use the last transition time instead of the last waypoint (_updated) time
-        try:
-            time_since_last_event = (datetime.strptime(self.get_current_time_str(), "%a, %d %b %Y %H:%M:%S GMT") - \
-                                datetime.strptime(self.app.get_trip()['_updated'], "%a, %d %b %Y %H:%M:%S GMT")
-                                ).total_seconds()
-        except Exception as e:
-            # logging.warning(self.behavior)
-            # logging.exception(str(e))
-            raise e
+        trip = self.app.get_trip()
+        now_str = self.get_current_time_str()
 
+        # 1. Check passenger online state
         if passenger['state'] != WorkflowStateMachine.online.name:
-            # try:
             raise Exception(f"{passenger['state'] = } is not valid")
-            # except Exception as e:
-            #     # logging.exception(str(e))
-            #     raise e
 
-        elif (self.app.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name) and \
-                (self.behavior['trip_request_time'] + (self.behavior['profile']['patience']/self.step_size) < self.current_time_step):
-            logging.info(f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps")
-            self.app.trip.cancel(self.get_current_time_str(), current_loc=self.current_loc,)
-
-        else:
-            self._interaction_plugin.on_state(
-                InteractionContext(state=self.app.get_trip()['state'])
+        # 2. Check patience timeout and cancel trip if needed
+        if (
+            trip['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name
+            and (self.behavior['trip_request_time'] + (self.behavior['profile']['patience'] / self.step_size) < self.current_time_step)
+        ):
+            logging.info(
+                f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps"
             )
+            self.app.trip.cancel(now_str, current_loc=self.current_loc)
+
+        # 3. Explicitly process trip state actions in strict sequence
+        # Each 'if' allows state to change between steps
+        if trip['state'] == RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name:
+            self._interaction_plugin.on_state(
+                InteractionContext(state=trip['state'])
+            )
+
+        if trip['state'] == RidehailPassengerTripStateMachine.passenger_accepted_trip.name:
+            self._interaction_plugin.on_state(
+                InteractionContext(state=trip['state'])
+            )
+
+        if trip['state'] == RidehailPassengerTripStateMachine.passenger_droppedoff.name:
+            self._interaction_plugin.on_state(
+                InteractionContext(state=trip['state'])
+            )
+
+        # Always process the current state (for plugin extensibility)
+        self._interaction_plugin.on_state(
+            InteractionContext(state=trip['state'])
+        )
 
 
     def _register_interaction_callbacks(self):

@@ -28,7 +28,7 @@ The `agent_core` module provides a set of generic, composable building blocks fo
 - **Runtime:** `DriverAgentIndie` (extends `AgentRuntimeBase`)
 - **App:** `DriverApp` (extends `RoleAppBase`)
 - **Manager:** `DriverManager` (extends `LifecycleManagerBase`)
-- **Trip Manager:** `DriverTripManager` (extends `RoleTripManagerBase` from `apps.common`, injected via `extra_components`)
+- **Trip Manager:** `DriverTripManager` (extends `TripManagerBase` from `apps.common`, injected via `extra_components`)
 - **Resource Client:** `ResourceTransitionClient` is now located in `apps.common.resource_client` and used by trip managers for HTTP resource transitions.
 - **Plugin:** `CallbackRouterInteractionPlugin` (implements `InteractionPlugin`)
 
@@ -165,7 +165,7 @@ plugin = CallbackRouterInteractionPlugin(handler_obj=handlers)
 - Update your imports accordingly:
 
   ```python
-  from apps.common.trip_manager_base import RoleTripManagerBase
+  from apps.common.trip_manager_base import TripManagerBase
   from apps.common.user_registry import UserRegistry
   from apps.common.resource_client import ResourceTransitionClient
   ```

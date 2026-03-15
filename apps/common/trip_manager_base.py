@@ -3,20 +3,22 @@ from apps.config import settings
 from .resource_transition_client import ResourceTransitionClient
 
 
-class RoleTripManagerBase:
+class TripManagerBase:
     """Shared base utilities for ride-hail trip manager implementations."""
 
-    trip = None
+    # trip = None
 
-    def __init__(self, run_id, user, messenger, role):
+    def __init__(self, run_id, user, messenger, entity_type):
         self.run_id = run_id
         self.user = user
         self.messenger = messenger
-        self._role = role
+        self._entity_type = entity_type
         self._resource_client = ResourceTransitionClient()
 
+        self.trip = None
+
     def _trip_collection_url(self):
-        return f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/{self._role}/ride_hail/trip"
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/{self._entity_type}/ride_hail/trip"
 
     def _trip_item_url(self, suffix=None):
         if self.trip is None:

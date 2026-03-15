@@ -35,8 +35,11 @@ class DriverApp(RoleAppBase):
         self.topic_params = {
             f"{self.run_id}/{self.driver.get_id()}": self.message_handler
         }
+        # print(f"DriverApp initialized with driver ID: {self.driver.get_id()}")
 
         self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
+
+        # print(f"DriverApp initialized with trip ID: {self.trip.trip['_id'] if self.trip.trip else 'None'}")
 
     def get_driver(self):
         return self.driver.as_dict()
@@ -46,10 +49,16 @@ class DriverApp(RoleAppBase):
 
     def login(self, sim_clock, current_loc, route):
         self.driver.login(sim_clock)
+        print(f"DriverApp.login: Driver {self.driver.get_id()} logged in at sim_clock {sim_clock} with location {current_loc}")
         self.create_new_unoccupied_trip(sim_clock, current_loc, route)
+        print(f"DriverApp.login: Created new unoccupied trip for driver {self.driver.get_id()} at sim_clock {sim_clock} with location {current_loc} and route {route}")
 
     def create_new_unoccupied_trip(self, sim_clock, current_loc, route):
-        self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle, route)
+        try:
+            self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle.as_dict(), route)
+        except Exception as e:
+            print(f"Exception in create_new_unoccupied_trip for driver {self.driver.get_id()}: {str(e)}")
+            traceback.print_exc()
 
     def logout(self, sim_clock, current_loc):
         logging.debug(f'logging out Driver {self.driver.get_id()}')
@@ -91,7 +100,7 @@ class DriverApp(RoleAppBase):
         if self.trip.as_dict()['is_occupied'] == False:
             self.trip.end_trip(sim_clock, current_loc)
 
-            self.trip.create_new_occupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle, requested_trip)
+            self.trip.create_new_occupied_trip(sim_clock, current_loc, self.driver.as_dict(), self.driver.vehicle.as_dict(), requested_trip)
         else:
             logging.warning(f'Ignoring Assignment request: Driver {self.driver.get_id()} is already engaged in an Occupied trip')
 
