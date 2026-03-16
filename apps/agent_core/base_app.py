@@ -64,15 +64,6 @@ class BaseApp:
     def enfront_message(self, payload):
         self.message_queue.insert(0, payload)
 
-    # def get_entity(self):
-    #     """
-    #     Returns the main entity for this app, following domain app conventions.
-    #     By default, returns manager.as_dict() if manager exists, else None.
-    #     Subclasses may override for custom entity logic.
-    #     """
-    #     if hasattr(self, 'manager') and self.manager:
-    #         return self.manager.as_dict()
-    #     return None
 
     def get_manager(self):
         return self.manager.as_dict() if self.manager else None

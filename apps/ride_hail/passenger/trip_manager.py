@@ -17,7 +17,7 @@ class PassengerTripManager(TripManagerBase):
     trip = None
 
     def __init__(self, run_id, sim_clock, user, messenger):
-        super().__init__(run_id, user, messenger, entity_type='passenger')
+        super().__init__(run_id, user, messenger, resource_type='passenger')
 
         self.time_requested = None
         self.time_assigned = None

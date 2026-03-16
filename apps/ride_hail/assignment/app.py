@@ -104,7 +104,7 @@ class AssignmentApp:
             "result": result
         }
         # self.manager.update_engine(sim_clock, online_params, performance)
-        self.manager.update_entity({"online_params": online_params, "last_run_performance": performance, "sim_clock": sim_clock})
+        self.manager.update_resource({"online_params": online_params, "last_run_performance": performance, "sim_clock": sim_clock})
 
         return assignment
 

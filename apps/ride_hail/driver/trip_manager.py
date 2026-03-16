@@ -17,7 +17,7 @@ class DriverTripManager(TripManagerBase):
     # trip = None
 
     def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False):
-        super().__init__(run_id, user, messenger, entity_type='driver')
+        super().__init__(run_id, user, messenger, resource_type='driver')
         self.update_passenger_loc = update_passenger_loc
 
     def as_dict(self):

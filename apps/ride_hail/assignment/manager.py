@@ -17,7 +17,7 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
         self.run_id = run_id
         self.user = user
         self.solver = solver
-        self.entity_type = 'engine'
+        self.resource_type = 'engine'
 
         params = {
             'where': json.dumps({
@@ -32,7 +32,7 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
             'offline_params': self.solver.params['offline_params'],
             'online_params': self.solver.params['online_params'],
         }
-        self.entity = self.init_entity(sim_clock, data=data, params=params)
+        self.resource = self.init_resource(sim_clock, data=data, params=params)
 
 
     def login(self, sim_clock):
@@ -46,10 +46,10 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
         AssignmentManager does not require logout. This is a no-op for interface compatibility.
         """
         pass
-    # init_engine is now handled by BaseManager's init_entity
+    # init_engine is now handled by BaseManager's init_resource
 
 
-    # create_engine is now handled by BaseManager's create_entity
+    # create_engine is now handled by BaseManager's create_resource
 
     # def update_engine(self, sim_clock, online_params, performance):
     #     data = {
@@ -57,12 +57,12 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
     #         "last_run_performance": performance,
     #         "sim_clock": sim_clock,
     #     }
-    #     result = self.resource_patch(entity_id=self.entity['_id'], data=data, etag=self.entity.get('_etag'))
+    #     result = self.resource_patch(resource_id=self.resource['_id'], data=data, etag=self.resource.get('_etag'))
     #     if not result:
     #         logging.warning(f"Update Engine Failed")
 
 
 
 
-# Backward compatibility for any code importing the old class name.
-EngineManager = AssignmentManager
+# # Backward compatibility for any code importing the old class name.
+# EngineManager = AssignmentManager

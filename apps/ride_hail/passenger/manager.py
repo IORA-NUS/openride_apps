@@ -13,7 +13,7 @@ from apps.common.resource_client_mixin import ResourceClientMixin
 class PassengerManager(ResourceClientMixin, BaseManager):
 
     def __init__(self, run_id, sim_clock, user, passenger_profile):
-        self.entity_type = 'passenger'
+        self.resource_type = 'passenger'
         self.run_id = run_id
         self.user = user
         self.passenger_profile = passenger_profile
@@ -22,11 +22,11 @@ class PassengerManager(ResourceClientMixin, BaseManager):
             "profile": self.passenger_profile,
             "sim_clock": sim_clock
         }
-        self.entity = self.init_entity(sim_clock, data=data)
+        self.resource = self.init_resource(sim_clock, data=data)
 
 
 
-    # init_passenger is now handled by BaseManager's init_entity
+    # init_passenger is now handled by BaseManager's init_resource
 
-    # create_passenger is now handled by BaseManager's create_entity
+    # create_passenger is now handled by BaseManager's create_resource
 

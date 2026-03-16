@@ -8,17 +8,17 @@ class TripManagerBase:
 
     # trip = None
 
-    def __init__(self, run_id, user, messenger, entity_type):
+    def __init__(self, run_id, user, messenger, resource_type):
         self.run_id = run_id
         self.user = user
         self.messenger = messenger
-        self._entity_type = entity_type
+        self._resource_type = resource_type
         self._resource_client = ResourceTransitionClient()
 
         self.trip = None
 
     def _trip_collection_url(self):
-        return f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/{self._entity_type}/ride_hail/trip"
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/{self._resource_type}/ride_hail/trip"
 
     def _trip_item_url(self, suffix=None):
         if self.trip is None:

@@ -10,17 +10,17 @@ class ResourceClientMixin:
     """
 
 
-    def _resource_url(self, entity_id=None):
+    def _resource_url(self, resource_id=None):
         base = settings['OPENRIDE_SERVER_URL']
-        url = f"{base}/{self.run_id}/{self.entity_type}"
-        if entity_id is not None:
-            url = f"{url}/{entity_id}"
+        url = f"{base}/{self.run_id}/{self.resource_type}"
+        if resource_id is not None:
+            url = f"{url}/{resource_id}"
         return url
 
 
 
-    def resource_get(self, entity_id=None, params={}, timeout=None):
-        url = self._resource_url(entity_id)
+    def resource_get(self, resource_id=None, params={}, timeout=None):
+        url = self._resource_url(resource_id)
         response = requests.get(
             url,
             headers=self.user.get_headers(),
@@ -30,8 +30,8 @@ class ResourceClientMixin:
         self._check_response(response)
         return response.json()
 
-    # def resource_find(self, entity_id=None, timeout=None, params={}):
-    #     url = self._resource_url(entity_id)
+    # def resource_find(self, resource_id=None, timeout=None, params={}):
+    #     url = self._resource_url(resource_id)
     #     response = requests.get(
     #         url,
     #         headers=self.user.get_headers(),
@@ -56,8 +56,8 @@ class ResourceClientMixin:
 
 
 
-    def resource_patch(self, entity_id, data, etag=None, timeout=None):
-        url = self._resource_url(entity_id)
+    def resource_patch(self, resource_id, data, etag=None, timeout=None):
+        url = self._resource_url(resource_id)
         headers = self.user.get_headers(etag=etag)
         response = requests.patch(
             url,
@@ -66,7 +66,7 @@ class ResourceClientMixin:
             timeout=timeout or settings.get('NETWORK_REQUEST_TIMEOUT', 10)
         )
         self._check_response(response)
-        self.resource_get(entity_id=entity_id)  # Refresh entity after patch
+        self.resource_get(resource_id=resource_id)  # Refresh resource after patch
         return response.json()
 
     def _check_response(self, response):

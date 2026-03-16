@@ -17,7 +17,7 @@ class DriverManager(ResourceClientMixin, BaseManager):
         self.run_id = run_id
         self.user = user
         self.profile = profile
-        self.entity_type = 'driver'
+        self.resource_type = 'driver'
 
         data = {
             "license": {
@@ -28,16 +28,16 @@ class DriverManager(ResourceClientMixin, BaseManager):
             "profile": self.profile,
             "sim_clock": sim_clock,
         }
-        self.entity = self.init_entity(sim_clock, data=data)
+        self.resource = self.init_resource(sim_clock, data=data)
 
         self.vehicle = VehicleManager(run_id, sim_clock, user, profile={})
 
 
 
-    # init_driver is now handled by BaseManager's init_entity
+    # init_driver is now handled by BaseManager's init_resource
 
 
-    # create_driver is now handled by BaseManager's create_entity
+    # create_driver is now handled by BaseManager's create_resource
 
 
 

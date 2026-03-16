@@ -47,7 +47,7 @@ class DriverApp:
         self.latest_loc = current_loc
 
     def get_manager(self):
-        # return self.manager.entity.as_dict()
+        # return self.manager.resource.as_dict()
         return self.manager.as_dict()
 
     def get_trip(self):

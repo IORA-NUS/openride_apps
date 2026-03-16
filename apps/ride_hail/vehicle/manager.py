@@ -10,7 +10,7 @@ class VehicleManager(ResourceClientMixin, BaseManager):
         self.run_id = run_id
         self.user = user
         self.profile = profile
-        self.entity_type = 'vehicle'
+        self.resource_type = 'vehicle'
         data = {
             "registration": {
                 "num": id_generator(6),
@@ -22,7 +22,7 @@ class VehicleManager(ResourceClientMixin, BaseManager):
         }
         if self.profile:
             data["profile"] = self.profile
-        self.entity = self.init_entity(sim_clock, data=data)
+        self.resource = self.init_resource(sim_clock, data=data)
 
 
-    # init_vehicle and create_vehicle are now handled by BaseManager's init_entity and create_entity
+    # init_vehicle and create_vehicle are now handled by BaseManager's init_resource and create_resource
