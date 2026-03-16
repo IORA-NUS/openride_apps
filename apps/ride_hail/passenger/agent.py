@@ -1,3 +1,4 @@
+from apps.agent_core.interaction.decorators import message_handler, state_handler
 import os, sys
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
@@ -76,7 +77,7 @@ class PassengerAgentIndie(ORSimAgent):
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
 
-            self._register_interaction_callbacks()
+            self._interaction_plugin = CallbackRouterInteractionPlugin(handler_obj=self)
 
         except Exception as e:
             print(f"Exception during PassengerAgentIndie initialization: {str(e)}")
@@ -234,7 +235,7 @@ class PassengerAgentIndie(ORSimAgent):
 
     def perform_workflow_actions(self):
         '''
-        Executes workflow actions in a strict sequence, allowing state changes between steps.
+        Executes workflow actions in a strict sequence using a for loop, allowing state changes between steps.
         '''
         passenger = self.app.get_manager()
         trip = self.app.get_trip()
@@ -254,45 +255,35 @@ class PassengerAgentIndie(ORSimAgent):
             )
             self.app.trip.cancel(now_str, current_loc=self.current_loc)
 
-        # 3. Explicitly process trip state actions in strict sequence
-        # Each 'if' allows state to change between steps
-        if trip['state'] == RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name:
-            self._interaction_plugin.on_state(
-                InteractionContext(state=trip['state'])
-            )
-
-        if trip['state'] == RidehailPassengerTripStateMachine.passenger_accepted_trip.name:
-            self._interaction_plugin.on_state(
-                InteractionContext(state=trip['state'])
-            )
-
-        if trip['state'] == RidehailPassengerTripStateMachine.passenger_droppedoff.name:
-            self._interaction_plugin.on_state(
-                InteractionContext(state=trip['state'])
-            )
+        # 3. Process trip state actions in strict sequence using a for loop
+        state_sequence = [
+            RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name,
+            RidehailPassengerTripStateMachine.passenger_accepted_trip.name,
+            RidehailPassengerTripStateMachine.passenger_droppedoff.name,
+        ]
+        prev_state = trip['state']
+        for state_name in state_sequence:
+            state = self.app.get_trip()['state']
+            if state == state_name:
+                self._interaction_plugin.on_state(
+                    InteractionContext(state=state)
+                )
+                new_state = self.app.get_trip()['state']
+                if new_state != prev_state:
+                    logging.info(f"PassengerAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
+                prev_state = new_state
 
         # Always process the current state (for plugin extensibility)
-        self._interaction_plugin.on_state(
-            InteractionContext(state=trip['state'])
-        )
+        state = self.app.get_trip()['state']
+        if state not in state_sequence:
+            self._interaction_plugin.on_state(
+                InteractionContext(state=state)
+            )
 
 
-    def _register_interaction_callbacks(self):
-        self._interaction_plugin = CallbackRouterInteractionPlugin()
-        # Backward compatibility for tests and any code still reading this attribute.
-        self._interaction_callbacks = self._interaction_plugin.router
+    # ...existing code...
 
-        self._interaction_plugin.register_message(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CONFIRMED_TRIP, self._on_driver_confirmed_trip)
-        self._interaction_plugin.register_message(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_PICKUP, self._on_driver_arrived_for_pickup)
-        self._interaction_plugin.register_message(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_MOVE_FOR_DROPOFF, self._on_driver_move_for_dropoff)
-        self._interaction_plugin.register_message(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_DROPOFF, self._on_driver_arrived_for_dropoff)
-        self._interaction_plugin.register_message(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_WAITING_FOR_DROPOFF, self._on_driver_waiting_for_dropoff)
-        self._interaction_plugin.register_message(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CANCELLED_TRIP, self._on_driver_cancelled_trip)
-
-        self._interaction_plugin.register_state(RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name, self._on_state_received_trip_confirmation)
-        self._interaction_plugin.register_state(RidehailPassengerTripStateMachine.passenger_accepted_trip.name, self._on_state_accepted_trip)
-        self._interaction_plugin.register_state(RidehailPassengerTripStateMachine.passenger_droppedoff.name, self._on_state_droppedoff)
-
+    @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CONFIRMED_TRIP)
     def _on_driver_confirmed_trip(self, payload, data):
         self.app.trip.driver_confirmed_trip(
             self.get_current_time_str(),
@@ -300,45 +291,53 @@ class PassengerAgentIndie(ORSimAgent):
             data.get('estimated_time_to_arrive', 0),
         )
 
+    @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_PICKUP)
     def _on_driver_arrived_for_pickup(self, payload, data):
         if data.get('location') is None:
             return
         self.current_loc = data.get('location')
         self.app.trip.driver_arrived_for_pickup(self.get_current_time_str(), self.current_loc, data.get('driver_trip_id'))
 
+    @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_MOVE_FOR_DROPOFF)
     def _on_driver_move_for_dropoff(self, payload, data):
         if data.get('location') is None:
             return
         self.current_loc = data.get('location')
         self.app.trip.driver_move_for_dropoff(self.get_current_time_str(), self.current_loc, route=data['planned_route'])
 
+    @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_DROPOFF)
     def _on_driver_arrived_for_dropoff(self, payload, data):
         if data.get('location') is None:
             return
         self.current_loc = data.get('location')
         self.app.trip.driver_arrived_for_dropoff(self.get_current_time_str(), self.current_loc)
 
+    @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_WAITING_FOR_DROPOFF)
     def _on_driver_waiting_for_dropoff(self, payload, data):
         if data.get('location') is None:
             return
         self.current_loc = data.get('location')
         self.app.trip.driver_waiting_for_dropoff(self.get_current_time_str(), self.current_loc)
 
+    @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CANCELLED_TRIP)
     def _on_driver_cancelled_trip(self, payload, data):
         if data.get('location') is None:
             return
         self.current_loc = data.get('location', self.current_loc)
         self.app.trip.driver_cancelled_trip(self.get_current_time_str(), self.current_loc)
 
+    @state_handler(RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name)
     def _on_state_received_trip_confirmation(self):
         if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
             self.app.trip.accept(self.get_current_time_str(), current_loc=self.current_loc)
         else:
             self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
 
+    @state_handler(RidehailPassengerTripStateMachine.passenger_accepted_trip.name)
     def _on_state_accepted_trip(self):
         self.app.trip.wait_for_pickup(self.get_current_time_str(), current_loc=self.current_loc)
 
+    @state_handler(RidehailPassengerTripStateMachine.passenger_droppedoff.name)
     def _on_state_droppedoff(self):
         self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
 
