@@ -15,55 +15,70 @@ from .manager import DriverManager
 from .trip_manager import DriverTripManager
 from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
+from apps.agent_core.base_app import BaseApp
 
 from apps.state_machine import RidehailDriverTripStateMachine
 
 # from apps.messenger_service import Messenger
 
-class DriverApp:
+class DriverApp(BaseApp):
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, current_loc, credentials, profile, messenger):
-        self.run_id = run_id
-        self.credentials = credentials
-        self.profile = profile
-        self.messenger = messenger
+    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile):
 
-        self.user = UserRegistry(sim_clock, credentials)
+        super().__init__(run_id=run_id,
+                         sim_clock=sim_clock,
+                         credentials=credentials,
+                         messenger=messenger,
+                         current_loc=current_loc,
+                         profile=profile)  # Initialize BaseApp attributes
+        # self.run_id = run_id
+        # self.sim_clock = sim_clock
+        # self.credentials = credentials
+        # self.profile = profile
+        # self.messenger = messenger
 
-        self.manager = DriverManager(run_id, sim_clock, self.user, profile)
+        # self.user = UserRegistry(sim_clock, credentials)
+        # self.manager = DriverManager(run_id, sim_clock, self.user, profile)
+        # self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
+        self.trip = self.create_trip_manager()
 
-        # self.messenger = Messenger(credentials, f"{self.run_id}/{self.manager.get_id()}", self.on_receive_message)
-        self.topic_params = {
-            f"{self.run_id}/{self.manager.get_id()}": self.message_handler
-        }
+        # self.user = self.create_user()
+        # self.manager = self.create_manager()
+        # self.trip = self.create_trip_manager()
 
-        self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
+        # # self.messenger = Messenger(credentials, f"{self.run_id}/{self.manager.get_id()}", self.on_receive_message)
+        # self.topic_params = {
+        #     f"{self.run_id}/{self.manager.get_id()}": self.message_handler
+        # }
 
-        self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual driver behavior
+        # self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual driver behavior
 
         self.latest_sim_clock = sim_clock
         self.latest_loc = current_loc
 
-    def get_manager(self):
-        # return self.manager.resource.as_dict()
-        return self.manager.as_dict()
+    def create_user(self):
+        return UserRegistry(self.sim_clock, self.credentials)
 
-    def get_trip(self):
-        return self.trip.as_dict()
+    def create_manager(self):
+        return DriverManager(self.run_id, self.sim_clock, self.user, self.profile)
+
+    def create_trip_manager(self):
+        return DriverTripManager(self.run_id, self.sim_clock, self.user, self.messenger)
+
+    # def get_manager(self):
+    #     # return self.manager.resource.as_dict()
+        # return self.manager.as_dict()
 
     def launch(self, sim_clock, current_loc, route):
         ''' '''
-        self.manager.login(sim_clock)
+        # self.manager.login(sim_clock)
+        super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
         # self.create_new_unoccupied_trip(sim_clock, current_loc)
         # self.trip.look_for_job(sim_clock, current_loc, route)
         self.create_new_unoccupied_trip(sim_clock, current_loc, route)
 
-    # def create_new_unoccupied_trip(self, sim_clock, current_loc):
-    #     self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle)
-    def create_new_unoccupied_trip(self, sim_clock, current_loc, route):
-        self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle.as_dict(), route)
 
     def close(self, sim_clock, current_loc):
         ''' '''
@@ -74,14 +89,15 @@ class DriverApp:
         except Exception as e:
             logging.exception(str(e))
 
-        try:
-            self.manager.logout(sim_clock)
-        except Exception as e:
-            logging.warning(str(e))
+        super().close(sim_clock)  # Call BaseApp's close method to set exited_market = True
+        # try:
+        #     self.manager.logout(sim_clock)
+        # except Exception as e:
+        #     logging.warning(str(e))
 
-        # self.messenger.disconnect()
+        # # self.messenger.disconnect()
 
-        self.exited_market = True
+        # self.exited_market = True
 
     def refresh(self):
         ''' Sync ALL inMemory State with the db State'''
@@ -112,6 +128,14 @@ class DriverApp:
                                     })
                                 )
 
+    def get_trip(self):
+        return self.trip.as_dict()
+
+    # def create_new_unoccupied_trip(self, sim_clock, current_loc):
+    #     self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle)
+    def create_new_unoccupied_trip(self, sim_clock, current_loc, route):
+        self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle.as_dict(), route)
+
     def handle_requested_trip(self, sim_clock, current_loc, requested_trip):
         '''
         Check for any existing trip
@@ -131,31 +155,10 @@ class DriverApp:
 
 
     ################
-    # Message Callbacks and other methods
-    def update_current(self, sim_clock, current_loc):
-        self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
-
-    # def on_receive_message(self, client, userdata, message):
-    #     ''' Push message to a personal RabbitMQ Queue
-    #     - At every step (simulation), The agent will pull items from queue and process them in sequence until Queue is empty
-    #     '''
-    #     payload = json.loads(message.payload.decode('utf-8'))
-
-    #     if payload['action'] == 'requested_trip':
-    #         passenger_id = payload['passenger_id']
-    #         requested_trip = payload['requested_trip']
-
-    #         try:
-    #             self.handle_requested_trip(self.latest_sim_clock,
-    #                                         current_loc=self.latest_loc,
-    #                                         requested_trip=requested_trip)
-    #         except Exception as e:
-    #             logging.exception(str(e))
-    #             # raise e
-
-    #     else:
-    #         self.enqueue_message(payload)
+    # # Message Callbacks and other methods
+    # def update_current(self, sim_clock, current_loc):
+    #     self.latest_sim_clock = sim_clock
+    #     self.latest_loc = current_loc
 
 
     def message_handler(self, payload):
@@ -182,18 +185,18 @@ class DriverApp:
             self.enqueue_message(payload)
 
 
-    def enqueue_message(self, payload):
-        ''' '''
-        self.message_queue.append(payload)
+    # def enqueue_message(self, payload):
+    #     ''' '''
+    #     self.message_queue.append(payload)
 
-    def dequeue_message(self):
-        ''' '''
-        try:
-            return self.message_queue.pop(0)
-        except: return None
+    # def dequeue_message(self):
+    #     ''' '''
+    #     try:
+    #         return self.message_queue.pop(0)
+    #     except: return None
 
-    def enfront_message(self, payload):
-        self.message_queue.insert(0, payload)
+    # def enfront_message(self, payload):
+    #     self.message_queue.insert(0, payload)
 
 
 if __name__ == '__main__':

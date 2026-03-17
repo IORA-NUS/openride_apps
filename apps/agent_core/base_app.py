@@ -1,30 +1,42 @@
 from typing import Any, Dict
+from orsim.messenger import Messenger
+import logging
+
 
 class BaseApp:
-    def __init__(self, run_id: str, start_time: str, credentials: Dict[str, Any], messenger=None, **kwargs):
+    def __init__(self, run_id: str, sim_clock: str, credentials: Dict[str, Any], messenger=None, **kwargs):
         """
         Base class for all app modules.
         Args:
             run_id: Unique run identifier
-            start_time: Simulation start time
+            sim_clock: Simulation clock time
             credentials: Auth credentials dict
             messenger: Messaging interface (optional)
             kwargs: Additional fields for subclass customization
         """
         self.run_id = run_id
-        self.start_time = start_time
+        self.sim_clock = sim_clock
         self.credentials = credentials
+        if messenger is not None:
+            if Messenger is None or not isinstance(messenger, Messenger):
+                raise TypeError("messenger must be an instance of orsim.messenger.Messenger")
         self.messenger = messenger
 
-        self.topic_params = {}
-        self._message_queue = []
-        self.exited_market = False
         for k, v in kwargs.items():
             setattr(self, k, v)
 
         self.user = self.create_user()
         self.manager = self.create_manager()
         # self.register_topic_handlers()
+
+        if self.manager:
+            self.topic_params = {
+                f"{self.run_id}/{self.manager.get_id()}": self.message_handler
+            }
+        else:
+            self.topic_params = {}
+        self.message_queue = []
+        self.exited_market = False
 
     # logger and manager/user_registry are implementation-specific and should be set in subclasses
 
@@ -36,20 +48,34 @@ class BaseApp:
         ''' '''
         raise NotImplementedError
 
-    def launch(self, *args, **kwargs):
-        raise NotImplementedError
+    def launch(self, sim_clock, **kwargs):
+        if self.manager:
+            try:
+                self.manager.login(sim_clock)
+            except Exception as e:
+                logging.warning(str(e))
 
-    def close(self, *args, **kwargs):
+    def close(self, sim_clock):
         self.exited_market = True
+        if self.manager:
+            try:
+                self.manager.logout(sim_clock)
+            except Exception as e:
+                logging.warning(str(e))
 
-    def refresh(self, *args, **kwargs):
-        raise NotImplementedError
+    # def refresh(self, *args, **kwargs):
+    #     raise NotImplementedError
+
+    def update_current(self, sim_clock, current_loc):
+        self.latest_sim_clock = sim_clock
+        self.latest_loc = current_loc
 
     # def register_topic_handlers(self):
     #     raise NotImplementedError
 
     def message_handler(self, *args, **kwargs):
         raise NotImplementedError
+
 
     def enqueue_message(self, payload):
         ''' '''

@@ -35,7 +35,10 @@ class AnalyticsAgentIndie(ORSimAgent):
         }
 
         try:
-            self.app = AnalyticsApp(self.run_id, self.get_current_time_str(), self.credentials, messenger=self.messenger)
+            self.app = AnalyticsApp(run_id=self.run_id,
+                                    sim_clock=self.get_current_time_str(),
+                                    credentials=self.credentials,
+                                    messenger=self.messenger)
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
@@ -49,7 +52,7 @@ class AnalyticsAgentIndie(ORSimAgent):
 
     def logout(self):
         self.step(self.current_time_step)
-        self.app.close()
+        self.app.close(self.get_current_time_str())
 
     def estimate_next_event_time(self):
         return self.current_time

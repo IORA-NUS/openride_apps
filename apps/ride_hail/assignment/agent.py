@@ -27,12 +27,12 @@ class AssignmentAgentIndie(ORSimAgent):
 
         try:
             self.app = AssignmentApp(
-                self.run_id,
-                self.get_current_time_str(),
-                self.credentials,
-                self.behavior['solver'],
-                self.behavior['solver_params'],
-                self.behavior['steps_per_action'],
+                run_id=self.run_id,
+                sim_clock=self.get_current_time_str(),
+                credentials=self.credentials,
+                solver_name=self.behavior['solver'],
+                solver_params=self.behavior['solver_params'],
+                steps_per_action=self.behavior['steps_per_action'],
                 messenger=self.messenger,
             )
         except Exception as e:
@@ -47,7 +47,7 @@ class AssignmentAgentIndie(ORSimAgent):
         return did_step
 
     def logout(self):
-        self.app.close()
+        self.app.close(self.get_current_time_str())
 
     def estimate_next_event_time(self):
         return self.current_time

@@ -21,34 +21,49 @@ from apps.utils.user_registry import UserRegistry
 from apps.config import settings
 
 from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
+from apps.agent_core.base_app import BaseApp
 
 import websockets, asyncio
 
 
-class AnalyticsApp:
+class AnalyticsApp(BaseApp):
     ''' '''
 
     def __init__(self, run_id, sim_clock, credentials, messenger):
         ''' '''
-        self.run_id = run_id
-        self.credentials = credentials
+        super().__init__(run_id=run_id,
+                         sim_clock=sim_clock,
+                         credentials=credentials,
+                         messenger=messenger)  # Initialize BaseApp attributes
+        # self.sim_clock = sim_clock
+        # self.run_id = run_id
+        # self.credentials = credentials
 
-        self.user = UserRegistry(sim_clock, credentials, role='admin')
+        # self.user = self.create_user()
 
-        # self.messenger = Messenger(credentials)
-        self.messenger = messenger
+        # # self.messenger = Messenger(credentials)
+        # self.messenger = messenger
         self.server_max_results = 50  # make sure this is in sync with server
 
         self.passenger_trips_for_metric = None
         self.driver_trips_for_metric = None
 
-    def close(self):  # , sim_clock, current_loc):
-        ''' '''
-        logging.debug(f'logging out Analytics Service ')
+    def create_user(self):
+        return UserRegistry(self.sim_clock, self.credentials, role='admin')
 
-        # self.messenger.disconnect()
+    def create_manager(self):
+        pass
 
-        self.exited_market = True
+    def launch(self):
+        pass
+
+    # def close(self):  # , sim_clock, current_loc):
+    #     ''' '''
+    #     logging.debug(f'logging out Analytics Service ')
+
+    #     # self.messenger.disconnect()
+
+    #     self.exited_market = True
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''

@@ -66,9 +66,9 @@ class PassengerAgentIndie(ORSimAgent):
         self.failure_log = {}
 
         try:
-            self.app = PassengerApp(self.run_id,
-                                    self.get_current_time_str(),
-                                    self.current_loc,
+            self.app = PassengerApp(run_id=self.run_id,
+                                    sim_clock=self.get_current_time_str(),
+                                    current_loc=self.current_loc,
                                     credentials=self.credentials,
                                     profile=self.behavior['profile'],
                                     messenger=self.messenger)
@@ -119,7 +119,12 @@ class PassengerAgentIndie(ORSimAgent):
         if (self.active == False) and (time_step == self.behavior['trip_request_time']):
             # print('Enter Market')
             # print(self.behavior)
-            self.app.launch(self.get_current_time_str(), self.current_loc, self.pickup_loc, self.dropoff_loc, trip_price=self.behavior.get('trip_price'))
+            self.app.launch(sim_clock=self.get_current_time_str(),
+                            current_loc=self.current_loc,
+                            pickup_loc=self.pickup_loc,
+                            dropoff_loc=self.dropoff_loc,
+                            trip_price=self.behavior.get('trip_price'))
+
             print(f"PassengerAgentIndie {self.unique_id} entered market at time_step {time_step}")
             self.active = True
             return True

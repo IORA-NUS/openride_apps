@@ -13,44 +13,64 @@ from .manager import PassengerManager
 from .trip_manager import PassengerTripManager
 from apps.loc_service import OSRMClient
 import paho.mqtt.client as paho
+from apps.agent_core.base_app import BaseApp
 
 from apps.state_machine import RidehailPassengerTripStateMachine
 from apps.ride_hail import RideHailActions, validate_assigned_payload
 
 
-class PassengerApp():
+class PassengerApp(BaseApp):
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, current_loc, credentials, profile, messenger):
-        self.run_id = run_id
-        self.credentials = credentials
-        self.profile = profile
-        self.messenger = messenger
+    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile):
 
-        self.user = UserRegistry(sim_clock, credentials)
+        super().__init__(run_id=run_id,
+                         sim_clock=sim_clock,
+                         credentials=credentials,
+                         messenger=messenger,
+                         current_loc=current_loc,
+                         profile=profile)  # Initialize BaseApp attributes
+        # self.run_id = run_id
+        # self.credentials = credentials
+        # self.profile = profile
+        # self.messenger = messenger
 
-        self.manager = PassengerManager(run_id, sim_clock, self.user, self.profile)
-        self.topic_params = {
-            f"{self.run_id}/{self.manager.get_id()}": self.message_handler
-        }
+        # # self.user = UserRegistry(sim_clock, credentials)
+        # # self.manager = PassengerManager(run_id, sim_clock, self.user, self.profile)
+        # # self.trip = PassengerTripManager(run_id, sim_clock, self.user, self.messenger)
 
-        self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual driver behavior
+        # self.user = self.create_user(sim_clock)
+        # self.manager = self.create_manager(sim_clock)
 
-        self.trip = PassengerTripManager(run_id, sim_clock, self.user, self.messenger)
+        self.trip = self.create_trip_manager()
+
+        # self.topic_params = {
+        #     f"{self.run_id}/{self.manager.get_id()}": self.message_handler
+        # }
+
+        # self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual passenger behavior
+
 
         self.latest_sim_clock = sim_clock
         self.latest_loc = current_loc
 
 
-    def get_manager(self):
-        return self.manager.as_dict()
+    def create_user(self):
+        return UserRegistry(self.sim_clock, self.credentials)
 
-    def get_trip(self):
-        return self.trip.as_dict()
+    def create_manager(self):
+        return PassengerManager(self.run_id, self.sim_clock, self.user, self.profile)
+
+    def create_trip_manager(self):
+        return PassengerTripManager(self.run_id, self.sim_clock, self.user, self.messenger)
+
+    # def get_manager(self):
+    #     return self.manager.as_dict()
 
     def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
-        self.manager.login(sim_clock)
+        # self.manager.login(sim_clock)
+        super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
 
         if (pickup_loc is not None) and (dropoff_loc is not None):
             self.trip.create_new_trip_request(sim_clock, current_loc, self.manager.as_dict(), pickup_loc, dropoff_loc, trip_price)
@@ -62,12 +82,16 @@ class PassengerApp():
         except Exception as e:
             logging.exception(str(e))
 
-        try:
-            self.manager.logout(sim_clock)
-        except Exception as e:
-            logging.warning(str(e))
+        super().close(sim_clock)  # Call BaseApp's close method to set exited_market = True
+        # try:
+        #     self.manager.logout(sim_clock)
+        # except Exception as e:
+        #     logging.warning(str(e))
 
-        self.exited_market = True
+        # self.exited_market = True
+
+    def get_trip(self):
+        return self.trip.as_dict()
 
     def ping(self, sim_clock, current_loc, **kwargs):
         self.trip.ping(sim_clock, current_loc, **kwargs)
@@ -75,24 +99,6 @@ class PassengerApp():
     def refresh(self):
         self.trip.refresh()
 
-    def handle_overbooking(self, sim_clock, driver):
-
-        self.messenger.client.publish(
-            f'{self.run_id}/{driver}',
-            json.dumps(
-                {
-                    'action': 'passenger_workflow_event',
-                    'passenger_id': self.manager.get_id(),
-                    'data': {
-                        'event': 'passenger_rejected_trip'
-                    }
-                }
-            ),
-        )
-
-    def update_current(self, sim_clock, current_loc):
-        self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
 
     def message_handler(self, payload):
         if payload['action'] == RideHailActions.ASSIGNED:
@@ -115,18 +121,37 @@ class PassengerApp():
         else:
             self.enqueue_message(payload)
 
-    def enqueue_message(self, payload):
-        ''' '''
-        self.message_queue.append(payload)
+    def handle_overbooking(self, sim_clock, driver):
 
-    def dequeue_message(self):
-        ''' '''
-        try:
-            return self.message_queue.pop(0)
-        except: return None
+        self.messenger.client.publish(
+            f'{self.run_id}/{driver}',
+            json.dumps(
+                {
+                    'action': 'passenger_workflow_event',
+                    'passenger_id': self.manager.get_id(),
+                    'data': {
+                        'event': 'passenger_rejected_trip'
+                    }
+                }
+            ),
+        )
 
-    def enfront_message(self, payload):
-        self.message_queue.insert(0, payload)
+    # def update_current(self, sim_clock, current_loc):
+    #     self.latest_sim_clock = sim_clock
+    #     self.latest_loc = current_loc
+
+    # def enqueue_message(self, payload):
+    #     ''' '''
+    #     self.message_queue.append(payload)
+
+    # def dequeue_message(self):
+    #     ''' '''
+    #     try:
+    #         return self.message_queue.pop(0)
+    #     except: return None
+
+    # def enfront_message(self, payload):
+    #     self.message_queue.insert(0, payload)
 
 
 if __name__ == '__main__':

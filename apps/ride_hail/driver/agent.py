@@ -63,9 +63,9 @@ class DriverAgentIndie(ORSimAgent):
         self.failure_log = {}
         try:
             self.app = DriverApp(
-                self.run_id,
-                self.get_current_time_str(),
-                self.current_loc,
+                run_id=self.run_id,
+                sim_clock=self.get_current_time_str(),
+                current_loc=self.current_loc,
                 credentials=self.credentials,
                 profile=self.behavior['profile'],
                 messenger=self.messenger
@@ -112,7 +112,7 @@ class DriverAgentIndie(ORSimAgent):
         else:
             logging.error(f"{payload = }")
 
-        print(f"process_payload for driver {self.unique_id} completed with {self.step_log =}")
+        # print(f"process_payload for driver {self.unique_id} completed with {self.step_log =}")
         return did_step
 
 
@@ -128,7 +128,9 @@ class DriverAgentIndie(ORSimAgent):
             elif self.action_when_free == 'stay':
                 self.set_route(self.current_loc, None)
 
-            self.app.launch(self.get_current_time_str(), self.current_loc, self.active_route)
+            self.app.launch(sim_clock=self.get_current_time_str(),
+                            current_loc=self.current_loc,
+                            route=self.active_route)
             print(f"DriverAgentIndie[{self.unique_id}]: DriverApp launch successful")
             self.active = True
             return True
@@ -295,7 +297,7 @@ class DriverAgentIndie(ORSimAgent):
         '''
 
         trip = self.app.get_trip()
-        print(f"update_location_by_route: {self.unique_id}, current_loc={self.current_loc}, trip={trip}")
+        # print(f"update_location_by_route: {self.unique_id}, current_loc={self.current_loc}, trip={trip}")
         elapsed_time = (self.current_time - str_to_time(trip['_updated'])).total_seconds()
 
         if (RidehailDriverTripStateMachine.is_moving(trip['state']) == False) or \

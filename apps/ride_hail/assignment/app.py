@@ -19,26 +19,47 @@ from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriver
 from apps.ride_hail import RideHailActions
 from .solver import *  # NOTE * is deliberate to load all solvers in globals()
 from .manager import AssignmentManager
+from apps.agent_core.base_app import BaseApp
 
 
-class AssignmentApp:
+class AssignmentApp(BaseApp):
     ''' '''
 
-    def __init__(self, run_id, sim_clock, credentials, solver_name, solver_params, steps_per_action, messenger):
+    def __init__(self, run_id, sim_clock, credentials, messenger, solver_name, solver_params, steps_per_action):
         ''' '''
-        self.run_id = run_id
-        self.credentials = credentials
-        self.solver_params = solver_params
-        self.steps_per_action = steps_per_action
+        super().__init__(run_id=run_id,
+                         sim_clock=sim_clock,
+                         credentials=credentials,
+                         messenger=messenger,
+                         solver_name=solver_name,
+                         solver_params=solver_params,
+                         steps_per_action=steps_per_action)
+        # self.run_id = run_id
+        # self.sim_clock = sim_clock
+        # self.credentials = credentials
+        # self.solver_name = solver_name
+        # self.solver_params = solver_params
+        # self.steps_per_action = steps_per_action
+        # self.messenger = messenger
 
-        self.user = UserRegistry(sim_clock, credentials, role='admin')
+        # # self.user = UserRegistry(sim_clock, credentials, role='admin')
 
-        self.solver = globals()[solver_name](self.solver_params)
+        # # self.solver = globals()[solver_name](self.solver_params)
 
-        self.manager = AssignmentManager(self.run_id, sim_clock, self.user, self.solver)
+        # # self.manager = AssignmentManager(self.run_id, sim_clock, self.user, self.solver)
+        # self.user = self.create_user()
+        # self.manager = self.create_manager()
 
-        self.messenger = messenger
         self.server_max_results = 50  # make sure this is in sync with server
+
+    def create_user(self):
+        return UserRegistry(self.sim_clock, self.credentials, role='admin')
+
+    def create_manager(self):
+        solver = globals()[self.solver_name](self.solver_params)
+
+        return AssignmentManager(self.run_id, self.sim_clock, self.user, solver)
+
 
     def get_scale_factor(self, time_step):
         if self.solver_params.get('online_metric_scale_strategy') == 'demand':
@@ -81,7 +102,7 @@ class AssignmentApp:
 
         start = time.time()
         try:
-            assignment, matched_pairs = self.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
+            assignment, matched_pairs = self.manager.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
         except Exception as e:
             logging.exception(traceback.format_exc())
             assignment = []
@@ -90,7 +111,7 @@ class AssignmentApp:
         end = time.time()
         scale_factor = self.get_scale_factor(time_step)
 
-        online_params = self.solver.update_online_params(scale_factor, driver_list, passenger_trip_list, matched_pairs, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
+        online_params = self.manager.solver.update_online_params(scale_factor, driver_list, passenger_trip_list, matched_pairs, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
         result = [{
             'driver': item[0]['driver'],
             'passenger': item[1]['passenger'],
@@ -135,7 +156,7 @@ class AssignmentApp:
                     "is_active": True,
                     "is_occupied": False,
                     "state": {"$in": [RidehailDriverTripStateMachine.driver_looking_for_job.name]},
-                    "current_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
+                    "current_loc": {"$geoWithin": {"$geometry": self.manager.solver.params['planning_area']['geometry']}}
                 }),
                 'projection': json.dumps({
                     '_id': 1,
@@ -173,7 +194,7 @@ class AssignmentApp:
                 "where": json.dumps({
                     "is_active": True,
                     "state": {"$in": [RidehailPassengerTripStateMachine.passenger_requested_trip.name]},
-                    "pickup_loc": {"$geoWithin": {"$geometry": self.solver.params['planning_area']['geometry']}}
+                    "pickup_loc": {"$geoWithin": {"$geometry": self.manager.solver.params['planning_area']['geometry']}}
                 }),
                 'projection': json.dumps({
                     '_id': 1,
@@ -210,11 +231,11 @@ class AssignmentApp:
 
         return distance_matrix
 
-    def close(self):
-        ''' '''
-        logging.debug(f'logging out Assignmenta Service {self.manager.get_id()}')
+    # def close(self):
+    #     ''' '''
+    #     logging.debug(f'logging out Assignmenta Service {self.manager.get_id()}')
 
-        self.exited_market = True
+    #     self.exited_market = True
 
 
 if __name__ == "__main__":

@@ -64,7 +64,7 @@ class UserRegistry():
         }
 
         response = requests.post(login_url, headers=self.get_headers(), data=json.dumps(data))
-        print(f"UserRegistry.user_login: Login response for user {self.email}, {self.password} at sim_clock {sim_clock}: {response.status_code} - {response.text}")
+        # print(f"UserRegistry.user_login: Login response for user {self.email}, {self.password} at sim_clock {sim_clock}: {response.status_code} - {response.text}")
 
         if is_success(response.status_code):
             # Login is successful
