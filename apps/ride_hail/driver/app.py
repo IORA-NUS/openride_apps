@@ -14,7 +14,6 @@ from apps.utils.user_registry import UserRegistry
 from .manager import DriverManager
 from .trip_manager import DriverTripManager
 from apps.loc_service import OSRMClient
-import paho.mqtt.client as paho
 from apps.agent_core.base_app import BaseApp
 
 from apps.state_machine import RidehailDriverTripStateMachine

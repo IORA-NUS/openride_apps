@@ -1,5 +1,10 @@
 
 import os, sys
+import asyncio
+# macOS event loop policy fix
+# if sys.platform == "darwin":
+#     asyncio.set_event_loop_policy(asyncio.SelectorEventLoopPolicy())
+
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
@@ -25,7 +30,6 @@ from unittest import mock
 
 # from messenger_service import Messenger
 
-import asyncio
 
 # from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
 
@@ -135,6 +139,21 @@ class DistributedOpenRideSimRandomised():
     def step(self, i):
         step_start_time = time.time()
         print(f"Simulation Step: {self.agent_scheduler.time} of {self.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS']}")
+
+        try:
+
+            loop = asyncio.get_event_loop()
+            # print loop debug
+            print(f"Event loop: {loop}")
+        except Exception as e:
+            # print(f"Error in Simulation step {i}: {str(e)}")
+            # traceback.print_exc()
+            # step_metric = {
+            #     i: {
+            #         'error': str(e),
+            #     }
+            # }
+            pass
 
         # IMPORTANT Make sure agents are added into the scheduler before step
         # add_agent is a blocking process and ensures the agent is ready to listen to step()

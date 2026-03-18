@@ -7,7 +7,6 @@ parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
 import json, requests, traceback
-import paho.mqtt.client as paho
 from datetime import datetime
 
 from apps.loc_service import OSRMClient

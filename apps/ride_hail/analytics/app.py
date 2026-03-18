@@ -10,7 +10,6 @@ parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
 import json, requests
-import paho.mqtt.client as paho
 from datetime import datetime
 
 # from apps.messenger_service import Messenger
