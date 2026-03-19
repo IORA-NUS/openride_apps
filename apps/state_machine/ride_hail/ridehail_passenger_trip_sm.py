@@ -8,14 +8,14 @@ class RidehailPassengerTripStateMachine(StateMachine):
     passenger_assigned_trip = State('passenger_assigned_trip')
     passenger_received_trip_confirmation = State('passenger_received_trip_confirmation')
     passenger_accepted_trip = State('passenger_accepted_trip')
-    passenger_cancelled_trip = State('passenger_cancelled_trip')
+    passenger_cancelled_trip = State('passenger_cancelled_trip', final=True)
     passenger_moving_for_pickup = State('passenger_moving_for_pickup')
     passenger_waiting_for_pickup = State('passenger_waiting_for_pickup')
     passenger_pickedup = State('passenger_pickedup')
     passenger_moving_for_dropoff = State('passenger_moving_for_dropoff')
     passenger_waiting_for_dropoff = State('passenger_waiting_for_dropoff')
     passenger_droppedoff = State('passenger_droppedoff')
-    passenger_completed_trip = State('passenger_completed_trip')
+    passenger_completed_trip = State('passenger_completed_trip', final=True)
 
 
   # request_trip = passenger_online.to(passenger_requested_trip)

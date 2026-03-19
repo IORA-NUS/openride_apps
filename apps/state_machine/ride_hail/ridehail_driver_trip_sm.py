@@ -9,14 +9,14 @@ class RidehailDriverTripStateMachine(StateMachine):
     driver_received_trip = State('driver_received_trip') # alternate Initial State
     driver_rejected_trip = State('driver_rejected_trip')
     driver_accepted_trip = State('driver_accepted_trip')
-    driver_cancelled_trip = State('driver_cancelled_trip')
+    driver_cancelled_trip = State('driver_cancelled_trip', final=True)
     driver_moving_to_pickup = State('driver_moving_to_pickup')
     driver_waiting_to_pickup = State('driver_waiting_to_pickup')
     driver_pickedup = State('driver_pickedup')
     driver_moving_to_dropoff = State('driver_moving_to_dropoff')
     driver_waiting_to_dropoff = State('driver_waiting_to_dropoff')
     driver_droppedoff = State('driver_droppedoff')
-    driver_completed_trip = State('driver_completed_trip')
+    driver_completed_trip = State('driver_completed_trip', final=True)
 
 
     look_for_job = driver_init_trip.to(driver_looking_for_job)

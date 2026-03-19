@@ -21,8 +21,8 @@ class HaulierContainerWorkflowStateMachine(StateMachine):
     dropoff_slot_allocated = State("dropoff_slot_allocated")
     container_dropped_off = State("container_dropped_off")
 
-    haul_completed = State("haul_completed")
-    haul_cancelled = State("haul_cancelled")
+    haul_completed = State("haul_completed", final=True)
+    haul_cancelled = State("haul_cancelled", final=True)
 
     facility_publishes_request = haul_request_received.from_(haulier_idle)
     haulier_accepts_request = haul_request_accepted.from_(haul_request_received)
@@ -41,7 +41,8 @@ class HaulierContainerWorkflowStateMachine(StateMachine):
     facility_accepts_container = container_dropped_off.from_(dropoff_slot_allocated)
 
     close_haul = haul_completed.from_(container_dropped_off)
-    reset = haulier_idle.from_(haul_completed, haul_cancelled)
+    # reset = haulier_idle.from_(haul_completed, haul_cancelled)
+    # Removed reset from final states to comply with statemachine rules
 
     cancel_haul = haul_cancelled.from_(
         haul_request_received,

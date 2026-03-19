@@ -22,6 +22,8 @@ from apps.config import settings
 from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from apps.agent_core.base_app import BaseApp
 
+from .manager import AnalyticsManager
+
 import websockets, asyncio
 
 
@@ -51,6 +53,7 @@ class AnalyticsApp(BaseApp):
         return UserRegistry(self.sim_clock, self.credentials, role='admin')
 
     def create_manager(self):
+        # return AnalyticsManager(self.run_id, self.sim_clock, self.user, None)
         pass
 
     def launch(self):

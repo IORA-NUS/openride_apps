@@ -12,8 +12,8 @@ class FacilityAgentInteractionStateMachine(StateMachine):
     handling_slot_allocated = State("handling_slot_allocated")
     handoff_in_progress = State("handoff_in_progress")
     handoff_completed = State("handoff_completed")
-    interaction_closed = State("interaction_closed")
-    interaction_cancelled = State("interaction_cancelled")
+    interaction_closed = State("interaction_closed", final=True)
+    interaction_cancelled = State("interaction_cancelled", final=True)
 
     publish_haul_request = haul_request_announced.from_(facility_idle)
     receive_haulier_confirmation = haulier_confirmed.from_(haul_request_announced)
@@ -25,7 +25,7 @@ class FacilityAgentInteractionStateMachine(StateMachine):
     complete_handoff = handoff_completed.from_(handoff_in_progress)
 
     close_interaction = interaction_closed.from_(handoff_completed)
-    reset = facility_idle.from_(interaction_closed, interaction_cancelled)
+    # reset = facility_idle.from_(interaction_closed, interaction_cancelled)
 
     cancel_interaction = interaction_cancelled.from_(
         haul_request_announced,

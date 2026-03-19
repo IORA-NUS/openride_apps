@@ -27,7 +27,7 @@ class HLDeliveryDriverTourStateMachine(StateMachine):
     driver_waiting_to_return = State('driver_waiting_to_return')
     driver_return_packages = State('driver_return_packages')
 
-    driver_completed_tour = State('driver_completed_tour')
+    driver_completed_tour = State('driver_completed_tour', final=True)
 
 
     assign = driver_assigned_package.from_(driver_init_tour,

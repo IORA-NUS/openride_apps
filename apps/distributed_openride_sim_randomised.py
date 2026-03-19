@@ -38,6 +38,9 @@ from apps.config import settings, messenger_backend #, driver_settings, passenge
 from apps.utils.user_registry import UserRegistry
 from apps.utils import time_to_str, str_to_time
 
+from apps.state_machine.ride_hail.register_state_machines import StateMachineRegistry
+
+
 class DistributedOpenRideSimRandomised():
 
 
@@ -58,6 +61,8 @@ class DistributedOpenRideSimRandomised():
 
         self.user = self.setup_user()
         self.run_record = self.init_run_config()
+
+        self.register_state_machines()
 
         self.execution_start_time = time.time()
 
@@ -135,6 +140,9 @@ class DistributedOpenRideSimRandomised():
                                             agent_class='apps.ride_hail.analytics.AnalyticsAgentIndie',
                                             # agent_class_name='AnalyticsAgentIndie',
                                             )
+
+    def register_state_machines(self):
+        StateMachineRegistry().register_state_machines(settings['OPENRIDE_SERVER_URL'], headers=self.user.get_headers())
 
     def step(self, i):
         step_start_time = time.time()

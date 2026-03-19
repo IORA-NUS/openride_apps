@@ -12,7 +12,7 @@ class HLDeliveryPackageTripStateMachine(StateMachine):
     package_droppedoff = State('package_droppedoff')
     package_droppedoff_failed = State('package_droppedoff_failed')
     package_completed_leg = State('package_completed_leg')
-    package_completed_delivery = State('package_completed_delivery')
+    package_completed_delivery = State('package_completed_delivery', final=True)
 
 
     assign = package_delivery_requested.to(package_assigned_driver)
