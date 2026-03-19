@@ -53,7 +53,7 @@ class BaseApp:
             try:
                 self.manager.login(sim_clock)
             except Exception as e:
-                logging.warning(str(e))
+                logging.warning(f"Failed to login manager: {str(e)}")
 
     def close(self, sim_clock):
         self.exited_market = True
@@ -61,7 +61,7 @@ class BaseApp:
             try:
                 self.manager.logout(sim_clock)
             except Exception as e:
-                logging.warning(str(e))
+                logging.warning(f"Failed to logout manager: {str(e)}")
 
     # def refresh(self, *args, **kwargs):
     #     raise NotImplementedError
@@ -85,7 +85,8 @@ class BaseApp:
         ''' '''
         try:
             return self.message_queue.pop(0)
-        except: return None
+        except IndexError:
+            return None
 
     def enfront_message(self, payload):
         self.message_queue.insert(0, payload)

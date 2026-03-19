@@ -14,13 +14,18 @@ class StateMachineRegistry:
         'ridehail_passenger_trip': RidehailPassengerTripStateMachine,
     }
 
-    SIM_TYPE = 'ride_hail'
+    domain = 'ride_hail'
 
-    def register_state_machines(self, SERVER_URL, headers):
-        for sm_name, sm_class in self.state_machines.items():
+    def register_state_machines(self, server_url, headers):
+        for statemachine_name, statemachine_class in self.state_machines.items():
             try:
-                print(f"Registering state machine: {sm_name}")
-                result = register_and_validate_statemachine(SERVER_URL, headers, self.SIM_TYPE, sm_name, sm_class)
+                print(f"Registering state machine: {statemachine_name}")
+                result = register_and_validate_statemachine(
+                    server_url=server_url,
+                    headers=headers,
+                    domain=self.domain,
+                    statemachine_name=statemachine_name,
+                    statemachine_cls=statemachine_class)
                 print(f"Statemachine registration result: {result}")
             except ValueError as e:
                 print(f"ERROR: {e}")

@@ -142,7 +142,10 @@ class DistributedOpenRideSimRandomised():
                                             )
 
     def register_state_machines(self):
-        StateMachineRegistry().register_state_machines(settings['OPENRIDE_SERVER_URL'], headers=self.user.get_headers())
+        StateMachineRegistry().register_state_machines(
+            server_url=settings['OPENRIDE_SERVER_URL'],
+            headers=self.user.get_headers()
+            )
 
     def step(self, i):
         step_start_time = time.time()

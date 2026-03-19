@@ -48,9 +48,6 @@ class DriverAgentIndie(ORSimAgent):
     traversed_path = None # shapely.geometry.LineString
     projected_path = None # shapely.geometry.LineString
 
-
-    # def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings):
-    #     super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler_id, behavior, orsim_settings)
     def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior):
         super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
         self.current_loc = self.behavior['init_loc']
@@ -77,6 +74,8 @@ class DriverAgentIndie(ORSimAgent):
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
+
+
 
     def get_random_location(self):
         return GenerateBehavior.get_random_location(self.behavior['coverage_area_name'])
@@ -122,23 +121,27 @@ class DriverAgentIndie(ORSimAgent):
         if (self.active == False) and (time_step == self.behavior['shift_start_time']):
             # self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
             print(f"DriverAgentIndie[{self.unique_id}]: Entering market at time_step {time_step}")
+            try:
+                if self.action_when_free == 'random_walk':
+                    self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+                elif self.action_when_free == 'stay':
+                    self.set_route(self.current_loc, None)
 
-            if self.action_when_free == 'random_walk':
-                self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-            elif self.action_when_free == 'stay':
-                self.set_route(self.current_loc, None)
-
-            self.app.launch(sim_clock=self.get_current_time_str(),
-                            current_loc=self.current_loc,
-                            route=self.active_route)
-            print(f"DriverAgentIndie[{self.unique_id}]: DriverApp launch successful")
-            self.active = True
+                self.app.launch(sim_clock=self.get_current_time_str(),
+                                current_loc=self.current_loc,
+                                route=self.active_route)
+                self.active = True
+            except Exception as e:
+                logging.exception(f"Failed to launch DriverApp for agent {self.unique_id}: {str(e)}")
+                self.agent_failed = True
+                return False
+            print(f"DriverAgentIndie[{self.unique_id}]: DriverApp launch successful, {self.active = }")
             return True
         elif self.active == True:
-            print(f"DriverAgentIndie[{self.unique_id}]: Already active in market at time_step {time_step} with trip state {self.app.get_trip()['state'] if self.app.get_trip() else 'No Trip'}")
+            print(f"DriverAgentIndie[{self.unique_id}]: Already active in market at {time_step = } with trip state {self.app.get_trip()['state'] if self.app.get_trip() else 'No Trip'}")
             return True
         else:
-            print(f"DriverAgentIndie[{self.unique_id}]: Not entering market at time_step {time_step} because active={self.active} and shift_start_time={self.behavior['shift_start_time']}")
+            print(f"DriverAgentIndie[{self.unique_id}]: Not entering market at {time_step = } because {self.active = } and shift_start_time={self.behavior['shift_start_time']}")
             return False
 
     def is_active(self):

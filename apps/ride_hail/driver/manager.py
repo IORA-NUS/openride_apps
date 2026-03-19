@@ -26,6 +26,10 @@ class DriverManager(ResourceClientMixin, BaseManager):
                 "expiry":  "Tue, 01 Jan 2030 00:00:00 GMT"
             },
             "profile": self.profile,
+            "statemachine": {
+                "name": "workflow",
+                "domain": "ride_hail",
+            },
             "sim_clock": sim_clock,
         }
         self.resource = self.init_resource(sim_clock, data=data)

@@ -40,19 +40,19 @@ def serialize_statemachine(sm_cls):
 
 import requests
 
-def register_and_validate_statemachine(server_url, headers, sim_type, sm_name, sm_cls):
+def register_and_validate_statemachine(server_url, headers, domain, statemachine_name, statemachine_cls):
     """
     Registers and validates a statemachine definition with the server.
     Raises ValueError if existing definition does not match current.
     """
     # sm_name = sm_cls.__name__
-    definition = serialize_statemachine(sm_cls)
+    definition = serialize_statemachine(statemachine_cls)
     endpoint = f"{server_url}/statemachine"
     params = {
         "where": json.dumps({
             "$and": [
-                {"sim_type": sim_type},
-                {"name": sm_name},
+                {"domain": domain},
+                {"name": statemachine_name},
             ]
         })
     }
@@ -61,14 +61,14 @@ def register_and_validate_statemachine(server_url, headers, sim_type, sm_name, s
     resp = requests.get(endpoint, headers=headers, params=params)
     # print(f"GET {endpoint} with params {params} returned status {resp.status_code}")
     # print(resp.url)
-    # print(f"Checked statemachine {sm_name} existence: {resp.status_code}")
+    # print(f"Checked statemachine {statemachine_name} existence: {resp.status_code}")
     # print(f"Response content: {resp.text}")
 
     if len(resp.json()['_items']) == 0:
         # Not found, create
         data = {
-            "sim_type": sim_type,
-            "name": sm_name,
+            "domain": domain,
+            "name": statemachine_name,
             "definition": definition
         }
         create_resp = requests.post(endpoint, headers=headers, json=data)
@@ -83,7 +83,7 @@ def register_and_validate_statemachine(server_url, headers, sim_type, sm_name, s
         # print(f"{definition = }")
 
         if existing != definition:
-            raise ValueError(f"Statemachine definition mismatch for {sm_name} (sim_type={sim_type})")
+            raise ValueError(f"Statemachine definition mismatch for {statemachine_name} (domain={domain})")
         return "validated"
     # else:
     #     raise RuntimeError(f"Unexpected response: {resp.status_code} {resp.text}")
