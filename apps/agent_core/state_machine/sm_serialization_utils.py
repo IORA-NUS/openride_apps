@@ -2,41 +2,7 @@ from statemachine import StateMachine, State
 from graphviz import Digraph
 
 import json
-from .state_machine_serializer import StateMachineSerializer
-
-# def serialize_statemachine(sm_cls):
-#     # Instantiate the statemachine
-#     sm = sm_cls()
-
-#     # Collect states
-#     states = [state.name for state in sm.states]
-
-#     # Collect transitions by iterating over states and their outgoing transitions
-#     transitions = []
-#     for state in sm.states:
-#         for transition in getattr(state, 'transitions', []):
-#             # Try trigger, then event, then fallback to None
-#             trigger = getattr(transition, 'trigger', None)
-#             event = getattr(transition, 'event', None)
-#             transitions.append({
-#                 'trigger': trigger or event or '',
-#                 'source': state.name,
-#                 'target': transition.target.name,
-#                 # 'event': trigger or event or '',
-#             })
-
-#     # Find initial state
-#     initial = None
-#     for state in sm.states:
-#         if state.initial:
-#             initial = state.name
-#             break
-
-#     return {
-#         'states': states,
-#         'transitions': transitions,
-#         'initial': initial,
-#     }
+from orsim.utils import StateMachineSerializer
 
 
 import requests

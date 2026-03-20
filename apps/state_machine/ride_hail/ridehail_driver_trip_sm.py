@@ -7,7 +7,7 @@ class RidehailDriverTripStateMachine(StateMachine):
     driver_init_trip = State('driver_init_trip', initial=True)
     driver_looking_for_job = State('driver_looking_for_job')
     driver_received_trip = State('driver_received_trip') # alternate Initial State
-    driver_rejected_trip = State('driver_rejected_trip')
+    driver_rejected_trip = State('driver_rejected_trip') # NOTE Check to see if rejected trip should be a final state
     driver_accepted_trip = State('driver_accepted_trip')
     driver_cancelled_trip = State('driver_cancelled_trip', final=True)
     driver_moving_to_pickup = State('driver_moving_to_pickup')
@@ -36,7 +36,7 @@ class RidehailDriverTripStateMachine(StateMachine):
     passenger_acknowledge_dropoff = driver_waiting_to_dropoff.to(driver_droppedoff)
     end_trip = driver_completed_trip.from_(driver_droppedoff, driver_init_trip, driver_looking_for_job, driver_rejected_trip)
 
-    reject = driver_rejected_trip.from_(driver_received_trip)
+    reject = driver_rejected_trip.from_(driver_received_trip) # NOTE Check to see if rejected trip should be a final state
     cancel = driver_cancelled_trip.from_(driver_accepted_trip, driver_moving_to_pickup, driver_waiting_to_pickup, driver_looking_for_job)
 
     force_quit = driver_cancelled_trip.from_(
