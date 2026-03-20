@@ -7,7 +7,9 @@ sys.path.append(parent_path)
 from re import I
 from shapely.geometry.linestring import LineString
 # from apps.state_machine.agent_workflow_sm import WorkflowStateMachine
-from apps.agent_core.state_machine import WorkflowStateMachine
+# from apps.agent_core.state_machine import WorkflowStateMachine
+from orsim.utils import WorkflowStateMachine
+
 
 import logging, traceback
 import json, time, asyncio
@@ -65,7 +67,8 @@ class DriverAgentIndie(ORSimAgent):
                 current_loc=self.current_loc,
                 credentials=self.credentials,
                 profile=self.behavior['profile'],
-                messenger=self.messenger
+                messenger=self.messenger,
+                persona=self.behavior.get('persona', {})
             )
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)

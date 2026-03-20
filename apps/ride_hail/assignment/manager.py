@@ -4,7 +4,7 @@ from http import HTTPStatus
 import logging
 from apps.config import settings
 from apps.utils import id_generator, is_success
-from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+# from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 
 from apps.agent_core.base_manager import BaseManager
@@ -13,11 +13,12 @@ from apps.common.resource_client_mixin import ResourceClientMixin
 class AssignmentManager(ResourceClientMixin, BaseManager):
 
 
-    def __init__(self, run_id, sim_clock, user, solver):
+    def __init__(self, run_id, sim_clock, user, persona,solver):
         self.run_id = run_id
         self.user = user
         self.solver = solver
-        self.resource_type = 'engine'
+        self.persona = persona
+        # self.resource_type = 'engine'
 
         params = {
             'where': json.dumps({
@@ -31,6 +32,7 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
             'planning_area': self.solver.params['planning_area'],
             'offline_params': self.solver.params['offline_params'],
             'online_params': self.solver.params['online_params'],
+            'persona': self.persona,
         }
         self.resource = self.init_resource(sim_clock, data=data, params=params)
 

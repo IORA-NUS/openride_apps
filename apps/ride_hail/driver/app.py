@@ -24,14 +24,15 @@ class DriverApp(BaseApp):
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile):
+    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona):
 
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
                          messenger=messenger,
                          current_loc=current_loc,
-                         profile=profile)  # Initialize BaseApp attributes
+                         profile=profile,
+                         persona=persona)  # Initialize BaseApp attributes
         # self.run_id = run_id
         # self.sim_clock = sim_clock
         # self.credentials = credentials
@@ -61,10 +62,20 @@ class DriverApp(BaseApp):
         return UserRegistry(self.sim_clock, self.credentials)
 
     def create_manager(self):
-        return DriverManager(self.run_id, self.sim_clock, self.user, self.profile)
+        return DriverManager(
+            run_id=self.run_id,
+            sim_clock=self.sim_clock,
+            user=self.user,
+            profile=self.profile,
+            persona=self.persona)
 
     def create_trip_manager(self):
-        return DriverTripManager(self.run_id, self.sim_clock, self.user, self.messenger)
+        return DriverTripManager(
+            run_id=self.run_id,
+            sim_clock=self.sim_clock,
+            user=self.user,
+            messenger=self.messenger,
+            persona=self.persona)
 
     # def get_manager(self):
     #     # return self.manager.resource.as_dict()

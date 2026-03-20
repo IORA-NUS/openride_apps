@@ -16,8 +16,8 @@ class DriverTripManager(TripManagerBase):
     ''' '''
     # trip = None
 
-    def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False):
-        super().__init__(run_id, user, messenger, resource_type='driver')
+    def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False, persona=None):
+        super().__init__(run_id, user, messenger, persona=persona)
         self.update_passenger_loc = update_passenger_loc
 
     def as_dict(self):
@@ -87,8 +87,9 @@ class DriverTripManager(TripManagerBase):
     def create_new_unoccupied_trip(self, sim_clock, current_loc, driver, vehicle, route):
         data = {
             "driver": f"{driver['_id']}",
+            'persona': self.persona,
             "meta": {
-                'profile': driver['profile']
+                'profile': driver['profile'],
             },
             "vehicle": f"{vehicle['_id']}",
             "current_loc": current_loc,
@@ -98,6 +99,7 @@ class DriverTripManager(TripManagerBase):
                 "name": "RidehailDriverTripStateMachine",
                 "domain": "ride_hail",
             },
+            "state": RidehailDriverTripStateMachine.initial_state.name,
             "sim_clock": sim_clock,
         }
 
@@ -116,8 +118,9 @@ class DriverTripManager(TripManagerBase):
     def create_new_occupied_trip(self, sim_clock, current_loc, driver, vehicle, passenger_ride_hail_trip):
         data = {
             "driver": f"{driver['_id']}",
+            'persona': self.persona,
             "meta": {
-                'profile': driver['profile']
+                'profile': driver['profile'],
             },
             "vehicle": f"{vehicle['_id']}",
             "current_loc": current_loc,
@@ -132,6 +135,7 @@ class DriverTripManager(TripManagerBase):
                 "name": "RidehailDriverTripStateMachine",
                 "domain": "ride_hail",
             },
+            "state": RidehailDriverTripStateMachine.initial_state.name,
             "sim_clock": sim_clock,
         }
 

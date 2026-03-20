@@ -4,7 +4,7 @@ import logging
 
 
 class BaseApp:
-    def __init__(self, run_id: str, sim_clock: str, credentials: Dict[str, Any], messenger=None, **kwargs):
+    def __init__(self, run_id: str, sim_clock: str, credentials: Dict[str, Any], messenger=None, persona=None, **kwargs):
         """
         Base class for all app modules.
         Args:
@@ -12,6 +12,7 @@ class BaseApp:
             sim_clock: Simulation clock time
             credentials: Auth credentials dict
             messenger: Messaging interface (optional)
+            persona: Persona information (optional)
             kwargs: Additional fields for subclass customization
         """
         self.run_id = run_id
@@ -21,6 +22,7 @@ class BaseApp:
             if Messenger is None or not isinstance(messenger, Messenger):
                 raise TypeError("messenger must be an instance of orsim.messenger.Messenger")
         self.messenger = messenger
+        self.persona = persona
 
         for k, v in kwargs.items():
             setattr(self, k, v)

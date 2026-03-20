@@ -7,20 +7,23 @@ from apps.config import settings
 from apps.utils import id_generator, is_success
 from apps.agent_core.base_manager import BaseManager
 from apps.common.resource_client_mixin import ResourceClientMixin
-from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+# from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+from orsim.utils import WorkflowStateMachine
 
 # from apps.utils.user_registry import UserRegistry
 
 class PassengerManager(ResourceClientMixin, BaseManager):
 
-    def __init__(self, run_id, sim_clock, user, passenger_profile):
+    def __init__(self, run_id, sim_clock, user, profile, persona):
         self.resource_type = 'passenger'
         self.run_id = run_id
         self.user = user
-        self.passenger_profile = passenger_profile
+        self.profile = profile
+        self.persona = persona
 
         data = {
-            "profile": self.passenger_profile,
+            "profile": self.profile,
+            "persona": self.persona,
             "statemachine": {
                 "name": "WorkflowStateMachine",
                 "domain": "ride_hail",

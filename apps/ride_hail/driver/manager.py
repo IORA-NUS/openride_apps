@@ -7,17 +7,19 @@ from apps.utils import id_generator, is_success
 
 from apps.agent_core.base_manager import BaseManager
 from apps.common.resource_client_mixin import ResourceClientMixin
-from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+# from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+from orsim.utils import WorkflowStateMachine
 from apps.ride_hail.vehicle.manager import VehicleManager
 
 
 class DriverManager(ResourceClientMixin, BaseManager):
 
-    def __init__(self, run_id, sim_clock, user, profile):
+    def __init__(self, run_id, sim_clock, user, profile, persona):
         self.run_id = run_id
         self.user = user
         self.profile = profile
-        self.resource_type = 'driver'
+        self.persona = persona
+        # self.resource_type = 'driver'
 
         data = {
             "license": {
@@ -31,12 +33,17 @@ class DriverManager(ResourceClientMixin, BaseManager):
                 "domain": "ride_hail",
             },
             "state": WorkflowStateMachine().initial_state.name,
+            "persona": self.persona,
             "sim_clock": sim_clock,
         }
         print(f"DriverManager.__init__: Initializing driver with data: {data}")
         self.resource = self.init_resource(sim_clock, data=data)
 
-        self.vehicle = VehicleManager(run_id, sim_clock, user, profile={})
+        vehicle_persona = {
+            "role": "vehicle",
+            "domain": self.persona.get("domain"),
+        }
+        self.vehicle = VehicleManager(run_id, sim_clock, user, profile={}, persona=vehicle_persona)
 
 
 

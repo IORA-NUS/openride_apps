@@ -34,6 +34,7 @@ class AssignmentAgentIndie(ORSimAgent):
                 solver_params=self.behavior['solver_params'],
                 steps_per_action=self.behavior['steps_per_action'],
                 messenger=self.messenger,
+                persona=self.behavior.get('persona', {})
             )
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")

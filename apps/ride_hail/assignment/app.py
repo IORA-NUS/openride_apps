@@ -24,12 +24,13 @@ from apps.agent_core.base_app import BaseApp
 class AssignmentApp(BaseApp):
     ''' '''
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, solver_name, solver_params, steps_per_action):
+    def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):
         ''' '''
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
                          messenger=messenger,
+                         persona=persona,
                          solver_name=solver_name,
                          solver_params=solver_params,
                          steps_per_action=steps_per_action)
@@ -57,7 +58,7 @@ class AssignmentApp(BaseApp):
     def create_manager(self):
         solver = globals()[self.solver_name](self.solver_params)
 
-        return AssignmentManager(self.run_id, self.sim_clock, self.user, solver)
+        return AssignmentManager(self.run_id, self.sim_clock, self.user, self.persona, solver)
 
 
     def get_scale_factor(self, time_step):

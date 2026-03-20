@@ -38,7 +38,9 @@ class AnalyticsAgentIndie(ORSimAgent):
             self.app = AnalyticsApp(run_id=self.run_id,
                                     sim_clock=self.get_current_time_str(),
                                     credentials=self.credentials,
-                                    messenger=self.messenger)
+                                    messenger=self.messenger,
+                                    persona=self.behavior.get('persona', {})
+                                )
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True

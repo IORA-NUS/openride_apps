@@ -4,7 +4,7 @@ from http import HTTPStatus
 import logging
 from apps.config import settings
 from apps.utils import id_generator, is_success
-from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+# from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 
 from apps.agent_core.base_manager import BaseManager
@@ -13,10 +13,11 @@ from apps.common.resource_client_mixin import ResourceClientMixin
 class AnalyticsManager(ResourceClientMixin, BaseManager):
 
 
-    def __init__(self, run_id, sim_clock, user):
+    def __init__(self, run_id, sim_clock, user, persona):
         self.run_id = run_id
         self.user = user
-        self.resource_type = 'kpi'
+        self.persona = persona
+        # self.resource_type = 'kpi'
 
         # params = {
         #     'where': json.dumps({

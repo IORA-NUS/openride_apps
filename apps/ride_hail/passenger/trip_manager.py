@@ -16,8 +16,8 @@ class PassengerTripManager(TripManagerBase):
     ''' '''
     trip = None
 
-    def __init__(self, run_id, sim_clock, user, messenger):
-        super().__init__(run_id, user, messenger, resource_type='passenger')
+    def __init__(self, run_id, sim_clock, user, messenger, persona):
+        super().__init__(run_id, user, messenger, persona=persona)
 
         self.time_requested = None
         self.time_assigned = None
@@ -97,6 +97,7 @@ class PassengerTripManager(TripManagerBase):
 
         data = {
             "passenger": passenger['_id'],
+            "persona": self.persona,
             "meta": {
                 'profile': passenger['profile'],
             },
@@ -108,6 +109,7 @@ class PassengerTripManager(TripManagerBase):
                 "name": "RidehailPassengerTripStateMachine",
                 "domain": "ride_hail",
             },
+            "state": RidehailPassengerTripStateMachine.initial_state.name,
             "trip_price": self.compute_trip_price(pickup_loc, dropoff_loc) if trip_price is None else trip_price,
         }
 

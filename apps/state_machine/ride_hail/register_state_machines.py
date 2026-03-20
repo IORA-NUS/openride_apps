@@ -1,6 +1,7 @@
 # Statemachine registration and validation
 from apps.agent_core.state_machine.sm_serialization_utils import register_and_validate_statemachine
-from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+# from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+from orsim.utils import WorkflowStateMachine
 
 from .ridehail_driver_trip_sm import RidehailDriverTripStateMachine
 from .ridehail_passenger_trip_sm import RidehailPassengerTripStateMachine

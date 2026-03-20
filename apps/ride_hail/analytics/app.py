@@ -30,12 +30,13 @@ import websockets, asyncio
 class AnalyticsApp(BaseApp):
     ''' '''
 
-    def __init__(self, run_id, sim_clock, credentials, messenger):
+    def __init__(self, run_id, sim_clock, credentials, messenger, persona):
         ''' '''
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
-                         messenger=messenger)  # Initialize BaseApp attributes
+                         messenger=messenger,
+                         persona=persona)  # Initialize BaseApp attributes
         # self.sim_clock = sim_clock
         # self.run_id = run_id
         # self.credentials = credentials

@@ -19,7 +19,8 @@ from typing import Any, Dict
 from .app import PassengerApp
 from apps.utils.utils import id_generator #, cut
 from apps.state_machine import RidehailPassengerTripStateMachine #, WorkflowStateMachine
-from apps.agent_core.state_machine import WorkflowStateMachine
+# from apps.agent_core.state_machine import WorkflowStateMachine
+from orsim.utils import WorkflowStateMachine
 
 from apps.loc_service import OSRMClient, cut
 
@@ -71,7 +72,9 @@ class PassengerAgentIndie(ORSimAgent):
                                     current_loc=self.current_loc,
                                     credentials=self.credentials,
                                     profile=self.behavior['profile'],
-                                    messenger=self.messenger)
+                                    messenger=self.messenger,
+                                    persona=self.behavior.get('persona', {})
+                                )
             print(f"PassengerApp initialized for {self.unique_id}")
 
             for topic, method in self.app.topic_params.items():

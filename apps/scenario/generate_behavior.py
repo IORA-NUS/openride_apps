@@ -97,7 +97,12 @@ class GenerateBehavior():
             'response_rate': driver_settings['response_rate'],
             'step_only_on_events': driver_settings['step_only_on_events'],
             'update_passenger_location': driver_settings['update_passenger_location'],
-            'action_when_free': driver_settings['action_when_free']
+            'action_when_free': driver_settings['action_when_free'],
+
+            'persona': {
+                'role': 'driver',
+                'domain': orsim_settings['DOMAIN'],
+            }
         }
 
         return behavior
@@ -178,6 +183,10 @@ class GenerateBehavior():
             'response_rate': passenger_settings['response_rate'],
             'step_only_on_events': passenger_settings['step_only_on_events'],
 
+            'persona': {
+                'role': 'passenger',
+                'domain': orsim_settings['DOMAIN'],
+            }
         }
 
         return behavior
@@ -199,6 +208,11 @@ class GenerateBehavior():
             'publish_paths_history': analytics_settings['publish_paths_history'],
             'write_ph_output_to_file': analytics_settings['write_ph_output_to_file'],
             'paths_history_time_window': analytics_settings['paths_history_time_window'],
+
+            'persona': {
+                'role': 'analytics',
+                'domain': orsim_settings['DOMAIN'],
+            }
 
         }
 
@@ -270,6 +284,11 @@ class GenerateBehavior():
             'steps_per_action': assignment_settings['steps_per_action'],
             'response_rate': assignment_settings['response_rate'],
             'step_only_on_events': assignment_settings['step_only_on_events'],
+
+            'persona': {
+                'role': 'engine',
+                'domain': orsim_settings['DOMAIN'],
+            }
 
         }
 

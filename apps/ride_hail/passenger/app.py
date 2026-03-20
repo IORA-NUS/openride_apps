@@ -22,18 +22,20 @@ class PassengerApp(BaseApp):
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile):
+    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona):
 
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
                          messenger=messenger,
                          current_loc=current_loc,
-                         profile=profile)  # Initialize BaseApp attributes
+                         profile=profile,
+                         persona=persona)  # Initialize BaseApp attributes
         # self.run_id = run_id
         # self.credentials = credentials
         # self.profile = profile
         # self.messenger = messenger
+        # self.persona = persona
 
         # # self.user = UserRegistry(sim_clock, credentials)
         # # self.manager = PassengerManager(run_id, sim_clock, self.user, self.profile)
@@ -59,10 +61,22 @@ class PassengerApp(BaseApp):
         return UserRegistry(self.sim_clock, self.credentials)
 
     def create_manager(self):
-        return PassengerManager(self.run_id, self.sim_clock, self.user, self.profile)
+        return PassengerManager(
+            run_id=self.run_id,
+            sim_clock=self.sim_clock,
+            user=self.user,
+            profile=self.profile,
+            persona=self.persona
+        )
 
     def create_trip_manager(self):
-        return PassengerTripManager(self.run_id, self.sim_clock, self.user, self.messenger)
+        return PassengerTripManager(
+            run_id=self.run_id,
+            sim_clock=self.sim_clock,
+            user=self.user,
+            messenger=self.messenger,
+            persona=self.persona
+        )
 
     # def get_manager(self):
     #     return self.manager.as_dict()

@@ -48,6 +48,7 @@ class ScenarioManager():
     analytics_collection = None
     orsim_settings = None
     reference_time = datetime(2020, 1, 1, 8, 0, 0)
+    domain = "RideHail_Simulation"
 
 
     def __init__(self, dataset):
@@ -131,6 +132,7 @@ class ScenarioManager():
             json.dump(self.analytics_collection, fp, indent=4, sort_keys=True)
 
         self.orsim_settings = orsim_settings
+        self.orsim_settings['DOMAIN'] = self.domain
         with open(f"{behavior_dir}/orsim_settings.json", "w") as fp:
             json.dump(self.orsim_settings, fp, indent=4, sort_keys=True)
 
@@ -221,6 +223,7 @@ class ScenarioManager():
             json.dump(self.analytics_collection, fp, indent=4, sort_keys=True)
 
         self.orsim_settings = orsim_settings
+        self.orsim_settings['DOMAIN'] = self.domain
         with open(f"{behavior_dir}/orsim_settings.json", "w") as fp:
             json.dump(self.orsim_settings, fp, indent=4, sort_keys=True)
 

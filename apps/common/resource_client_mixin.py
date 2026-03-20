@@ -12,7 +12,7 @@ class ResourceClientMixin:
 
     def _resource_url(self, resource_id=None):
         base = settings['OPENRIDE_SERVER_URL']
-        url = f"{base}/{self.run_id}/{self.resource_type}"
+        url = f"{base}/{self.run_id}/{self.persona.get('role')}"
         if resource_id is not None:
             url = f"{url}/{resource_id}"
         return url

@@ -1,14 +1,15 @@
 from typing import Any
-from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+# from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+from orsim.utils import WorkflowStateMachine
 
 class BaseManager:
 
     def __init__(self, *args, **kwargs):
-        # must have user, resource_type and run_id for logging and resource client mixin
+        # must have user, run_id, and persona for logging and resource client mixin
         if not hasattr(self, 'user') or \
             not hasattr(self, 'run_id') or \
-            not hasattr(self, 'resource_type'):
-            raise NotImplementedError("Subclasses of BaseManager must have 'user', 'run_id', 'resource_type', and 'resource' attributes.")
+            not hasattr(self, 'persona'):
+            raise NotImplementedError("Subclasses of BaseManager must have 'user', 'run_id', 'persona', and 'resource' attributes.")
 
         # resource must be a dict and shoule have id
         if not isinstance(self.resource, dict) or '_id' not in self.resource:
@@ -97,7 +98,7 @@ class BaseManager:
     #     """
     #     pass
 
-    def transition_resource_to_state(self, resource, target_state, sim_clock):
+    def transition_resource_to_state(self, resource, target_state, sim_clock,):
         """
         State transition logic using WorkflowStateMachine.
         Calls resource_patch, which must be implemented by subclasses or via ResourceClientMixin.
@@ -109,7 +110,7 @@ class BaseManager:
         )
         if event is None:
             raise Exception(f"No transition from {resource['state']} to {target_state}")
-        # Example usage: self.resource_patch(resource_type, resource_id, data, etag, timeout)
+        # Example usage: self.resource_patch(resource_id, data, etag, timeout)
         self.resource_patch(resource["_id"], {"transition": event, "sim_clock": sim_clock}, etag=resource.get("_etag"))
         return_value = self.resource_get(resource_id=resource["_id"])  # Refresh resource after transition
         # print(f"{self.__class__.__name__}.transition_resource_to_state: Refresh result for resource {self.get_id()}: {return_value}")
@@ -118,13 +119,13 @@ class BaseManager:
     # The following are abstract methods that subclasses must implement depending on the backend.
 
     def resource_get(self, resource_id, params={}, timeout=None):
-        """GET an resource or collection from the backend. Uses self.resource_type."""
+        """GET an resource or collection from the backend. Uses self.persona."""
         raise NotImplementedError("Subclasses must implement resource_get or use ResourceClientMixin.")
 
     def resource_post(self,  resource_id, data, timeout=None):
-        """POST an resource to the backend. Uses self.resource_type."""
+        """POST an resource to the backend. Uses self.persona."""
         raise NotImplementedError("Subclasses must implement resource_post or use ResourceClientMixin.")
 
     def resource_patch(self,  resource_id, data, etag=None, timeout=None):
-        """PATCH an resource in the backend. Uses self.resource_type."""
+        """PATCH an resource in the backend. Uses self.persona."""
         raise NotImplementedError("Subclasses must implement resource_patch or use ResourceClientMixin.")
