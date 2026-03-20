@@ -9,9 +9,9 @@ from .ridehail_passenger_trip_sm import RidehailPassengerTripStateMachine
 class StateMachineRegistry:
     """Registry for state machines used in the ride hail simulation."""
     state_machines = {
-        'workflow': WorkflowStateMachine,
-        'ridehail_driver_trip': RidehailDriverTripStateMachine,
-        'ridehail_passenger_trip': RidehailPassengerTripStateMachine,
+        'WorkflowStateMachine': WorkflowStateMachine,
+        'RidehailDriverTripStateMachine': RidehailDriverTripStateMachine,
+        'RidehailPassengerTripStateMachine': RidehailPassengerTripStateMachine,
     }
 
     domain = 'ride_hail'

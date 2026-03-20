@@ -2,40 +2,41 @@ from statemachine import StateMachine, State
 from graphviz import Digraph
 
 import json
+from .state_machine_serializer import StateMachineSerializer
 
-def serialize_statemachine(sm_cls):
-    # Instantiate the statemachine
-    sm = sm_cls()
+# def serialize_statemachine(sm_cls):
+#     # Instantiate the statemachine
+#     sm = sm_cls()
 
-    # Collect states
-    states = [state.name for state in sm.states]
+#     # Collect states
+#     states = [state.name for state in sm.states]
 
-    # Collect transitions by iterating over states and their outgoing transitions
-    transitions = []
-    for state in sm.states:
-        for transition in getattr(state, 'transitions', []):
-            # Try trigger, then event, then fallback to None
-            trigger = getattr(transition, 'trigger', None)
-            event = getattr(transition, 'event', None)
-            transitions.append({
-                'trigger': trigger or event or '',
-                'source': state.name,
-                'target': transition.target.name,
-                # 'event': trigger or event or '',
-            })
+#     # Collect transitions by iterating over states and their outgoing transitions
+#     transitions = []
+#     for state in sm.states:
+#         for transition in getattr(state, 'transitions', []):
+#             # Try trigger, then event, then fallback to None
+#             trigger = getattr(transition, 'trigger', None)
+#             event = getattr(transition, 'event', None)
+#             transitions.append({
+#                 'trigger': trigger or event or '',
+#                 'source': state.name,
+#                 'target': transition.target.name,
+#                 # 'event': trigger or event or '',
+#             })
 
-    # Find initial state
-    initial = None
-    for state in sm.states:
-        if state.initial:
-            initial = state.name
-            break
+#     # Find initial state
+#     initial = None
+#     for state in sm.states:
+#         if state.initial:
+#             initial = state.name
+#             break
 
-    return {
-        'states': states,
-        'transitions': transitions,
-        'initial': initial,
-    }
+#     return {
+#         'states': states,
+#         'transitions': transitions,
+#         'initial': initial,
+#     }
 
 
 import requests
@@ -46,7 +47,7 @@ def register_and_validate_statemachine(server_url, headers, domain, statemachine
     Raises ValueError if existing definition does not match current.
     """
     # sm_name = sm_cls.__name__
-    definition = serialize_statemachine(statemachine_cls)
+    definition = StateMachineSerializer.serialize(statemachine_cls)
     endpoint = f"{server_url}/statemachine"
     params = {
         "where": json.dumps({

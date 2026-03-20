@@ -94,6 +94,10 @@ class DriverTripManager(TripManagerBase):
             "current_loc": current_loc,
             "next_dest_loc": current_loc,
             "is_occupied": False,
+            "statemachine": {
+                "name": "RidehailDriverTripStateMachine",
+                "domain": "ride_hail",
+            },
             "sim_clock": sim_clock,
         }
 
@@ -124,6 +128,10 @@ class DriverTripManager(TripManagerBase):
             "pickup_loc": passenger_ride_hail_trip['pickup_loc'],
             "dropoff_loc": passenger_ride_hail_trip['dropoff_loc'],
             "is_occupied": True,
+            "statemachine": {
+                "name": "RidehailDriverTripStateMachine",
+                "domain": "ride_hail",
+            },
             "sim_clock": sim_clock,
         }
 

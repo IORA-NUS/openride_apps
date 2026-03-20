@@ -7,6 +7,7 @@ from apps.config import settings
 from apps.utils import id_generator, is_success
 from apps.agent_core.base_manager import BaseManager
 from apps.common.resource_client_mixin import ResourceClientMixin
+from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 # from apps.utils.user_registry import UserRegistry
 
@@ -21,9 +22,10 @@ class PassengerManager(ResourceClientMixin, BaseManager):
         data = {
             "profile": self.passenger_profile,
             "statemachine": {
-                "name": "workflow",
+                "name": "WorkflowStateMachine",
                 "domain": "ride_hail",
             },
+            "state": WorkflowStateMachine().initial_state.name,
             "sim_clock": sim_clock
         }
         self.resource = self.init_resource(sim_clock, data=data)

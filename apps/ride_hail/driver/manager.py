@@ -27,11 +27,13 @@ class DriverManager(ResourceClientMixin, BaseManager):
             },
             "profile": self.profile,
             "statemachine": {
-                "name": "workflow",
+                "name": "WorkflowStateMachine",
                 "domain": "ride_hail",
             },
+            "state": WorkflowStateMachine().initial_state.name,
             "sim_clock": sim_clock,
         }
+        print(f"DriverManager.__init__: Initializing driver with data: {data}")
         self.resource = self.init_resource(sim_clock, data=data)
 
         self.vehicle = VehicleManager(run_id, sim_clock, user, profile={})

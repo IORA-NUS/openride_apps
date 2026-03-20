@@ -104,6 +104,10 @@ class PassengerTripManager(TripManagerBase):
             "pickup_loc": pickup_loc,
             "dropoff_loc": dropoff_loc,
             "sim_clock": sim_clock,
+            "statemachine": {
+                "name": "RidehailPassengerTripStateMachine",
+                "domain": "ride_hail",
+            },
             "trip_price": self.compute_trip_price(pickup_loc, dropoff_loc) if trip_price is None else trip_price,
         }
 
