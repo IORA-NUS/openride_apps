@@ -66,8 +66,13 @@ class BaseManager:
 
     def logout(self, sim_clock):
         """Generic logout using transition_resource_to_state. Assumes 'logout' is a valid transition from current state."""
-        self.resource = self.transition_resource_to_state(self.resource, 'logout', sim_clock)
-        print(f"{self.__class__.__name__}.logout: resource {self.get_id()} has logged out")
+        # self.resource = self.transition_resource_to_state(self.resource, 'logout', sim_clock)
+        try:
+            self.resource = self.transition_resource_to_state(self.resource, 'offline', sim_clock)
+            print(f"{self.__class__.__name__}.logout: resource {self.get_id()} has logged out")
+        except Exception as e:
+            print(f"{self.__class__.__name__}.logout: unable to logout resource {self.get_id()}: {e}")
+        # May be consider moving te state to dormant if the agent will not need to participate in market again...
         return self.resource
 
     def refresh(self):

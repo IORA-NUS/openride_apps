@@ -89,7 +89,8 @@ class DriverAgentIndie(ORSimAgent):
             self.add_step_log("After entering_market")
             # print(f"DriverAgentIndie[{self.unique_id}]: Completed entering_market with {self.app.get_trip()=}")
 
-            if self.is_active():
+            # if self.is_active():
+            if self.active:
                 # print(f"DriverAgentIndie[{self.unique_id}]: Agent is active, processing step with payload {payload=}")
                 try:
                     self.add_step_log("Before step")
@@ -144,8 +145,8 @@ class DriverAgentIndie(ORSimAgent):
             print(f"DriverAgentIndie[{self.unique_id}]: Not entering market at {time_step = } because {self.active = } and shift_start_time={self.behavior['shift_start_time']}")
             return False
 
-    def is_active(self):
-        return self.active
+    # def is_active(self):
+    #     return self.active
 
     def exiting_market(self):
         ''' '''

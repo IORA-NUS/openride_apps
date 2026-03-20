@@ -95,7 +95,8 @@ class PassengerAgentIndie(ORSimAgent):
             self.add_step_log("After entering_market")
             print(f"Finished processing step for PassengerAgentIndie {self.unique_id} at time_step {payload.get('time_step')}")
 
-            if self.is_active():
+            # if self.is_active():
+            if self.active:
                 try:
                     self.add_step_log("Before step")
                     did_step = self.step(payload.get("time_step"))
@@ -144,15 +145,22 @@ class PassengerAgentIndie(ORSimAgent):
         #     return True
         else:
             if self.app.exited_market:
+                print(f"PassengerAgentIndie[{self.unique_id}]: Already exited market as {self.app.exited_market=}")
                 return False
             elif (self.current_time_step > self.behavior['trip_request_time']) and \
                     (self.app.get_trip() is not None) and \
                     (self.app.get_trip()['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.name,
                                                     RidehailPassengerTripStateMachine.passenger_cancelled_trip.name,]):
+
+                print(f"PassengerAgentIndie[{self.unique_id}]: Exiting market at time_step {self.current_time_step} with trip state {self.app.get_trip()['state']}")
                 self.shutdown()
                 return True
 
             else:
+                if self.app.get_trip() is None:
+                    print(f"PassengerAgentIndie[{self.unique_id}]: Not exiting market at time_step {self.current_time_step} because no {self.app.get_trip() =}")
+                else:
+                    print(f"PassengerAgentIndie[{self.unique_id}]: Not exiting market at time_step {self.current_time_step} with trip state {self.app.get_trip()['state']}")
                 return False
 
     def logout(self):

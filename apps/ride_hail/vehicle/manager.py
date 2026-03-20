@@ -18,6 +18,10 @@ class VehicleManager(ResourceClientMixin, BaseManager):
                 "expiry":  "Tue, 01 Jan 2030 00:00:00 GMT"
             },
             "capacity": 4,
+            "statemachine": {
+                "name": "workflow",
+                "domain": "ride_hail",
+            },
             "sim_clock": sim_clock,
         }
         if self.profile:

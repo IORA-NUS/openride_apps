@@ -61,7 +61,7 @@ class BaseApp:
             try:
                 self.manager.logout(sim_clock)
             except Exception as e:
-                logging.warning(f"Failed to logout manager: {str(e)}")
+                logging.warning(f"Failed to logout {self.get_manager()}: {str(e)}")
 
     # def refresh(self, *args, **kwargs):
     #     raise NotImplementedError

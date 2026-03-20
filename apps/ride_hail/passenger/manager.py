@@ -20,6 +20,10 @@ class PassengerManager(ResourceClientMixin, BaseManager):
 
         data = {
             "profile": self.passenger_profile,
+            "statemachine": {
+                "name": "workflow",
+                "domain": "ride_hail",
+            },
             "sim_clock": sim_clock
         }
         self.resource = self.init_resource(sim_clock, data=data)
