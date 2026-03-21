@@ -1,4 +1,4 @@
-from apps.agent_core.interaction.decorators import message_handler, state_handler
+from apps.agent_core.interaction import message_handler, state_handler
 import os, sys
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
@@ -39,7 +39,7 @@ from typing import Any, Dict
 from orsim import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
-from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
+from apps.agent_core.interaction.plugin import CallbackRouterPlugin, InteractionContext
 from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
 # from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import driver_settings, orsim_settings
@@ -73,7 +73,7 @@ class DriverAgentIndie(ORSimAgent):
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
             # Use interaction plugin for message/state handling with decorator support
-            self._interaction_plugin = CallbackRouterInteractionPlugin(handler_obj=self)
+            self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True

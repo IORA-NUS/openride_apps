@@ -34,6 +34,8 @@ class PassengerManager(ResourceClientMixin, BaseManager):
         }
         self.resource = self.init_resource(sim_clock, data=data)
 
+    def on_init(self):
+        pass
 
 
     # init_passenger is now handled by BaseManager's init_resource

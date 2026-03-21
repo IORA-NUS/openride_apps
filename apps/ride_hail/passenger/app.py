@@ -23,39 +23,16 @@ class PassengerApp(BaseApp):
     exited_market = False
 
     def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona):
-
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
                          messenger=messenger,
                          current_loc=current_loc,
                          profile=profile,
-                         persona=persona)  # Initialize BaseApp attributes
-        # self.run_id = run_id
-        # self.credentials = credentials
-        # self.profile = profile
-        # self.messenger = messenger
-        # self.persona = persona
-
-        # # self.user = UserRegistry(sim_clock, credentials)
-        # # self.manager = PassengerManager(run_id, sim_clock, self.user, self.profile)
-        # # self.trip = PassengerTripManager(run_id, sim_clock, self.user, self.messenger)
-
-        # self.user = self.create_user(sim_clock)
-        # self.manager = self.create_manager(sim_clock)
-
+                         persona=persona)
         self.trip = self.create_trip_manager()
-
-        # self.topic_params = {
-        #     f"{self.run_id}/{self.manager.get_id()}": self.message_handler
-        # }
-
-        # self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual passenger behavior
-
-
         self.latest_sim_clock = sim_clock
         self.latest_loc = current_loc
-
 
     def create_user(self):
         return UserRegistry(self.sim_clock, self.credentials)

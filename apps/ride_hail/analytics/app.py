@@ -33,17 +33,11 @@ class AnalyticsApp(BaseApp):
     ''' '''
 
     def __init__(self, run_id, sim_clock, credentials, messenger, persona):
-        ''' '''
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
                          messenger=messenger,
-                         persona=persona)  # Initialize BaseApp attributes
-        # self.sim_clock = sim_clock
-        # self.run_id = run_id
-        # self.credentials = credentials
-
-        # self.user = self.create_user()
+                         persona=persona)
         self.kpi_collection = {
             'revenue': 0,
             'num_cancelled': 0,
@@ -54,9 +48,6 @@ class AnalyticsApp(BaseApp):
             'wait_time_pickup': 0,
             'service_score': 0,
         }
-
-        # # self.messenger = Messenger(credentials)
-        # self.messenger = messenger
         self.server_max_results = 50  # make sure this is in sync with server
 
         self.passenger_trips_for_metric = None

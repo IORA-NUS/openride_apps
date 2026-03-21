@@ -46,6 +46,8 @@ class DriverManager(ResourceClientMixin, BaseManager):
         }
         self.vehicle = VehicleManager(run_id, sim_clock, user, profile={}, persona=vehicle_persona)
 
+    def on_init(self):
+        pass
 
 
     # init_driver is now handled by BaseManager's init_resource

@@ -1,4 +1,4 @@
-from apps.agent_core.interaction.decorators import message_handler, state_handler
+from apps.agent_core.interaction import message_handler, state_handler
 import os, sys
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
@@ -34,7 +34,7 @@ from apps.loc_service import TaxiStop, BusStop
 from orsim import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
-from apps.utils.interaction_plugin import CallbackRouterInteractionPlugin, InteractionContext
+from apps.agent_core.interaction.plugin import CallbackRouterPlugin, InteractionContext
 from apps.ride_hail import RideHailActions, RideHailEvents, validate_driver_workflow_payload
 # from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import orsim_settings, passenger_settings
@@ -80,7 +80,7 @@ class PassengerAgentIndie(ORSimAgent):
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
 
-            self._interaction_plugin = CallbackRouterInteractionPlugin(handler_obj=self)
+            self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
 
         except Exception as e:
             print(f"Exception during PassengerAgentIndie initialization: {str(e)}")

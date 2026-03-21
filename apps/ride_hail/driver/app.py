@@ -22,39 +22,17 @@ from apps.state_machine import RidehailDriverTripStateMachine
 
 class DriverApp(BaseApp):
 
-    exited_market = False
+    # exited_market = False
 
     def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona):
-
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
                          messenger=messenger,
                          current_loc=current_loc,
                          profile=profile,
-                         persona=persona)  # Initialize BaseApp attributes
-        # self.run_id = run_id
-        # self.sim_clock = sim_clock
-        # self.credentials = credentials
-        # self.profile = profile
-        # self.messenger = messenger
-
-        # self.user = UserRegistry(sim_clock, credentials)
-        # self.manager = DriverManager(run_id, sim_clock, self.user, profile)
-        # self.trip = DriverTripManager(run_id, sim_clock, self.user, self.messenger)
+                         persona=persona)
         self.trip = self.create_trip_manager()
-
-        # self.user = self.create_user()
-        # self.manager = self.create_manager()
-        # self.trip = self.create_trip_manager()
-
-        # # self.messenger = Messenger(credentials, f"{self.run_id}/{self.manager.get_id()}", self.on_receive_message)
-        # self.topic_params = {
-        #     f"{self.run_id}/{self.manager.get_id()}": self.message_handler
-        # }
-
-        # self.message_queue = [] # message_queue is used to support buffering of messages between each Simulation step to provide for an approximation of actual driver behavior
-
         self.latest_sim_clock = sim_clock
         self.latest_loc = current_loc
 

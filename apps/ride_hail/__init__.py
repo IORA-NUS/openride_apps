@@ -11,12 +11,6 @@ from .models import (
 	PassengerWorkflowPayload,
 	RequestedTripPayload,
 )
-from .adapters import (
-	RideHailAnalyticsAdapter,
-	RideHailAssignmentAdapter,
-	RideHailDriverAdapter,
-	RideHailPassengerAdapter,
-)
 from .analytics import AnalyticsAgentIndie, AnalyticsApp
 from .assignment import AssignmentAgentIndie, AssignmentApp
 from .driver import DriverAgentIndie, DriverApp, DriverManager, DriverTripManager
@@ -33,10 +27,6 @@ __all__ = [
 	"AssignedPayload",
 	"PassengerWorkflowPayload",
 	"DriverWorkflowPayload",
-	"RideHailAssignmentAdapter",
-	"RideHailAnalyticsAdapter",
-	"RideHailDriverAdapter",
-	"RideHailPassengerAdapter",
 	"DriverApp",
 	"DriverAgentIndie",
 	"DriverManager",

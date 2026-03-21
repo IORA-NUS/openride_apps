@@ -37,5 +37,7 @@ class VehicleManager(ResourceClientMixin, BaseManager):
             data["profile"] = self.profile
         self.resource = self.init_resource(sim_clock, data=data)
 
+    def on_init(self):
+        pass
 
     # init_vehicle and create_vehicle are now handled by BaseManager's init_resource and create_resource

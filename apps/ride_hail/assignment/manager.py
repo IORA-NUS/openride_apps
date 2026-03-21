@@ -37,6 +37,8 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
         }
         self.resource = self.init_resource(sim_clock, data=data, params=params)
 
+    def on_init(self):
+        pass
 
     def login(self, sim_clock):
         """

@@ -1,11 +1,11 @@
-from apps.utils.interaction_plugin import (
-    CallbackRouterInteractionPlugin,
+from apps.agent_core.interaction.plugin import (
+    CallbackRouterPlugin,
     InteractionContext,
 )
 
 
 def test_plugin_adapter_dispatches_registered_message_handler():
-    plugin = CallbackRouterInteractionPlugin()
+    plugin = CallbackRouterPlugin()
     calls = []
 
     def _handler(payload=None, data=None, **_kwargs):
@@ -27,7 +27,7 @@ def test_plugin_adapter_dispatches_registered_message_handler():
 
 
 def test_plugin_adapter_dispatches_registered_state_handler():
-    plugin = CallbackRouterInteractionPlugin()
+    plugin = CallbackRouterPlugin()
     calls = []
 
     def _handler(**kwargs):
@@ -47,7 +47,7 @@ def test_plugin_adapter_dispatches_registered_state_handler():
 
 
 def test_plugin_adapter_returns_false_for_unregistered_entries():
-    plugin = CallbackRouterInteractionPlugin()
+    plugin = CallbackRouterPlugin()
 
     message_handled = plugin.on_message(
         InteractionContext(action="x", event="y", payload={}, data={})

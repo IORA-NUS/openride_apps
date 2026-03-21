@@ -25,7 +25,6 @@ class AssignmentApp(BaseApp):
     ''' '''
 
     def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):
-        ''' '''
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
@@ -34,22 +33,6 @@ class AssignmentApp(BaseApp):
                          solver_name=solver_name,
                          solver_params=solver_params,
                          steps_per_action=steps_per_action)
-        # self.run_id = run_id
-        # self.sim_clock = sim_clock
-        # self.credentials = credentials
-        # self.solver_name = solver_name
-        # self.solver_params = solver_params
-        # self.steps_per_action = steps_per_action
-        # self.messenger = messenger
-
-        # # self.user = UserRegistry(sim_clock, credentials, role='admin')
-
-        # # self.solver = globals()[solver_name](self.solver_params)
-
-        # # self.manager = AssignmentManager(self.run_id, sim_clock, self.user, self.solver)
-        # self.user = self.create_user()
-        # self.manager = self.create_manager()
-
         self.server_max_results = 50  # make sure this is in sync with server
 
     def create_user(self):
