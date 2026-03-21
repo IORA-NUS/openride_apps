@@ -14,11 +14,14 @@ class TripManagerBase:
         self.messenger = messenger
         self.persona = persona
         self._resource_client = ResourceTransitionClient()
+        self.simulation_domain = None
 
         self.trip = None
 
     def _trip_collection_url(self):
-        return f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/{self.persona.get('role')}/ride_hail/trip"
+        # return f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/{self.persona.get('role')}/ride_hail/trip"
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/{self.persona.get('role')}/trip"
+
 
     def _trip_item_url(self, suffix=None):
         if self.trip is None:

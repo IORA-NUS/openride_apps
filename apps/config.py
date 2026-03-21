@@ -28,4 +28,10 @@ messenger_backend = {
     'WEB_MQTT_PORT': 15675,
 }
 
+# Simulation domains mapping
+simulation_domains = {
+    'ridehail': 'ridehail-sim',
+    # Add other domains as needed
+}
+
 

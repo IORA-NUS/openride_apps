@@ -31,7 +31,7 @@ import asyncio
 # from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
 
 # from orsim import ORSimScheduler
-from apps.config import settings
+from apps.config import settings, simulation_domains
 # from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
 from apps.scenario.scenario_config import driver_settings, passenger_settings, analytics_settings, assignment_settings
 from apps.orsim_config import orsim_settings
@@ -48,7 +48,7 @@ class ScenarioManager():
     analytics_collection = None
     orsim_settings = None
     reference_time = datetime(2020, 1, 1, 8, 0, 0)
-    domain = "ridehail-sim"
+    domain = simulation_domains['ridehail']
 
 
     def __init__(self, dataset):

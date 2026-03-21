@@ -3,7 +3,7 @@ import requests, json
 from http import HTTPStatus
 from dateutil.relativedelta import relativedelta
 
-from apps.config import settings
+from apps.config import settings, simulation_domains
 from apps.utils import id_generator, is_success
 from apps.agent_core.base_manager import BaseManager
 from apps.common.resource_client_mixin import ResourceClientMixin
@@ -20,6 +20,7 @@ class PassengerManager(ResourceClientMixin, BaseManager):
         self.user = user
         self.profile = profile
         self.persona = persona
+        self.simulation_domain = simulation_domains['ridehail']
 
         data = {
             "profile": self.profile,

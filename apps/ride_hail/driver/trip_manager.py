@@ -1,7 +1,7 @@
 from dateutil.relativedelta import relativedelta
 import json, logging
 
-from apps.config import settings #, driver_settings
+from apps.config import settings, simulation_domains
 from apps.utils import is_success, str_to_time
 
 from apps.state_machine import RidehailDriverTripStateMachine
@@ -19,6 +19,7 @@ class DriverTripManager(TripManagerBase):
     def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False, persona=None):
         super().__init__(run_id, user, messenger, persona=persona)
         self.update_passenger_loc = update_passenger_loc
+        self.simulation_domain = simulation_domains['ridehail']
 
     def as_dict(self):
         return self.trip

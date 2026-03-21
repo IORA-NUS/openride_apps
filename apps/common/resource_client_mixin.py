@@ -6,12 +6,12 @@ from apps.config import settings
 class ResourceClientMixin:
     """
     Mixin for generic RESTful resource operations and URL construction.
-    Expects self.run_id, self.settings, and self.user.
+    Expects self.run_id, self.settings, self.simulation_domain, and self.user.
     """
 
 
     def _resource_url(self, resource_id=None):
-        base = settings['OPENRIDE_SERVER_URL']
+        base = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}"
         url = f"{base}/{self.run_id}/{self.persona.get('role')}"
         if resource_id is not None:
             url = f"{url}/{resource_id}"

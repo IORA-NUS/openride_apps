@@ -11,6 +11,7 @@ from apps.common.trip_manager_base import TripManagerBase
 from apps.ride_hail import RideHailActions, RideHailEvents
 
 from apps.utils.excepions import WriteFailedException, RefreshException
+from apps.config import settings, simulation_domains
 
 class PassengerTripManager(TripManagerBase):
     ''' '''
@@ -24,6 +25,7 @@ class PassengerTripManager(TripManagerBase):
         self.time_confirmed = None
         self.time_pickedup = None
         self.time_droppedoff = None
+        self.simulation_domain = simulation_domains['ridehail']
 
     def as_dict(self):
         return self.trip

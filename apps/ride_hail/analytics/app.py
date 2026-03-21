@@ -17,12 +17,12 @@ from datetime import datetime
 # from apps.utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
 from apps.loc_service import transform_lonlat_webmercator, itransform_lonlat_webmercator
 from apps.utils.user_registry import UserRegistry
-from apps.config import settings
+from apps.config import settings, simulation_domains
 
 from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from apps.agent_core.base_app import BaseApp
 
-from .manager import AnalyticsManager
+# from .manager import AnalyticsManager
 
 import websockets, asyncio
 
@@ -70,8 +70,10 @@ class AnalyticsApp(BaseApp):
 
     def get_active_driver_trips(self, sim_clock):
         ''' '''
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
-        waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
+        # driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
+        # waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/driver/trip"
+        waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/waypoint"
 
         got_results = True
         response_items = []
@@ -119,8 +121,10 @@ class AnalyticsApp(BaseApp):
 
     def get_active_passenger_trips(self, sim_clock):
         ''' '''
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
-        waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
+        # passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
+        # waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint"
+        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip"
+        waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/waypoint"
 
         display_expiry_time = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT") - relativedelta(seconds=30)
 
@@ -269,7 +273,8 @@ class AnalyticsApp(BaseApp):
 
     def get_history_as_paths(self, timewindow_start, timewindow_end):
         ''' '''
-        waypoint_history_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint_history/all_trips"
+        # waypoint_history_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/waypoint_history/all_trips"
+        waypoint_history_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/waypoint_history/all_trips"
 
         params = {
             'from': datetime.strftime(timewindow_start, '%Y%m%d%H%M%S'),
@@ -285,7 +290,8 @@ class AnalyticsApp(BaseApp):
         self.get_driver_trips_for_metric(start_time, end_time)
 
     def get_passenger_trips_for_metric(self, start_time, end_time):
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
+        # passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
+        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip"
 
         got_results = True
         self.passenger_trips_for_metric = []
@@ -320,7 +326,8 @@ class AnalyticsApp(BaseApp):
                 page += 1
 
     def get_driver_trips_for_metric(self, start_time, end_time):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
+        # driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/driver/trip"
 
         got_results = True
         self.driver_trips_for_metric = []
@@ -351,7 +358,8 @@ class AnalyticsApp(BaseApp):
                 page += 1
 
     def active_driver_count(self):
-        driver_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/driver/ride_hail/trip/count_active"
+        # driver_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/driver/ride_hail/trip/count_active"
+        driver_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/driver/trip/count_active"
 
         params = {
             "aggregate": json.dumps({
@@ -371,7 +379,8 @@ class AnalyticsApp(BaseApp):
             logging.error(response.status_code, response.text)
 
     def active_passenger_count(self):
-        passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count_active"
+        # passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count_active"
+        passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip/count_active"
 
         params = {
             "aggregate": json.dumps({
@@ -445,7 +454,8 @@ class AnalyticsApp(BaseApp):
 
     def save_kpi(self, sim_clock, kpi_collection):
         ''' '''
-        kpi_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/kpi"
+        # kpi_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/kpi"
+        kpi_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/kpi"
 
         data = []
         for metric, value in kpi_collection.items():

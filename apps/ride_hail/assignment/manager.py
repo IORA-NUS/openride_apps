@@ -2,7 +2,7 @@ import requests, json
 from http import HTTPStatus
 
 import logging
-from apps.config import settings
+from apps.config import settings, simulation_domains
 from apps.utils import id_generator, is_success
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
@@ -19,6 +19,7 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
         self.solver = solver
         self.persona = persona
         # self.resource_type = 'engine'
+        self.simulation_domain = simulation_domains['ridehail']
 
         params = {
             'where': json.dumps({

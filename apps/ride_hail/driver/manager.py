@@ -2,7 +2,7 @@ from dateutil.relativedelta import relativedelta
 import requests, json, logging, traceback
 from http import HTTPStatus
 
-from apps.config import settings
+from apps.config import settings, simulation_domains
 from apps.utils import id_generator, is_success
 
 from apps.agent_core.base_manager import BaseManager
@@ -20,6 +20,7 @@ class DriverManager(ResourceClientMixin, BaseManager):
         self.profile = profile
         self.persona = persona
         # self.resource_type = 'driver'
+        self.simulation_domain = simulation_domains['ridehail']
 
         data = {
             "license": {

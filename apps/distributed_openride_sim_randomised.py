@@ -208,7 +208,7 @@ class DistributedOpenRideSimRandomised():
 
     def init_run_config(self):
 
-        run_config_url = f"{settings['OPENRIDE_SERVER_URL']}/run_config"
+        run_config_url = f"{settings['OPENRIDE_SERVER_URL']}/run-config"
 
         data = {
             "run_id": self.run_id,
@@ -236,7 +236,7 @@ class DistributedOpenRideSimRandomised():
             raise Exception(f"{response.url}, {response.text}")
 
     def update_status(self, status, execution_time=0, step_metric=None):
-        run_config_item_url = f"{settings['OPENRIDE_SERVER_URL']}/run_config/{self.run_record['_id']}"
+        run_config_item_url = f"{settings['OPENRIDE_SERVER_URL']}/run-config/{self.run_record['_id']}"
 
         data = {
             'status': status,

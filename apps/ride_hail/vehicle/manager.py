@@ -1,4 +1,4 @@
-from apps.config import settings
+from apps.config import settings, simulation_domains
 from apps.utils import id_generator, is_success
 from apps.agent_core.base_manager import BaseManager
 from apps.common.resource_client_mixin import ResourceClientMixin
@@ -14,6 +14,9 @@ class VehicleManager(ResourceClientMixin, BaseManager):
         self.user = user
         self.profile = profile
         self.persona = persona
+
+        self.simulation_domain = simulation_domains['ridehail']
+
         # self.resource_type = 'vehicle'
         data = {
             "registration": {

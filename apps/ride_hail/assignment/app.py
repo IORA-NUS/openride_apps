@@ -12,7 +12,7 @@ from datetime import datetime
 from apps.loc_service import OSRMClient
 
 from apps.utils.user_registry import UserRegistry
-from apps.config import settings
+from apps.config import settings, simulation_domains
 
 from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from apps.ride_hail import RideHailActions
@@ -64,7 +64,8 @@ class AssignmentApp(BaseApp):
     def get_scale_factor(self, time_step):
         if self.solver_params.get('online_metric_scale_strategy') == 'demand':
             try:
-                passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count"  # NOTE Absence of run_id in URL
+                # passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count"  # NOTE Absence of run_id in URL
+                passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip/count"  # NOTE Absence of run_id in URL
                 params = {
                     "aggregate": json.dumps({
                         "$run_id": self.run_id,
@@ -145,7 +146,8 @@ class AssignmentApp(BaseApp):
 
     def get_driver_trip(self):
         ''' '''
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
+        # driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
+        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/driver/trip"
 
         got_results = True
         response_items = []
@@ -184,7 +186,8 @@ class AssignmentApp(BaseApp):
 
     def get_passenger_trip(self):
         ''' '''
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
+        # passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
+        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip"
 
         got_results = True
         response_items = []
