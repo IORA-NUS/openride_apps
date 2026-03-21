@@ -23,16 +23,6 @@ class AnalyticsAgentIndie(ORSimAgent):
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
         }
-        # self.kpi_collection = {
-        #     'revenue': 0,
-        #     'num_cancelled': 0,
-        #     'num_served': 0,
-        #     'wait_time_driver_confirm': 0,
-        #     'wait_time_total': 0,
-        #     'wait_time_assignment': 0,
-        #     'wait_time_pickup': 0,
-        #     'service_score': 0,
-        # }
 
         try:
             self.app = AnalyticsApp(run_id=self.run_id,
@@ -44,6 +34,8 @@ class AnalyticsAgentIndie(ORSimAgent):
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
+        if hasattr(self, 'agent_failed') and self.agent_failed:
+            logging.error(f"AnalyticsAgentIndie {self.unique_id} failed to initialize and will not step.")
 
     def process_payload(self, payload):
         did_step = False
@@ -53,22 +45,31 @@ class AnalyticsAgentIndie(ORSimAgent):
         return did_step
 
     def logout(self):
-        self.step(self.current_time_step)
+        def step(self, time_step):
+            logging.info(f"[AnalyticsAgentIndie.step] Called for agent {self.unique_id} at time_step {time_step}")
         self.app.close(self.get_current_time_str())
 
     def estimate_next_event_time(self):
         return self.current_time
 
     def step(self, time_step):
+        # print(f"[AnalyticsAgentIndie.step] Called for agent {self.unique_id} at time_step {time_step}")
         if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
                     (random() <= self.behavior['response_rate']) and \
                     (self.next_event_time <= self.current_time):
-            self.app.compute_all_metrics()
+            # print(f"[AnalyticsAgentIndie.step] Agent {self.unique_id} is taking action at time_step {time_step}. Conditions met.")
+            # print("before compute_all_metrics")
+            try:
+                self.compute_all_metrics()
+            except Exception as e:
+                logging.exception(f"Error computing metrics for agent {self.unique_id} at time_step {time_step}: {str(e)}")
+                # raise e
+            # print("after compute_all_metrics")
 
             output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
 
             if self.behavior['publish_realtime_data']:
-                location_stream, route_stream = self.app.publish_active_trips(self.get_current_time_str())
+                location_stream, route_stream = self.publish_active_trips(self.get_current_time_str())
 
                 if self.behavior['write_ws_output_to_file']:
                     stream_output_dir = f"{output_dir}/stream"
@@ -99,12 +100,95 @@ class AnalyticsAgentIndie(ORSimAgent):
 
             return True
         else:
+            # print(f"[AnalyticsAgentIndie.step] Agent {self.unique_id} is skipping this step. Conditions not met.")
+            # print()
             return False
 
-    # def compute_all_metrics(self):
-    #     start_time = self.current_time - relativedelta(seconds=(self.behavior['steps_per_action'] * self.orsim_settings['STEP_INTERVAL']))
-    #     end_time = self.current_time
-    #     self.app.prep_metric_computation_queries(start_time, end_time)
+    def publish_active_trips(self, sim_clock):
+        """Publish active driver and passenger trips to the appropriate stream using the agent's messenger."""
+        driver_trips = self.app.get_active_driver_trips(sim_clock)
+        passenger_trips = self.app.get_active_passenger_trips(sim_clock)
+        from apps.loc_service import transform_lonlat_webmercator, itransform_lonlat_webmercator
+        import json
+        import logging
+        location_stream = {
+            "type": "featureResult",
+            "features": []
+        }
+        route_stream = {
+            "type": "featureResult",
+            "features": []
+        }
+        for id, trip in driver_trips.items():
+            current_loc = trip['current_loc']
+            transformed_loc = transform_lonlat_webmercator(current_loc['coordinates'][1], current_loc['coordinates'][0])
+            driver_feature = {
+                "attributes": {
+                    "OBJECTID": trip['last_waypoint_id'],
+                    "TRACKID": id,
+                    "CLASS": 'driver',
+                    "STATUS": trip['state']
+                },
+                "geometry": {
+                    "x": transformed_loc[0],
+                    "y": transformed_loc[1]
+                }
+            }
+            location_stream['features'].append(driver_feature)
+            if (trip.get('projected_path') is not None) and (len(trip.get('projected_path')) > 1):
+                projected_path = trip['projected_path']
+                transformed_projected_path = itransform_lonlat_webmercator([[item[1], item[0]] for item in projected_path])
+                driver_feature = {
+                    "attributes": {
+                        "OBJECTID": trip['last_waypoint_id'],
+                        "TRACKID": id,
+                        "CLASS": 'driver',
+                        "STATUS": trip['state']
+                    },
+                    "geometry": {
+                        "paths": [list(transformed_projected_path)]
+                    }
+                }
+                route_stream['features'].append(driver_feature)
+        for id, trip in passenger_trips.items():
+            current_loc = trip['current_loc']
+            transformed_loc = transform_lonlat_webmercator(current_loc['coordinates'][1], current_loc['coordinates'][0])
+            passenger_feature = {
+                "attributes": {
+                    "OBJECTID": trip['last_waypoint_id'],
+                    "TRACKID": id,
+                    "CLASS": 'passenger',
+                    "STATUS": trip['state']
+                },
+                "geometry": {
+                    "x": transformed_loc[0],
+                    "y": transformed_loc[1]
+                }
+            }
+            location_stream['features'].append(passenger_feature)
+        from apps.config import settings
+        if settings['WEBSOCKET_SERVICE'] == 'MQTT':
+            self.messenger.client.publish(f'anaytics/location_stream', json.dumps(location_stream))
+            self.messenger.client.publish(f'anaytics/route_stream', json.dumps(route_stream))
+        elif settings['WEBSOCKET_SERVICE'] == 'WS':
+            import websockets, asyncio
+            async def publish_location_stream_async(location_stream):
+                uri = f"{settings['WS_SERVER']}/location_stream"
+                async with websockets.connect(uri) as websocket:
+                    await websocket.send(json.dumps(location_stream))
+            async def publish_route_stream_async(route_stream):
+                uri = f"{settings['WS_SERVER']}/route_stream"
+                async with websockets.connect(uri) as websocket:
+                    await websocket.send(json.dumps(route_stream))
+            asyncio.run(publish_location_stream_async(location_stream))
+            asyncio.run(publish_route_stream_async(route_stream))
+        return location_stream, route_stream
+
+    def compute_all_metrics(self):
+        start_time = self.current_time - relativedelta(seconds=(self.behavior['steps_per_action'] * self.orsim_settings['STEP_INTERVAL']))
+        end_time = self.current_time
+
+        self.app.compute_all_metrics(start_time, end_time)
 
     #     self.kpi_collection['revenue'] = self.app.compute_revenue()
     #     self.kpi_collection['num_cancelled'] = self.app.compute_cancelled()

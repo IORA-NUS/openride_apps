@@ -172,7 +172,11 @@ class DistributedOpenRideSimRandomised():
         # print(self.agent_registry[0])
         for item in self.agent_registry[i]:
             # print(f"{item}")
-            self.agent_scheduler.add_agent(**item)
+            agent_obj = self.agent_scheduler.add_agent(**item)
+            # If the agent object has agent_failed, log it
+            if hasattr(agent_obj, 'agent_failed') and getattr(agent_obj, 'agent_failed', False):
+                import logging
+                logging.error(f"Agent {getattr(agent_obj, 'unique_id', 'unknown')} failed to initialize and will not step.")
         # step() assumes all agents will be ready to respond to step message
         asyncio.run(self.agent_scheduler.step())
         agent_scheduler_run_time = time.time() - agent_scheduler_start_time

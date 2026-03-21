@@ -16,7 +16,7 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
         self.run_id = run_id
         self.user = user
         self.persona = persona
-        self.resource_id = None
+        self.resource_id = '' # keep this a string
         self.resource_type = 'kpi'
 
         self.simulation_domain = simulation_domains['ridehail']

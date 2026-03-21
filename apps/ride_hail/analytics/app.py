@@ -26,6 +26,8 @@ from .manager import AnalyticsManager
 
 import websockets, asyncio
 
+from orsim.utils import time_to_str, str_to_time
+
 
 class AnalyticsApp(BaseApp):
     ''' '''
@@ -78,31 +80,44 @@ class AnalyticsApp(BaseApp):
 
     #     self.exited_market = True
 
-    def compute_all_metrics(self):
-        start_time = self.current_time - relativedelta(seconds=(self.behavior['steps_per_action'] * self.orsim_settings['STEP_INTERVAL']))
-        end_time = self.current_time
-        self.prep_metric_computation_queries(start_time, end_time)
+    def compute_all_metrics(self, start_time, end_time):
+        # logging.info(f"[compute_all_metrics] Starting metric computation for {time_to_str(start_time)} to {time_to_str(end_time)}")
+        try:
+            self.prep_metric_computation_queries(start_time, end_time)
 
-        self.kpi_collection['revenue'] = self.compute_revenue()
-        self.kpi_collection['num_cancelled'] = self.compute_cancelled()
-        self.kpi_collection['num_served'] = self.compute_served()
+            # Log if backend returned empty data
+            if not self.passenger_trips_for_metric:
+                logging.warning(f"No passenger trips returned for metric computation at {time_to_str(end_time)}")
+            if not self.driver_trips_for_metric:
+                logging.warning(f"No driver trips returned for metric computation at {time_to_str(end_time)}")
 
-        waiting_time = self.compute_waiting_time()
-        self.kpi_collection['wait_time_driver_confirm'] = waiting_time['wait_time_driver_confirm']
-        self.kpi_collection['wait_time_total'] = waiting_time['wait_time_total']
-        self.kpi_collection['wait_time_assignment'] = waiting_time['wait_time_assignment']
-        self.kpi_collection['wait_time_pickup'] = waiting_time['wait_time_pickup']
+            self.kpi_collection['revenue'] = self.compute_revenue()
+            self.kpi_collection['num_cancelled'] = self.compute_cancelled()
+            self.kpi_collection['num_served'] = self.compute_served()
 
-        self.kpi_collection['service_score'] = self.compute_service_score()
-        self.kpi_collection['active_driver_count'] = self.manager.active_driver_count()
-        self.kpi_collection['active_passenger_count'] = self.manager.active_passenger_count()
+            waiting_time = self.compute_waiting_time()
+            self.kpi_collection['wait_time_driver_confirm'] = waiting_time['wait_time_driver_confirm']
+            self.kpi_collection['wait_time_total'] = waiting_time['wait_time_total']
+            self.kpi_collection['wait_time_assignment'] = waiting_time['wait_time_assignment']
+            self.kpi_collection['wait_time_pickup'] = waiting_time['wait_time_pickup']
 
-        # check if any KPI is None and log a warning if so
-        for kpi_name, kpi_value in self.kpi_collection.items():
-            if kpi_value is None:
-                logging.warning(f"KPI {kpi_name} is None at time {self.get_current_time_str()}")
+            self.kpi_collection['service_score'] = self.compute_service_score()
+            self.kpi_collection['active_driver_count'] = self.manager.active_driver_count()
+            self.kpi_collection['active_passenger_count'] = self.manager.active_passenger_count()
 
-        self.manager.save_kpi(self.get_current_time_str(), self.kpi_collection)
+            # Log the full KPI collection before saving
+            # logging.info(f"[compute_all_metrics] KPI collection at {time_to_str(end_time)}: {self.kpi_collection}")
+
+            # check if any KPI is None and log a warning if so
+            for kpi_name, kpi_value in self.kpi_collection.items():
+                if kpi_value is None:
+                    logging.warning(f"KPI {kpi_name} is None at time {time_to_str(end_time)}")
+
+            self.manager.save_kpi(time_to_str(end_time), self.kpi_collection)
+            # logging.info(f"[compute_all_metrics] Successfully saved KPIs for {time_to_str(end_time)}")
+        except Exception as e:
+            # logging.exception(f"[compute_all_metrics] Exception occurred: {str(e)}")
+            raise
 
 
     def get_active_driver_trips(self, sim_clock):
@@ -111,8 +126,7 @@ class AnalyticsApp(BaseApp):
     def get_active_passenger_trips(self, sim_clock):
         return self.manager.get_active_passenger_trips(sim_clock)
 
-    def publish_active_trips(self, sim_clock):
-        return self.manager.publish_active_trips(sim_clock)
+    # publish_active_trips should be implemented in the agent, not the app
 
     def get_history_as_paths(self, timewindow_start, timewindow_end):
         return self.manager.get_history_as_paths(timewindow_start, timewindow_end)
