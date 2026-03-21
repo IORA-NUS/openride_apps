@@ -115,7 +115,7 @@ class DriverTripManager(TripManagerBase):
         else:
             raise WriteFailedException(f"{response.url}, {response.text}")
 
-    def create_new_occupied_trip(self, sim_clock, current_loc, driver, vehicle, passenger_ride_hail_trip):
+    def create_new_occupied_trip(self, sim_clock, current_loc, driver, vehicle, ridehail_passenger_trip):
         data = {
             "driver": f"{driver['_id']}",
             'persona': self.persona,
@@ -124,12 +124,12 @@ class DriverTripManager(TripManagerBase):
             },
             "vehicle": f"{vehicle['_id']}",
             "current_loc": current_loc,
-            "next_dest_loc": passenger_ride_hail_trip['pickup_loc'],
-            "passenger_ride_hail_trip": passenger_ride_hail_trip['_id'],
-            "passenger": passenger_ride_hail_trip['passenger'],
+            "next_dest_loc": ridehail_passenger_trip['pickup_loc'],
+            "ridehail_passenger_trip": ridehail_passenger_trip['_id'],
+            "passenger": ridehail_passenger_trip['passenger'],
             "trip_start_loc": current_loc,
-            "pickup_loc": passenger_ride_hail_trip['pickup_loc'],
-            "dropoff_loc": passenger_ride_hail_trip['dropoff_loc'],
+            "pickup_loc": ridehail_passenger_trip['pickup_loc'],
+            "dropoff_loc": ridehail_passenger_trip['dropoff_loc'],
             "is_occupied": True,
             "statemachine": {
                 "name": "RidehailDriverTripStateMachine",

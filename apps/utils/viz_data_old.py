@@ -33,21 +33,21 @@ db = _connect_mongo(host='localhost', port=27017, username=None, password=None, 
 
 
 def get_price_vs_service(run_id):
-    collection = db.driver_ride_hail_trip
+    collection = db.ridehail_driver_trip
 
     results = collection.aggregate(
         [
             {
                 '$match': {
                     'run_id': run_id,
-                    'passenger_ride_hail_trip': {
+                    'ridehail_passenger_trip': {
                         '$exists': True
                     }
                 }
             }, {
                 '$lookup': {
-                    'from': 'passenger_ride_hail_trip',
-                    'localField': 'passenger_ride_hail_trip',
+                    'from': 'ridehail_passenger_trip',
+                    'localField': 'ridehail_passenger_trip',
                     'foreignField': '_id',
                     'as': 'pax'
                 }
@@ -207,7 +207,7 @@ def get_pivot(collection, run_id_meta, metric):
 
 
 def count_active_users(collection, run_id_meta, sim_clock_ticks):
-    # DRIVER_TRIP = db.driver_ride_hail_trip
+    # DRIVER_TRIP = db.ridehail_driver_trip
 
     cursor = collection.aggregate([
         {
@@ -280,8 +280,8 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
     KPI = db.kpi
     ENGINE_HISTORY = db.engine_history
     WAYPOINT = db.waypoint
-    DRIVER_TRIP = db.driver_ride_hail_trip
-    PASSENGER_TRIP = db.passenger_ride_hail_trip
+    DRIVER_TRIP = db.ridehail_driver_trip
+    PASSENGER_TRIP = db.ridehail_passenger_trip
 
     output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{run_id}"
     print(f"{output_dir = }")

@@ -37,9 +37,9 @@ db = _connect_mongo(host='localhost', port=27017, username=None, password=None, 
 
 def get_trip_metrics(run_id_dict, db_option=None):
     if db_option is not None:
-        collection = db_option.driver_ride_hail_trip
+        collection = db_option.ridehail_driver_trip
     else:
-        collection = db.driver_ride_hail_trip
+        collection = db.ridehail_driver_trip
 
     results = collection.aggregate(
         [
@@ -47,14 +47,14 @@ def get_trip_metrics(run_id_dict, db_option=None):
                 '$match': {
                     'run_id': {'$in': [k for k, v in run_id_dict.items()]},
                     'state': 'driver_completed_trip',
-                    'passenger_ride_hail_trip': {
+                    'ridehail_passenger_trip': {
                         '$exists': True
                     }
                 }
             }, {
                 '$lookup': {
-                    'from': 'passenger_ride_hail_trip',
-                    'localField': 'passenger_ride_hail_trip',
+                    'from': 'ridehail_passenger_trip',
+                    'localField': 'ridehail_passenger_trip',
                     'foreignField': '_id',
                     'as': 'pax'
                 }
@@ -165,16 +165,16 @@ def get_active_user_time_series(run_id_dict, num_steps, sim_step_size, sim_start
     ]
 
     if db_option is not None:
-        driver_collection = db_option.driver_ride_hail_trip
+        driver_collection = db_option.ridehail_driver_trip
     else:
-        driver_collection = db.driver_ride_hail_trip
+        driver_collection = db.ridehail_driver_trip
     driver_cursor = driver_collection.aggregate(query)
     driver_docs = list(driver_cursor)
 
     if db_option is not None:
-        pax_collection = db_option.passenger_ride_hail_trip
+        pax_collection = db_option.ridehail_passenger_trip
     else:
-        pax_collection = db.passenger_ride_hail_trip
+        pax_collection = db.ridehail_passenger_trip
     pax_cursor = pax_collection.aggregate(query)
     pax_docs = list(pax_cursor)
 

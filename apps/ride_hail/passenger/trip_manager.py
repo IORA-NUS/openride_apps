@@ -291,7 +291,7 @@ class PassengerTripManager(TripManagerBase):
         else:
             raise WriteFailedException(f"{response.url}, {response.text}")
 
-    def driver_arrived_for_pickup(self, sim_clock, current_loc, driver_ride_hail_trip):
+    def driver_arrived_for_pickup(self, sim_clock, current_loc, ridehail_driver_trip):
 
         # try:
         #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_pickup"
@@ -304,7 +304,7 @@ class PassengerTripManager(TripManagerBase):
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
-            'driver_ride_hail_trip': driver_ride_hail_trip,
+            'ridehail_driver_trip': ridehail_driver_trip,
             'stats.wait_time_pickup': wait_time_pickup,
             'stats.wait_time_total': wait_time_total
         }
