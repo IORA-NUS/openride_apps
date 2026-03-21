@@ -26,7 +26,7 @@ from .manager import AnalyticsManager
 
 import websockets, asyncio
 
-from orsim.utils import time_to_str, str_to_time
+from apps.utils import time_to_str, str_to_time
 
 
 class AnalyticsApp(BaseApp):
