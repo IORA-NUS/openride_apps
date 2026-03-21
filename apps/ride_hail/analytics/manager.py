@@ -39,10 +39,38 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
         """
         pass
 
-    def get_active_driver_trips(self, sim_clock):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/driver/trip"
-        waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/waypoint"
+    # --- Helper methods for endpoint URL construction ---
+    def _trip_url(self, role):
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/{role}/trip"
 
+    def _waypoint_url(self):
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/waypoint"
+
+    def _kpi_url(self):
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/kpi"
+
+    def _waypoint_history_url(self):
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/waypoint_history/all_trips"
+
+    def _trip_count_url(self, role):
+        return f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/{role}/trip/count_active"
+
+    # --- Helper methods for HTTP requests ---
+    def _get(self, url, params=None):
+        response = requests.get(url, headers=self.user.get_headers(), params=params or {})
+        self._check_response(response)
+        return response.json()
+
+    def _post(self, url, data):
+        response = requests.post(url, headers=self.user.get_headers(), data=json.dumps(data))
+        self._check_response(response)
+        return response.json()
+
+
+
+    def get_active_driver_trips(self, sim_clock):
+        driver_trip_url = self._trip_url('driver')
+        waypoint_url = self._waypoint_url()
         got_results = True
         response_items = []
         page = 1
@@ -57,15 +85,13 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
                 'page': page,
                 "max_results": 50
             }
-
-            response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
-            if response.json()['_items'] == []:
+            result = self._get(driver_trip_url, params)
+            if result['_items'] == []:
                 got_results = False
                 break
             else:
-                response_items.extend(response.json()['_items'])
+                response_items.extend(result['_items'])
                 page += 1
-
         driver_trips = {}
         for item in response_items:
             waypoint_params = {
@@ -78,15 +104,15 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
                 "sort": "-counter",
                 "max_results": 1
             }
-            waypoint_response = requests.get(waypoint_url, headers=self.user.get_headers(), params=waypoint_params)
-            waypoint = waypoint_response.json()['_items'][0]
+            waypoint_result = self._get(waypoint_url, waypoint_params)
+            waypoint = waypoint_result['_items'][0]
             item['last_waypoint_id'] = waypoint['_id']
             driver_trips[item['driver']] = item
         return driver_trips
 
     def get_active_passenger_trips(self, sim_clock):
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/passenger/trip"
-        waypoint_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/waypoint"
+        passenger_trip_url = self._trip_url('passenger')
+        waypoint_url = self._waypoint_url()
         from dateutil.relativedelta import relativedelta
         from datetime import datetime
         display_expiry_time = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT") - relativedelta(seconds=30)
@@ -119,12 +145,12 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
                 'page': page,
                 "max_results": 50
             }
-            response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
-            if response.json()['_items'] == []:
+            result = self._get(passenger_trip_url, params)
+            if result['_items'] == []:
                 got_results = False
                 break
             else:
-                response_items.extend(response.json()['_items'])
+                response_items.extend(result['_items'])
                 page += 1
         passenger_trips = {}
         for item in response_items:
@@ -138,100 +164,23 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
                 "sort": "-counter",
                 "max_results": 1
             }
-            waypoint_response = requests.get(waypoint_url, headers=self.user.get_headers(), params=waypoint_params)
-            waypoint = waypoint_response.json()['_items'][0]
+            waypoint_result = self._get(waypoint_url, waypoint_params)
+            waypoint = waypoint_result['_items'][0]
             item['last_waypoint_id'] = waypoint['_id']
             passenger_trips[item['passenger']] = item
         return passenger_trips
 
-    def publish_active_trips(self, sim_clock):
-        from apps.loc_service import transform_lonlat_webmercator, itransform_lonlat_webmercator
-        driver_trips = self.get_active_driver_trips(sim_clock)
-        passenger_trips = self.get_active_passenger_trips(sim_clock)
-        location_stream = {
-            "type": "featureResult",
-            "features": []
-        }
-        route_stream = {
-            "type": "featureResult",
-            "features": []
-        }
-        for id, trip in driver_trips.items():
-            current_loc = trip['current_loc']
-            transformed_loc = transform_lonlat_webmercator(current_loc['coordinates'][1], current_loc['coordinates'][0])
-            driver_feature = {
-                "attributes": {
-                    "OBJECTID": trip['last_waypoint_id'],
-                    "TRACKID": id,
-                    "CLASS": 'driver',
-                    "STATUS": trip['state']
-                },
-                "geometry": {
-                    "x": transformed_loc[0],
-                    "y": transformed_loc[1]
-                }
-            }
-            location_stream['features'].append(driver_feature)
-            if (trip.get('projected_path') is not None) and (len(trip.get('projected_path')) > 1):
-                projected_path = trip['projected_path']
-                transformed_projected_path = itransform_lonlat_webmercator([[item[1], item[0]] for item in projected_path])
-                driver_feature = {
-                    "attributes": {
-                        "OBJECTID": trip['last_waypoint_id'],
-                        "TRACKID": id,
-                        "CLASS": 'driver',
-                        "STATUS": trip['state']
-                    },
-                    "geometry": {
-                        "paths": [list(transformed_projected_path)]
-                    }
-                }
-                route_stream['features'].append(driver_feature)
-        for id, trip in passenger_trips.items():
-            current_loc = trip['current_loc']
-            transformed_loc = transform_lonlat_webmercator(current_loc['coordinates'][1], current_loc['coordinates'][0])
-            passenger_feature = {
-                "attributes": {
-                    "OBJECTID": trip['last_waypoint_id'],
-                    "TRACKID": id,
-                    "CLASS": 'passenger',
-                    "STATUS": trip['state']
-                },
-                "geometry": {
-                    "x": transformed_loc[0],
-                    "y": transformed_loc[1]
-                }
-            }
-            location_stream['features'].append(passenger_feature)
-        if settings['WEBSOCKET_SERVICE'] == 'MQTT':
-            self.messenger.client.publish(f'anaytics/location_stream', json.dumps(location_stream))
-            self.messenger.client.publish(f'anaytics/route_stream', json.dumps(route_stream))
-        elif settings['WEBSOCKET_SERVICE'] == 'WS':
-            import websockets, asyncio
-            async def publish_location_stream_async(location_stream):
-                uri = f"{settings['WS_SERVER']}/location_stream"
-                async with websockets.connect(uri) as websocket:
-                    await websocket.send(json.dumps(location_stream))
-            async def publish_route_stream_async(route_stream):
-                uri = f"{settings['WS_SERVER']}/route_stream"
-                async with websockets.connect(uri) as websocket:
-                    await websocket.send(json.dumps(route_stream))
-            asyncio.run(publish_location_stream_async(location_stream))
-            asyncio.run(publish_route_stream_async(route_stream))
-        return location_stream, route_stream
-
     def get_history_as_paths(self, timewindow_start, timewindow_end):
-        waypoint_history_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/waypoint_history/all_trips"
+        waypoint_history_url = self._waypoint_history_url()
         from datetime import datetime
         params = {
             'from': datetime.strftime(timewindow_start, '%Y%m%d%H%M%S'),
             'to': datetime.strftime(timewindow_end, '%Y%m%d%H%M%S'),
         }
-        response = requests.get(waypoint_history_url, headers=self.user.get_headers(), params=params)
-        return response.json()
+        return self._get(waypoint_history_url, params)
 
     def get_passenger_trips_for_metric(self, start_time, end_time):
-        passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/passenger/trip"
+        passenger_trip_url = self._trip_url('passenger')
         from apps.state_machine import RidehailPassengerTripStateMachine
         from datetime import datetime
         got_results = True
@@ -257,17 +206,17 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
                 'page': page,
                 "max_results": 50
             }
-            response = requests.get(passenger_trip_url, headers=self.user.get_headers(), params=params)
-            if response.json()['_items'] == []:
+            result = self._get(passenger_trip_url, params)
+            if result['_items'] == []:
                 got_results = False
                 break
             else:
-                passenger_trips_for_metric.extend(response.json()['_items'])
+                passenger_trips_for_metric.extend(result['_items'])
                 page += 1
         return passenger_trips_for_metric
 
     def get_driver_trips_for_metric(self, start_time, end_time):
-        driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/driver/trip"
+        driver_trip_url = self._trip_url('driver')
         from apps.state_machine import RidehailDriverTripStateMachine
         from datetime import datetime
         got_results = True
@@ -289,52 +238,51 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
                 'page': page,
                 "max_results": 50
             }
-            response = requests.get(driver_trip_url, headers=self.user.get_headers(), params=params)
-            if response.json()['_items'] == []:
+            result = self._get(driver_trip_url, params)
+            if result['_items'] == []:
                 got_results = False
                 break
             else:
-                driver_trips_for_metric.extend(response.json()['_items'])
+                driver_trips_for_metric.extend(result['_items'])
                 page += 1
         return driver_trips_for_metric
 
     def active_driver_count(self):
-        driver_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/driver/trip/count_active"
+        driver_trip_count_url = self._trip_count_url('driver')
         params = {
             "aggregate": json.dumps({
                 "$run_id": self.run_id,
                 "$is_active": True,
             })
         }
-        response = requests.get(driver_trip_count_url, headers=self.user.get_headers(), params=params)
         try:
-            if response.json()['_items'] == []:
+            result = self._get(driver_trip_count_url, params)
+            if result['_items'] == []:
                 return 0
             else:
-                return response.json()['_items'][0].get('num_trips', 0)
-        except Exception:
-            logging.error(response.status_code, response.text)
+                return result['_items'][0].get('num_trips', 0)
+        except Exception as e:
+            logging.error(str(e))
 
     def active_passenger_count(self):
-        passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/passenger/trip/count_active"
+        passenger_trip_count_url = self._trip_count_url('passenger')
         params = {
             "aggregate": json.dumps({
                 "$run_id": self.run_id,
                 "$is_active": True,
             })
         }
-        response = requests.get(passenger_trip_count_url, headers=self.user.get_headers(), params=params)
         try:
-            if response.json()['_items'] == []:
+            result = self._get(passenger_trip_count_url, params)
+            if result['_items'] == []:
                 return 0
             else:
-                return response.json()['_items'][0].get('num_trips', 0)
-        except Exception:
-            logging.error(response.status_code, response.text)
+                return result['_items'][0].get('num_trips', 0)
+        except Exception as e:
+            logging.error(str(e))
 
     def save_kpi(self, sim_clock, kpi_collection):
-        kpi_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/kpi"
-        import json
+        kpi_url = self._kpi_url()
         data = []
         for metric, value in kpi_collection.items():
             data.append({
@@ -342,9 +290,6 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
                 'value': value,
                 'sim_clock': sim_clock,
             })
-        response = requests.post(kpi_url, headers=self.user.get_headers(), data=json.dumps(data))
-        from apps.utils.utils import is_success
-        if not is_success(response.status_code):
-            raise Exception(f"{response.url}, {response.text}")
+        self._post(kpi_url, data)
 
 
