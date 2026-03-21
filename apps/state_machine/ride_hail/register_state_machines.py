@@ -1,5 +1,5 @@
 # Statemachine registration and validation
-from apps.agent_core.state_machine.sm_serialization_utils import register_and_validate_statemachine
+from apps.state_machine import StateMachineManager
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
 
@@ -21,7 +21,7 @@ class StateMachineRegistry:
         for statemachine_name, statemachine_class in self.state_machines.items():
             try:
                 print(f"Registering state machine: {statemachine_name}")
-                result = register_and_validate_statemachine(
+                result = StateMachineManager.register_and_validate(
                     server_url=server_url,
                     headers=headers,
                     domain=self.domain,
