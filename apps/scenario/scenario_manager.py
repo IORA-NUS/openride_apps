@@ -48,7 +48,7 @@ class ScenarioManager():
     analytics_collection = None
     orsim_settings = None
     reference_time = datetime(2020, 1, 1, 8, 0, 0)
-    domain = "RideHail_Simulation"
+    domain = "ridehail-sim"
 
 
     def __init__(self, dataset):
