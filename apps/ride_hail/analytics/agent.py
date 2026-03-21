@@ -23,16 +23,16 @@ class AnalyticsAgentIndie(ORSimAgent):
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
         }
-        self.kpi_collection = {
-            'revenue': 0,
-            'num_cancelled': 0,
-            'num_served': 0,
-            'wait_time_driver_confirm': 0,
-            'wait_time_total': 0,
-            'wait_time_assignment': 0,
-            'wait_time_pickup': 0,
-            'service_score': 0,
-        }
+        # self.kpi_collection = {
+        #     'revenue': 0,
+        #     'num_cancelled': 0,
+        #     'num_served': 0,
+        #     'wait_time_driver_confirm': 0,
+        #     'wait_time_total': 0,
+        #     'wait_time_assignment': 0,
+        #     'wait_time_pickup': 0,
+        #     'service_score': 0,
+        # }
 
         try:
             self.app = AnalyticsApp(run_id=self.run_id,
@@ -63,7 +63,7 @@ class AnalyticsAgentIndie(ORSimAgent):
         if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
                     (random() <= self.behavior['response_rate']) and \
                     (self.next_event_time <= self.current_time):
-            self.compute_all_metrics()
+            self.app.compute_all_metrics()
 
             output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
 
@@ -101,28 +101,28 @@ class AnalyticsAgentIndie(ORSimAgent):
         else:
             return False
 
-    def compute_all_metrics(self):
-        start_time = self.current_time - relativedelta(seconds=(self.behavior['steps_per_action'] * self.orsim_settings['STEP_INTERVAL']))
-        end_time = self.current_time
-        self.app.prep_metric_computation_queries(start_time, end_time)
+    # def compute_all_metrics(self):
+    #     start_time = self.current_time - relativedelta(seconds=(self.behavior['steps_per_action'] * self.orsim_settings['STEP_INTERVAL']))
+    #     end_time = self.current_time
+    #     self.app.prep_metric_computation_queries(start_time, end_time)
 
-        self.kpi_collection['revenue'] = self.app.compute_revenue()
-        self.kpi_collection['num_cancelled'] = self.app.compute_cancelled()
-        self.kpi_collection['num_served'] = self.app.compute_served()
+    #     self.kpi_collection['revenue'] = self.app.compute_revenue()
+    #     self.kpi_collection['num_cancelled'] = self.app.compute_cancelled()
+    #     self.kpi_collection['num_served'] = self.app.compute_served()
 
-        waiting_time = self.app.compute_waiting_time()
-        self.kpi_collection['wait_time_driver_confirm'] = waiting_time['wait_time_driver_confirm']
-        self.kpi_collection['wait_time_total'] = waiting_time['wait_time_total']
-        self.kpi_collection['wait_time_assignment'] = waiting_time['wait_time_assignment']
-        self.kpi_collection['wait_time_pickup'] = waiting_time['wait_time_pickup']
+    #     waiting_time = self.app.compute_waiting_time()
+    #     self.kpi_collection['wait_time_driver_confirm'] = waiting_time['wait_time_driver_confirm']
+    #     self.kpi_collection['wait_time_total'] = waiting_time['wait_time_total']
+    #     self.kpi_collection['wait_time_assignment'] = waiting_time['wait_time_assignment']
+    #     self.kpi_collection['wait_time_pickup'] = waiting_time['wait_time_pickup']
 
-        self.kpi_collection['service_score'] = self.app.compute_service_score()
-        self.kpi_collection['active_driver_count'] = self.app.active_driver_count()
-        self.kpi_collection['active_passenger_count'] = self.app.active_passenger_count()
+    #     self.kpi_collection['service_score'] = self.app.compute_service_score()
+    #     self.kpi_collection['active_driver_count'] = self.app.active_driver_count()
+    #     self.kpi_collection['active_passenger_count'] = self.app.active_passenger_count()
 
-        # check if any KPI is None and log a warning if so
-        for kpi_name, kpi_value in self.kpi_collection.items():
-            if kpi_value is None:
-                logging.warning(f"KPI {kpi_name} is None at time {self.get_current_time_str()}")
+    #     # check if any KPI is None and log a warning if so
+    #     for kpi_name, kpi_value in self.kpi_collection.items():
+    #         if kpi_value is None:
+    #             logging.warning(f"KPI {kpi_name} is None at time {self.get_current_time_str()}")
 
-        self.app.save_kpi(self.get_current_time_str(), self.kpi_collection)
+    #     self.app.save_kpi(self.get_current_time_str(), self.kpi_collection)

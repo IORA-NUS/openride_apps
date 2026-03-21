@@ -22,7 +22,7 @@ class BaseManager:
 
     def get_id(self):
         """Return the current resource's id."""
-        return self.resource['_id']
+        return self.resource.get('_id')
 
     def estimate_next_event_time(self, current_time):
         """Default: return a distant future date."""
