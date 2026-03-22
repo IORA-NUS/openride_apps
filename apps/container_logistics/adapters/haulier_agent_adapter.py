@@ -1,6 +1,6 @@
 from apps.container_logistics.contracts import validate_facility_workflow_payload
 from apps.container_logistics.events import ContainerLogisticsActions, ContainerLogisticsEvents
-from apps.state_machine.container_logistics.haulier_workflow_sm import (
+from apps.container_logistics.statemachine import (
     HaulierContainerWorkflowStateMachine,
 )
 

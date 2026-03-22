@@ -1,6 +1,6 @@
 from apps.ride_hail.driver import DriverAgentIndie
 from apps.ride_hail.passenger import PassengerAgentIndie
-from apps.state_machine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+from apps.ride_hail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
 
 
 class _Recorder:

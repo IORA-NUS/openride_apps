@@ -2,8 +2,9 @@ import requests, json
 from http import HTTPStatus
 
 from apps.config import settings
-from apps.common.utils import id_generator, is_success
+from apps.utils import id_generator, is_success
 # from apps.state_machine import WorkflowStateMachine
+from requests.exceptions import ConnectionError
 
 class UserRegistry:
     token = None
@@ -33,17 +34,21 @@ class UserRegistry:
     def user_login(self, sim_clock):
         login_url = f"{settings['OPENRIDE_SERVER_URL']}/auth/login"
         data = {"email": self.email, "password": self.password, "sim_clock": sim_clock}
-        response = requests.post(login_url, headers=self.get_headers(), data=json.dumps(data))
-        if is_success(response.status_code):
-            return response.json()
-        else:
-            register_url = f"{settings['OPENRIDE_SERVER_URL']}/auth/signup"
-            data = {"email": self.email, "password": self.password, "name": {"first_name": "Dummy", "last_name": "Dummy"}, "public_key": "000", "role": self.role, "sim_clock": sim_clock}
-            response = requests.post(register_url, headers=self.get_headers(), data=json.dumps(data))
+        try:
+            response = requests.post(login_url, headers=self.get_headers(), data=json.dumps(data))
             if is_success(response.status_code):
-                return self.user_login(sim_clock)
+                return response.json()
             else:
-                return None
+                register_url = f"{settings['OPENRIDE_SERVER_URL']}/auth/signup"
+                data = {"email": self.email, "password": self.password, "name": {"first_name": "Dummy", "last_name": "Dummy"}, "public_key": "000", "role": self.role, "sim_clock": sim_clock}
+                response = requests.post(register_url, headers=self.get_headers(), data=json.dumps(data))
+                if is_success(response.status_code):
+                    return self.user_login(sim_clock)
+                else:
+                    return None
+        except ConnectionError as e:
+            print(f"Unable to connect to OpenRoad Server at {settings['OPENRIDE_SERVER_URL']}. Please ensure the server is running and the URL is correct.")
+            raise e
 
     def update_user_role(self):
         user_url = f"{settings['OPENRIDE_SERVER_URL']}/user"

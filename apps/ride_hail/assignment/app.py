@@ -11,10 +11,10 @@ from datetime import datetime
 
 from apps.loc_service import OSRMClient
 
-from apps.utils.user_registry import UserRegistry
+from apps.common.user_registry import UserRegistry
 from apps.config import settings, simulation_domains
 
-from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
+from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from apps.ride_hail import RideHailActions
 from .solver import *  # NOTE * is deliberate to load all solvers in globals()
 from .manager import AssignmentManager

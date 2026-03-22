@@ -283,10 +283,10 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
     DRIVER_TRIP = db.ridehail_driver_trip
     PASSENGER_TRIP = db.ridehail_passenger_trip
 
-    output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{run_id}"
-    print(f"{output_dir = }")
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    run_logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'datahub', 'run_logs', str(run_id))
+    print(f"{run_logs_dir = }")
+    if not os.path.exists(run_logs_dir):
+        os.makedirs(run_logs_dir)
 
     filter = {
         'run_id': run_id
@@ -310,7 +310,7 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
         # with open(f"{output_dir}/paths_{args['from']}_{args['to']}.json", 'w') as file:
         #     json.dump(paths, file, indent=2)
 
-    with open(f"{output_dir}/paths_20200101{start_hour:02}0000_20200101{end_hour:02}0000.json", 'w') as file:
+    with open(os.path.join(run_logs_dir, f"paths_20200101{start_hour:02}0000_20200101{end_hour:02}0000.json"), 'w') as file:
         json.dump(all_paths, file, indent=2)
 
     sum_metric = [
@@ -352,7 +352,7 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
             'graph_data': cum_pivot.fillna(0).values.tolist()
         }
 
-        with open (f"{output_dir}/plot_cumulative_{m}.json", 'w') as file:
+        with open (os.path.join(run_logs_dir, f"plot_cumulative_{m}.json"), 'w') as file:
             json.dump(metrics, file, default=str, indent=2)
 
     # served_pivot, served_cum_pivot = get_pivot(KPI, run_id_meta, 'num_served')
@@ -373,7 +373,7 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
             'column_names': list(cum_pivot.columns),
             'graph_data': cum_pivot.fillna(0).values.tolist()
         }
-        with open (f"{output_dir}/plot_avg_{m}_by_served.json", 'w') as file:
+        with open (os.path.join(run_logs_dir, f"plot_avg_{m}_by_served.json"), 'w') as file:
             json.dump(metrics, file, default=str, indent=2)
 
         # metrics = metric_pivot_by_time.to_dict(orient='records')
@@ -384,7 +384,7 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
             'column_names': list(metric_pivot_by_time.columns),
             'graph_data': metric_pivot_by_time.fillna(0).values.tolist()
         }
-        with open (f"{output_dir}/plot_avg_{m}_by_time.json", 'w') as file:
+        with open (os.path.join(run_logs_dir, f"plot_avg_{m}_by_time.json"), 'w') as file:
             json.dump(metrics, file, default=str, indent=2)
 
         # target_metric_pivot = metric_pivot_by_time.copy()
@@ -413,19 +413,19 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
         'graph_data': answer_rate_pivot.fillna(0).values.tolist()
     }
 
-    with open (f"{output_dir}/plot_answer_rate.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "plot_answer_rate.json"), 'w') as file:
         json.dump(metrics, file, default=str, indent=2)
 
     # num_drivers
     sim_start_time = datetime(2020, 1, 1, reference_time.hour, 0 , 0)
     sim_clock_ticks = [sim_start_time + relativedelta(seconds=(step*sim_step_size)) for step in range(num_steps+1)]
     metrics = count_active_users(DRIVER_TRIP, run_id_meta, sim_clock_ticks)
-    with open (f"{output_dir}/num_driver_in_market.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "num_driver_in_market.json"), 'w') as file:
         json.dump(metrics, file, default=str, indent=2)
 
     # num_passengers
     metrics = count_active_users(PASSENGER_TRIP, run_id_meta, sim_clock_ticks)
-    with open (f"{output_dir}/num_passenger_in_market.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "num_passenger_in_market.json"), 'w') as file:
         json.dump(metrics, file, default=str, indent=2)
 
 
@@ -461,7 +461,7 @@ def dump(run_id, num_steps, sim_step_size, reference_time, engine_metrics=False)
             'column_names': list(metric_df.columns),
             'graph_data': metric_df.fillna(0).values.tolist()
         }
-        with open (f"{output_dir}/weight_obj.json", 'w') as file:
+        with open (os.path.join(run_logs_dir, "weight_obj.json"), 'w') as file:
             json.dump(metrics, file, default=str, indent=2)
 
         # Objective vs Target

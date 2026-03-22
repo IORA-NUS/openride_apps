@@ -11,3 +11,9 @@ class RideHailAnalyticsAdapter:
         from apps.ride_hail.analytics.agent import AnalyticsAgentIndie
 
         return AnalyticsAgentIndie
+
+    @staticmethod
+    def get_manager_class():
+        from apps.ride_hail.analytics.manager import AnalyticsManager
+
+        return AnalyticsManager

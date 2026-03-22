@@ -7,8 +7,8 @@ parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
 
 from datetime import datetime
-from apps.utils.create_dashboard import get_all_paths, get_demand_coords
-from apps.utils.direct_db_queries import paths_to_geojson, coords_to_df
+from openride_apps.apps.utils.legacy.create_dashboard import get_all_paths, get_demand_coords
+from openride_apps.apps.utils.legacy.direct_db_queries import paths_to_geojson, coords_to_df
 
 data_folder = f'{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output'
 

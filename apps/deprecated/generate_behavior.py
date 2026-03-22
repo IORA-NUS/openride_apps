@@ -8,7 +8,7 @@ from apps.loc_service import BusStop, PlanningArea
 
 from apps.config import settings
 # from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
-from apps.scenario.scenario_config import driver_settings, passenger_settings, analytics_settings, assignment_settings
+from .scenario_config import driver_settings, passenger_settings, analytics_settings, assignment_settings
 from apps.orsim_config import orsim_settings
 
 import haversine as hs

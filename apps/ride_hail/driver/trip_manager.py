@@ -4,7 +4,7 @@ import json, logging
 from apps.config import settings, simulation_domains
 from apps.utils import is_success, str_to_time
 
-from apps.state_machine import RidehailDriverTripStateMachine
+from apps.ride_hail.statemachine import RidehailDriverTripStateMachine
 from apps.utils import time_to_str, str_to_time
 from apps.common.trip_manager_base import TripManagerBase
 from apps.ride_hail import RideHailActions, RideHailEvents
@@ -98,7 +98,7 @@ class DriverTripManager(TripManagerBase):
             "is_occupied": False,
             "statemachine": {
                 "name": "RidehailDriverTripStateMachine",
-                "domain": "ride_hail",
+                "domain": self.simulation_domain,
             },
             "state": RidehailDriverTripStateMachine.initial_state.name,
             "sim_clock": sim_clock,
@@ -134,7 +134,7 @@ class DriverTripManager(TripManagerBase):
             "is_occupied": True,
             "statemachine": {
                 "name": "RidehailDriverTripStateMachine",
-                "domain": "ride_hail",
+                "domain": self.simulation_domain,
             },
             "state": RidehailDriverTripStateMachine.initial_state.name,
             "sim_clock": sim_clock,

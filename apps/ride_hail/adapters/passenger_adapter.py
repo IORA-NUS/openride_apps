@@ -11,3 +11,9 @@ class RideHailPassengerAdapter:
         from apps.ride_hail.passenger.agent import PassengerAgentIndie
 
         return PassengerAgentIndie
+
+    @staticmethod
+    def get_manager_class():
+        from apps.ride_hail.passenger.manager import PassengerManager
+
+        return PassengerManager

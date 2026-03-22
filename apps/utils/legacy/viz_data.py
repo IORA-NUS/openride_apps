@@ -15,7 +15,7 @@ from dateutil.relativedelta import relativedelta
 from datetime import date, datetime, tzinfo, timezone
 from pymongo.cursor import CursorType
 
-from apps.utils.direct_db_queries import *
+from openride_apps.apps.utils.legacy.direct_db_queries import *
 
 data_folder = f'{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output'
 

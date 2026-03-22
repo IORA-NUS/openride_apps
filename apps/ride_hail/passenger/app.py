@@ -8,13 +8,13 @@ import logging
 from apps.config import settings
 from apps.utils.utils import is_success
 
-from apps.utils.user_registry import UserRegistry
+from apps.common.user_registry import UserRegistry
 from .manager import PassengerManager
 from .trip_manager import PassengerTripManager
 from apps.loc_service import OSRMClient
 from apps.agent_core.base_app import BaseApp
 
-from apps.state_machine import RidehailPassengerTripStateMachine
+from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
 from apps.ride_hail import RideHailActions, validate_assigned_payload
 
 

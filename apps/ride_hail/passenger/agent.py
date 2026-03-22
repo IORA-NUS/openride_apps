@@ -18,7 +18,7 @@ from typing import Any, Dict
 
 from .app import PassengerApp
 from apps.utils.utils import id_generator #, cut
-from apps.state_machine import RidehailPassengerTripStateMachine #, WorkflowStateMachine
+from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine #, WorkflowStateMachine
 # from apps.agent_core.state_machine import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
 

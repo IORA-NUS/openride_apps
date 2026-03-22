@@ -24,10 +24,10 @@ from shapely.geometry import Point, mapping
 
 from .app import DriverApp
 from apps.utils.utils import id_generator, str_to_time #, cut
-from apps.state_machine import RidehailDriverTripStateMachine
+from apps.ride_hail.statemachine import RidehailDriverTripStateMachine
 from apps.loc_service import OSRMClient
 # from apps.utils.generate_behavior import GenerateBehavior
-from apps.scenario import GenerateBehavior
+from apps.ride_hail.scenario import GenerateBehavior
 
 from apps.loc_service import TaxiStop, BusStop, cut, cut_route
 from typing import Any, Dict

@@ -11,3 +11,9 @@ class RideHailAssignmentAdapter:
         from apps.ride_hail.assignment.agent import AssignmentAgentIndie
 
         return AssignmentAgentIndie
+
+    @staticmethod
+    def get_manager_class():
+        from apps.ride_hail.assignment.manager import AssignmentManager
+
+        return AssignmentManager

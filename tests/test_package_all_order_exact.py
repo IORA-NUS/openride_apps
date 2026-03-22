@@ -68,5 +68,6 @@ def test_canonical_role_package_all_order_is_stable():
     assert canonical_analytics_pkg.__all__ == [
         "AnalyticsApp",
         "AnalyticsAgentIndie",
+        "AnalyticsManager",
     ]
 

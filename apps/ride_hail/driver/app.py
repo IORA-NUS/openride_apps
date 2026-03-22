@@ -10,13 +10,13 @@ import logging
 from apps.config import settings
 from apps.utils.utils import is_success
 
-from apps.utils.user_registry import UserRegistry
+from apps.common.user_registry import UserRegistry
 from .manager import DriverManager
 from .trip_manager import DriverTripManager
 from apps.loc_service import OSRMClient
 from apps.agent_core.base_app import BaseApp
 
-from apps.state_machine import RidehailDriverTripStateMachine
+from apps.ride_hail.statemachine import RidehailDriverTripStateMachine
 
 # from apps.messenger_service import Messenger
 

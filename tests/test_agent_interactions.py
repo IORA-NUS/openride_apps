@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 from apps.ride_hail.driver import DriverAgentIndie
 from apps.ride_hail.passenger import PassengerAgentIndie
-from apps.state_machine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+from apps.ride_hail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
 # from apps.agent_core.state_machine import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
 

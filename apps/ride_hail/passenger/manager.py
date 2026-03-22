@@ -10,7 +10,6 @@ from apps.common.resource_client_mixin import ResourceClientMixin
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
 
-# from apps.utils.user_registry import UserRegistry
 
 class PassengerManager(ResourceClientMixin, BaseManager):
 
@@ -27,7 +26,7 @@ class PassengerManager(ResourceClientMixin, BaseManager):
             "persona": self.persona,
             "statemachine": {
                 "name": "WorkflowStateMachine",
-                "domain": "ride_hail",
+                "domain": self.simulation_domain,
             },
             "state": WorkflowStateMachine().initial_state.name,
             "sim_clock": sim_clock

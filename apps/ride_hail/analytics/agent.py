@@ -16,8 +16,9 @@ from orsim import ORSimAgent
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior):
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior, run_data_dir=None):
         super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
+        self.run_data_dir = run_data_dir
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -66,20 +67,25 @@ class AnalyticsAgentIndie(ORSimAgent):
                 # raise e
             # print("after compute_all_metrics")
 
-            output_dir = f"{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output/{self.run_id}"
+            run_data_dir = self.run_data_dir
+            if run_data_dir is None:
+                run_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'datahub', 'run_data', str(self.run_id))
+                if not os.path.exists(run_data_dir):
+                    os.makedirs(run_data_dir)
+            # Directory is now guaranteed to exist
 
             if self.behavior['publish_realtime_data']:
                 location_stream, route_stream = self.publish_active_trips(self.get_current_time_str())
 
                 if self.behavior['write_ws_output_to_file']:
-                    stream_output_dir = f"{output_dir}/stream"
+                    stream_output_dir = os.path.join(run_data_dir, 'stream')
                     if not os.path.exists(stream_output_dir):
                         os.makedirs(stream_output_dir)
 
-                    with open(f"{stream_output_dir}/{self.current_time_step}.location_stream.json", 'w') as publish_file:
+                    with open(os.path.join(stream_output_dir, f'{self.current_time_step}.location_stream.json'), 'w') as publish_file:
                         publish_file.write(json.dumps(location_stream))
 
-                    with open(f"{stream_output_dir}/{self.current_time_step}.route_stream.json", 'w') as publish_file:
+                    with open(os.path.join(stream_output_dir, f'{self.current_time_step}.route_stream.json'), 'w') as publish_file:
                         publish_file.write(json.dumps(route_stream))
 
             if self.behavior['publish_paths_history']:
@@ -91,11 +97,11 @@ class AnalyticsAgentIndie(ORSimAgent):
                     paths_history = self.app.get_history_as_paths(timewindow_start, timewindow_end)
 
                     if self.behavior['write_ph_output_to_file']:
-                        rest_output_dir = f"{output_dir}/rest"
+                        rest_output_dir = os.path.join(run_data_dir, 'rest')
                         if not os.path.exists(rest_output_dir):
                             os.makedirs(rest_output_dir)
 
-                        with open(f"{rest_output_dir}/{self.current_time_step}.paths_history.json", 'w') as publish_file:
+                        with open(os.path.join(rest_output_dir, f'{self.current_time_step}.paths_history.json'), 'w') as publish_file:
                             publish_file.write(json.dumps(paths_history))
 
             return True

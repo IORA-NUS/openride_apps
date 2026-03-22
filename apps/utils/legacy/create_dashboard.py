@@ -15,7 +15,7 @@ from dateutil.relativedelta import relativedelta
 from datetime import date, datetime, tzinfo, timezone
 from pymongo.cursor import CursorType
 
-from apps.utils.direct_db_queries import *
+from openride_apps.apps.utils.legacy.direct_db_queries import *
 
 data_folder = f'{os.path.dirname(os.path.dirname(os.path.abspath(__file__)))}/output'
 
@@ -277,10 +277,10 @@ if __name__ == '__main__':
     sim_step_size = 30
     reference_time = datetime(2020, 1, 1, 4, 0, 0)
 
-    output_dir = f"{data_folder}/{datetime.strftime(datetime.now(), '%Y%m%d%H%M%S')}"
-    print(f"{output_dir = }")
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    run_logs_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'datahub', 'run_logs', datetime.strftime(datetime.now(), '%Y%m%d%H%M%S'))
+    print(f"{run_logs_dir = }")
+    if not os.path.exists(run_logs_dir):
+        os.makedirs(run_logs_dir)
 
     # primary_run_id = '9YOUfrgBKvdO'
     # primary_run_id = 'juyxDLTucfQj'
@@ -383,44 +383,44 @@ if __name__ == '__main__':
 
     # billboard
     billboard = get_billboard(primary_run_id_dict, num_steps, sim_step_size, reference_time)
-    with open (f"{output_dir}/billboard.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "billboard.json"), 'w') as file:
         json.dump(billboard, file, default=str, indent=2)
 
     # demand Coords (map)
     demand_coords = get_demand_coords(primary_run_id, num_steps, sim_step_size, reference_time)
-    with open (f"{output_dir}/demand_coords.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "demand_coords.json"), 'w') as file:
         json.dump(demand_coords, file, default=str, indent=2)
 
     # Paths (map)
     paths = get_all_paths(primary_run_id, num_steps, sim_step_size, reference_time),
-    with open (f"{output_dir}/paths.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "paths.json"), 'w') as file:
         json.dump(paths, file, default=str, indent=2)
 
     # platform revenue (graph (1,1))
     graph_1_1 = get_chart(run_id_dict, 'revenue', 'cumulative', title='Platform Revenue')
-    with open (f"{output_dir}/graph_1_1.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_1_1.json"), 'w') as file:
         json.dump(graph_1_1, file, default=str, indent=2)
 
     # Trip Waiting Time (graph (1,2))
     graph_1_2 = get_chart(run_id_dict, 'wait_time_pickup', 'avg_by_trip', title='Customer Waiting Time')
-    with open (f"{output_dir}/graph_1_2.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_1_2.json"), 'w') as file:
         json.dump(graph_1_2, file, default=str, indent=2)
 
     # customer Satisfaction (graph (1,3))
     graph_1_3 = get_chart(run_id_dict, 'service_score', 'cumulative', title='Customer Satisfaction Score')
-    with open (f"{output_dir}/graph_1_3.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_1_3.json"), 'w') as file:
         json.dump(graph_1_3, file, default=str, indent=2)
 
     # driver revenue (graph (2,1))
     graph_2_1 = get_chart(run_id_dict, 'revenue', 'avg_by_trip', title='Driver Revenue (per Trip)')
-    with open (f"{output_dir}/graph_2_1.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_2_1.json"), 'w') as file:
         json.dump(graph_2_1, file, default=str, indent=2)
 
     # # customers Served (graph (2,2))
     # graph_2_2 = get_chart(run_id_dict, 'num_served', 'cumulative', title='Service Rate'),
     # Answer rate (graph (2,2))
     graph_2_2 = get_answer_rate(run_id_dict, title='Customer Service Rate')
-    with open (f"{output_dir}/graph_2_2.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_2_2.json"), 'w') as file:
         json.dump(graph_2_2, file, default=str, indent=2)
 
 
@@ -431,7 +431,7 @@ if __name__ == '__main__':
     # })
     # graph_2_3 = get_static_chart(priority_service_run_id_dict, 'service_score', 'trip_price', 'mean', title='Service based Reward')
     graph_2_3 = get_static_chart(run_id_dict, 'service_score', 'trip_price', 'mean', title='Service based Reward')
-    with open (f"{output_dir}/graph_2_3.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_2_3.json"), 'w') as file:
         json.dump(graph_2_3, file, default=str, indent=2)
 
 
@@ -442,7 +442,7 @@ if __name__ == '__main__':
         'weight_service_score': 'Service (Control)',
     }
     graph_3_1 = get_solver_metric_chart(primary_run_id_dict, metric_dict, title='Realtime Control (Tuning parameters)')
-    with open (f"{output_dir}/graph_3_1.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_3_1.json"), 'w') as file:
         json.dump(graph_3_1, file, default=str, indent=2)
 
     # Online Performance (graph (3, 2))
@@ -452,5 +452,5 @@ if __name__ == '__main__':
         'service_perf': 'Service (Performance)'
     }
     graph_3_2 = get_solver_metric_chart(primary_run_id_dict, metric_dict, target=100, title='Realtime performance (target=100)')
-    with open (f"{output_dir}/graph_3_2.json", 'w') as file:
+    with open (os.path.join(run_logs_dir, "graph_3_2.json"), 'w') as file:
         json.dump(graph_3_2, file, default=str, indent=2)

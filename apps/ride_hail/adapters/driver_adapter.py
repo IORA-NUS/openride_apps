@@ -11,3 +11,9 @@ class RideHailDriverAdapter:
         from apps.ride_hail.driver.agent import DriverAgentIndie
 
         return DriverAgentIndie
+
+    @staticmethod
+    def get_manager_class():
+        from apps.ride_hail.driver.manager import DriverManager
+
+        return DriverManager

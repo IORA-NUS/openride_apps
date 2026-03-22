@@ -12,7 +12,7 @@ from apps.ride_hail import (
     validate_passenger_workflow_payload,
     validate_requested_trip_payload,
 )
-from apps.state_machine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+from apps.ride_hail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
 
 
 class _Recorder:

@@ -121,7 +121,7 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
         got_results = True
         response_items = []
         page = 1
-        from apps.state_machine import RidehailPassengerTripStateMachine
+        from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
         while got_results:
             params = {
                 "where": json.dumps({
@@ -183,7 +183,7 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
 
     def get_passenger_trips_for_metric(self, start_time, end_time):
         passenger_trip_url = self._trip_url('passenger')
-        from apps.state_machine import RidehailPassengerTripStateMachine
+        from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
         from datetime import datetime
         got_results = True
         passenger_trips_for_metric = []
@@ -219,7 +219,7 @@ class AnalyticsManager(ResourceClientMixin, BaseManager):
 
     def get_driver_trips_for_metric(self, start_time, end_time):
         driver_trip_url = self._trip_url('driver')
-        from apps.state_machine import RidehailDriverTripStateMachine
+        from apps.ride_hail.statemachine import RidehailDriverTripStateMachine
         from datetime import datetime
         got_results = True
         driver_trips_for_metric = []

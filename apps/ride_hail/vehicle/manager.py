@@ -27,7 +27,7 @@ class VehicleManager(ResourceClientMixin, BaseManager):
             "capacity": 4,
             "statemachine": {
                 "name": "WorkflowStateMachine",
-                "domain": "ride_hail",
+                "domain": self.simulation_domain,
             },
             "state": WorkflowStateMachine().initial_state.name,
             "persona": self.persona,

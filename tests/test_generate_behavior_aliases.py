@@ -1,4 +1,4 @@
-# from apps.scenario.generate_behavior import GenerateBehavior
+# from apps.ride_hail.datahub.scenario.generate_behavior import GenerateBehavior
 
 
 # def test_generate_behavior_driver_alias_targets_legacy_method():

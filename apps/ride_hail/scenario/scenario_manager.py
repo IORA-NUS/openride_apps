@@ -17,7 +17,7 @@ from datetime import datetime, time
 # from analytics_app import AnalyticsAgentIndie
 
 # from apps.utils import id_generator
-from apps.scenario.generate_behavior import GenerateBehavior
+from .generate_behavior import GenerateBehavior
 
 # from datetime import datetime
 # from dateutil.relativedelta import relativedelta
@@ -33,7 +33,7 @@ import asyncio
 # from orsim import ORSimScheduler
 from apps.config import settings, simulation_domains
 # from apps.orsim_config import driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
-from apps.scenario.scenario_config import driver_settings, passenger_settings, analytics_settings, assignment_settings
+from .scenario_config import driver_settings, passenger_settings, analytics_settings, assignment_settings
 from apps.orsim_config import orsim_settings
 
 def to_sec(tm):
@@ -51,24 +51,33 @@ class ScenarioManager():
     domain = simulation_domains['ridehail']
 
 
-    def __init__(self, dataset):
 
+    def __init__(self, dataset, domain, run_data_dir=None):
         self.dataset = dataset
-        behavior_dir = f"{os.path.dirname(os.path.abspath(__file__))}/dataset/{self.dataset}"
-        processed_input_dir = f"{os.path.dirname(os.path.abspath(__file__))}/processed_input/{self.dataset}"
-
-        if os.path.exists(behavior_dir): # this is a preexisting dataset, so just read the behaviors and retuen
-            logging.warning(f"Loading scenario behaviors {dataset=} from disk")
-            self.load_behavior_from_disk(behavior_dir)
+        self.domain = domain
+        # Use run_data_dir's parent as base for datahub paths if provided
+        if run_data_dir is not None:
+            # run_data_dir: .../datahub/<domain>/run_logs/<run_id>
+            base_datahub = os.path.abspath(os.path.join(run_data_dir, '..', '..'))
         else:
-            os.makedirs(behavior_dir)
+            # fallback for legacy usage
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) )
+            base_datahub = os.path.join(project_root, 'datahub', domain)
+        behavior_dir = os.path.join(base_datahub, 'dataset', self.dataset)
+        processed_input_dir = os.path.join(base_datahub, 'processed_input', self.dataset)
 
-            if os.path.exists(processed_input_dir):
-                logging.warning(f"Generating a new scenario  {dataset=} with behaviors form processed Input")
-                self.generate_data_from_processed_inputs(processed_input_dir, behavior_dir)
-            else:
-                logging.warning(f"Generating a scenario with random behaviors for {dataset=}")
-                self.generate_random_data_from_orsim_config(behavior_dir)
+        os.makedirs(behavior_dir, exist_ok=True)
+
+        if any(os.path.exists(os.path.join(behavior_dir, fname)) for fname in [
+            'driver_behavior.json', 'passenger_behavior.json', 'assignment_behavior.json', 'analytics_behavior.json', 'orsim_settings.json']):
+            logging.warning(f"Loading scenario behaviors {dataset=} from disk in {behavior_dir}")
+            self.load_behavior_from_disk(behavior_dir)
+        elif os.path.exists(processed_input_dir):
+            logging.warning(f"Generating a new scenario  {dataset=} with behaviors from processed Input in {processed_input_dir}")
+            self.generate_data_from_processed_inputs(processed_input_dir, behavior_dir)
+        else:
+            logging.warning(f"Generating a scenario with random behaviors for {dataset=}")
+            self.generate_random_data_from_orsim_config(behavior_dir)
 
         if self.orsim_settings.get('REFERENCE_TIME') is not None:
             self.reference_time = datetime.strptime(self.orsim_settings.get('REFERENCE_TIME'), '%Y-%m-%d %H:%M:%S')

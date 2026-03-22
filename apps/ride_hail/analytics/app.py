@@ -16,10 +16,10 @@ from datetime import datetime
 
 # from apps.utils import transform_lonlat_webmercator, itransform_lonlat_webmercator
 from apps.loc_service import transform_lonlat_webmercator, itransform_lonlat_webmercator
-from apps.utils.user_registry import UserRegistry
+from apps.common.user_registry import UserRegistry
 from apps.config import settings, simulation_domains
 
-from apps.state_machine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
+from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
 from apps.agent_core.base_app import BaseApp
 
 from .manager import AnalyticsManager

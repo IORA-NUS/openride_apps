@@ -5,7 +5,7 @@ from dateutil.relativedelta import relativedelta
 from apps.utils import is_success
 from apps.loc_service import OSRMClient
 
-from apps.state_machine import RidehailPassengerTripStateMachine
+from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
 from apps.utils import str_to_time, time_to_str
 from apps.common.trip_manager_base import TripManagerBase
 from apps.ride_hail import RideHailActions, RideHailEvents
@@ -109,7 +109,7 @@ class PassengerTripManager(TripManagerBase):
             "sim_clock": sim_clock,
             "statemachine": {
                 "name": "RidehailPassengerTripStateMachine",
-                "domain": "ride_hail",
+                "domain": self.simulation_domain,
             },
             "state": RidehailPassengerTripStateMachine.initial_state.name,
             "trip_price": self.compute_trip_price(pickup_loc, dropoff_loc) if trip_price is None else trip_price,
