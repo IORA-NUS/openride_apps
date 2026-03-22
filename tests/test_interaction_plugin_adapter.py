@@ -1,4 +1,4 @@
-from apps.agent_core.interaction.plugin import (
+from orsim.messenger.interaction import (
     CallbackRouterPlugin,
     InteractionContext,
 )

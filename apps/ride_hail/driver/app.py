@@ -14,13 +14,13 @@ from apps.common.user_registry import UserRegistry
 from .manager import DriverManager
 from .trip_manager import DriverTripManager
 from apps.loc_service import OSRMClient
-from apps.agent_core.base_app import BaseApp
+from orsim.lifecycle import ORSimApp
 
 from apps.ride_hail.statemachine import RidehailDriverTripStateMachine
 
 # from apps.messenger_service import Messenger
 
-class DriverApp(BaseApp):
+class DriverApp(ORSimApp):
 
     # exited_market = False
 

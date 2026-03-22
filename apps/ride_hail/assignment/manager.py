@@ -7,10 +7,10 @@ from apps.utils import id_generator, is_success
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 
-from apps.agent_core.base_manager import BaseManager
+from orsim.lifecycle import ORSimManager
 from apps.common.resource_client_mixin import ResourceClientMixin
 
-class AssignmentManager(ResourceClientMixin, BaseManager):
+class AssignmentManager(ResourceClientMixin, ORSimManager):
 
 
     def __init__(self, run_id, sim_clock, user, persona,solver):
@@ -51,10 +51,6 @@ class AssignmentManager(ResourceClientMixin, BaseManager):
         AssignmentManager does not require logout. This is a no-op for interface compatibility.
         """
         pass
-    # init_engine is now handled by BaseManager's init_resource
-
-
-    # create_engine is now handled by BaseManager's create_resource
 
     # def update_engine(self, sim_clock, online_params, performance):
     #     data = {

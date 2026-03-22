@@ -1,4 +1,3 @@
-from apps.agent_core.interaction import message_handler, state_handler
 import os, sys
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
@@ -9,6 +8,7 @@ from shapely.geometry.linestring import LineString
 # from apps.state_machine.agent_workflow_sm import WorkflowStateMachine
 # from apps.agent_core.state_machine import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
+from orsim.messenger.interaction import message_handler, state_handler
 
 
 import logging, traceback
@@ -34,12 +34,10 @@ from typing import Any, Dict
 
 # from apps.messenger_service import Messenger
 
-# from apps.orsim import ORSimAgent
-# from orsim import ORSimAgent
-from orsim import ORSimAgent
+from orsim.lifecycle import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
-from apps.agent_core.interaction.plugin import CallbackRouterPlugin, InteractionContext
+from orsim.messenger.interaction import CallbackRouterPlugin, InteractionContext
 from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
 # from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import driver_settings, orsim_settings

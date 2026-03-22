@@ -20,7 +20,9 @@ from apps.common.user_registry import UserRegistry
 from apps.config import settings, simulation_domains
 
 from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
-from apps.agent_core.base_app import BaseApp
+# from apps.agent_core.base_app import BaseApp
+from orsim.lifecycle import ORSimApp
+
 
 from .manager import AnalyticsManager
 
@@ -29,7 +31,7 @@ import websockets, asyncio
 from apps.utils import time_to_str, str_to_time
 
 
-class AnalyticsApp(BaseApp):
+class AnalyticsApp(ORSimApp):
     ''' '''
 
     def __init__(self, run_id, sim_clock, credentials, messenger, persona):

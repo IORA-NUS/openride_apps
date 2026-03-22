@@ -18,10 +18,10 @@ from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, Rideh
 from apps.ride_hail import RideHailActions
 from .solver import *  # NOTE * is deliberate to load all solvers in globals()
 from .manager import AssignmentManager
-from apps.agent_core.base_app import BaseApp
+from orsim.lifecycle import ORSimApp
 
 
-class AssignmentApp(BaseApp):
+class AssignmentApp(ORSimApp):
     ''' '''
 
     def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):

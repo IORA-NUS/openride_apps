@@ -1,4 +1,4 @@
-from apps.agent_core.interaction import message_handler, state_handler
+from orsim.messenger.interaction import message_handler, state_handler
 import os, sys
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
@@ -30,11 +30,10 @@ from apps.loc_service import TaxiStop, BusStop
 
 # Passenger agent will be called to apply behavior at every step
 # At each step, the Agent will process list of collected messages in the app.
-# from apps.orsim import ORSimAgent
-from orsim import ORSimAgent
+from orsim.lifecycle import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
-from apps.agent_core.interaction.plugin import CallbackRouterPlugin, InteractionContext
+from orsim.messenger.interaction import CallbackRouterPlugin, InteractionContext
 from apps.ride_hail import RideHailActions, RideHailEvents, validate_driver_workflow_payload
 # from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import orsim_settings, passenger_settings

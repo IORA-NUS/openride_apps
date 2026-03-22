@@ -13,7 +13,7 @@ Usage:
 """
 
 from apps.agent_core.agent_factory import AgentFactory
-from apps.agent_core.interaction.decorators import message_handler, state_handler
+from apps.agent_core.interaction_manager.decorators import message_handler, state_handler
 
 # --- Agent Runtime ---
 class MyAgentRuntime:

@@ -7,10 +7,10 @@ from apps.utils import id_generator, is_success
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 
-from apps.agent_core.base_manager import BaseManager
+from orsim.lifecycle import ORSimManager
 from apps.common.resource_client_mixin import ResourceClientMixin
 
-class AnalyticsManager(ResourceClientMixin, BaseManager):
+class AnalyticsManager(ResourceClientMixin, ORSimManager):
 
     def __init__(self, run_id, sim_clock, user, persona):
         self.run_id = run_id

@@ -5,13 +5,13 @@ from dateutil.relativedelta import relativedelta
 
 from apps.config import settings, simulation_domains
 from apps.utils import id_generator, is_success
-from apps.agent_core.base_manager import BaseManager
+from orsim.lifecycle import ORSimManager
 from apps.common.resource_client_mixin import ResourceClientMixin
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
 
 
-class PassengerManager(ResourceClientMixin, BaseManager):
+class PassengerManager(ResourceClientMixin, ORSimManager):
 
     def __init__(self, run_id, sim_clock, user, profile, persona):
         self.resource_type = 'passenger'
@@ -36,8 +36,4 @@ class PassengerManager(ResourceClientMixin, BaseManager):
     def on_init(self):
         pass
 
-
-    # init_passenger is now handled by BaseManager's init_resource
-
-    # create_passenger is now handled by BaseManager's create_resource
 

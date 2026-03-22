@@ -10,7 +10,7 @@ from .app import AnalyticsApp
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from orsim import ORSimAgent
+from orsim.lifecycle import ORSimAgent
 
 
 class AnalyticsAgentIndie(ORSimAgent):

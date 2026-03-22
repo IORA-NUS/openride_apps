@@ -12,13 +12,13 @@ from apps.common.user_registry import UserRegistry
 from .manager import PassengerManager
 from .trip_manager import PassengerTripManager
 from apps.loc_service import OSRMClient
-from apps.agent_core.base_app import BaseApp
+from orsim.lifecycle import ORSimApp
 
 from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
 from apps.ride_hail import RideHailActions, validate_assigned_payload
 
 
-class PassengerApp(BaseApp):
+class PassengerApp(ORSimApp):
 
     exited_market = False
 

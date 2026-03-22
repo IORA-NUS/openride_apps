@@ -6,8 +6,8 @@ def get_run_data_dir(run_id, domain, project_root=None):
     project_root: if None, will resolve to the parent of the current file's parent (should be openride_apps/openride_apps)
     """
     if project_root is None:
-        # Default: two levels up from this file
-        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # Default: three levels up from this file (so datahub is sibling of apps)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     base_dir = os.path.join(project_root, 'datahub', domain, 'run_logs', str(run_id))
     abs_dir = os.path.abspath(base_dir)
     if not os.path.exists(abs_dir):

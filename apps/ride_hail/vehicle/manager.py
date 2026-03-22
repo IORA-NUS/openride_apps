@@ -1,13 +1,13 @@
 from apps.config import settings, simulation_domains
 from apps.utils import id_generator, is_success
-from apps.agent_core.base_manager import BaseManager
+from orsim.lifecycle import ORSimManager
 from apps.common.resource_client_mixin import ResourceClientMixin
 import requests, json
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
 
 
-class VehicleManager(ResourceClientMixin, BaseManager):
+class VehicleManager(ResourceClientMixin, ORSimManager):
 
     def __init__(self, run_id, sim_clock, user, profile=None, persona=None):
         self.run_id = run_id
@@ -40,4 +40,4 @@ class VehicleManager(ResourceClientMixin, BaseManager):
     def on_init(self):
         pass
 
-    # init_vehicle and create_vehicle are now handled by BaseManager's init_resource and create_resource
+    # init_vehicle and create_vehicle are now handled by ORSimManager's init_resource and create_resource

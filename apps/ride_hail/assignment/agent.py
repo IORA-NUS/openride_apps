@@ -11,7 +11,7 @@ from shapely.geometry import MultiPolygon, mapping
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 
-from orsim import ORSimAgent
+from orsim.lifecycle import ORSimAgent
 
 
 class AssignmentAgentIndie(ORSimAgent):
