@@ -1,6 +1,6 @@
 import logging
 
-from apps.agent_core.runtime import AgentRuntimeBase, RoleMessageQueueMixin
+from apps.agent_core_deprecated.runtime import AgentRuntimeBase, RoleMessageQueueMixin
 
 from .base_interaction_adapter import BaseInteractionAdapter
 

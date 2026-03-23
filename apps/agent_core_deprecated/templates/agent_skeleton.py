@@ -12,7 +12,7 @@ Usage:
     5. Load parameters from a config file (see agent_config.json).
 """
 
-from apps.agent_core.agent_factory import AgentFactory
+from apps.agent_core_deprecated.agent_factory import AgentFactory
 from apps.agent_core.interaction_manager.decorators import message_handler, state_handler
 
 # --- Agent Runtime ---

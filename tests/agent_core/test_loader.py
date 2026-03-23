@@ -1,5 +1,5 @@
 import pytest
-from apps.agent_core.examples.loader import load_agent_config
+from apps.agent_core_deprecated.examples.loader import load_agent_config
 
 def test_load_agent_config_default():
     config = load_agent_config()
@@ -25,7 +25,7 @@ def test_agent_factory_integration():
     class DummyManager:
         def __init__(self, **kwargs):
             self.params = kwargs
-    from apps.agent_core.agent_factory import AgentFactory
+    from apps.agent_core_deprecated.agent_factory import AgentFactory
     config = load_agent_config()
     agent = AgentFactory(
         runtime_cls=DummyRuntime,
