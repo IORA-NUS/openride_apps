@@ -18,7 +18,7 @@ class SimulationRuntime:
         run_id,
         domain,
         scenario_manager,
-        run_data_dir,
+        datahub_dir,
         agent_config,
         statemachine_collection,
         scheduler_config,
@@ -44,7 +44,7 @@ class SimulationRuntime:
         self.domain = domain
         self.scenario_manager = scenario_manager
         # agent_classes and service_classes are now passed via agent_config
-        self.run_data_dir = run_data_dir
+        self.datahub_dir = datahub_dir
         self.reference_time = scenario_manager.reference_time
         self.current_time = self.reference_time
         self.statemachine_collection = statemachine_collection

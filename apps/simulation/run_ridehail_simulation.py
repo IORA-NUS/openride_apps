@@ -1,20 +1,24 @@
 # Renamed from run_generalized_simulation.py
 
-import sys, json
+import sys, json, os
 from datetime import datetime
 from apps.ride_hail.scenario import ScenarioManager
 from openride_apps.apps.simulation.simulation_runtime import SimulationRuntime
-from apps.utils.path_utils import get_run_data_dir
+# from apps.utils.path_utils import get_run_data_dir
 from apps.config import simulation_domains
 
 # --- Domain-specific configuration for ridehail ---
+
+datahub_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'datahub'))
+# Ensure this is an absolute path to the datahub location.
+
 run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 scenario_name = 'stay_or_leave_test'
 domain = simulation_domains['ridehail']
-run_data_dir = get_run_data_dir(run_id, domain)
+# run_data_dir = get_run_data_dir(run_id, domain)
 
 # ScenarioManager for ridehail
-scenario_manager = ScenarioManager(scenario_name, domain=domain, run_data_dir=run_data_dir)
+scenario_manager = ScenarioManager(datahub_dir, scenario_name, domain=domain) #, run_data_dir=run_data_dir)
 
 domain_name = domain  # e.g., 'ridehail-sim'
 
@@ -42,7 +46,7 @@ agent_config = {
         'scheduler_key': 'service',
         'agent_class': 'apps.ride_hail.analytics.AnalyticsAgentIndie',
         'init_time_step_key': None,
-        'extra_fields': lambda agent_id, behavior, sim: {'run_data_dir': sim.run_data_dir},
+        'extra_fields': lambda agent_id, behavior, sim: {'datahub_dir': sim.datahub_dir},
     },
 }
 
@@ -125,7 +129,7 @@ scheduler_config = {
 sim = SimulationRuntime(
     run_id=run_id,
     scenario_manager=scenario_manager,
-    run_data_dir=run_data_dir,
+    datahub_dir=datahub_dir,
     domain=domain,
     agent_config=agent_config,
     statemachine_collection=ridehail_statemachines,

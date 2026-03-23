@@ -16,9 +16,9 @@ from orsim.lifecycle import ORSimAgent
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior, run_data_dir=None):
+    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior, datahub_dir=None):
         super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
-        self.run_data_dir = run_data_dir
+        self.datahub_dir = datahub_dir
 
         self.credentials = {
             'email': self.behavior.get('email'),
@@ -67,11 +67,11 @@ class AnalyticsAgentIndie(ORSimAgent):
                 # raise e
             # print("after compute_all_metrics")
 
-            run_data_dir = self.run_data_dir
-            if run_data_dir is None:
-                run_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'datahub', 'run_data', str(self.run_id))
-                if not os.path.exists(run_data_dir):
-                    os.makedirs(run_data_dir)
+            run_data_dir = os.path.join(self.datahub_dir, self.behavior.get('domain', 'ridehail'), 'run_data', str(self.run_id))
+            # if run_data_dir is None:
+            #     run_data_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'datahub', 'run_data', str(self.run_id))
+            if not os.path.exists(run_data_dir):
+                os.makedirs(run_data_dir)
             # Directory is now guaranteed to exist
 
             if self.behavior['publish_realtime_data']:

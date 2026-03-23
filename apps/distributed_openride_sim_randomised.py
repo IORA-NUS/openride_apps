@@ -22,7 +22,7 @@ from apps.ride_hail.passenger import PassengerAgentIndie
 from utils import id_generator, is_success
 # from utils.generate_behavior import GenerateBehavior
 from apps.ride_hail.scenario import ScenarioManager
-from apps.utils.path_utils import get_run_data_dir
+# from apps.utils.path_utils import get_run_data_dir
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -44,13 +44,14 @@ from apps.common.statemachine_registry import StateMachineRegistry
 
 
 class DistributedOpenRideSimRandomised:
-    def __init__(self, run_id, scenario_name, run_data_dir):
+    def __init__(self, datahub_dir, run_id, scenario_name): #, run_data_dir):
         ORSimEnv.set_backend(messenger_backend)
 
+        self.datahub_dir = datahub_dir
         self.run_id = run_id
         self.scenario_name = scenario_name
-        self.run_data_dir = run_data_dir
-        self.scenario = ScenarioManager(scenario_name, domain=simulation_domains['ridehail'], run_data_dir=run_data_dir)
+        # self.run_data_dir = run_data_dir
+        self.scenario = ScenarioManager(self.datahub_dir, self.scenario_name, domain=simulation_domains['ridehail']) #, run_data_dir=run_data_dir)
 
         self.reference_time = self.scenario.reference_time
         self.current_time = self.reference_time
@@ -115,7 +116,8 @@ class DistributedOpenRideSimRandomised:
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': 0,
                 'behavior': behavior,
-                'run_data_dir': run_data_dir,
+                # 'run_data_dir': run_data_dir,
+                'datahub_dir': self.datahub_dir,
             }
             self.service_scheduler.add_agent(
                 spec=spec,
@@ -262,10 +264,12 @@ if __name__ == '__main__':
 
     run_id = id_generator(12)
     from apps.config import simulation_domains
-    from apps.utils.path_utils import get_run_data_dir
+    # from apps.utils.path_utils import get_run_data_dir
     domain = simulation_domains['ridehail']
-    run_data_dir = get_run_data_dir(run_id, domain)
-    print(f"[DEBUG] Run data directory for this run: {run_data_dir}")
+    # run_data_dir = get_run_data_dir(run_id, domain)
+    datahub_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'datahub'))
+    # Ensure this is an absolute path to the datahub location.
+    print(f"[DEBUG] Datahub directory for this run: {datahub_dir}")
 
 
     # Option to also display logs to console for debugging
@@ -275,7 +279,10 @@ if __name__ == '__main__':
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
 
-    log_file = os.path.join(run_data_dir, 'app.log')
+    log_file_dir = os.path.join(datahub_dir, domain, 'run_logs', run_id)
+    if not os.path.exists(log_file_dir):
+        os.makedirs(log_file_dir)
+    log_file = os.path.join(log_file_dir, 'app.log')
     print(f"[DEBUG] Log file for this run: {log_file}")
     file_handler = logging.FileHandler(log_file, mode='w')
     formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
@@ -379,7 +386,7 @@ if __name__ == '__main__':
     # scenario_name = 'stay_or_leave_test_changi'
 
     try:
-        sim = DistributedOpenRideSimRandomised(run_id, scenario_name, run_data_dir=run_data_dir)
+        sim = DistributedOpenRideSimRandomised(datahub_dir, run_id, scenario_name) #, run_data_dir=run_data_dir)
     except Exception as e:
         print(f"Failed to launch Simulation model... got: {str(e)}")
         raise e

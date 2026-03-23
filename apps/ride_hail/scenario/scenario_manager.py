@@ -14,7 +14,7 @@ class ScenarioManager(BaseScenarioManager):
     """
     Ridehail-specific ScenarioManager, inherits from BaseScenarioManager.
     """
-    def __init__(self, scenario_name, domain, run_data_dir=None):
+    def __init__(self, datahub_dir, scenario_name, domain): #, run_data_dir=None):
         self.driver_collection = None
         self.passenger_collection = None
         self.assignment_collection = None
@@ -22,7 +22,7 @@ class ScenarioManager(BaseScenarioManager):
         self.orsim_settings = None
         self.reference_time = datetime(2020, 1, 1, 8, 0, 0)
 
-        super().__init__(scenario_name, domain, run_data_dir)
+        super().__init__(datahub_dir, scenario_name, domain) #, run_data_dir)
 
         # self.domain = simulation_domains['ridehail']
 
