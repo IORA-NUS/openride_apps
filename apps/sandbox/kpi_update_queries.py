@@ -35,7 +35,7 @@ run_id_meta = {
 def update_service_score(db, run_id):
 
     WAYPOINT = db.waypoint
-    DRIVER_TRIP = db.driver_ride_hail_trip
+    DRIVER_TRIP = db.ridehail_driver_trip
     KPI = db.kpi
 
 
@@ -88,7 +88,7 @@ def update_service_score(db, run_id):
 def update_num_accepted(db, run_id):
 
     WAYPOINT = db.waypoint
-    DRIVER_TRIP = db.driver_ride_hail_trip
+    DRIVER_TRIP = db.ridehail_driver_trip
     KPI = db.kpi
 
 

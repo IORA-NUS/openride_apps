@@ -1,0 +1,43 @@
+from apps.config import settings, simulation_domains
+from apps.utils import id_generator, is_success
+from orsim.lifecycle import ORSimManager
+from apps.common.resource_client_mixin import ResourceClientMixin
+import requests, json
+# from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
+from orsim.utils import WorkflowStateMachine
+
+
+class VehicleManager(ResourceClientMixin, ORSimManager):
+
+    def __init__(self, run_id, sim_clock, user, profile=None, persona=None):
+        self.run_id = run_id
+        self.user = user
+        self.profile = profile
+        self.persona = persona
+
+        self.simulation_domain = simulation_domains['ridehail']
+
+        # self.resource_type = 'vehicle'
+        data = {
+            "registration": {
+                "num": id_generator(6),
+                "country": "Singapore",
+                "expiry":  "Tue, 01 Jan 2030 00:00:00 GMT"
+            },
+            "capacity": 4,
+            "statemachine": {
+                "name": "WorkflowStateMachine",
+                "domain": self.simulation_domain,
+            },
+            "state": WorkflowStateMachine().initial_state.name,
+            "persona": self.persona,
+            "sim_clock": sim_clock,
+        }
+        if self.profile:
+            data["profile"] = self.profile
+        self.resource = self.init_resource(sim_clock, data=data)
+
+    def on_init(self):
+        pass
+
+    # init_vehicle and create_vehicle are now handled by ORSimManager's init_resource and create_resource

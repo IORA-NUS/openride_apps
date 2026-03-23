@@ -1,6 +1,6 @@
 import string
 import random
-from  collections import Mapping
+from collections.abc import Mapping
 
 from datetime import datetime
 

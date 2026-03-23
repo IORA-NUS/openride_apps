@@ -1,5 +1,10 @@
 
 import os, sys
+import asyncio
+# macOS event loop policy fix
+# if sys.platform == "darwin":
+#     asyncio.set_event_loop_policy(asyncio.SelectorEventLoopPolicy())
+
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
@@ -9,16 +14,15 @@ import logging, time, json, traceback, requests
 from pprint import pprint
 from datetime import datetime
 
-from analytics_app.analytics_agent_indie import AnalyticsAgentIndie
-from assignment_app.assignment_agent_indie import AssignmentAgentIndie
-from driver_app import DriverAgentIndie
-from passenger_app import PassengerAgentIndie
-from assignment_app import AssignmentAgentIndie
-from analytics_app import AnalyticsAgentIndie
+from apps.ride_hail.analytics import AnalyticsAgentIndie
+from apps.ride_hail.assignment import AssignmentAgentIndie
+from apps.ride_hail.driver import DriverAgentIndie
+from apps.ride_hail.passenger import PassengerAgentIndie
 
 from utils import id_generator, is_success
 # from utils.generate_behavior import GenerateBehavior
-from apps.scenario import ScenarioManager
+from apps.ride_hail.scenario import ScenarioManager
+from apps.utils.path_utils import get_run_data_dir
 
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -27,25 +31,26 @@ from unittest import mock
 
 # from messenger_service import Messenger
 
-import asyncio
 
 # from apps.tasks import start_driver, start_passenger, start_analytics, start_assignment
 
 from orsim import ORSimScheduler, ORSimEnv
-from apps.config import settings, messenger_backend #, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
-from apps.utils.user_registry import UserRegistry
+from apps.config import settings, messenger_backend, simulation_domains #, driver_settings, passenger_settings, analytics_settings, assignment_settings, orsim_settings
+from apps.common.user_registry import UserRegistry
 from apps.utils import time_to_str, str_to_time
 
-class DistributedOpenRideSimRandomised():
+from apps.common.statemachine_registry import StateMachineRegistry
 
 
-    def __init__(self, run_id, scenario_name):
 
+class DistributedOpenRideSimRandomised:
+    def __init__(self, run_id, scenario_name, run_data_dir):
         ORSimEnv.set_backend(messenger_backend)
 
         self.run_id = run_id
         self.scenario_name = scenario_name
-        self.scenario = ScenarioManager(scenario_name)
+        self.run_data_dir = run_data_dir
+        self.scenario = ScenarioManager(scenario_name, domain=simulation_domains['ridehail'], run_data_dir=run_data_dir)
 
         self.reference_time = self.scenario.reference_time
         self.current_time = self.reference_time
@@ -57,6 +62,8 @@ class DistributedOpenRideSimRandomised():
         self.user = self.setup_user()
         self.run_record = self.init_run_config()
 
+        self.register_state_machines()
+
         self.execution_start_time = time.time()
 
         for agent_id, behavior in self.scenario.driver_collection.items():
@@ -66,17 +73,12 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': behavior['shift_start_time'],
                 'behavior': behavior,
-                # 'orsim_settings': self.scenario.orsim_settings
             }
-
             self.agent_registry[behavior['shift_start_time']].append({
-                                                                'spec': spec,
-                                                                # 'unique_id': agent_id,
-                                                                # 'method': start_driver,
-                                                                'project_path': f'{parent_path}',
-                                                                'agent_class': 'apps.driver_app.DriverAgentIndie',
-                                                                # 'agent_class_name': 'DriverAgentIndie',
-                                                            })
+                'spec': spec,
+                'project_path': f'{parent_path}',
+                'agent_class': 'apps.ride_hail.driver.DriverAgentIndie',
+            })
 
         for agent_id, behavior in self.scenario.passenger_collection.items():
             spec = {
@@ -85,18 +87,12 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': behavior['trip_request_time'],
                 'behavior': behavior,
-                # 'orsim_settings': self.scenario.orsim_settings
             }
-
             self.agent_registry[behavior['trip_request_time']].append({
-                                                                'spec': spec,
-                                                                # 'unique_id': agent_id,
-                                                                # 'method': start_passenger,
-                                                                'project_path': f'{parent_path}',
-                                                                'agent_class': 'apps.passenger_app.PassengerAgentIndie',
-                                                                # 'agent_class_name': 'PassengerAgentIndie',
-                                                            })
-
+                'spec': spec,
+                'project_path': f'{parent_path}',
+                'agent_class': 'apps.ride_hail.passenger.PassengerAgentIndie',
+            })
 
         for agent_id, behavior in self.scenario.assignment_collection.items():
             spec = {
@@ -105,16 +101,12 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': 0,
                 'behavior': behavior,
-                # 'orsim_settings': self.scenario.orsim_settings
             }
-
-            # self.service_scheduler.add_agent(agent_id, start_assignment, spec)
-            self.service_scheduler.add_agent(#agent_id,
-                                            spec=spec,
-                                            project_path=f'{parent_path}',
-                                            agent_class='apps.assignment_app.AssignmentAgentIndie',
-                                            # agent_class_name='AssignmentAgentIndie',
-                                            )
+            self.service_scheduler.add_agent(
+                spec=spec,
+                project_path=f'{parent_path}',
+                agent_class='apps.ride_hail.assignment.AssignmentAgentIndie',
+            )
 
         for agent_id, behavior in self.scenario.analytics_collection.items():
             spec = {
@@ -123,20 +115,48 @@ class DistributedOpenRideSimRandomised():
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
                 'init_time_step': 0,
                 'behavior': behavior,
-                # 'orsim_settings': self.scenario.orsim_settings
+                'run_data_dir': run_data_dir,
             }
+            self.service_scheduler.add_agent(
+                spec=spec,
+                project_path=f'{parent_path}',
+                agent_class='apps.ride_hail.analytics.AnalyticsAgentIndie',
+            )
 
-            # self.service_scheduler.add_agent(agent_id, start_analytics, spec)
-            self.service_scheduler.add_agent(#agent_id,
-                                             spec=spec,
-                                            project_path=f'{parent_path}',
-                                            agent_class='apps.analytics_app.AnalyticsAgentIndie',
-                                            # agent_class_name='AnalyticsAgentIndie',
-                                            )
+
+
+
+    def register_state_machines(self):
+        from apps.ride_hail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+        from orsim.utils import WorkflowStateMachine
+        statemachines = {
+            'RidehailDriverTripStateMachine': RidehailDriverTripStateMachine,
+            'RidehailPassengerTripStateMachine': RidehailPassengerTripStateMachine,
+            'WorkflowStateMachine': WorkflowStateMachine,
+        }
+        StateMachineRegistry(statemachines=statemachines, domain=simulation_domains['ridehail']).register_state_machines(
+            server_url=settings['OPENRIDE_SERVER_URL'],
+            headers=self.user.get_headers()
+            )
 
     def step(self, i):
         step_start_time = time.time()
         print(f"Simulation Step: {self.agent_scheduler.time} of {self.scenario.orsim_settings['SIMULATION_LENGTH_IN_STEPS']}")
+
+        try:
+
+            loop = asyncio.get_event_loop()
+            # print loop debug
+            print(f"Event loop: {loop}")
+        except Exception as e:
+            # print(f"Error in Simulation step {i}: {str(e)}")
+            # traceback.print_exc()
+            # step_metric = {
+            #     i: {
+            #         'error': str(e),
+            #     }
+            # }
+            pass
 
         # IMPORTANT Make sure agents are added into the scheduler before step
         # add_agent is a blocking process and ensures the agent is ready to listen to step()
@@ -144,7 +164,11 @@ class DistributedOpenRideSimRandomised():
         # print(self.agent_registry[0])
         for item in self.agent_registry[i]:
             # print(f"{item}")
-            self.agent_scheduler.add_agent(**item)
+            agent_obj = self.agent_scheduler.add_agent(**item)
+            # If the agent object has agent_failed, log it
+            if hasattr(agent_obj, 'agent_failed') and getattr(agent_obj, 'agent_failed', False):
+                import logging
+                logging.error(f"Agent {getattr(agent_obj, 'unique_id', 'unknown')} failed to initialize and will not step.")
         # step() assumes all agents will be ready to respond to step message
         asyncio.run(self.agent_scheduler.step())
         agent_scheduler_run_time = time.time() - agent_scheduler_start_time
@@ -180,7 +204,7 @@ class DistributedOpenRideSimRandomised():
 
     def init_run_config(self):
 
-        run_config_url = f"{settings['OPENRIDE_SERVER_URL']}/run_config"
+        run_config_url = f"{settings['OPENRIDE_SERVER_URL']}/run-config"
 
         data = {
             "run_id": self.run_id,
@@ -208,7 +232,7 @@ class DistributedOpenRideSimRandomised():
             raise Exception(f"{response.url}, {response.text}")
 
     def update_status(self, status, execution_time=0, step_metric=None):
-        run_config_item_url = f"{settings['OPENRIDE_SERVER_URL']}/run_config/{self.run_record['_id']}"
+        run_config_item_url = f"{settings['OPENRIDE_SERVER_URL']}/run-config/{self.run_record['_id']}"
 
         data = {
             'status': status,
@@ -237,15 +261,33 @@ class DistributedOpenRideSimRandomised():
 if __name__ == '__main__':
 
     run_id = id_generator(12)
+    from apps.config import simulation_domains
+    from apps.utils.path_utils import get_run_data_dir
+    domain = simulation_domains['ridehail']
+    run_data_dir = get_run_data_dir(run_id, domain)
+    print(f"[DEBUG] Run data directory for this run: {run_data_dir}")
 
-    # log_dir = f"{os.path.dirname(os.path.abspath(__file__))}/log"
-    # if not os.path.exists(log_dir):
-    #     os.makedirs(log_dir)
-    output_dir = f"{os.path.dirname(os.path.abspath(__file__))}/output/{run_id}"
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
 
-    logging.basicConfig(filename=f'{output_dir}/app.log', level=settings['LOG_LEVEL'], filemode='w')
+    # Option to also display logs to console for debugging
+    DISPLAY_LOGS_TO_CONSOLE = False  # Set to False to disable console logging
+
+    # Remove all handlers associated with the root logger object
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
+    log_file = os.path.join(run_data_dir, 'app.log')
+    print(f"[DEBUG] Log file for this run: {log_file}")
+    file_handler = logging.FileHandler(log_file, mode='w')
+    formatter = logging.Formatter('%(asctime)s %(levelname)s %(name)s %(message)s')
+    file_handler.setFormatter(formatter)
+    logging.root.addHandler(file_handler)
+
+    if DISPLAY_LOGS_TO_CONSOLE:
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        logging.root.addHandler(console_handler)
+
+    logging.root.setLevel(settings['LOG_LEVEL'])
 
     # # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_random'
     # # scenario_name = '20211117_D200_P2000_4Hx30s_U_singapore_greedy_pickup'
@@ -337,7 +379,7 @@ if __name__ == '__main__':
     # scenario_name = 'stay_or_leave_test_changi'
 
     try:
-        sim = DistributedOpenRideSimRandomised(run_id, scenario_name)
+        sim = DistributedOpenRideSimRandomised(run_id, scenario_name, run_data_dir=run_data_dir)
     except Exception as e:
         print(f"Failed to launch Simulation model... got: {str(e)}")
         raise e

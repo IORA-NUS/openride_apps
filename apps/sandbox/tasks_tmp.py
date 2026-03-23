@@ -3,10 +3,20 @@ from __future__ import absolute_import
 from apps.celery_proj import app
 import time
 
-# from apps.driver_app import DriverAgentIndie
-from apps.passenger_app import PassengerAgentIndie
-from apps.analytics_app import AnalyticsAgentIndie
-from apps.assignment_app import AssignmentAgentIndie
+from apps.ride_hail import (
+    RideHailAnalyticsAdapter,
+    RideHailAssignmentAdapter,
+    RideHailDriverAdapter,
+    RideHailPassengerAdapter,
+)
+
+
+AGENT_CLASS_MAP = {
+    "PassengerAgentIndie": RideHailPassengerAdapter.get_agent_class(),
+    "AnalyticsAgentIndie": RideHailAnalyticsAdapter.get_agent_class(),
+    "AssignmentAgentIndie": RideHailAssignmentAdapter.get_agent_class(),
+    "DriverAgentIndie": RideHailDriverAdapter.get_agent_class(),
+}
 
 
 @app.task
@@ -15,7 +25,8 @@ def execute_step(class_name, spec):
     run_id = spec[1]
     reference_date = spec[2]
 
-    agent = globals()[class_name](unique_id, run_id, reference_date, None)
+    agent_cls = AGENT_CLASS_MAP[class_name]
+    agent = agent_cls(unique_id, run_id, reference_date, None)
 
     agent.start_listening()
     # try:

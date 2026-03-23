@@ -1,4 +1,5 @@
 # custom
+
 archive/
 results/
 output/
@@ -6,6 +7,9 @@ notebook/
 dataset/
 log/
 nohup*
+datahub/
+run_logs/
+
 
 # user_db.py
 .DS_Store
