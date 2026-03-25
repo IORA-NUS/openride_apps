@@ -1,0 +1,17 @@
+{
+  "facility_id": "FAC001",
+  "type": "port", 
+  "opening_hours": {
+    "start": "06:00",
+    "end": "22:00"
+  },
+  "location": {
+    "lat": 1.3010,
+    "lon": 103.8010
+  },
+  "num_gates": 4,
+  "service_time_per_container_min": 20,
+  "max_queue_length": 10,
+  "special_services": ["reefer plug", "customs clearance"],
+  "notes": "Gate 3 under maintenance"
+}

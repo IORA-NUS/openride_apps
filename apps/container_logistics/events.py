@@ -1,22 +1,46 @@
-class ContainerLogisticsActions:
-    HAUL_REQUEST = "haul_request"
-    HAULIER_WORKFLOW_EVENT = "haulier_workflow_event"
-    FACILITY_WORKFLOW_EVENT = "facility_workflow_event"
+"""
+Container Logistics Events and Actions
+Event constants for state machine transitions, following the ride_hail pattern.
+"""
 
+# Haul Trip Events
+HAULTRIP_CREATED = "haultrip_created"
+HAULTRIP_ASSIGNED = "haultrip_assigned"
+HAULTRIP_EN_ROUTE_TO_PICKUP = "haultrip_en_route_to_pickup"
+HAULTRIP_WAITING_AT_PICKUP = "haultrip_waiting_at_pickup"
+HAULTRIP_AT_PICKUP_GATE = "haultrip_at_pickup_gate"
+HAULTRIP_LOADING = "haultrip_loading"
+HAULTRIP_LOADED = "haultrip_loaded"
+HAULTRIP_EN_ROUTE_TO_DROPOFF = "haultrip_en_route_to_dropoff"
+HAULTRIP_WAITING_AT_DROPOFF = "haultrip_waiting_at_dropoff"
+HAULTRIP_AT_DROPOFF_GATE = "haultrip_at_dropoff_gate"
+HAULTRIP_UNLOADING = "haultrip_unloading"
+HAULTRIP_COMPLETED = "haultrip_completed"
+HAULTRIP_CANCELLED = "haultrip_cancelled"
 
-class ContainerLogisticsEvents:
-    PUBLISH_HAUL_REQUEST = "publish_haul_request"
-    HAULIER_ACCEPTS_REQUEST = "haulier_accepts_request"
-    ARRIVE_FOR_PICKUP = "arrive_for_pickup"
-    ARRIVE_FOR_DROPOFF = "arrive_for_dropoff"
+# Truck Workflow Events
+TRUCK_OFF_DUTY = "truck_off_duty"
+TRUCK_ON_DUTY = "truck_on_duty"
+TRUCK_RESTING = "truck_resting"
 
-    FACILITY_ACKNOWLEDGES_PICKUP_CHECKIN = "facility_acknowledges_pickup_checkin"
-    FACILITY_ALLOCATES_PICKUP_SLOT = "facility_allocates_pickup_slot"
-    FACILITY_RELEASES_CONTAINER = "facility_releases_container"
+# Facility Gate Events
+GATE_CLOSED = "gate_closed"
+GATE_AVAILABLE = "gate_available"
+GATE_OCCUPIED = "gate_occupied"
+GATE_SERVICE_IN_PROGRESS = "gate_service_in_progress"
+GATE_SERVICE_COMPLETE = "gate_service_complete"
+GATE_UNAVAILABLE = "gate_unavailable"
 
-    FACILITY_ACKNOWLEDGES_DROPOFF_CHECKIN = "facility_acknowledges_dropoff_checkin"
-    FACILITY_ALLOCATES_DROPOFF_SLOT = "facility_allocates_dropoff_slot"
-    FACILITY_ACCEPTS_CONTAINER = "facility_accepts_container"
+# Order Events
+ORDER_CREATED = "order_created"
+ORDER_IN_MARKET = "order_in_market"
+ORDER_ASSIGNED = "order_assigned"
+ORDER_COMPLETED = "order_completed"
+ORDER_EXPIRED = "order_expired"
+ORDER_CANCELLED = "order_cancelled"
 
-    CANCEL_HAUL = "cancel_haul"
-    CANCEL_INTERACTION = "cancel_interaction"
+# Import state machines for reference
+from .statemachine.haul_trip_sm import HaulTripStateMachine
+from .statemachine.truck_sm import TruckWorkflowStateMachine
+from .statemachine.facility_sm import Facility, GateStateMachine
+from .statemachine.order_sm import OrderStateMachine
