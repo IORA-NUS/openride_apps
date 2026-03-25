@@ -7,10 +7,13 @@ from openride_apps.apps.simulation.simulation_runtime import SimulationRuntime
 # from apps.utils.path_utils import get_run_data_dir
 from apps.config import simulation_domains
 
+
 # --- Domain-specific configuration for ridehail ---
 
 datahub_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'datahub'))
 # Ensure this is an absolute path to the datahub location.
+if not os.path.exists(datahub_dir) or not os.path.isabs(datahub_dir):
+    raise ValueError(f"datahub_dir does not exist or is not an absolute path. Got: {datahub_dir}")
 
 run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 scenario_name = 'stay_or_leave_test'
