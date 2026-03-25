@@ -1,0 +1,102 @@
+flowchart TD
+    subgraph RidehailDriverTripStateMachine
+        RidehailDriverTripStateMachine_driver_init_trip[driver init trip]
+        RidehailDriverTripStateMachine_driver_looking_for_job[driver looking for job]
+        RidehailDriverTripStateMachine_driver_received_trip[driver received trip]
+        RidehailDriverTripStateMachine_driver_rejected_trip[driver rejected trip]
+        RidehailDriverTripStateMachine_driver_accepted_trip[driver accepted trip]
+        RidehailDriverTripStateMachine_driver_cancelled_trip[driver cancelled trip]
+        RidehailDriverTripStateMachine_driver_moving_to_pickup[driver moving to pickup]
+        RidehailDriverTripStateMachine_driver_waiting_to_pickup[driver waiting to pickup]
+        RidehailDriverTripStateMachine_driver_pickedup[driver pickedup]
+        RidehailDriverTripStateMachine_driver_moving_to_dropoff[driver moving to dropoff]
+        RidehailDriverTripStateMachine_driver_waiting_to_dropoff[driver waiting to dropoff]
+        RidehailDriverTripStateMachine_driver_droppedoff[driver droppedoff]
+        RidehailDriverTripStateMachine_driver_completed_trip[driver completed trip]
+    end
+    subgraph RidehailPassengerTripStateMachine
+        RidehailPassengerTripStateMachine_passenger_requested_trip[passenger requested trip]
+        RidehailPassengerTripStateMachine_passenger_assigned_trip[passenger assigned trip]
+        RidehailPassengerTripStateMachine_passenger_received_trip_confirmation[passenger received trip confirmation]
+        RidehailPassengerTripStateMachine_passenger_accepted_trip[passenger accepted trip]
+        RidehailPassengerTripStateMachine_passenger_cancelled_trip[passenger cancelled trip]
+        RidehailPassengerTripStateMachine_passenger_moving_for_pickup[passenger moving for pickup]
+        RidehailPassengerTripStateMachine_passenger_waiting_for_pickup[passenger waiting for pickup]
+        RidehailPassengerTripStateMachine_passenger_pickedup[passenger pickedup]
+        RidehailPassengerTripStateMachine_passenger_moving_for_dropoff[passenger moving for dropoff]
+        RidehailPassengerTripStateMachine_passenger_waiting_for_dropoff[passenger waiting for dropoff]
+        RidehailPassengerTripStateMachine_passenger_droppedoff[passenger droppedoff]
+        RidehailPassengerTripStateMachine_passenger_completed_trip[passenger completed trip]
+    end
+    RidehailDriverTripStateMachine_driver_init_trip --|look for job|--> RidehailDriverTripStateMachine_driver_looking_for_job
+    RidehailDriverTripStateMachine_driver_init_trip --|recieve|--> RidehailDriverTripStateMachine_driver_received_trip
+    RidehailDriverTripStateMachine_driver_init_trip --|end trip|--> RidehailDriverTripStateMachine_driver_completed_trip
+    RidehailDriverTripStateMachine_driver_init_trip --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_looking_for_job --|end trip|--> RidehailDriverTripStateMachine_driver_completed_trip
+    RidehailDriverTripStateMachine_driver_looking_for_job --|cancel|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_looking_for_job --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_received_trip --|confirm|--> RidehailDriverTripStateMachine_driver_accepted_trip
+    RidehailDriverTripStateMachine_driver_received_trip --|reject|--> RidehailDriverTripStateMachine_driver_rejected_trip
+    RidehailDriverTripStateMachine_driver_received_trip --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_rejected_trip --|end trip|--> RidehailDriverTripStateMachine_driver_completed_trip
+    RidehailDriverTripStateMachine_driver_rejected_trip --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_accepted_trip --|passenger confirmed trip|--> RidehailDriverTripStateMachine_driver_moving_to_pickup
+    RidehailDriverTripStateMachine_driver_accepted_trip --|passenger cancelled trip|--> RidehailDriverTripStateMachine_driver_completed_trip
+    RidehailDriverTripStateMachine_driver_accepted_trip --|cancel|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_accepted_trip --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_moving_to_pickup --|wait to pickup|--> RidehailDriverTripStateMachine_driver_waiting_to_pickup
+    RidehailDriverTripStateMachine_driver_moving_to_pickup --|passenger cancelled trip|--> RidehailDriverTripStateMachine_driver_completed_trip
+    RidehailDriverTripStateMachine_driver_moving_to_pickup --|cancel|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_moving_to_pickup --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_waiting_to_pickup --|passenger cancelled trip|--> RidehailDriverTripStateMachine_driver_completed_trip
+    RidehailDriverTripStateMachine_driver_waiting_to_pickup --|passenger acknowledge pickup|--> RidehailDriverTripStateMachine_driver_pickedup
+    RidehailDriverTripStateMachine_driver_waiting_to_pickup --|cancel|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_waiting_to_pickup --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_pickedup --|move to dropoff|--> RidehailDriverTripStateMachine_driver_moving_to_dropoff
+    RidehailDriverTripStateMachine_driver_pickedup --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_moving_to_dropoff --|wait to dropoff|--> RidehailDriverTripStateMachine_driver_waiting_to_dropoff
+    RidehailDriverTripStateMachine_driver_moving_to_dropoff --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_waiting_to_dropoff --|passenger acknowledge dropoff|--> RidehailDriverTripStateMachine_driver_droppedoff
+    RidehailDriverTripStateMachine_driver_waiting_to_dropoff --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailDriverTripStateMachine_driver_droppedoff --|end trip|--> RidehailDriverTripStateMachine_driver_completed_trip
+    RidehailDriverTripStateMachine_driver_droppedoff --|force quit|--> RidehailDriverTripStateMachine_driver_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_requested_trip --|assign|--> RidehailPassengerTripStateMachine_passenger_assigned_trip
+    RidehailPassengerTripStateMachine_passenger_requested_trip --|cancel|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_requested_trip --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_assigned_trip --|driver confirmed trip|--> RidehailPassengerTripStateMachine_passenger_received_trip_confirmation
+    RidehailPassengerTripStateMachine_passenger_assigned_trip --|cancel|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_assigned_trip --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_received_trip_confirmation --|accept|--> RidehailPassengerTripStateMachine_passenger_accepted_trip
+    RidehailPassengerTripStateMachine_passenger_received_trip_confirmation --|reject|--> RidehailPassengerTripStateMachine_passenger_requested_trip
+    RidehailPassengerTripStateMachine_passenger_received_trip_confirmation --|cancel|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_received_trip_confirmation --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_accepted_trip --|move for pickup|--> RidehailPassengerTripStateMachine_passenger_moving_for_pickup
+    RidehailPassengerTripStateMachine_passenger_accepted_trip --|wait for pickup|--> RidehailPassengerTripStateMachine_passenger_waiting_for_pickup
+    RidehailPassengerTripStateMachine_passenger_accepted_trip --|driver cancelled trip|--> RidehailPassengerTripStateMachine_passenger_requested_trip
+    RidehailPassengerTripStateMachine_passenger_accepted_trip --|driver arrived for pickup|--> RidehailPassengerTripStateMachine_passenger_pickedup
+    RidehailPassengerTripStateMachine_passenger_accepted_trip --|cancel|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_accepted_trip --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_moving_for_pickup --|wait for pickup|--> RidehailPassengerTripStateMachine_passenger_waiting_for_pickup
+    RidehailPassengerTripStateMachine_passenger_moving_for_pickup --|driver cancelled trip|--> RidehailPassengerTripStateMachine_passenger_requested_trip
+    RidehailPassengerTripStateMachine_passenger_moving_for_pickup --|driver arrived for pickup|--> RidehailPassengerTripStateMachine_passenger_pickedup
+    RidehailPassengerTripStateMachine_passenger_moving_for_pickup --|cancel|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_moving_for_pickup --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_waiting_for_pickup --|driver cancelled trip|--> RidehailPassengerTripStateMachine_passenger_requested_trip
+    RidehailPassengerTripStateMachine_passenger_waiting_for_pickup --|driver arrived for pickup|--> RidehailPassengerTripStateMachine_passenger_pickedup
+    RidehailPassengerTripStateMachine_passenger_waiting_for_pickup --|cancel|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_waiting_for_pickup --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_pickedup --|driver move for dropoff|--> RidehailPassengerTripStateMachine_passenger_moving_for_dropoff
+    RidehailPassengerTripStateMachine_passenger_pickedup --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_moving_for_dropoff --|driver arrived for dropoff|--> RidehailPassengerTripStateMachine_passenger_waiting_for_dropoff
+    RidehailPassengerTripStateMachine_passenger_moving_for_dropoff --|driver waiting for dropoff|--> RidehailPassengerTripStateMachine_passenger_droppedoff
+    RidehailPassengerTripStateMachine_passenger_moving_for_dropoff --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_waiting_for_dropoff --|driver waiting for dropoff|--> RidehailPassengerTripStateMachine_passenger_droppedoff
+    RidehailPassengerTripStateMachine_passenger_waiting_for_dropoff --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailPassengerTripStateMachine_passenger_droppedoff --|end trip|--> RidehailPassengerTripStateMachine_passenger_completed_trip
+    RidehailPassengerTripStateMachine_passenger_droppedoff --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    Passenger_requested -. |PASSENGER CONFIRMED TRIP: Passenger confirms trip, driver starts moving to pickup| .-> Driver_moving_to_pickup
+    Passenger_requested -. |PASSENGER REJECTED TRIP: Passenger rejects trip, driver resumes looking for job| .-> Driver_looking_for_job
+    Driver_moving_to_pickup -. |DRIVER ARRIVED FOR PICKUP: Driver arrives, passenger waits for pickup| .-> Passenger_waiting_for_pickup
+    Passenger_waiting_for_pickup -. |PASSENGER ACKNOWLEDGE PICKUP: Passenger acknowledges pickup, driver moves to dropoff| .-> Driver_moving_to_dropoff
+    Driver_moving_to_dropoff -. |DRIVER ARRIVED FOR DROPOFF: Driver arrives at dropoff, passenger dropped off| .-> Passenger_droppedoff
+    Passenger_droppedoff -. |PASSENGER ACKNOWLEDGE DROPOFF: Passenger acknowledges dropoff, driver ends trip| .-> Driver_droppedoff
