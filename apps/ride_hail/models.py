@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from apps.ride_hail.events import RideHailActions
+from apps.ride_hail.statemachine.events import RideHailActions
 
 
 @dataclass

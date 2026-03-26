@@ -94,9 +94,16 @@ flowchart TD
     RidehailPassengerTripStateMachine_passenger_waiting_for_dropoff --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
     RidehailPassengerTripStateMachine_passenger_droppedoff --|end trip|--> RidehailPassengerTripStateMachine_passenger_completed_trip
     RidehailPassengerTripStateMachine_passenger_droppedoff --|force quit|--> RidehailPassengerTripStateMachine_passenger_cancelled_trip
-    Passenger_requested -. |PASSENGER CONFIRMED TRIP: Passenger confirms trip, driver starts moving to pickup| .-> Driver_moving_to_pickup
-    Passenger_requested -. |PASSENGER REJECTED TRIP: Passenger rejects trip, driver resumes looking for job| .-> Driver_looking_for_job
-    Driver_moving_to_pickup -. |DRIVER ARRIVED FOR PICKUP: Driver arrives, passenger waits for pickup| .-> Passenger_waiting_for_pickup
-    Passenger_waiting_for_pickup -. |PASSENGER ACKNOWLEDGE PICKUP: Passenger acknowledges pickup, driver moves to dropoff| .-> Driver_moving_to_dropoff
-    Driver_moving_to_dropoff -. |DRIVER ARRIVED FOR DROPOFF: Driver arrives at dropoff, passenger dropped off| .-> Passenger_droppedoff
-    Passenger_droppedoff -. |PASSENGER ACKNOWLEDGE DROPOFF: Passenger acknowledges dropoff, driver ends trip| .-> Driver_droppedoff
+    RidehailPassengerTripStateMachine_passenger_requested_trip -. |PASSENGER CONFIRMED TRIP: Passenger confirms trip, driver starts moving to pickup| .-> RidehailDriverTripStateMachine_driver_moving_to_pickup
+    RidehailPassengerTripStateMachine_passenger_requested_trip -. |PASSENGER REJECTED TRIP: Passenger rejects trip, driver resumes looking for job| .-> RidehailDriverTripStateMachine_driver_looking_for_job
+    RidehailDriverTripStateMachine_driver_received_trip -. |DRIVER CONFIRMED TRIP: Driver confirms trip, passenger receives confirmation| .-> RidehailPassengerTripStateMachine_passenger_received_trip_confirmation
+    RidehailDriverTripStateMachine_driver_moving_to_pickup -. |DRIVER ARRIVED FOR PICKUP: Driver arrives, passenger waits for pickup| .-> RidehailPassengerTripStateMachine_passenger_waiting_for_pickup
+    RidehailPassengerTripStateMachine_passenger_waiting_for_pickup -. |PASSENGER ACKNOWLEDGE PICKUP: Passenger acknowledges pickup, driver moves to dropoff| .-> RidehailDriverTripStateMachine_driver_moving_to_dropoff
+    RidehailDriverTripStateMachine_driver_pickedup -. |DRIVER MOVE FOR DROPOFF: Driver starts dropoff leg, passenger moves for dropoff| .-> RidehailPassengerTripStateMachine_passenger_moving_for_dropoff
+    RidehailDriverTripStateMachine_driver_moving_to_dropoff -. |DRIVER ARRIVED FOR DROPOFF: Driver arrives at dropoff, passenger waits for dropoff| .-> RidehailPassengerTripStateMachine_passenger_waiting_for_dropoff
+    RidehailDriverTripStateMachine_driver_moving_to_dropoff -. |DRIVER WAITING FOR DROPOFF: Driver signals waiting at dropoff, passenger dropped off| .-> RidehailPassengerTripStateMachine_passenger_droppedoff
+    RidehailPassengerTripStateMachine_passenger_droppedoff -. |PASSENGER ACKNOWLEDGE DROPOFF: Passenger acknowledges dropoff, driver ends trip| .-> RidehailDriverTripStateMachine_driver_droppedoff
+    RidehailDriverTripStateMachine_driver_received_trip -. |DRIVER CANCELLED TRIP: Driver cancels trip, passenger cancelled| .-> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailDriverTripStateMachine_driver_accepted_trip -. |DRIVER CANCELLED TRIP: Driver cancels trip, passenger cancelled| .-> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailDriverTripStateMachine_driver_moving_to_pickup -. |DRIVER CANCELLED TRIP: Driver cancels trip, passenger cancelled| .-> RidehailPassengerTripStateMachine_passenger_cancelled_trip
+    RidehailDriverTripStateMachine_driver_moving_to_dropoff -. |DRIVER CANCELLED TRIP: Driver cancels trip, passenger cancelled| .-> RidehailPassengerTripStateMachine_passenger_cancelled_trip

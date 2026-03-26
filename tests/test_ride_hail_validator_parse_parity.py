@@ -10,7 +10,7 @@ from apps.ride_hail import (
     validate_passenger_workflow_payload,
     validate_requested_trip_payload,
 )
-from apps.ride_hail.events import RideHailEvents
+from openride_apps.apps.ride_hail.statemachine.events import RideHailEvents
 from apps.ride_hail.models import AssignedPayload
 
 
