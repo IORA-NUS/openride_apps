@@ -34,7 +34,6 @@ from apps.utils.utils import id_generator, str_to_time, time_to_str #, cut
 from apps.loc_service import TaxiStop, BusStop, cut, cut_route, create_route, get_tentative_travel_time
 
 from .passenger_interaction_mixin import PassengerInteractionMixin
-# from apps.messenger_service import Messenger
 
 class DriverApp(ORSimApp, PassengerInteractionMixin):
 
@@ -89,21 +88,12 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
             messenger=self.messenger,
             persona=self.persona)
 
-    # def get_manager(self):
-    #     # return self.manager.resource.as_dict()
-        # return self.manager.as_dict()
-
     def launch(self, sim_clock, current_loc): #, route):
         ''' '''
-        # self.manager.login(sim_clock)
         super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
-        # self.create_new_unoccupied_trip(sim_clock, current_loc)
-        # self.trip.look_for_job(sim_clock, current_loc, route)
         if self.agent_helper.get_behavior_detail('action_when_free') == 'random_walk':
-            # self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.agent_helper.get_behavior_detail('empty_dest_loc'))
         elif self.agent_helper.get_behavior_detail('action_when_free') == 'stay':
-            # self.set_route(self.current_loc, None)
             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, None)
         self.create_new_unoccupied_trip(sim_clock, current_loc, self.active_route)
 
@@ -112,20 +102,11 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         ''' '''
         logging.debug(f'logging out Driver {self.manager.get_id()}')
         try:
-            # self.trip.end_trip(sim_clock, current_loc, force_quit=True)
             self.trip.force_quit(sim_clock, current_loc)
         except Exception as e:
             logging.exception(str(e))
 
         super().close(sim_clock)  # Call BaseApp's close method to set exited_market = True
-        # try:
-        #     self.manager.logout(sim_clock)
-        # except Exception as e:
-        #     logging.warning(str(e))
-
-        # # self.messenger.disconnect()
-
-        # self.exited_market = True
 
     def refresh(self):
         ''' Sync ALL inMemory State with the db State'''
@@ -159,8 +140,6 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
     def get_trip(self):
         return self.trip.as_dict()
 
-    # def create_new_unoccupied_trip(self, sim_clock, current_loc):
-    #     self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle)
     def create_new_unoccupied_trip(self, sim_clock, current_loc, route):
         self.trip.create_new_unoccupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle.as_dict(), route)
 
@@ -221,28 +200,20 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         # 1. Always refresh trip manager to sync InMemory States with DB
         if add_step_log_fn:
             add_step_log_fn('Before refresh')
-        else:
-            self.add_step_log('Before refresh')
         self.refresh() # Raises exception if unable to refresh
         ### Driver has likely moved between the ticks, so update their current loc
         # self.update_location()
         if add_step_log_fn:
             add_step_log_fn('Before update_location_by_route')
-        else:
-            self.add_step_log('Before update_location_by_route')
         self.update_location_by_route()
 
         # 1. DeQueue all messages and process them in sequence
         if add_step_log_fn:
             add_step_log_fn('Before consume_messages')
-        else:
-            self.add_step_log('Before consume_messages')
         self.consume_messages()
         # 2. based on current state, perform any workflow actions according to Agent behavior
         if add_step_log_fn:
             add_step_log_fn('Before perform_workflow_actions')
-        else:
-            self.add_step_log('Before perform_workflow_actions')
         self.perform_workflow_actions()
 
 
@@ -302,10 +273,6 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         '''
         driver = self.get_manager()
         trip = self.get_trip()
-        # time_since_last_event = (
-        #     datetime.strptime(self.get_current_time_str(), "%a, %d %b %Y %H:%M:%S GMT") -
-        #     datetime.strptime(trip['_updated'], "%a, %d %b %Y %H:%M:%S GMT")
-        # ).total_seconds()
         time_since_last_event = (
             datetime.strptime(self.current_time_str, "%a, %d %b %Y %H:%M:%S GMT") -
             datetime.strptime(trip['_updated'], "%a, %d %b %Y %H:%M:%S GMT")
@@ -355,9 +322,6 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
                 # print(f"DriverAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
                 print(f"DriverApp [{self.manager.get_id()}]: State changed from {prev_state} to {new_state}")
 
-
-
-
     def update_location_by_route(self):
         ''' - Update self.current_loc based on:
                 - last known current_loc
@@ -384,112 +348,15 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
                 logging.exception(traceback.format_exc())
                 return
 
-            # try:
             if type(self.projected_path) == LineString:
                 self.current_loc = mapping(Point(self.projected_path.boundary.geoms[0]))
             elif type(self.projected_path) == Point:
                 self.current_loc = mapping(self.projected_path)
-            # print(moved_distance, self.current_loc) #, self.projected_path)
-            # except Exception as e:
-            #     logging.warning(f"{elapsed_time=}")
-            #     # print(e)
-            #     logging.exception(traceback.format_exc())
 
             # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
-            # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
-            # try:
             self.ping(self.current_time_str, current_loc=self.current_loc,
                     traversed_path=list(self.traversed_path.coords),
                     projected_path=list(self.projected_path.coords))
-            # except Exception as e:
-            #     # logging.exception(traceback.format_exc())
-            #     # logging.exception(str(e))
-            #     logging.warning(str(e))
-            #     raise e
-
-    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_CONFIRMED_TRIP)
-    # def _on_passenger_confirmed_trip(self, payload, data):
-    #     self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.get_trip()['pickup_loc'])
-    #     self.trip.passenger_confirmed_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
-
-    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_REJECTED_TRIP)
-    # def _on_passenger_rejected_trip(self, payload, data):
-    #     self.trip.force_quit(self.current_time_str, current_loc=self.current_loc)
-
-    #     if self.action_when_free == 'random_walk':
-    #         self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.agent_helper.get_behavior_detail('empty_dest_loc')) # self.behavior['empty_dest_loc'])
-    #     elif self.action_when_free == 'stay':
-    #         self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, None)
-
-    #     self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
-
-    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_PICKUP)
-    # def _on_passenger_acknowledge_pickup(self, payload, data):
-    #     self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.get_trip()['dropoff_loc'])
-    #     self.trip.passenger_acknowledge_pickup(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
-
-    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_DROPOFF)
-    # def _on_passenger_acknowledge_dropoff(self, payload, data):
-    #     self.trip.passenger_acknowledge_dropoff(self.current_time_str, current_loc=self.current_loc)
-
-    # @state_handler(RidehailDriverTripStateMachine.driver_looking_for_job.name)
-    # def _on_state_looking_for_job(self, time_since_last_event):
-    #     if type(self.projected_path) == Point:
-    #         self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
-    #         self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.get_random_location())
-    #         self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
-
-    # @state_handler(RidehailDriverTripStateMachine.driver_received_trip.name)
-    # def _on_state_received_trip(self, time_since_last_event):
-    #     print(f"DriverApp [{self.manager.get_id()}]: Received Trip Request.")
-    #     if random() <= self.agent_helper.get_transition_probability(('accept', self.get_trip()['state']), 1):
-    #         estimated_time_to_arrive = get_tentative_travel_time(self.current_loc, self.get_trip()['pickup_loc'])
-    #         self.trip.confirm(self.current_time_str, current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
-    #         print(f"DriverApp [{self.manager.get_id()}]: Trip Confirmed.")
-    #     else:
-    #         self.trip.reject(self.current_time_str, current_loc=self.current_loc)
-    #         self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
-    #         print(f"DriverApp [{self.manager.get_id()}]: Trip Rejected.")
-
-    #     print(f"DriverApp [{self.manager.get_id()}]: after _on_state_received_trip Current Trip State: {self.get_trip()['state']}")
-
-    # @state_handler(RidehailDriverTripStateMachine.driver_moving_to_pickup.name)
-    # def _on_state_moving_to_pickup(self, time_since_last_event):
-    #     distance = hs.haversine(
-    #         reversed(self.current_loc['coordinates'][:2]),
-    #         reversed(self.get_trip()['pickup_loc']['coordinates'][:2]),
-    #         unit=hs.Unit.METERS,
-    #     )
-    #     if distance < 100:
-    #         self.trip.wait_to_pickup(self.current_time_str, current_loc=self.current_loc)
-
-    # @state_handler(RidehailDriverTripStateMachine.driver_pickedup.name)
-    # def _on_state_pickedup(self, time_since_last_event):
-    #     if time_since_last_event >= self.agent_helper.get_behavior_detail('transition_time_pickup'): #self.behavior['transition_time_pickup']:
-    #         self.trip.move_to_dropoff(self.current_time_str, current_loc=self.current_loc)
-
-    # @state_handler(RidehailDriverTripStateMachine.driver_moving_to_dropoff.name)
-    # def _on_state_moving_to_dropoff(self, time_since_last_event):
-    #     distance = hs.haversine(
-    #         reversed(self.current_loc['coordinates'][:2]),
-    #         reversed(self.get_trip()['dropoff_loc']['coordinates'][:2]),
-    #         unit=hs.Unit.METERS,
-    #     )
-    #     if distance < 100:
-    #         self.trip.wait_to_dropoff(self.current_time_str, current_loc=self.current_loc)
-
-    # @state_handler(RidehailDriverTripStateMachine.driver_droppedoff.name)
-    # def _on_state_droppedoff(self, time_since_last_event):
-    #     if time_since_last_event >= self.agent_helper.get_behavior_detail('transition_time_dropoff'): #self.behavior['transition_time_dropoff']:
-    #         self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
-
-    #         if self.agent_helper.get_behavior_detail('action_when_free') == 'random_walk':
-    #             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.agent_helper.get_behavior_detail('empty_dest_loc'))
-    #         elif self.agent_helper.get_behavior_detail('action_when_free') == 'stay':
-    #             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, None)
-
-    #         self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
-
 
 
 if __name__ == '__main__':

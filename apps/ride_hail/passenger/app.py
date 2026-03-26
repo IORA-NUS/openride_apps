@@ -79,11 +79,7 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             persona=self.persona
         )
 
-    # def get_manager(self):
-    #     return self.manager.as_dict()
-
     def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
-        # self.manager.login(sim_clock)
         super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
 
         if (pickup_loc is not None) and (dropoff_loc is not None):
@@ -97,12 +93,6 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             logging.exception(str(e))
 
         super().close(sim_clock)  # Call BaseApp's close method to set exited_market = True
-        # try:
-        #     self.manager.logout(sim_clock)
-        # except Exception as e:
-        #     logging.warning(str(e))
-
-        # self.exited_market = True
 
     def get_trip(self):
         return self.trip.as_dict()
@@ -113,8 +103,6 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
     def refresh(self):
         self.trip.refresh()
 
-
-    # def message_handler(self, payload):
     def handle_app_topic_messages(self, payload):
         if payload['action'] == RideHailActions.ASSIGNED:
             if validate_assigned_payload(payload) is False:
@@ -267,74 +255,6 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             self._interaction_plugin.on_state(
                 InteractionContext(state=state)
             )
-
-
-    # # ...existing code...
-
-    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CONFIRMED_TRIP)
-    # def _on_driver_confirmed_trip(self, payload, data):
-    #     self.trip.driver_confirmed_trip(
-    #         self.current_time_str,
-    #         self.current_loc,
-    #         data.get('estimated_time_to_arrive', 0),
-    #     )
-
-    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_PICKUP)
-    # def _on_driver_arrived_for_pickup(self, payload, data):
-    #     if data.get('location') is None:
-    #         return
-    #     self.current_loc = data.get('location')
-    #     self.trip.driver_arrived_for_pickup(self.current_time_str, self.current_loc, data.get('driver_trip_id'))
-
-    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_MOVE_FOR_DROPOFF)
-    # def _on_driver_move_for_dropoff(self, payload, data):
-    #     if data.get('location') is None:
-    #         return
-    #     self.current_loc = data.get('location')
-    #     self.trip.driver_move_for_dropoff(self.current_time_str, self.current_loc, route=data['planned_route'])
-
-    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_DROPOFF)
-    # def _on_driver_arrived_for_dropoff(self, payload, data):
-    #     if data.get('location') is None:
-    #         return
-    #     self.current_loc = data.get('location')
-    #     self.trip.driver_arrived_for_dropoff(self.current_time_str, self.current_loc)
-
-    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_WAITING_FOR_DROPOFF)
-    # def _on_driver_waiting_for_dropoff(self, payload, data):
-    #     if data.get('location') is None:
-    #         return
-    #     self.current_loc = data.get('location')
-    #     self.trip.driver_waiting_for_dropoff(self.current_time_str, self.current_loc)
-
-    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CANCELLED_TRIP)
-    # def _on_driver_cancelled_trip(self, payload, data):
-    #     if data.get('location') is None:
-    #         return
-    #     self.current_loc = data.get('location', self.current_loc)
-    #     self.trip.driver_cancelled_trip(self.current_time_str, self.current_loc)
-
-    # @state_handler(RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name)
-    # def _on_state_received_trip_confirmation(self):
-    #     print(f"PassengerApp [{self.manager.get_id()}]: Received Trip Confirmation. Current Trip State: {self.get_trip()['state']}")
-    #     # if random() <= self.get_transition_probability(('accept', self.get_trip()['state']), 1):
-    #     if random() <= self.agent_helper.get_transition_probability(('accept', self.get_trip()['state']), 1):
-    #         self.trip.accept(self.current_time_str, current_loc=self.current_loc)
-    #         print(f"PassengerApp [{self.manager.get_id()}]: Trip Accepted.")
-    #     else:
-    #         self.trip.reject(self.current_time_str, current_loc=self.current_loc)
-    #         print(f"PassengerApp [{self.manager.get_id()}]: Trip Rejected.")
-
-    #     print(f"PassengerApp [{self.manager.get_id()}]: Current Trip State after decision: {self.get_trip()['state']}")
-
-    # @state_handler(RidehailPassengerTripStateMachine.passenger_accepted_trip.name)
-    # def _on_state_accepted_trip(self):
-    #     self.trip.wait_for_pickup(self.current_time_str, current_loc=self.current_loc)
-
-    # @state_handler(RidehailPassengerTripStateMachine.passenger_droppedoff.name)
-    # def _on_state_droppedoff(self):
-    #     self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
-
 
 
 
