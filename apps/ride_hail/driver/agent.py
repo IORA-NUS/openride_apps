@@ -44,9 +44,6 @@ from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_w
 
 class DriverAgentIndie(ORSimAgent):
 
-    # active_route = None # shapely.geometry.LineString
-    # traversed_path = None # shapely.geometry.LineString
-    # projected_path = None # shapely.geometry.LineString
 
     def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior):
         super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
@@ -63,10 +60,11 @@ class DriverAgentIndie(ORSimAgent):
                 run_id=self.run_id,
                 sim_clock=self.get_current_time_str(),
                 current_loc=self.current_loc,
-                credentials=self.credentials,
-                profile=self.behavior['profile'],
+                behavior=self.behavior,
+                # credentials=self.credentials,
+                # profile=self.behavior['profile'],
                 messenger=self.messenger,
-                persona=self.behavior.get('persona', {}),
+                # persona=self.behavior.get('persona', {}),
                 agent_helper=self,
             )
             for topic, method in self.app.topic_params.items():
@@ -78,8 +76,8 @@ class DriverAgentIndie(ORSimAgent):
 
 
 
-    def get_random_location(self):
-        return GenerateBehavior.get_random_location(self.behavior['coverage_area_name'])
+    # def get_random_location(self):
+    #     return GenerateBehavior.get_random_location(self.behavior['coverage_area_name'])
 
     def process_payload(self, payload: Dict[str, Any]) -> bool:
         did_step: bool = False

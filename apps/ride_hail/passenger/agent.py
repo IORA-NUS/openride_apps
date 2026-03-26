@@ -40,6 +40,7 @@ from apps.ride_hail import RideHailActions, RideHailEvents, validate_driver_work
 
 class PassengerAgentIndie(ORSimAgent):
 
+
     current_loc = None
     current_time_step = None
     prev_time_step = None
@@ -55,10 +56,10 @@ class PassengerAgentIndie(ORSimAgent):
         self.pickup_loc = self.behavior['pickup_loc']
         self.dropoff_loc = self.behavior['dropoff_loc']
 
-        self.credentials = {
-            'email': self.behavior.get('email'),
-            'password': self.behavior.get('password'),
-        }
+        # self.credentials = {
+        #     'email': self.behavior.get('email'),
+        #     'password': self.behavior.get('password'),
+        # }
         # self.timeout_error = False
         self.failure_count = 0
         self.failure_log = {}
@@ -67,10 +68,11 @@ class PassengerAgentIndie(ORSimAgent):
             self.app = PassengerApp(run_id=self.run_id,
                                     sim_clock=self.get_current_time_str(),
                                     current_loc=self.current_loc,
-                                    credentials=self.credentials,
-                                    profile=self.behavior['profile'],
+                                    behavior=self.behavior,
+                                    # credentials=self.credentials,
+                                    # profile=self.behavior['profile'],
                                     messenger=self.messenger,
-                                    persona=self.behavior.get('persona', {}),
+                                    # persona=self.behavior.get('persona', {}),
                                     agent_helper=self
                                 )
             print(f"PassengerApp initialized for {self.unique_id}")

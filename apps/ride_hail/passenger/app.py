@@ -38,16 +38,28 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
     def interaction_ground_truth_list(self):
         return [driver_passenger_interactions]
 
+    @property
+    def runtime_behavior_schema(self):
+        return {
+            'pickup_loc': {'type': 'dict', 'required': True},
+            'dropoff_loc': {'type': 'dict', 'required': True},
+            'trip_price': {'type': 'number', 'required': True},
+            'trip_request_time': {'type': 'integer', 'required': True},
+            'transition_prob': {'type': 'list', 'required': True},
+        }
+
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
+    # def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
+    def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
-                         credentials=credentials,
+                         behavior = behavior,
+                        #  credentials=credentials,
                          messenger=messenger,
                          current_loc=current_loc,
-                         profile=profile,
-                         persona=persona,
+                        #  profile=profile,
+                        #  persona=persona,
                          agent_helper=agent_helper)
         self.trip = self.create_trip_manager()
         self.latest_sim_clock = sim_clock
@@ -66,8 +78,8 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             run_id=self.run_id,
             sim_clock=self.sim_clock,
             user=self.user,
-            profile=self.profile,
-            persona=self.persona
+            profile=self.behavior.get('profile', {}),
+            persona=self.behavior.get('persona', {})
         )
 
     def create_trip_manager(self):
@@ -76,7 +88,7 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             sim_clock=self.sim_clock,
             user=self.user,
             messenger=self.messenger,
-            persona=self.persona
+            persona=self.behavior.get('persona', {})
         )
 
     def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
@@ -223,11 +235,11 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
         if (
             trip['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name
             # and (self.behavior['trip_request_time'] + (self.behavior['profile']['patience'] / self.step_size) < self.current_time_step)
-            and (self.behavior['trip_request_time'] + (self.agent_helper.get_behavior_detail('profile')['patience'] / self.step_size) < self.current_time_step)
+            and (self.behavior['trip_request_time'] + (self.behavior.get('profile', {}).get('patience', 0) / self.step_size) < self.current_time_step)
         ):
             logging.info(
                 # f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps"
-                f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.agent_helper.get_behavior_detail('profile')['patience']/self.step_size} steps"
+                f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior.get('profile', {}).get('patience', 0)/self.step_size} steps"
             )
             self.trip.cancel(self.current_time_str, current_loc=self.current_loc)
 

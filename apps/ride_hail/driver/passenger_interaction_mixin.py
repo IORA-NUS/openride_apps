@@ -24,9 +24,9 @@ class PassengerInteractionMixin():
     def _on_passenger_rejected_trip(self, payload, data):
         self.trip.force_quit(self.current_time_str, current_loc=self.current_loc)
 
-        if self.action_when_free == 'random_walk':
-            self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.agent_helper.get_behavior_detail('empty_dest_loc')) # self.behavior['empty_dest_loc'])
-        elif self.action_when_free == 'stay':
+        if self.behavior.get('action_when_free') == 'random_walk':
+            self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.behavior.get('empty_dest_loc')) # self.behavior['empty_dest_loc'])
+        elif self.behavior.get('action_when_free') == 'stay':
             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, None)
 
         self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
@@ -73,7 +73,7 @@ class PassengerInteractionMixin():
 
     @state_handler(RidehailDriverTripStateMachine.driver_pickedup.name)
     def _on_state_pickedup(self, time_since_last_event):
-        if time_since_last_event >= self.agent_helper.get_behavior_detail('transition_time_pickup'): #self.behavior['transition_time_pickup']:
+        if time_since_last_event >= self.behavior.get('transition_time_pickup', 0): #self.behavior['transition_time_pickup']:
             self.trip.move_to_dropoff(self.current_time_str, current_loc=self.current_loc)
 
     @state_handler(RidehailDriverTripStateMachine.driver_moving_to_dropoff.name)
@@ -88,12 +88,12 @@ class PassengerInteractionMixin():
 
     @state_handler(RidehailDriverTripStateMachine.driver_droppedoff.name)
     def _on_state_droppedoff(self, time_since_last_event):
-        if time_since_last_event >= self.agent_helper.get_behavior_detail('transition_time_dropoff'): #self.behavior['transition_time_dropoff']:
+        if time_since_last_event >= self.behavior.get('transition_time_dropoff', 0): #self.behavior['transition_time_dropoff']:
             self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
 
-            if self.agent_helper.get_behavior_detail('action_when_free') == 'random_walk':
-                self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.agent_helper.get_behavior_detail('empty_dest_loc'))
-            elif self.agent_helper.get_behavior_detail('action_when_free') == 'stay':
+            if self.behavior.get('action_when_free') == 'random_walk':
+                self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.behavior.get('empty_dest_loc'))
+            elif self.behavior.get('action_when_free') == 'stay':
                 self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, None)
 
             self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)

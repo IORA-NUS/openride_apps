@@ -28,9 +28,10 @@ class AnalyticsAgentIndie(ORSimAgent):
         try:
             self.app = AnalyticsApp(run_id=self.run_id,
                                     sim_clock=self.get_current_time_str(),
-                                    credentials=self.credentials,
+                                    behavior=self.behavior,
+                                    # credentials=self.credentials,
                                     messenger=self.messenger,
-                                    persona=self.behavior.get('persona', {})
+                                    # persona=self.behavior.get('persona', {})
                                 )
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")

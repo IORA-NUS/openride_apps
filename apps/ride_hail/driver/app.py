@@ -32,6 +32,7 @@ from shapely.geometry.linestring import LineString
 
 from apps.utils.utils import id_generator, str_to_time, time_to_str #, cut
 from apps.loc_service import TaxiStop, BusStop, cut, cut_route, create_route, get_tentative_travel_time
+from apps.ride_hail.scenario import GenerateBehavior
 
 from .passenger_interaction_mixin import PassengerInteractionMixin
 
@@ -45,15 +46,31 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
     def interaction_ground_truth_list(self):
         return [driver_passenger_interactions]
 
+    @property
+    def runtime_behavior_schema(self):
+        return {
+            'action_when_free': {'type': 'string', 'required': True},
+            'coverage_area_name': {'type': 'string', 'required': True},
+            'empty_dest_loc': {'type': 'dict', 'required': True},
+            'init_loc': {'type': 'dict', 'required': True},
+            'shift_start_time': {'type': 'integer', 'required': True},
+            'shift_end_time': {'type': 'integer', 'required': True},
+            'transition_prob': {'type': 'list', 'required': True},
+            'transition_time_dropoff': {'type': 'integer', 'required': True},
+            'transition_time_pickup': {'type': 'integer', 'required': True},
+            'update_passenger_location': {'type': 'boolean', 'required': True},
+        }
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
+    # def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
+    def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
-                         credentials=credentials,
+                         behavior = behavior,
+                        #  credentials=credentials,
                          messenger=messenger,
                          current_loc=current_loc,
-                         profile=profile,
-                         persona=persona,
+                        #  profile=profile,
+                        #  persona=persona,
                          agent_helper=agent_helper)
         self.trip = self.create_trip_manager()
 
@@ -77,8 +94,8 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
             run_id=self.run_id,
             sim_clock=self.sim_clock,
             user=self.user,
-            profile=self.profile,
-            persona=self.persona)
+            profile=self.behavior.get('profile', {}),
+            persona=self.behavior.get('persona', {}))
 
     def create_trip_manager(self):
         return DriverTripManager(
@@ -86,17 +103,19 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
             sim_clock=self.sim_clock,
             user=self.user,
             messenger=self.messenger,
-            persona=self.persona)
+            persona=self.behavior.get('persona', {}))
 
     def launch(self, sim_clock, current_loc): #, route):
         ''' '''
         super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
-        if self.agent_helper.get_behavior_detail('action_when_free') == 'random_walk':
-            self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.agent_helper.get_behavior_detail('empty_dest_loc'))
-        elif self.agent_helper.get_behavior_detail('action_when_free') == 'stay':
+        if self.behavior.get('action_when_free') == 'random_walk':
+            self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.behavior.get('empty_dest_loc'))
+        elif self.behavior.get('action_when_free') == 'stay':
             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, None)
         self.create_new_unoccupied_trip(sim_clock, current_loc, self.active_route)
 
+    def get_random_location(self):
+        return GenerateBehavior.get_random_location(self.behavior.get('coverage_area_name'))
 
     def close(self, sim_clock, current_loc):
         ''' '''

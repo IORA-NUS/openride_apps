@@ -31,24 +31,40 @@ class AssignmentApp(ORSimApp):
     def interaction_ground_truth_list(self):
         return []
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):
+    @property
+    def runtime_behavior_schema(self):
+        return {
+            'solver': {'type': 'string', 'required': True},
+            'solver_params': {'type': 'dict', 'required': True},
+        }
+
+    # def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):
+    def __init__(self, run_id, sim_clock, behavior, messenger):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
-                         credentials=credentials,
+                         behavior=behavior,
+                        #  credentials=credentials,
                          messenger=messenger,
-                         persona=persona,
-                         solver_name=solver_name,
-                         solver_params=solver_params,
-                         steps_per_action=steps_per_action)
+                        #  persona=persona,
+                        #  solver_name=solver_name,
+                        #  solver_params=solver_params,
+                        #  steps_per_action=steps_per_action)
+                    )
+        # self.solver_name = self.behavior.get('solver_name')
+        # self.solver_params = self.behavior.get('solver_params')
         self.server_max_results = 50  # make sure this is in sync with server
 
     def create_user(self):
         return UserRegistry(self.sim_clock, self.credentials, role='admin')
 
     def create_manager(self):
-        solver = globals()[self.solver_name](self.solver_params)
+        solver = globals()[self.behavior.get('solver')](self.behavior.get('solver_params'))
 
-        return AssignmentManager(self.run_id, self.sim_clock, self.user, self.persona, solver)
+        return AssignmentManager(run_id=self.run_id,
+                                 sim_clock=self.sim_clock,
+                                 user=self.user,
+                                 persona=self.behavior.get('persona', {}),
+                                 solver=solver)
 
     def handle_app_topic_messages(self, payload):
         ''' '''
@@ -56,7 +72,7 @@ class AssignmentApp(ORSimApp):
         pass
 
     def get_scale_factor(self, time_step):
-        if self.solver_params.get('online_metric_scale_strategy') == 'demand':
+        if self.behavior.get('solver_params').get('online_metric_scale_strategy') == 'demand':
             try:
                 # passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count"  # NOTE Absence of run_id in URL
                 passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip/count"  # NOTE Absence of run_id in URL

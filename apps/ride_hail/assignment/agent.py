@@ -29,12 +29,13 @@ class AssignmentAgentIndie(ORSimAgent):
             self.app = AssignmentApp(
                 run_id=self.run_id,
                 sim_clock=self.get_current_time_str(),
-                credentials=self.credentials,
-                solver_name=self.behavior['solver'],
-                solver_params=self.behavior['solver_params'],
-                steps_per_action=self.behavior['steps_per_action'],
+                behavior=self.behavior,
+                # credentials=self.credentials,
+                # solver_name=self.behavior['solver'],
+                # solver_params=self.behavior['solver_params'],
+                # steps_per_action=self.behavior['steps_per_action'],
                 messenger=self.messenger,
-                persona=self.behavior.get('persona', {})
+                # persona=self.behavior.get('persona', {})
             )
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")

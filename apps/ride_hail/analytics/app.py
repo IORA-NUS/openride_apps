@@ -41,12 +41,25 @@ class AnalyticsApp(ORSimApp):
     def interaction_ground_truth_list(self):
         return []
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, persona):
+    @property
+    def runtime_behavior_schema(self):
+        return {
+            'paths_history_time_window': {'type': 'integer', 'required': True},
+            'publish_paths_history': {'type': 'boolean', 'required': True},
+            'publish_realtime_data': {'type': 'boolean', 'required': True},
+            'write_ph_output_to_file': {'type': 'boolean', 'required': True},
+            'write_ws_output_to_file': {'type': 'boolean', 'required': True},
+        }
+
+    # def __init__(self, run_id, sim_clock, credentials, messenger, persona):
+    def __init__(self, run_id, sim_clock, behavior, messenger):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
-                         credentials=credentials,
+                         behavior=behavior,
+                        #  credentials=credentials,
                          messenger=messenger,
-                         persona=persona)
+                        #  persona=persona)
+                        )
         self.kpi_collection = {
             'revenue': 0,
             'num_cancelled': 0,

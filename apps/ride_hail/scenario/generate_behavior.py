@@ -212,8 +212,8 @@ class GenerateBehavior():
             'persona': {
                 'role': 'analytics',
                 'domain': orsim_settings['DOMAIN'],
-            }
-
+            },
+            'profile': {}
         }
 
         return behavior
@@ -288,7 +288,8 @@ class GenerateBehavior():
             'persona': {
                 'role': 'engine',
                 'domain': orsim_settings['DOMAIN'],
-            }
+            },
+            'profile': {}
 
         }
 
