@@ -20,7 +20,7 @@ from apps.ride_hail.driver import (
     DriverManager,
     DriverTripManager,
 )
-from apps.ride_hail.events import RideHailActions, RideHailEvents
+from openride_apps.apps.ride_hail.statemachine.events import RideHailActions, RideHailEvents
 from apps.ride_hail.models import (
     AssignedPayload,
     DriverWorkflowPayload,

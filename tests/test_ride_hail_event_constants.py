@@ -1,4 +1,4 @@
-from apps.ride_hail.events import RideHailActions, RideHailEvents
+from openride_apps.apps.ride_hail.statemachine.events import RideHailActions, RideHailEvents
 
 
 def test_ride_hail_action_constants_match_expected_literals():
