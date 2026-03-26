@@ -10,16 +10,20 @@ from apps.common.trip_manager_base import TripManagerBase
 from apps.ride_hail import RideHailActions, RideHailEvents
 
 from apps.utils.excepions import WriteFailedException, RefreshException
+from apps.loc_service import OSRMClient
+
 
 
 class DriverTripManager(TripManagerBase):
     ''' '''
     # trip = None
+    StateMachineCls = RidehailDriverTripStateMachine
 
     def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False, persona=None):
         super().__init__(run_id, user, messenger, persona=persona)
         self.update_passenger_loc = update_passenger_loc
         self.simulation_domain = simulation_domains['ridehail']
+
 
     def as_dict(self):
         return self.trip
@@ -574,3 +578,27 @@ class DriverTripManager(TripManagerBase):
             else:
                 raise RefreshException(f'DriverTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
 
+
+    # def create_route(self, from_loc, to_loc):
+    #     ''' find a Feasible route using some routeing engine'''
+    #     if to_loc is not None:
+    #         active_route = OSRMClient.get_route(from_loc, to_loc)
+    #         projected_path = OSRMClient.get_coords_from_route(active_route)
+    #         traversed_path = []
+    #         # print(f"DriverAgentIndie[{self.unique_id}]: Setting route from {from_loc} to {to_loc}")
+    #         # print(f"DriverAgentIndie[{self.unique_id}]: Active route set with duration {self.active_route['duration']} seconds and distance {self.active_route['distance']} meters")
+    #     else:
+    #         active_route = None
+    #         projected_path = []
+    #         traversed_path = []
+    #         # print(f"DriverAgentIndie[{self.unique_id}]: No route set as to_loc is None")
+
+    #         return active_route, projected_path, traversed_path
+
+    # def get_tentative_travel_time(self, from_loc, to_loc):
+    #     ''' find a Feasible route using some routeing engine'''
+    #     try:
+    #         tentative_route = OSRMClient.get_route(from_loc, to_loc)
+    #         return tentative_route['duration']
+    #     except:
+    #         return 36000 # Some arbitrarily large number in Seconds

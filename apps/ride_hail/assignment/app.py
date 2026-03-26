@@ -23,6 +23,13 @@ from orsim.lifecycle import ORSimApp
 
 class AssignmentApp(ORSimApp):
     ''' '''
+    @property
+    def managed_statemachine(self):
+        return None
+
+    @property
+    def interaction_ground_truth_list(self):
+        return []
 
     def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):
         super().__init__(run_id=run_id,
@@ -43,6 +50,10 @@ class AssignmentApp(ORSimApp):
 
         return AssignmentManager(self.run_id, self.sim_clock, self.user, self.persona, solver)
 
+    def handle_app_topic_messages(self, payload):
+        ''' '''
+        # Handle any incoming messages on the app topic if needed
+        pass
 
     def get_scale_factor(self, time_step):
         if self.solver_params.get('online_metric_scale_strategy') == 'demand':

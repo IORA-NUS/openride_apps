@@ -7,6 +7,8 @@ from shapely.geometry.geo import mapping
 import logging
 from apps.config import settings
 from apps.utils.utils import is_success
+from random import choice, randint, random
+
 
 from apps.common.user_registry import UserRegistry
 from .manager import PassengerManager
@@ -14,25 +16,47 @@ from .trip_manager import PassengerTripManager
 from apps.loc_service import OSRMClient
 from orsim.lifecycle import ORSimApp
 
-from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
+from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, driver_passenger_interactions
 from apps.ride_hail import RideHailActions, validate_assigned_payload
+from apps.ride_hail import RideHailActions, RideHailEvents, validate_driver_workflow_payload
 
+from orsim.utils import WorkflowStateMachine
+from orsim.messenger.interaction import message_handler, state_handler
 
-class PassengerApp(ORSimApp):
+from apps.utils.utils import id_generator, str_to_time, time_to_str #, cut
+from apps.utils.excepions import WriteFailedException, RefreshException
+from orsim.messenger.interaction import CallbackRouterPlugin, InteractionContext
+from .driver_interaction_mixin import DriverInteractionMixin
+
+class PassengerApp(ORSimApp, DriverInteractionMixin):
+
+    @property
+    def managed_statemachine(self):
+        return RidehailPassengerTripStateMachine # <-- this must be a StateMachine class
+
+    @property
+    def interaction_ground_truth_list(self):
+        return [driver_passenger_interactions]
 
     exited_market = False
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona):
+    def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          credentials=credentials,
                          messenger=messenger,
                          current_loc=current_loc,
                          profile=profile,
-                         persona=persona)
+                         persona=persona,
+                         agent_helper=agent_helper)
         self.trip = self.create_trip_manager()
         self.latest_sim_clock = sim_clock
         self.latest_loc = current_loc
+
+        self.current_time = None
+        self.current_time_str = None
+
+        self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
 
     def create_user(self):
         return UserRegistry(self.sim_clock, self.credentials)
@@ -90,7 +114,8 @@ class PassengerApp(ORSimApp):
         self.trip.refresh()
 
 
-    def message_handler(self, payload):
+    # def message_handler(self, payload):
+    def handle_app_topic_messages(self, payload):
         if payload['action'] == RideHailActions.ASSIGNED:
             if validate_assigned_payload(payload) is False:
                 logging.warning(f"Invalid assigned payload ignored: {payload=}")
@@ -126,22 +151,191 @@ class PassengerApp(ORSimApp):
             ),
         )
 
-    # def update_current(self, sim_clock, current_loc):
-    #     self.latest_sim_clock = sim_clock
-    #     self.latest_loc = current_loc
+    def execute_step_actions(self, current_time, add_step_log_fn=None):
+        self.current_time = current_time
+        self.current_time_str = time_to_str(current_time)
 
-    # def enqueue_message(self, payload):
-    #     ''' '''
-    #     self.message_queue.append(payload)
+        # 1. Always refresh trip manager to sync InMemory States with DB
+        if add_step_log_fn:
+            add_step_log_fn(f'Before refresh')
+        self.refresh() # Raises exception if unable to refresh
 
-    # def dequeue_message(self):
-    #     ''' '''
-    #     try:
-    #         return self.message_queue.pop(0)
-    #     except: return None
+        # 1. DeQueue all messages and process them in sequence
+        if add_step_log_fn:
+            add_step_log_fn(f'Before consume_messages')
+        self.consume_messages()
+        # 2. based on current state, perform any workflow actions according to Agent behavior
+        if add_step_log_fn:
+            add_step_log_fn(f'Before perform_workflow_actions')
+        self.perform_workflow_actions()
 
-    # def enfront_message(self, payload):
-    #     self.message_queue.insert(0, payload)
+
+
+
+    def consume_messages(self):
+        '''
+        Consume messages. This ensures all the messages received between the two ticks are processed appropriately.
+        Workflows as a consequence of events must be handled here.
+        '''
+        payload = self.dequeue_message()
+
+        while payload is not None:
+            try:
+                if payload['action'] == RideHailActions.DRIVER_WORKFLOW_EVENT:
+                    if validate_driver_workflow_payload(payload) is False:
+                        logging.warning(f"Invalid driver workflow payload ignored: {payload=}")
+                        payload = self.dequeue_message()
+                        continue
+
+                    trip = self.get_trip()
+                    channel_open = RidehailPassengerTripStateMachine.is_driver_channel_open(trip['state'])
+                    driver_id_match = trip['driver'] == payload['driver_id']
+
+                    if channel_open:
+                        if driver_id_match:
+                            driver_data = payload['data']
+                            handled = self._interaction_plugin.on_message(
+                                InteractionContext(
+                                    action=RideHailActions.DRIVER_WORKFLOW_EVENT,
+                                    event=driver_data.get('event'),
+                                    payload=payload,
+                                    data=driver_data,
+                                )
+                            )
+                            if (handled == False) and (driver_data.get('location') is not None):
+                                self.current_loc = driver_data.get('location')
+                                self.ping(self.current_time_str, current_loc=self.current_loc)
+                        else:
+                            logging.warning(f"WARNING: Mismatch {trip['driver']=} and {payload['driver_id']=}")
+                    else:
+                        logging.warning(f"WARNING: Passenger will not listen to Driver workflow events when {trip['state']=}")
+
+                payload = self.dequeue_message()
+            except WriteFailedException as e:
+                self.enfront_message(payload)
+                raise e # Important do not allow the while loop to continue
+            except RefreshException as e:
+                raise e # Important do not allow the while loop to continue
+            except Exception as e:
+                raise e # Important do not allow the while loop to continue
+
+
+    def perform_workflow_actions(self):
+        '''
+        Executes workflow actions in a strict sequence using a for loop, allowing state changes between steps.
+        '''
+        passenger = self.get_manager()
+        trip = self.get_trip()
+
+        # 1. Check passenger online state
+        if passenger['state'] != WorkflowStateMachine.online.name:
+            raise Exception(f"{passenger['state'] = } is not valid")
+
+        # 2. Check patience timeout and cancel trip if needed
+        if (
+            trip['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name
+            # and (self.behavior['trip_request_time'] + (self.behavior['profile']['patience'] / self.step_size) < self.current_time_step)
+            and (self.behavior['trip_request_time'] + (self.agent_helper.get_behavior_detail('profile')['patience'] / self.step_size) < self.current_time_step)
+        ):
+            logging.info(
+                # f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps"
+                f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.agent_helper.get_behavior_detail('profile')['patience']/self.step_size} steps"
+            )
+            self.trip.cancel(self.current_time_str, current_loc=self.current_loc)
+
+        # 3. Process trip state actions in strict sequence using a for loop
+        state_sequence = [
+            RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name,
+            RidehailPassengerTripStateMachine.passenger_accepted_trip.name,
+            RidehailPassengerTripStateMachine.passenger_droppedoff.name,
+        ]
+        prev_state = trip['state']
+        for state_name in state_sequence:
+            state = self.get_trip()['state']
+            if state == state_name:
+                self._interaction_plugin.on_state(
+                    InteractionContext(state=state)
+                )
+                new_state = self.get_trip()['state']
+                if new_state != prev_state:
+                    logging.info(f"PassengerAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
+                prev_state = new_state
+
+        # Always process the current state (for plugin extensibility)
+        state = self.get_trip()['state']
+        if state not in state_sequence:
+            self._interaction_plugin.on_state(
+                InteractionContext(state=state)
+            )
+
+
+    # # ...existing code...
+
+    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CONFIRMED_TRIP)
+    # def _on_driver_confirmed_trip(self, payload, data):
+    #     self.trip.driver_confirmed_trip(
+    #         self.current_time_str,
+    #         self.current_loc,
+    #         data.get('estimated_time_to_arrive', 0),
+    #     )
+
+    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_PICKUP)
+    # def _on_driver_arrived_for_pickup(self, payload, data):
+    #     if data.get('location') is None:
+    #         return
+    #     self.current_loc = data.get('location')
+    #     self.trip.driver_arrived_for_pickup(self.current_time_str, self.current_loc, data.get('driver_trip_id'))
+
+    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_MOVE_FOR_DROPOFF)
+    # def _on_driver_move_for_dropoff(self, payload, data):
+    #     if data.get('location') is None:
+    #         return
+    #     self.current_loc = data.get('location')
+    #     self.trip.driver_move_for_dropoff(self.current_time_str, self.current_loc, route=data['planned_route'])
+
+    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_ARRIVED_FOR_DROPOFF)
+    # def _on_driver_arrived_for_dropoff(self, payload, data):
+    #     if data.get('location') is None:
+    #         return
+    #     self.current_loc = data.get('location')
+    #     self.trip.driver_arrived_for_dropoff(self.current_time_str, self.current_loc)
+
+    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_WAITING_FOR_DROPOFF)
+    # def _on_driver_waiting_for_dropoff(self, payload, data):
+    #     if data.get('location') is None:
+    #         return
+    #     self.current_loc = data.get('location')
+    #     self.trip.driver_waiting_for_dropoff(self.current_time_str, self.current_loc)
+
+    # @message_handler(RideHailActions.DRIVER_WORKFLOW_EVENT, RideHailEvents.DRIVER_CANCELLED_TRIP)
+    # def _on_driver_cancelled_trip(self, payload, data):
+    #     if data.get('location') is None:
+    #         return
+    #     self.current_loc = data.get('location', self.current_loc)
+    #     self.trip.driver_cancelled_trip(self.current_time_str, self.current_loc)
+
+    # @state_handler(RidehailPassengerTripStateMachine.passenger_received_trip_confirmation.name)
+    # def _on_state_received_trip_confirmation(self):
+    #     print(f"PassengerApp [{self.manager.get_id()}]: Received Trip Confirmation. Current Trip State: {self.get_trip()['state']}")
+    #     # if random() <= self.get_transition_probability(('accept', self.get_trip()['state']), 1):
+    #     if random() <= self.agent_helper.get_transition_probability(('accept', self.get_trip()['state']), 1):
+    #         self.trip.accept(self.current_time_str, current_loc=self.current_loc)
+    #         print(f"PassengerApp [{self.manager.get_id()}]: Trip Accepted.")
+    #     else:
+    #         self.trip.reject(self.current_time_str, current_loc=self.current_loc)
+    #         print(f"PassengerApp [{self.manager.get_id()}]: Trip Rejected.")
+
+    #     print(f"PassengerApp [{self.manager.get_id()}]: Current Trip State after decision: {self.get_trip()['state']}")
+
+    # @state_handler(RidehailPassengerTripStateMachine.passenger_accepted_trip.name)
+    # def _on_state_accepted_trip(self):
+    #     self.trip.wait_for_pickup(self.current_time_str, current_loc=self.current_loc)
+
+    # @state_handler(RidehailPassengerTripStateMachine.passenger_droppedoff.name)
+    # def _on_state_droppedoff(self):
+    #     self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
+
+
 
 
 if __name__ == '__main__':

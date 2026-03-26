@@ -8,7 +8,7 @@ from shapely.geometry.linestring import LineString
 # from apps.state_machine.agent_workflow_sm import WorkflowStateMachine
 # from apps.agent_core.state_machine import WorkflowStateMachine
 from orsim.utils import WorkflowStateMachine
-from orsim.messenger.interaction import message_handler, state_handler
+# from orsim.messenger.interaction import message_handler, state_handler
 
 
 import logging, traceback
@@ -29,7 +29,7 @@ from apps.loc_service import OSRMClient
 # from apps.utils.generate_behavior import GenerateBehavior
 from apps.ride_hail.scenario import GenerateBehavior
 
-from apps.loc_service import TaxiStop, BusStop, cut, cut_route
+from apps.loc_service import TaxiStop, BusStop, cut, cut_route, create_route
 from typing import Any, Dict
 
 # from apps.messenger_service import Messenger
@@ -44,14 +44,14 @@ from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_w
 
 class DriverAgentIndie(ORSimAgent):
 
-    active_route = None # shapely.geometry.LineString
-    traversed_path = None # shapely.geometry.LineString
-    projected_path = None # shapely.geometry.LineString
+    # active_route = None # shapely.geometry.LineString
+    # traversed_path = None # shapely.geometry.LineString
+    # projected_path = None # shapely.geometry.LineString
 
     def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior):
         super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
         self.current_loc = self.behavior['init_loc']
-        self.action_when_free = behavior.get('action_when_free', 'random_walk')
+        # self.action_when_free = behavior.get('action_when_free', 'random_walk')
         self.credentials = {
             'email': self.behavior.get('email'),
             'password': self.behavior.get('password'),
@@ -66,12 +66,14 @@ class DriverAgentIndie(ORSimAgent):
                 credentials=self.credentials,
                 profile=self.behavior['profile'],
                 messenger=self.messenger,
-                persona=self.behavior.get('persona', {})
+                persona=self.behavior.get('persona', {}),
+                agent_helper=self,
             )
             for topic, method in self.app.topic_params.items():
                 self.register_message_handler(topic=topic, method=method)
+
             # Use interaction plugin for message/state handling with decorator support
-            self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
+            # self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
         except Exception as e:
             logging.exception(f"{self.unique_id = }: {str(e)}")
             self.agent_failed = True
@@ -124,14 +126,21 @@ class DriverAgentIndie(ORSimAgent):
             # self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
             print(f"DriverAgentIndie[{self.unique_id}]: Entering market at time_step {time_step}")
             try:
-                if self.action_when_free == 'random_walk':
-                    self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-                elif self.action_when_free == 'stay':
-                    self.set_route(self.current_loc, None)
+                # print(self.behavior)
+                # if self.action_when_free == 'random_walk':
+                #     # self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+                #     active_route, projected_path, traversed_path = create_route(self.current_loc, self.behavior['empty_dest_loc'])
+                # elif self.action_when_free == 'stay':
+                #     # self.set_route(self.current_loc, None)
+                #     active_route, projected_path, traversed_path = create_route(self.current_loc, None)
 
+                # self.app.launch(sim_clock=self.get_current_time_str(),
+                #                 current_loc=self.current_loc,
+                #                 route=self.active_route)
                 self.app.launch(sim_clock=self.get_current_time_str(),
                                 current_loc=self.current_loc,
-                                route=self.active_route)
+                )
+                                # route=active_route)
                 self.active = True
             except Exception as e:
                 logging.exception(f"Failed to launch DriverApp for agent {self.unique_id}: {str(e)}")
@@ -181,28 +190,30 @@ class DriverAgentIndie(ORSimAgent):
                 print(f"DriverAgentIndie[{self.unique_id}]: Not exiting market at time_step {self.current_time_step} with trip state {self.app.get_trip()['state']} and shift_end_time {self.behavior['shift_end_time']}")
                 return False
 
-    def set_route(self, from_loc, to_loc):
-        ''' find a Feasible route using some routeing engine'''
-        if to_loc is not None:
-            self.active_route = OSRMClient.get_route(from_loc, to_loc)
-            self.projected_path = OSRMClient.get_coords_from_route(self.active_route)
-            self.traversed_path = []
-            print(f"DriverAgentIndie[{self.unique_id}]: Setting route from {from_loc} to {to_loc}")
-            print(f"DriverAgentIndie[{self.unique_id}]: Active route set with duration {self.active_route['duration']} seconds and distance {self.active_route['distance']} meters")
-        else:
-            self.active_route = None
-            self.projected_path = []
-            self.traversed_path = []
-            print(f"DriverAgentIndie[{self.unique_id}]: No route set as to_loc is None")
+    # def set_route(self, from_loc, to_loc):
+    #     ''' find a Feasible route using some routeing engine'''
+    #     if to_loc is not None:
+    #         self.active_route = OSRMClient.get_route(from_loc, to_loc)
+    #         self.projected_path = OSRMClient.get_coords_from_route(self.active_route)
+    #         self.traversed_path = []
+    #         print(f"DriverAgentIndie[{self.unique_id}]: Setting route from {from_loc} to {to_loc}")
+    #         print(f"DriverAgentIndie[{self.unique_id}]: Active route set with duration {self.active_route['duration']} seconds and distance {self.active_route['distance']} meters")
+    #     else:
+    #         self.active_route = None
+    #         self.projected_path = []
+    #         self.traversed_path = []
+    #         print(f"DriverAgentIndie[{self.unique_id}]: No route set as to_loc is None")
+
+    #         # return active_route, projected_path, traversed_path
 
 
-    def get_tentative_travel_time(self, from_loc, to_loc):
-        ''' find a Feasible route using some routeing engine'''
-        try:
-            tentative_route = OSRMClient.get_route(from_loc, to_loc)
-            return tentative_route['duration']
-        except:
-            return 36000 # Some arbitrarily large number in Seconds
+    # def get_tentative_travel_time(self, from_loc, to_loc):
+    #     ''' find a Feasible route using some routeing engine'''
+    #     try:
+    #         tentative_route = OSRMClient.get_route(from_loc, to_loc)
+    #         return tentative_route['duration']
+    #     except:
+    #         return 36000 # Some arbitrarily large number in Seconds
 
 
     def logout(self):
@@ -225,19 +236,20 @@ class DriverAgentIndie(ORSimAgent):
         if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
                     (random() <= self.behavior['response_rate']) and \
                     (self.next_event_time <= self.current_time):
-                # 1. Always refresh trip manager to sync InMemory States with DB
-                self.add_step_log('Before refresh')
-                self.app.refresh() # Raises exception if unable to refresh
-                ### Driver has likely moved between the ticks, so update their current loc
-                # self.update_location()
-                self.add_step_log('Before update_location_by_route')
-                self.update_location_by_route()
-                # 1. DeQueue all messages and process them in sequence
-                self.add_step_log('Before consume_messages')
-                self.consume_messages()
-                # 2. based on current state, perform any workflow actions according to Agent behavior
-                self.add_step_log('Before perform_workflow_actions')
-                self.perform_workflow_actions()
+                # # 1. Always refresh trip manager to sync InMemory States with DB
+                # self.add_step_log('Before refresh')
+                # self.app.refresh() # Raises exception if unable to refresh
+                # ### Driver has likely moved between the ticks, so update their current loc
+                # # self.update_location()
+                # self.add_step_log('Before update_location_by_route')
+                # self.update_location_by_route()
+                # # 1. DeQueue all messages and process them in sequence
+                # self.add_step_log('Before consume_messages')
+                # self.consume_messages()
+                # # 2. based on current state, perform any workflow actions according to Agent behavior
+                # self.add_step_log('Before perform_workflow_actions')
+                # self.perform_workflow_actions()
+                self.app.execute_step_actions(self.current_time, add_step_log_fn=self.add_step_log)
 
                 return True
         else:
@@ -290,240 +302,242 @@ class DriverAgentIndie(ORSimAgent):
     #                   projected_path=list(self.projected_path.coords))
 
 
-    def update_location_by_route(self):
-        ''' - Update self.current_loc based on:
-                - last known current_loc
-                - driver.state (waiting ==> no change in current_loc)
-                - route
-                - elapsed time
-                - speed (average estimated speed)
-            - Ping Waypoint. This restores the current state of the driver
-                - Workflow events will be processed in the next step
-        '''
+    # def update_location_by_route(self):
+    #     ''' - Update self.current_loc based on:
+    #             - last known current_loc
+    #             - driver.state (waiting ==> no change in current_loc)
+    #             - route
+    #             - elapsed time
+    #             - speed (average estimated speed)
+    #         - Ping Waypoint. This restores the current state of the driver
+    #             - Workflow events will be processed in the next step
+    #     '''
 
-        trip = self.app.get_trip()
-        # print(f"update_location_by_route: {self.unique_id}, current_loc={self.current_loc}, trip={trip}")
-        elapsed_time = (self.current_time - str_to_time(trip['_updated'])).total_seconds()
+    #     trip = self.app.get_trip()
+    #     # print(f"update_location_by_route: {self.unique_id}, current_loc={self.current_loc}, trip={trip}")
+    #     elapsed_time = (self.current_time - str_to_time(trip['_updated'])).total_seconds()
 
-        if (RidehailDriverTripStateMachine.is_moving(trip['state']) == False) or \
-                (elapsed_time == 0) or (self.active_route is None):
-            return
-        else:
+    #     if (RidehailDriverTripStateMachine.is_moving(trip['state']) == False) or \
+    #             (elapsed_time == 0) or (self.active_route is None):
+    #         return
+    #     else:
 
-            try:
-                self.traversed_path, self.projected_path, self.active_route = cut_route(self.active_route, elapsed_time)
-            except Exception as e:
-                logging.exception(traceback.format_exc())
-                return
+    #         try:
+    #             self.traversed_path, self.projected_path, self.active_route = cut_route(self.active_route, elapsed_time)
+    #         except Exception as e:
+    #             logging.exception(traceback.format_exc())
+    #             return
 
-            # try:
-            if type(self.projected_path) == LineString:
-                self.current_loc = mapping(Point(self.projected_path.boundary.geoms[0]))
-            elif type(self.projected_path) == Point:
-                self.current_loc = mapping(self.projected_path)
-            # print(moved_distance, self.current_loc) #, self.projected_path)
-            # except Exception as e:
-            #     logging.warning(f"{elapsed_time=}")
-            #     # print(e)
-            #     logging.exception(traceback.format_exc())
+    #         # try:
+    #         if type(self.projected_path) == LineString:
+    #             self.current_loc = mapping(Point(self.projected_path.boundary.geoms[0]))
+    #         elif type(self.projected_path) == Point:
+    #             self.current_loc = mapping(self.projected_path)
+    #         # print(moved_distance, self.current_loc) #, self.projected_path)
+    #         # except Exception as e:
+    #         #     logging.warning(f"{elapsed_time=}")
+    #         #     # print(e)
+    #         #     logging.exception(traceback.format_exc())
 
-            # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
-            # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
-            # try:
-            self.app.ping(self.get_current_time_str(), current_loc=self.current_loc,
-                    traversed_path=list(self.traversed_path.coords),
-                    projected_path=list(self.projected_path.coords))
-            # except Exception as e:
-            #     # logging.exception(traceback.format_exc())
-            #     # logging.exception(str(e))
-            #     logging.warning(str(e))
-            #     raise e
-
-
-    def consume_messages(self):
-        '''
-        Consume messages. This ensures all the messages received between the two ticks are processed appropriately.
-        - Workflows as a consequence of events must be handled here.
-        - In Simulation, the duration between ticks is uniform & discrete as opposed to continuous time in the real world.
-        - Some grouping of messages could be done to avoid creating unnecessary empty records.
-        '''
-        payload = self.app.dequeue_message()
-        while payload is not None:
-            try:
-                # Critical: Only process passenger workflow events if channel is open and passenger matches
-                if payload['action'] == RideHailActions.PASSENGER_WORKFLOW_EVENT:
-                    if not validate_passenger_workflow_payload(payload):
-                        logging.warning(f"Invalid passenger workflow payload ignored: {payload=}")
-                        payload = self.app.dequeue_message()
-                        continue
-                    trip = self.app.get_trip()
-                    channel_open = RidehailDriverTripStateMachine.is_passenger_channel_open(trip['state'])
-                    passenger_id_match = trip['passenger'] == payload['passenger_id']
-                    if channel_open and passenger_id_match:
-                        passenger_data = payload['data']
-                        self._interaction_plugin.on_message(
-                            InteractionContext(
-                                action=RideHailActions.PASSENGER_WORKFLOW_EVENT,
-                                event=passenger_data.get('event'),
-                                payload=payload,
-                                data=passenger_data,
-                            )
-                        )
-                    else:
-                        logging.warning(f"Driver will not listen to Passenger workflow events when {trip['state']=}")
-                else:
-                    # For other actions, you can dispatch via plugin or handle as needed
-                    self._interaction_plugin.on_message(
-                        InteractionContext(
-                            action=payload.get('action'),
-                            event=payload.get('event'),
-                            payload=payload,
-                        )
-                    )
-                payload = self.app.dequeue_message()
-            except WriteFailedException as e:
-                self.app.enfront_message(payload)
-                raise e
-            except RefreshException as e:
-                raise e
-            except Exception as e:
-                raise e
-
-    def perform_workflow_actions(self):
-        '''
-        Execute workflow actions in a strict sequence using a for loop and interaction_plugin for extensibility and clarity.
-        Critical: This ensures state transitions are handled one at a time, allowing for intermediate state changes.
-        '''
-        driver = self.app.get_manager()
-        trip = self.app.get_trip()
-        time_since_last_event = (
-            datetime.strptime(self.get_current_time_str(), "%a, %d %b %Y %H:%M:%S GMT") -
-            datetime.strptime(trip['_updated'], "%a, %d %b %Y %H:%M:%S GMT")
-        ).total_seconds()
-
-        # Step 1: Check driver state
-        if driver['state'] != WorkflowStateMachine.online.name:
-            raise Exception(f"{driver['state'] = } is not valid")
-
-        # Step 2: Sequence of state actions using a for loop
-        state_sequence = [
-            RidehailDriverTripStateMachine.driver_looking_for_job.name,
-            RidehailDriverTripStateMachine.driver_received_trip.name,
-            RidehailDriverTripStateMachine.driver_moving_to_pickup.name,
-            RidehailDriverTripStateMachine.driver_pickedup.name,
-            RidehailDriverTripStateMachine.driver_moving_to_dropoff.name,
-            RidehailDriverTripStateMachine.driver_droppedoff.name,
-        ]
-        prev_state = trip['state']
-        for state_name in state_sequence:
-            state = self.app.get_trip()['state']
-            if state == state_name:
-                # Standardize: Use interaction_plugin for all state handling
-                self._interaction_plugin.on_state(
-                    InteractionContext(
-                        state=state,
-                        extra={'time_since_last_event': time_since_last_event},
-                    )
-                )
-                new_state = self.app.get_trip()['state']
-                if new_state != prev_state:
-                    print(f"DriverAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
-                prev_state = new_state
-
-        # Fallback: plugin dispatch for any custom/unknown state
-        state = self.app.get_trip()['state']
-        if state not in state_sequence:
-            self._interaction_plugin.on_state(
-                InteractionContext(
-                    state=state,
-                    extra={'time_since_last_event': time_since_last_event},
-                )
-            )
-            new_state = self.app.get_trip()['state']
-            if new_state != prev_state:
-                print(f"DriverAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
+    #         # NOTE This will be called at every Step hence the projected_path will always be based on Latest info from Agent
+    #         # self.app.ping(self.get_current_time_str(), current_loc=self.current_loc, projected_path=list(self.current_route_coords.coords))
+    #         # try:
+    #         self.app.ping(self.get_current_time_str(), current_loc=self.current_loc,
+    #                 traversed_path=list(self.traversed_path.coords),
+    #                 projected_path=list(self.projected_path.coords))
+    #         # except Exception as e:
+    #         #     # logging.exception(traceback.format_exc())
+    #         #     # logging.exception(str(e))
+    #         #     logging.warning(str(e))
+    #         #     raise e
 
 
-    # ...existing code...
+    # def consume_messages(self):
+    #     '''
+    #     Consume messages. This ensures all the messages received between the two ticks are processed appropriately.
+    #     - Workflows as a consequence of events must be handled here.
+    #     - In Simulation, the duration between ticks is uniform & discrete as opposed to continuous time in the real world.
+    #     - Some grouping of messages could be done to avoid creating unnecessary empty records.
+    #     '''
+    #     payload = self.app.dequeue_message()
+    #     while payload is not None:
+    #         try:
+    #             # Critical: Only process passenger workflow events if channel is open and passenger matches
+    #             if payload['action'] == RideHailActions.PASSENGER_WORKFLOW_EVENT:
+    #                 if not validate_passenger_workflow_payload(payload):
+    #                     logging.warning(f"Invalid passenger workflow payload ignored: {payload=}")
+    #                     payload = self.app.dequeue_message()
+    #                     continue
+    #                 trip = self.app.get_trip()
+    #                 channel_open = RidehailDriverTripStateMachine.is_passenger_channel_open(trip['state'])
+    #                 passenger_id_match = trip['passenger'] == payload['passenger_id']
+    #                 if channel_open and passenger_id_match:
+    #                     passenger_data = payload['data']
+    #                     self._interaction_plugin.on_message(
+    #                         InteractionContext(
+    #                             action=RideHailActions.PASSENGER_WORKFLOW_EVENT,
+    #                             event=passenger_data.get('event'),
+    #                             payload=payload,
+    #                             data=passenger_data,
+    #                         )
+    #                     )
+    #                 else:
+    #                     logging.warning(f"Driver will not listen to Passenger workflow events when {trip['state']=}")
+    #             else:
+    #                 # For other actions, you can dispatch via plugin or handle as needed
+    #                 self._interaction_plugin.on_message(
+    #                     InteractionContext(
+    #                         action=payload.get('action'),
+    #                         event=payload.get('event'),
+    #                         payload=payload,
+    #                     )
+    #                 )
+    #             payload = self.app.dequeue_message()
+    #         except WriteFailedException as e:
+    #             self.app.enfront_message(payload)
+    #             raise e
+    #         except RefreshException as e:
+    #             raise e
+    #         except Exception as e:
+    #             raise e
 
-    @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_CONFIRMED_TRIP)
-    def _on_passenger_confirmed_trip(self, payload, data):
-        self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
-        self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+    # def perform_workflow_actions(self):
+    #     '''
+    #     Execute workflow actions in a strict sequence using a for loop and interaction_plugin for extensibility and clarity.
+    #     Critical: This ensures state transitions are handled one at a time, allowing for intermediate state changes.
+    #     '''
+    #     driver = self.app.get_manager()
+    #     trip = self.app.get_trip()
+    #     time_since_last_event = (
+    #         datetime.strptime(self.get_current_time_str(), "%a, %d %b %Y %H:%M:%S GMT") -
+    #         datetime.strptime(trip['_updated'], "%a, %d %b %Y %H:%M:%S GMT")
+    #     ).total_seconds()
 
-    @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_REJECTED_TRIP)
-    def _on_passenger_rejected_trip(self, payload, data):
-        self.app.trip.force_quit(self.get_current_time_str(), current_loc=self.current_loc)
+    #     # Step 1: Check driver state
+    #     if driver['state'] != WorkflowStateMachine.online.name:
+    #         raise Exception(f"{driver['state'] = } is not valid")
 
-        if self.action_when_free == 'random_walk':
-            self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-        elif self.action_when_free == 'stay':
-            self.set_route(self.current_loc, None)
+    #     # Step 2: Sequence of state actions using a for loop
+    #     state_sequence = [
+    #         RidehailDriverTripStateMachine.driver_looking_for_job.name,
+    #         RidehailDriverTripStateMachine.driver_received_trip.name,
+    #         RidehailDriverTripStateMachine.driver_moving_to_pickup.name,
+    #         RidehailDriverTripStateMachine.driver_pickedup.name,
+    #         RidehailDriverTripStateMachine.driver_moving_to_dropoff.name,
+    #         RidehailDriverTripStateMachine.driver_droppedoff.name,
+    #     ]
+    #     prev_state = trip['state']
+    #     for state_name in state_sequence:
+    #         state = self.app.get_trip()['state']
+    #         if state == state_name:
+    #             # Standardize: Use interaction_plugin for all state handling
+    #             self._interaction_plugin.on_state(
+    #                 InteractionContext(
+    #                     state=state,
+    #                     extra={'time_since_last_event': time_since_last_event},
+    #                 )
+    #             )
+    #             new_state = self.app.get_trip()['state']
+    #             if new_state != prev_state:
+    #                 print(f"DriverAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
+    #             prev_state = new_state
 
-        self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+    #     # Fallback: plugin dispatch for any custom/unknown state
+    #     state = self.app.get_trip()['state']
+    #     if state not in state_sequence:
+    #         self._interaction_plugin.on_state(
+    #             InteractionContext(
+    #                 state=state,
+    #                 extra={'time_since_last_event': time_since_last_event},
+    #             )
+    #         )
+    #         new_state = self.app.get_trip()['state']
+    #         if new_state != prev_state:
+    #             print(f"DriverAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
 
-    @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_PICKUP)
-    def _on_passenger_acknowledge_pickup(self, payload, data):
-        self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
-        self.app.trip.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-    @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_DROPOFF)
-    def _on_passenger_acknowledge_dropoff(self, payload, data):
-        self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+    # # ...existing code...
 
-    @state_handler(RidehailDriverTripStateMachine.driver_looking_for_job.name)
-    def _on_state_looking_for_job(self, time_since_last_event):
-        if type(self.projected_path) == Point:
-            self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
-            self.set_route(self.current_loc, self.get_random_location())
-            self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_CONFIRMED_TRIP)
+    # def _on_passenger_confirmed_trip(self, payload, data):
+    #     self.set_route(self.current_loc, self.app.get_trip()['pickup_loc'])
+    #     self.app.trip.passenger_confirmed_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-    @state_handler(RidehailDriverTripStateMachine.driver_received_trip.name)
-    def _on_state_received_trip(self, time_since_last_event):
-        if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
-            estimated_time_to_arrive = self.get_tentative_travel_time(self.current_loc, self.app.get_trip()['pickup_loc'])
-            self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
-        else:
-            self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
-            self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_REJECTED_TRIP)
+    # def _on_passenger_rejected_trip(self, payload, data):
+    #     self.app.trip.force_quit(self.get_current_time_str(), current_loc=self.current_loc)
 
-    @state_handler(RidehailDriverTripStateMachine.driver_moving_to_pickup.name)
-    def _on_state_moving_to_pickup(self, time_since_last_event):
-        distance = hs.haversine(
-            reversed(self.current_loc['coordinates'][:2]),
-            reversed(self.app.get_trip()['pickup_loc']['coordinates'][:2]),
-            unit=hs.Unit.METERS,
-        )
-        if distance < 100:
-            self.app.trip.wait_to_pickup(self.get_current_time_str(), current_loc=self.current_loc)
+    #     if self.action_when_free == 'random_walk':
+    #         self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+    #     elif self.action_when_free == 'stay':
+    #         self.set_route(self.current_loc, None)
 
-    @state_handler(RidehailDriverTripStateMachine.driver_pickedup.name)
-    def _on_state_pickedup(self, time_since_last_event):
-        if time_since_last_event >= self.behavior['transition_time_pickup']:
-            self.app.trip.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+    #     self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-    @state_handler(RidehailDriverTripStateMachine.driver_moving_to_dropoff.name)
-    def _on_state_moving_to_dropoff(self, time_since_last_event):
-        distance = hs.haversine(
-            reversed(self.current_loc['coordinates'][:2]),
-            reversed(self.app.get_trip()['dropoff_loc']['coordinates'][:2]),
-            unit=hs.Unit.METERS,
-        )
-        if distance < 100:
-            self.app.trip.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_PICKUP)
+    # def _on_passenger_acknowledge_pickup(self, payload, data):
+    #     self.set_route(self.current_loc, self.app.get_trip()['dropoff_loc'])
+    #     self.app.trip.passenger_acknowledge_pickup(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-    @state_handler(RidehailDriverTripStateMachine.driver_droppedoff.name)
-    def _on_state_droppedoff(self, time_since_last_event):
-        if time_since_last_event >= self.behavior['transition_time_dropoff']:
-            self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
+    # @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_DROPOFF)
+    # def _on_passenger_acknowledge_dropoff(self, payload, data):
+    #     self.app.trip.passenger_acknowledge_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
 
-            if self.action_when_free == 'random_walk':
-                self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
-            elif self.action_when_free == 'stay':
-                self.set_route(self.current_loc, None)
+    # @state_handler(RidehailDriverTripStateMachine.driver_looking_for_job.name)
+    # def _on_state_looking_for_job(self, time_since_last_event):
+    #     if type(self.projected_path) == Point:
+    #         self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
+    #         self.set_route(self.current_loc, self.get_random_location())
+    #         self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
-            self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+    # @state_handler(RidehailDriverTripStateMachine.driver_received_trip.name)
+    # def _on_state_received_trip(self, time_since_last_event):
+    #     if random() <= self.get_transition_probability(('accept', self.app.get_trip()['state']), 1):
+    #         estimated_time_to_arrive = self.get_tentative_travel_time(self.current_loc, self.app.get_trip()['pickup_loc'])
+    #         self.app.trip.confirm(self.get_current_time_str(), current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
+    #     else:
+    #         self.app.trip.reject(self.get_current_time_str(), current_loc=self.current_loc)
+    #         self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
 
+    # @state_handler(RidehailDriverTripStateMachine.driver_moving_to_pickup.name)
+    # def _on_state_moving_to_pickup(self, time_since_last_event):
+    #     distance = hs.haversine(
+    #         reversed(self.current_loc['coordinates'][:2]),
+    #         reversed(self.app.get_trip()['pickup_loc']['coordinates'][:2]),
+    #         unit=hs.Unit.METERS,
+    #     )
+    #     if distance < 100:
+    #         self.app.trip.wait_to_pickup(self.get_current_time_str(), current_loc=self.current_loc)
+
+    # @state_handler(RidehailDriverTripStateMachine.driver_pickedup.name)
+    # def _on_state_pickedup(self, time_since_last_event):
+    #     if time_since_last_event >= self.behavior['transition_time_pickup']:
+    #         self.app.trip.move_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+
+    # @state_handler(RidehailDriverTripStateMachine.driver_moving_to_dropoff.name)
+    # def _on_state_moving_to_dropoff(self, time_since_last_event):
+    #     distance = hs.haversine(
+    #         reversed(self.current_loc['coordinates'][:2]),
+    #         reversed(self.app.get_trip()['dropoff_loc']['coordinates'][:2]),
+    #         unit=hs.Unit.METERS,
+    #     )
+    #     if distance < 100:
+    #         self.app.trip.wait_to_dropoff(self.get_current_time_str(), current_loc=self.current_loc)
+
+    # @state_handler(RidehailDriverTripStateMachine.driver_droppedoff.name)
+    # def _on_state_droppedoff(self, time_since_last_event):
+    #     if time_since_last_event >= self.behavior['transition_time_dropoff']:
+    #         self.app.trip.end_trip(self.get_current_time_str(), current_loc=self.current_loc)
+
+    #         if self.action_when_free == 'random_walk':
+    #             self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
+    #         elif self.action_when_free == 'stay':
+    #             self.set_route(self.current_loc, None)
+
+    #         self.app.create_new_unoccupied_trip(self.get_current_time_str(), current_loc=self.current_loc, route=self.active_route)
+
+    def get_behavior_detail(self, key):
+        return self.behavior.get(key, None)
 
 if __name__ == '__main__':
 

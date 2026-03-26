@@ -33,6 +33,13 @@ from apps.utils import time_to_str, str_to_time
 
 class AnalyticsApp(ORSimApp):
     ''' '''
+    @property
+    def managed_statemachine(self):
+        return None
+
+    @property
+    def interaction_ground_truth_list(self):
+        return []
 
     def __init__(self, run_id, sim_clock, credentials, messenger, persona):
         super().__init__(run_id=run_id,
@@ -65,6 +72,10 @@ class AnalyticsApp(ORSimApp):
     def launch(self):
         pass
 
+    def handle_app_topic_messages(self, payload):
+        ''' '''
+        # Handle any incoming messages on the app topic if needed
+        pass
     # def close(self):  # , sim_clock, current_loc):
     #     ''' '''
     #     logging.debug(f'logging out Analytics Service ')
