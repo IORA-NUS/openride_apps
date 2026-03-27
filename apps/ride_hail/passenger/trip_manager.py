@@ -8,7 +8,7 @@ from apps.loc_service import OSRMClient
 from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
 from apps.utils import str_to_time, time_to_str
 from apps.common.trip_manager_base import TripManagerBase
-from apps.ride_hail import RideHailActions, RideHailEvents
+from apps.ride_hail.statemachine import RideHailActions, RideHailEvents
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 from apps.config import settings, simulation_domains
@@ -193,276 +193,26 @@ class PassengerTripManager(TripManagerBase):
         else:
             raise WriteFailedException(f"{response.url}, {response.text}")
 
-    def driver_confirmed_trip(self, sim_clock, current_loc, estimated_time_to_arrive):
-        self.time_confirmed = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
-        wait_time_driver_confirm = (self.time_confirmed - self.time_requested).total_seconds()
 
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-            'stats.wait_time_driver_confirm': wait_time_driver_confirm,
-            'stats.estimated_time_to_arrive': estimated_time_to_arrive,
-        }
-
-        response = self._patch_trip_transition('driver_confirmed_trip', data)
-
-        if is_success(response.status_code):
-            self.refresh()
+    def end_active_trip(self, sim_clock, current_loc, force=False):
+        if force:
+            self.apply_trip_transition_and_notify(
+                transition=RidehailPassengerTripStateMachine.force_quit.name,
+                data={
+                    'sim_clock': sim_clock,
+                    'current_loc': current_loc,
+                },
+                context={}
+            )
         else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def accept(self, sim_clock, current_loc):
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('accept', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-
-            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
-                                    json.dumps({
-                                        'action': RideHailActions.PASSENGER_WORKFLOW_EVENT,
-                                        'passenger_id': self.trip['passenger'],
-                                        'data': {
-                                            'event': RideHailEvents.PASSENGER_CONFIRMED_TRIP
-                                        }
-
-                                    })
-                                )
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def reject(self, sim_clock, current_loc):
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('reject', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-
-            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
-                                    json.dumps({
-                                        'action': RideHailActions.PASSENGER_WORKFLOW_EVENT,
-                                        'passenger_id': self.trip['passenger'],
-                                        'data': {
-                                            'event': RideHailEvents.PASSENGER_REJECTED_TRIP
-                                        }
-
-                                    })
-                                )
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def cancel(self, sim_clock, current_loc):
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('cancel', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-
-            if self.trip.get('driver') is not None:
-                self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
-                                    json.dumps({
-                                        'action': RideHailActions.PASSENGER_WORKFLOW_EVENT,
-                                        'passenger_id': self.trip['passenger'],
-                                        'data': {
-                                            'event': RideHailEvents.PASSENGER_CANCEL_TRIP
-                                        }
-
-                                    })
-                                )
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def wait_for_pickup(self, sim_clock, current_loc):
-
-        # try:
-        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/wait_for_pickup"
-        # except Exception as e:
-        #     raise e
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('wait_for_pickup', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def driver_cancelled_trip(self, sim_clock, current_loc):
-
-        # try:
-        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_cancelled_trip"
-        # except Exception as e:
-        #     raise e
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('driver_cancelled_trip', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def driver_arrived_for_pickup(self, sim_clock, current_loc, ridehail_driver_trip):
-
-        # try:
-        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_pickup"
-        # except Exception as e:
-        #     raise e
-        self.time_pickedup = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
-        wait_time_pickup = (self.time_pickedup - self.time_assigned).total_seconds()
-        wait_time_total = (self.time_pickedup - self.time_requested).total_seconds()
-
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-            'ridehail_driver_trip': ridehail_driver_trip,
-            'stats.wait_time_pickup': wait_time_pickup,
-            'stats.wait_time_total': wait_time_total
-        }
-
-        response = self._patch_trip_transition('driver_arrived_for_pickup', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-
-            # Message driver
-            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
-                                json.dumps({
-                                    'action': RideHailActions.PASSENGER_WORKFLOW_EVENT,
-                                    'passenger_id': self.trip['passenger'],
-                                    'data': {
-                                        'event': RideHailEvents.PASSENGER_ACKNOWLEDGE_PICKUP
-                                    }
-
-                                })
-                            )
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def driver_move_for_dropoff(self, sim_clock, current_loc, route):
-
-        # try:
-        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_move_for_dropoff"
-        # except Exception as e:
-        #     raise e
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-            'routes.planned.moving_for_dropoff': route,
-            'stats.estimated_time_to_dropoff': route['duration']
-        }
-
-        response = self._patch_trip_transition('driver_move_for_dropoff', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def driver_arrived_for_dropoff(self, sim_clock, current_loc):
-
-        # try:
-        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_arrived_for_dropoff"
-        # except Exception as e:
-        #     raise e
-        self.time_droppedoff = datetime.strptime(sim_clock, "%a, %d %b %Y %H:%M:%S GMT")
-        travel_time_total = (self.time_droppedoff - self.time_pickedup).total_seconds()
-
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-            'stats.travel_time_total': travel_time_total
-        }
-
-        response = self._patch_trip_transition('driver_arrived_for_dropoff', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def driver_waiting_for_dropoff(self, sim_clock, current_loc):
-
-        # try:
-        #     passenger_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip/{self.trip['_id']}/driver_waiting_for_dropoff"
-        # except Exception as e:
-        #     raise e
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('driver_waiting_for_dropoff', data)
-
-        if is_success(response.status_code):
-            self.refresh()
-
-            # Message driver
-            self.messenger.client.publish(f'{self.run_id}/{self.trip["driver"]}',
-                                json.dumps({
-                                    'action': RideHailActions.PASSENGER_WORKFLOW_EVENT,
-                                    'passenger_id': self.trip['passenger'],
-                                    'data': {
-                                        'event': RideHailEvents.PASSENGER_ACKNOWLEDGE_DROPOFF
-                                    }
-
-                                })
-                            )
-        else:
-            raise WriteFailedException(f"{response.url}, {response.text}")
-
-    def end_trip(self, sim_clock, current_loc):
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('end_trip', data)
-
-        # # # WATCH THIS
-        # if is_success(response.status_code):
-        #     logging.info('ending_trip')
-        #     self.trip = None
-        # else:
-        #     raise Exception(f"{response.url}, {response.text}")
-
-
-    def force_quit(self, sim_clock, current_loc):
-
-        if (self.trip is None) or  (self.trip['state'] in [RidehailPassengerTripStateMachine.passenger_completed_trip.name,
-                                                            RidehailPassengerTripStateMachine.passenger_cancelled_trip.name,]):
-            return
-
-        data = {
-            'sim_clock': sim_clock,
-            'current_loc': current_loc,
-        }
-
-        response = self._patch_trip_transition('force_quit', data)
-
-        # if is_success(response.status_code):
-        #     logging.info('force quit trip')
-        #     self.trip = None
-        # else:
-        #     raise Exception(f"{response.url}, {response.text}")
+            self.apply_trip_transition_and_notify(
+                transition=RidehailPassengerTripStateMachine.end_trip.name,
+                data={
+                    'sim_clock': sim_clock,
+                    'current_loc': current_loc,
+                },
+                context={}
+            )
 
     def refresh(self):
         if self.trip is not None:

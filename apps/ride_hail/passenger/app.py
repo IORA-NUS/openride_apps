@@ -11,14 +11,16 @@ from random import choice, randint, random
 
 
 from apps.common.user_registry import UserRegistry
+from apps.ride_hail.message_data_models import AssignedActionPayload
 from .manager import PassengerManager
 from .trip_manager import PassengerTripManager
 from apps.loc_service import OSRMClient
 from orsim.lifecycle import ORSimApp
 
 from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, driver_passenger_interactions
-from apps.ride_hail import RideHailActions, validate_assigned_payload
-from apps.ride_hail import RideHailActions, RideHailEvents, validate_driver_workflow_payload
+# from apps.ride_hail import RideHailActions, validate_assigned_payload
+from apps.ride_hail.statemachine import RideHailActions, RideHailEvents
+from apps.ride_hail.message_data_models import AssignedActionPayload, DriverWorkflowPayload
 
 from orsim.utils import WorkflowStateMachine
 from orsim.messenger.interaction import message_handler, state_handler
@@ -100,7 +102,8 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
     def close(self, sim_clock, current_loc):
         logging.debug(f'logging out Passenger {self.manager.get_id()}')
         try:
-            self.trip.force_quit(sim_clock, current_loc)
+            # self.trip.force_quit(sim_clock, current_loc)
+            self.trip.end_active_trip(sim_clock, current_loc, force=False)
         except Exception as e:
             logging.exception(str(e))
 
@@ -109,6 +112,7 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
     def get_trip(self):
         return self.trip.as_dict()
 
+
     def ping(self, sim_clock, current_loc, **kwargs):
         self.trip.ping(sim_clock, current_loc, **kwargs)
 
@@ -116,8 +120,10 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
         self.trip.refresh()
 
     def handle_app_topic_messages(self, payload):
-        if payload['action'] == RideHailActions.ASSIGNED: # THis message may be coming from the assignment agent
-            if validate_assigned_payload(payload) is False:
+
+        if payload.get('action') == RideHailActions.ASSIGNED:
+            parsed = AssignedActionPayload.parse(payload)
+            if parsed is None:
                 logging.warning(f"Invalid assigned payload ignored: {payload=}")
                 return
 
@@ -126,15 +132,35 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
                     self.trip.assign(
                         self.latest_sim_clock,
                         current_loc=self.latest_loc,
-                        driver=payload['driver_id'],
+                        driver=parsed.driver_id,
                     )
                 except Exception as e:
                     logging.warning(f"Assignment failed for {payload=}: {str(e)}")
-                    self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
+                    self.handle_overbooking(self.latest_sim_clock, driver=parsed.driver_id)
             else:
-                self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
+                self.handle_overbooking(self.latest_sim_clock, driver=parsed.driver_id)
         else:
             self.enqueue_message(payload)
+
+        # if payload.get('action') == RideHailActions.ASSIGNED: # THis message may be coming from the assignment agent
+        #     if validate_assigned_payload(payload) is False:
+        #         logging.warning(f"Invalid assigned payload ignored: {payload=}")
+        #         return
+
+        #     if self.get_trip()['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name:
+        #         try:
+        #             self.trip.assign(
+        #                 self.latest_sim_clock,
+        #                 current_loc=self.latest_loc,
+        #                 driver=payload['driver_id'],
+        #             )
+        #         except Exception as e:
+        #             logging.warning(f"Assignment failed for {payload=}: {str(e)}")
+        #             self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
+        #     else:
+        #         self.handle_overbooking(self.latest_sim_clock, driver=payload['driver_id'])
+        # else:
+        #     self.enqueue_message(payload)
 
     def handle_overbooking(self, sim_clock, driver):
 
@@ -182,7 +208,8 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
         while payload is not None:
             try:
                 if payload['action'] == RideHailActions.DRIVER_WORKFLOW_EVENT:
-                    if validate_driver_workflow_payload(payload) is False:
+                    # if validate_driver_workflow_payload(payload) is False:
+                    if DriverWorkflowPayload.parse(payload) is None:
                         logging.warning(f"Invalid driver workflow payload ignored: {payload=}")
                         payload = self.dequeue_message()
                         continue

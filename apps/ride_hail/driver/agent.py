@@ -38,7 +38,7 @@ from orsim.lifecycle import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 from orsim.messenger.interaction import CallbackRouterPlugin, InteractionContext
-from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
+# from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
 # from apps.agent_core.runtime import AgentRuntimeBase
 # from apps.config import driver_settings, orsim_settings
 

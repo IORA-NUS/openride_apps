@@ -1,11 +1,10 @@
 from abc import ABC, abstractmethod
 from typing import Any
 from orsim.messenger.interaction import message_handler, state_handler
-from apps.ride_hail import RideHailEvents
 
 from apps.ride_hail.statemachine import RidehailDriverTripStateMachine
 from apps.loc_service import TaxiStop, BusStop, cut, cut_route, create_route, get_tentative_travel_time
-from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
+from apps.ride_hail.statemachine import RideHailActions, RideHailEvents
 from shapely.geometry import Point, mapping
 from shapely.geometry.linestring import LineString
 

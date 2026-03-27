@@ -1,10 +1,12 @@
 import logging
 import os, sys, time
 
-from apps.utils.utils import is_success
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
+
+from apps.utils.utils import is_success
+from apps.ride_hail.message_data_models import RequestedTripActionPayload
 
 import json, requests, traceback
 from datetime import datetime
@@ -15,7 +17,7 @@ from apps.common.user_registry import UserRegistry
 from apps.config import settings, simulation_domains
 
 from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
-from apps.ride_hail import RideHailActions
+from apps.ride_hail.statemachine import RideHailActions
 from .solver import *  # NOTE * is deliberate to load all solvers in globals()
 from .manager import AssignmentManager
 from orsim.lifecycle import ORSimApp
@@ -146,13 +148,23 @@ class AssignmentApp(ORSimApp):
             driver = item[0]
             passenger_trip = item[1]
 
-            passenger_assignment = {
-                "action": RideHailActions.REQUESTED_TRIP,
-                "passenger_id": passenger_trip['passenger'],
-                "requested_trip": passenger_trip
-            }
+            # passenger_assignment = {
+            #     "action": RideHailActions.REQUESTED_TRIP,
+            #     "passenger_id": passenger_trip['passenger'],
+            #     "requested_trip": passenger_trip
+            # }
 
-            self.messenger.client.publish(f"{self.run_id}/{driver['driver']}", json.dumps(passenger_assignment))
+            # self.messenger.client.publish(f"{self.run_id}/{driver['driver']}", json.dumps(passenger_assignment))
+
+            passenger_assignment = RequestedTripActionPayload(
+                action=RideHailActions.REQUESTED_TRIP,
+                passenger_id=passenger_trip['passenger'],
+                requested_trip=passenger_trip
+            )
+            self.messenger.client.publish(
+                f"{self.run_id}/{driver['driver']}",
+                json.dumps(passenger_assignment.__dict__)
+            )
 
     def get_driver_trip(self):
         ''' '''

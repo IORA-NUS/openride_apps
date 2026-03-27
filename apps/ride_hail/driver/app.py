@@ -11,6 +11,7 @@ from apps.config import settings
 from apps.utils.utils import is_success
 
 from apps.common.user_registry import UserRegistry
+from apps.ride_hail.message_data_models import RequestedTripActionPayload
 from .manager import DriverManager
 from .trip_manager import DriverTripManager
 from apps.loc_service import OSRMClient
@@ -25,7 +26,8 @@ from random import choice, randint, random
 
 from apps.utils.excepions import WriteFailedException, RefreshException, HandlerValidationException
 from orsim.messenger.interaction import CallbackRouterPlugin, InteractionContext
-from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
+from apps.ride_hail.statemachine import RideHailActions, RideHailEvents
+from apps.ride_hail.message_data_models import RequestedTripActionPayload, PassengerWorkflowPayload
 
 from shapely.geometry import Point, mapping
 from shapely.geometry.linestring import LineString
@@ -121,7 +123,8 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         ''' '''
         logging.debug(f'logging out Driver {self.manager.get_id()}')
         try:
-            self.trip.force_quit(sim_clock, current_loc)
+            # self.trip.force_quit(sim_clock, current_loc)
+            self.trip.end_active_trip(sim_clock, current_loc, force=True)
         except Exception as e:
             logging.exception(str(e))
 
@@ -173,7 +176,8 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
 
         if self.trip.as_dict()['is_occupied'] == False:
             # self.trip.end_trip(sim_clock, current_loc, force_quit=False)
-            self.trip.end_trip(sim_clock, current_loc)
+            # self.trip.end_trip(sim_clock, current_loc)
+            self.trip.end_active_trip(sim_clock, current_loc, force=False)
 
             self.trip.create_new_occupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle.as_dict(), requested_trip)
         else:
@@ -191,25 +195,39 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         ''' Push message to a personal RabbitMQ Queue
         - At every step (simulation), The agent will pull items from queue and process them in sequence until Queue is empty
         '''
+        if payload['action'] == RideHailActions.REQUESTED_TRIP:
+            parsed = RequestedTripActionPayload.parse(payload)
 
-        # print('driver_app received_message', payload)
-        print(type(payload), payload)
-
-        if payload['action'] == 'requested_trip':
-            passenger_id = payload['passenger_id']
-            requested_trip = payload['requested_trip']
-
-            try:
-                self.handle_requested_trip(self.latest_sim_clock,
-                                            current_loc=self.latest_loc,
-                                            requested_trip=requested_trip)
-            except Exception as e:
-                # logging.exception(traceback.format_exc())
-                logging.warning(f"Driver failed to respond to trip Request {payload=}: {str(e)}")
-                # raise e
-
+            if parsed is not None:
+                try:
+                    self.handle_requested_trip(
+                        self.latest_sim_clock,
+                        current_loc=self.latest_loc,
+                        requested_trip=parsed.requested_trip
+                    )
+                except Exception as e:
+                    logging.warning(f"Driver failed to respond to trip Request {payload=}: {str(e)}")
         else:
             self.enqueue_message(payload)
+
+        # # print('driver_app received_message', payload)
+        # print(type(payload), payload)
+
+        # if payload['action'] == RideHailActions.REQUESTED_TRIP:
+        #     passenger_id = payload['passenger_id']
+        #     requested_trip = payload['requested_trip']
+
+        #     try:
+        #         self.handle_requested_trip(self.latest_sim_clock,
+        #                                     current_loc=self.latest_loc,
+        #                                     requested_trip=requested_trip)
+        #     except Exception as e:
+        #         # logging.exception(traceback.format_exc())
+        #         logging.warning(f"Driver failed to respond to trip Request {payload=}: {str(e)}")
+        #         # raise e
+
+        # else:
+        #     self.enqueue_message(payload)
 
 
     def execute_step_actions(self, current_time, add_step_log_fn=None):
@@ -248,7 +266,8 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
             try:
                 # Critical: Only process passenger workflow events if channel is open and passenger matches
                 if payload['action'] == RideHailActions.PASSENGER_WORKFLOW_EVENT:
-                    if not validate_passenger_workflow_payload(payload):
+                    # if not validate_passenger_workflow_payload(payload):
+                    if PassengerWorkflowPayload.parse(payload) is None:
                         logging.warning(f"Invalid passenger workflow payload ignored: {payload=}")
                         payload = self.dequeue_message()
                         continue
