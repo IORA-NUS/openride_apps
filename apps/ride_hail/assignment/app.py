@@ -56,10 +56,10 @@ class AssignmentApp(ORSimApp):
         # self.solver_params = self.behavior.get('solver_params')
         self.server_max_results = 50  # make sure this is in sync with server
 
-    def create_user(self):
+    def _create_user(self):
         return UserRegistry(self.sim_clock, self.credentials, role='admin')
 
-    def create_manager(self):
+    def _create_manager(self):
         solver = globals()[self.behavior.get('solver')](self.behavior.get('solver_params'))
 
         return AssignmentManager(run_id=self.run_id,

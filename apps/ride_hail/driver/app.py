@@ -64,13 +64,14 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         }
 
     # def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
-    def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
+    # def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
+    def __init__(self, run_id, sim_clock, behavior, messenger, agent_helper=None):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          behavior = behavior,
                         #  credentials=credentials,
                          messenger=messenger,
-                         current_loc=current_loc,
+                        #  current_loc=current_loc,
                         #  profile=profile,
                         #  persona=persona,
                          agent_helper=agent_helper)
@@ -80,7 +81,9 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         self.current_time_str = None
 
         self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
+        # self.latest_loc = current_loc
+        self.current_loc = self.behavior['init_loc']
+        self.latest_loc = self.current_loc
 
         self.active_route = None # shapely.geometry.LineString
         self.traversed_path = None # shapely.geometry.LineString
@@ -88,10 +91,10 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
 
         self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
 
-    def create_user(self):
+    def _create_user(self):
         return UserRegistry(self.sim_clock, self.credentials)
 
-    def create_manager(self):
+    def _create_manager(self):
         return DriverManager(
             run_id=self.run_id,
             sim_clock=self.sim_clock,
@@ -107,24 +110,26 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
             messenger=self.messenger,
             persona=self.behavior.get('persona', {}))
 
-    def launch(self, sim_clock, current_loc): #, route):
+    # def launch(self, sim_clock, current_loc): #, route):
+    def launch(self, sim_clock): #, route):
         ''' '''
         super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
         if self.behavior.get('action_when_free') == 'random_walk':
             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.behavior.get('empty_dest_loc'))
         elif self.behavior.get('action_when_free') == 'stay':
             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, None)
-        self.create_new_unoccupied_trip(sim_clock, current_loc, self.active_route)
+        self.create_new_unoccupied_trip(sim_clock, self.current_loc, self.active_route)
 
     def get_random_location(self):
         return GenerateBehavior.get_random_location(self.behavior.get('coverage_area_name'))
 
-    def close(self, sim_clock, current_loc):
+    # def close(self, sim_clock, current_loc):
+    def close(self, sim_clock):
         ''' '''
         logging.debug(f'logging out Driver {self.manager.get_id()}')
         try:
             # self.trip.force_quit(sim_clock, current_loc)
-            self.trip.end_active_trip(sim_clock, current_loc, force=True)
+            self.trip.end_active_trip(sim_clock, self.current_loc, force=True)
         except Exception as e:
             logging.exception(str(e))
 

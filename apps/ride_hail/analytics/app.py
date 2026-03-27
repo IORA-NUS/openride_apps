@@ -75,10 +75,10 @@ class AnalyticsApp(ORSimApp):
         self.passenger_trips_for_metric = None
         self.driver_trips_for_metric = None
 
-    def create_user(self):
+    def _create_user(self):
         return UserRegistry(self.sim_clock, self.credentials, role='admin')
 
-    def create_manager(self):
+    def _create_manager(self):
         return AnalyticsManager(self.run_id, self.sim_clock, self.user, None)
         # pass
 

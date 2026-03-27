@@ -38,82 +38,23 @@ from orsim.lifecycle import ORSimAgent
 
 from apps.utils.excepions import WriteFailedException, RefreshException
 from orsim.messenger.interaction import CallbackRouterPlugin, InteractionContext
-# from apps.ride_hail import RideHailActions, RideHailEvents, validate_passenger_workflow_payload
-# from apps.agent_core.runtime import AgentRuntimeBase
-# from apps.config import driver_settings, orsim_settings
 
 class DriverAgentIndie(ORSimAgent):
 
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior):
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
-        self.current_loc = self.behavior['init_loc']
-        # self.action_when_free = behavior.get('action_when_free', 'random_walk')
-        self.credentials = {
-            'email': self.behavior.get('email'),
-            'password': self.behavior.get('password'),
-        }
-        self.failure_count = 0
-        self.failure_log = {}
-        try:
-            self.app = DriverApp(
-                run_id=self.run_id,
-                sim_clock=self.get_current_time_str(),
-                current_loc=self.current_loc,
-                behavior=self.behavior,
-                # credentials=self.credentials,
-                # profile=self.behavior['profile'],
-                messenger=self.messenger,
-                # persona=self.behavior.get('persona', {}),
-                agent_helper=self,
-            )
-            for topic, method in self.app.topic_params.items():
-                self.register_message_handler(topic=topic, method=method)
+    def _create_app(self):
+        ''' Subclasses should implement this method to create their specific app instance.
+        This method is called during initialization to set up the agent's application logic.
+        '''
+        return DriverApp(run_id=self.run_id,
+                         sim_clock=self.get_current_time_str(),
+                         behavior=self.behavior,
+                         messenger=self.messenger,
+                         agent_helper=self)
 
-        except Exception as e:
-            logging.exception(f"{self.unique_id = }: {str(e)}")
-            self.agent_failed = True
-
-
-
-    # def get_random_location(self):
-    #     return GenerateBehavior.get_random_location(self.behavior['coverage_area_name'])
-
-    def process_payload(self, payload: Dict[str, Any]) -> bool:
-        did_step: bool = False
-
-        if (payload.get("action") == "step") or (payload.get("action") == "init"):
-            self.add_step_log("Before entering_market")
-            self.entering_market(payload.get("time_step"))
-            self.add_step_log("After entering_market")
-            # print(f"DriverAgentIndie[{self.unique_id}]: Completed entering_market with {self.app.get_trip()=}")
-
-            # if self.is_active():
-            if self.active:
-                # print(f"DriverAgentIndie[{self.unique_id}]: Agent is active, processing step with payload {payload=}")
-                try:
-                    self.add_step_log("Before step")
-                    did_step = self.step(payload.get("time_step"))
-                    self.add_step_log("After step")
-                    self.failure_count = 0
-                    self.failure_log = {}
-                except Exception as e:
-                    print(f"Exception in step for driver {self.unique_id}: {str(e)}")
-                    self.failure_log[self.failure_count] = traceback.format_exc()
-                    self.failure_count += 1
-            else:
-                print(f"DriverAgentIndie[{self.unique_id}]: Agent is not active, checking exiting_market with {self.app.get_trip()=}")
-
-            self.add_step_log("Before exiting_market")
-            self.exiting_market()
-            self.add_step_log("After exiting_market")
-            # print(f"DriverAgentIndie[{self.unique_id}]: Completed exiting_market with {self.app.get_trip()=}")
-        else:
-            logging.error(f"{payload = }")
-
-        # print(f"process_payload for driver {self.unique_id} completed with {self.step_log =}")
-        return did_step
-
+    @property
+    def process_payload_on_init(self):
+        return True
 
     def entering_market(self, time_step):
         ''' '''
@@ -122,9 +63,7 @@ class DriverAgentIndie(ORSimAgent):
             # self.set_route(self.current_loc, self.behavior['empty_dest_loc'])
             print(f"DriverAgentIndie[{self.unique_id}]: Entering market at time_step {time_step}")
             try:
-                self.app.launch(sim_clock=self.get_current_time_str(),
-                                current_loc=self.current_loc,
-                )
+                self.app.launch(sim_clock=self.get_current_time_str())
                 self.active = True
             except Exception as e:
                 logging.exception(f"Failed to launch DriverApp for agent {self.unique_id}: {str(e)}")
@@ -139,14 +78,11 @@ class DriverAgentIndie(ORSimAgent):
             print(f"DriverAgentIndie[{self.unique_id}]: Not entering market at {time_step = } because {self.active = } and shift_start_time={self.behavior['shift_start_time']}")
             return False
 
-    # def is_active(self):
-    #     return self.active
-
     def exiting_market(self):
         ''' '''
         failure_threshold = 3
         if self.failure_count > failure_threshold:
-            print(f"DriverAgentIndie[{self.unique_id}]: Failure count {self.failure_count} exceeded threshold {failure_threshold}. Logging out.")
+            # print(f"DriverAgentIndie[{self.unique_id}]: Failure count {self.failure_count} exceeded threshold {failure_threshold}. Logging out.")
             logging.warning(f'Shutting down driver {self.app.manager.get_id()} due to too many failures')
             logging.warning(json.dumps(self.failure_log, indent=2))
             self.shutdown()
@@ -175,7 +111,8 @@ class DriverAgentIndie(ORSimAgent):
                 return False
 
     def logout(self):
-        self.app.close(self.get_current_time_str(), current_loc=self.current_loc)
+        # self.app.close(self.get_current_time_str(), current_loc=self.current_loc)
+        self.app.close(self.get_current_time_str())
 
     def estimate_next_event_time(self):
         ''' '''
@@ -188,8 +125,9 @@ class DriverAgentIndie(ORSimAgent):
 
     def step(self, time_step):
         # # The agent's step will go here.
-        self.app.update_current(self.get_current_time_str(), self.current_loc)
-        print(f"driver_agent_indie.step: {self.unique_id}, time_step={time_step}, current_loc={self.current_loc}, trip_state={self.app.get_trip()['state'] if self.app.get_trip() else 'No Trip'}, next_event_time={self.estimate_next_event_time()}")
+        # self.app.update_current(self.get_current_time_str(), self.current_loc)
+        self.app.update_current(self.get_current_time_str())
+        print(f"driver_agent_indie.step: {self.unique_id}, time_step={time_step}, trip_state={self.app.get_trip()['state'] if self.app.get_trip() else 'No Trip'}, next_event_time={self.estimate_next_event_time()}")
 
         if (self.current_time_step % self.behavior['steps_per_action'] == 0) and \
                     (random() <= self.behavior['response_rate']) and \

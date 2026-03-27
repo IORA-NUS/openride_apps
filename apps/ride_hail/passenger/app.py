@@ -53,29 +53,35 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
     exited_market = False
 
     # def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
-    def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
+    # def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
+    def __init__(self, run_id, sim_clock, behavior, messenger, agent_helper=None):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          behavior = behavior,
                         #  credentials=credentials,
                          messenger=messenger,
-                         current_loc=current_loc,
+                        #  current_loc=current_loc,
                         #  profile=profile,
                         #  persona=persona,
                          agent_helper=agent_helper)
         self.trip = self.create_trip_manager()
         self.latest_sim_clock = sim_clock
-        self.latest_loc = current_loc
+
+        # self.latest_loc = current_loc
+        self.current_loc = self.behavior['pickup_loc']
+        # self.pickup_loc = self.behavior['pickup_loc']
+        # self.dropoff_loc = self.behavior['dropoff_loc']
+        self.latest_loc = self.current_loc
 
         self.current_time = None
         self.current_time_str = None
 
         self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
 
-    def create_user(self):
+    def _create_user(self):
         return UserRegistry(self.sim_clock, self.credentials)
 
-    def create_manager(self):
+    def _create_manager(self):
         return PassengerManager(
             run_id=self.run_id,
             sim_clock=self.sim_clock,
@@ -93,17 +99,24 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             persona=self.behavior.get('persona', {})
         )
 
-    def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
+    # def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
+    # def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
+    #     super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
+
+    #     if (pickup_loc is not None) and (dropoff_loc is not None):
+    #         self.trip.create_new_trip_request(sim_clock, current_loc, self.manager.as_dict(), pickup_loc, dropoff_loc, trip_price)
+    def launch(self, sim_clock):
         super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
 
-        if (pickup_loc is not None) and (dropoff_loc is not None):
-            self.trip.create_new_trip_request(sim_clock, current_loc, self.manager.as_dict(), pickup_loc, dropoff_loc, trip_price)
+        # if (self.behavior.get('pickup_loc') is not None) and (self.behavior.get('dropoff_loc') is not None):
+        self.trip.create_new_trip_request(sim_clock, self.current_loc, self.manager.as_dict(), self.behavior.get('pickup_loc'), self.behavior.get('dropoff_loc'), self.behavior.get('trip_price'))
 
-    def close(self, sim_clock, current_loc):
+    # def close(self, sim_clock, current_loc):
+    def close(self, sim_clock):
         logging.debug(f'logging out Passenger {self.manager.get_id()}')
         try:
             # self.trip.force_quit(sim_clock, current_loc)
-            self.trip.end_active_trip(sim_clock, current_loc, force=False)
+            self.trip.end_active_trip(sim_clock, self.current_loc, force=False)
         except Exception as e:
             logging.exception(str(e))
 
@@ -242,11 +255,11 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
         if (
             trip['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name
             # and (self.behavior['trip_request_time'] + (self.behavior['profile']['patience'] / self.step_size) < self.current_time_step)
-            and (self.behavior['trip_request_time'] + (self.behavior.get('profile', {}).get('patience', 0) / self.agent_helper.step_size) < self.current_time_step)
+            and (self.behavior['trip_request_time'] + (self.behavior.get('profile', {}).get('patience', 0) / self.agent_helper.step_size) < self.agent_helper.current_time_step)
         ):
             logging.info(
                 # f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps"
-                f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior.get('profile', {}).get('patience', 0)/self.agent_helper.step_size} steps"
+                f"Passenger {self.manager.get_id()} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior.get('profile', {}).get('patience', 0)/self.agent_helper.step_size} steps"
             )
             self.trip.cancel(self.current_time_str, current_loc=self.current_loc)
 
@@ -265,7 +278,7 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
                 )
                 new_state = self.get_trip()['state']
                 if new_state != prev_state:
-                    logging.info(f"PassengerAgentIndie [{self.unique_id}]: State changed from {prev_state} to {new_state}")
+                    logging.info(f"PassengerAgentIndie [{self.manager.get_id()}]: State changed from {prev_state} to {new_state}")
                 prev_state = new_state
 
         # Always process the current state (for plugin extensibility)

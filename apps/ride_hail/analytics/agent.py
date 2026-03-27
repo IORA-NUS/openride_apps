@@ -16,35 +16,22 @@ from orsim.lifecycle import ORSimAgent
 class AnalyticsAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior, datahub_dir=None):
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
-        self.datahub_dir = datahub_dir
+    def _create_app(self):
+        return AnalyticsApp(run_id=self.run_id,
+                         sim_clock=self.get_current_time_str(),
+                         behavior=self.behavior,
+                         messenger=self.messenger,
+                        )
 
-        self.credentials = {
-            'email': self.behavior.get('email'),
-            'password': self.behavior.get('password'),
-        }
+    @property
+    def process_payload_on_init(self):
+        return False
 
-        try:
-            self.app = AnalyticsApp(run_id=self.run_id,
-                                    sim_clock=self.get_current_time_str(),
-                                    behavior=self.behavior,
-                                    # credentials=self.credentials,
-                                    messenger=self.messenger,
-                                    # persona=self.behavior.get('persona', {})
-                                )
-        except Exception as e:
-            logging.exception(f"{self.unique_id = }: {str(e)}")
-            self.agent_failed = True
-        if hasattr(self, 'agent_failed') and self.agent_failed:
-            logging.error(f"AnalyticsAgentIndie {self.unique_id} failed to initialize and will not step.")
+    def entering_market(self, time_step):
+        self.active = True
 
-    def process_payload(self, payload):
-        did_step = False
-        if payload.get('action') == 'step':
-            did_step = self.step(payload.get('time_step'))
-
-        return did_step
+    def exiting_market(self):
+        self.active = False
 
     def logout(self):
         def step(self, time_step):
@@ -197,23 +184,3 @@ class AnalyticsAgentIndie(ORSimAgent):
 
         self.app.compute_all_metrics(start_time, end_time)
 
-    #     self.kpi_collection['revenue'] = self.app.compute_revenue()
-    #     self.kpi_collection['num_cancelled'] = self.app.compute_cancelled()
-    #     self.kpi_collection['num_served'] = self.app.compute_served()
-
-    #     waiting_time = self.app.compute_waiting_time()
-    #     self.kpi_collection['wait_time_driver_confirm'] = waiting_time['wait_time_driver_confirm']
-    #     self.kpi_collection['wait_time_total'] = waiting_time['wait_time_total']
-    #     self.kpi_collection['wait_time_assignment'] = waiting_time['wait_time_assignment']
-    #     self.kpi_collection['wait_time_pickup'] = waiting_time['wait_time_pickup']
-
-    #     self.kpi_collection['service_score'] = self.app.compute_service_score()
-    #     self.kpi_collection['active_driver_count'] = self.app.active_driver_count()
-    #     self.kpi_collection['active_passenger_count'] = self.app.active_passenger_count()
-
-    #     # check if any KPI is None and log a warning if so
-    #     for kpi_name, kpi_value in self.kpi_collection.items():
-    #         if kpi_value is None:
-    #             logging.warning(f"KPI {kpi_name} is None at time {self.get_current_time_str()}")
-
-    #     self.app.save_kpi(self.get_current_time_str(), self.kpi_collection)
