@@ -40,20 +40,12 @@ class AssignmentApp(ORSimApp):
             'solver_params': {'type': 'dict', 'required': True},
         }
 
-    # def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):
     def __init__(self, run_id, sim_clock, behavior, messenger):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          behavior=behavior,
-                        #  credentials=credentials,
                          messenger=messenger,
-                        #  persona=persona,
-                        #  solver_name=solver_name,
-                        #  solver_params=solver_params,
-                        #  steps_per_action=steps_per_action)
                     )
-        # self.solver_name = self.behavior.get('solver_name')
-        # self.solver_params = self.behavior.get('solver_params')
         self.server_max_results = 50  # make sure this is in sync with server
 
     def _create_user(self):
@@ -148,14 +140,6 @@ class AssignmentApp(ORSimApp):
             driver = item[0]
             passenger_trip = item[1]
 
-            # passenger_assignment = {
-            #     "action": RideHailActions.REQUESTED_TRIP,
-            #     "passenger_id": passenger_trip['passenger'],
-            #     "requested_trip": passenger_trip
-            # }
-
-            # self.messenger.client.publish(f"{self.run_id}/{driver['driver']}", json.dumps(passenger_assignment))
-
             passenger_assignment = RequestedTripActionPayload(
                 action=RideHailActions.REQUESTED_TRIP,
                 passenger_id=passenger_trip['passenger'],
@@ -168,7 +152,6 @@ class AssignmentApp(ORSimApp):
 
     def get_driver_trip(self):
         ''' '''
-        # driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/driver/trip"
 
         got_results = True
@@ -208,7 +191,6 @@ class AssignmentApp(ORSimApp):
 
     def get_passenger_trip(self):
         ''' '''
-        # passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip"
 
         got_results = True
@@ -255,12 +237,6 @@ class AssignmentApp(ORSimApp):
         distance_matrix = OSRMClient.get_distance_matrix(driver_locs, passenger_locs, units='duration')
 
         return distance_matrix
-
-    # def close(self):
-    #     ''' '''
-    #     logging.debug(f'logging out Assignmenta Service {self.manager.get_id()}')
-
-    #     self.exited_market = True
 
 
 if __name__ == "__main__":

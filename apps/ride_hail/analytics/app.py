@@ -51,14 +51,11 @@ class AnalyticsApp(ORSimApp):
             'write_ws_output_to_file': {'type': 'boolean', 'required': True},
         }
 
-    # def __init__(self, run_id, sim_clock, credentials, messenger, persona):
     def __init__(self, run_id, sim_clock, behavior, messenger):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          behavior=behavior,
-                        #  credentials=credentials,
                          messenger=messenger,
-                        #  persona=persona)
                         )
         self.kpi_collection = {
             'revenue': 0,
@@ -89,13 +86,6 @@ class AnalyticsApp(ORSimApp):
         ''' '''
         # Handle any incoming messages on the app topic if needed
         pass
-    # def close(self):  # , sim_clock, current_loc):
-    #     ''' '''
-    #     logging.debug(f'logging out Analytics Service ')
-
-    #     # self.messenger.disconnect()
-
-    #     self.exited_market = True
 
     def compute_all_metrics(self, start_time, end_time):
         # logging.info(f"[compute_all_metrics] Starting metric computation for {time_to_str(start_time)} to {time_to_str(end_time)}")
@@ -152,18 +142,6 @@ class AnalyticsApp(ORSimApp):
         self.passenger_trips_for_metric = self.manager.get_passenger_trips_for_metric(start_time, end_time)
         self.driver_trips_for_metric = self.manager.get_driver_trips_for_metric(start_time, end_time)
 
-    # def get_passenger_trips_for_metric(self, start_time, end_time):
-    #     return self.manager.get_passenger_trips_for_metric(start_time, end_time)
-
-    # def get_driver_trips_for_metric(self, start_time, end_time):
-    #     return self.manager.get_driver_trips_for_metric(start_time, end_time)
-
-    # def active_driver_count(self):
-    #     return self.manager.active_driver_count()
-
-    # def active_passenger_count(self):
-    #     return self.manager.active_passenger_count()
-
     def compute_revenue(self):
         step_revenue = 0
         for item in self.passenger_trips_for_metric:
@@ -218,5 +196,3 @@ class AnalyticsApp(ORSimApp):
 
         return service_score
 
-    # def save_kpi(self, sim_clock, kpi_collection):
-    #     return self.manager.save_kpi(sim_clock, kpi_collection)

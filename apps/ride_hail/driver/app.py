@@ -46,7 +46,7 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
 
     @property
     def interaction_ground_truth_list(self):
-        return [driver_passenger_interactions]
+        return [driver_passenger_interactions] # <-- this must be a list of interaction dicts with a specific Key structure.
 
     @property
     def runtime_behavior_schema(self):
@@ -63,17 +63,11 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
             'update_passenger_location': {'type': 'boolean', 'required': True},
         }
 
-    # def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
-    # def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
     def __init__(self, run_id, sim_clock, behavior, messenger, agent_helper=None):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          behavior = behavior,
-                        #  credentials=credentials,
                          messenger=messenger,
-                        #  current_loc=current_loc,
-                        #  profile=profile,
-                        #  persona=persona,
                          agent_helper=agent_helper)
         self.trip = self.create_trip_manager()
 
@@ -110,8 +104,7 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
             messenger=self.messenger,
             persona=self.behavior.get('persona', {}))
 
-    # def launch(self, sim_clock, current_loc): #, route):
-    def launch(self, sim_clock): #, route):
+    def launch(self, sim_clock):
         ''' '''
         super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
         if self.behavior.get('action_when_free') == 'random_walk':
@@ -123,12 +116,10 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
     def get_random_location(self):
         return GenerateBehavior.get_random_location(self.behavior.get('coverage_area_name'))
 
-    # def close(self, sim_clock, current_loc):
     def close(self, sim_clock):
         ''' '''
         logging.debug(f'logging out Driver {self.manager.get_id()}')
         try:
-            # self.trip.force_quit(sim_clock, current_loc)
             self.trip.end_active_trip(sim_clock, self.current_loc, force=True)
         except Exception as e:
             logging.exception(str(e))
@@ -180,8 +171,6 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
         '''
 
         if self.trip.as_dict()['is_occupied'] == False:
-            # self.trip.end_trip(sim_clock, current_loc, force_quit=False)
-            # self.trip.end_trip(sim_clock, current_loc)
             self.trip.end_active_trip(sim_clock, current_loc, force=False)
 
             self.trip.create_new_occupied_trip(sim_clock, current_loc, self.manager.as_dict(), self.manager.vehicle.as_dict(), requested_trip)

@@ -52,25 +52,16 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
 
     exited_market = False
 
-    # def __init__(self, run_id, sim_clock, credentials, messenger, current_loc, profile, persona, agent_helper=None):
-    # def __init__(self, run_id, sim_clock, behavior, messenger, current_loc, agent_helper=None):
     def __init__(self, run_id, sim_clock, behavior, messenger, agent_helper=None):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
                          behavior = behavior,
-                        #  credentials=credentials,
                          messenger=messenger,
-                        #  current_loc=current_loc,
-                        #  profile=profile,
-                        #  persona=persona,
                          agent_helper=agent_helper)
         self.trip = self.create_trip_manager()
         self.latest_sim_clock = sim_clock
 
-        # self.latest_loc = current_loc
         self.current_loc = self.behavior['pickup_loc']
-        # self.pickup_loc = self.behavior['pickup_loc']
-        # self.dropoff_loc = self.behavior['dropoff_loc']
         self.latest_loc = self.current_loc
 
         self.current_time = None
@@ -99,19 +90,12 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             persona=self.behavior.get('persona', {})
         )
 
-    # def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
-    # def launch(self, sim_clock, current_loc, pickup_loc=None, dropoff_loc=None, trip_price=None):
-    #     super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
-
-    #     if (pickup_loc is not None) and (dropoff_loc is not None):
-    #         self.trip.create_new_trip_request(sim_clock, current_loc, self.manager.as_dict(), pickup_loc, dropoff_loc, trip_price)
     def launch(self, sim_clock):
         super().launch(sim_clock)  # Call BaseApp's launch method to login the manager
 
         # if (self.behavior.get('pickup_loc') is not None) and (self.behavior.get('dropoff_loc') is not None):
         self.trip.create_new_trip_request(sim_clock, self.current_loc, self.manager.as_dict(), self.behavior.get('pickup_loc'), self.behavior.get('dropoff_loc'), self.behavior.get('trip_price'))
 
-    # def close(self, sim_clock, current_loc):
     def close(self, sim_clock):
         logging.debug(f'logging out Passenger {self.manager.get_id()}')
         try:
