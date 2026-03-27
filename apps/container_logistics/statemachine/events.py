@@ -39,8 +39,3 @@ ORDER_COMPLETED = "order_completed"
 ORDER_EXPIRED = "order_expired"
 ORDER_CANCELLED = "order_cancelled"
 
-# Import state machines for reference
-from .statemachine.haul_trip_sm import HaulTripStateMachine
-from .statemachine.truck_sm import TruckWorkflowStateMachine
-from .statemachine.facility_sm import Facility, GateStateMachine
-from .statemachine.order_sm import OrderStateMachine

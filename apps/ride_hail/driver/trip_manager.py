@@ -47,50 +47,6 @@ class DriverTripManager(TripManagerBase):
         }
 
 
-    # def post_transition_hook(self, source_transition, source_new_state, context=None):
-    #     """
-    #     Look up event from mapping using source_transition and source_new_state, then publish message.
-    #     """
-    #     event = None
-    #     for rule in self.statemachine_interaction_mapping:
-    #         if (
-    #             rule.get('source_statemachine') == self.StateMachineCls.__name__ and
-    #             rule.get('source_transition') == source_transition #and
-    #             # rule.get('source_new_state') == source_new_state
-    #         ):
-    #             event = rule.get('event')
-    #             break
-    #     if not event:
-    #         # Optionally log or raise if event not found
-    #         return
-    #     # msg = {
-    #     #     'action': self.action_header,
-    #     #     'driver_id': self.trip.get('driver'),
-    #     #     'data': {
-    #     #         'event': event
-    #     #     }
-    #     # }
-    #     msg = self.message_template(event)
-
-    #     if context:
-    #         msg['data'].update(context)
-    #     self.messenger.client.publish(
-    #         self.message_channel,
-    #         json.dumps(msg)
-    #     )
-
-    # def apply_trip_transition_and_notify(self, transition, data, context=None):
-    #     # Save previous state before transition
-    #     # prev_state = self.trip['state'] if self.trip else None
-    #     response = self._patch_trip_transition(transition, data)
-    #     # After transition, get new state
-    #     if is_success(response.status_code):
-    #         self.refresh()
-    #         new_state = self.trip['state']
-    #         self.post_transition_hook(transition, new_state, context=context)
-    #     return response
-
-
     def as_dict(self):
         return self.trip
 
@@ -214,9 +170,6 @@ class DriverTripManager(TripManagerBase):
         response = self._post_trip(data)
 
         if is_success(response.status_code):
-            # driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{response.json()['_id']}"
-            # response = requests.get(driver_trip_item_url, headers=self.user.get_headers())
-            # self.trip = response.json()
             self.trip = {'_id': response.json()['_id']}
             self.refresh()
             self.recieve(sim_clock, current_loc)
@@ -225,10 +178,6 @@ class DriverTripManager(TripManagerBase):
 
     def look_for_job(self, sim_clock, current_loc, route):
 
-        # try:
-        #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/look_for_job"
-        # except Exception as e:
-        #     raise e
         data = {
             'sim_clock': sim_clock,
             'current_loc': current_loc,
@@ -240,19 +189,6 @@ class DriverTripManager(TripManagerBase):
         if is_success(response.status_code):
             self.refresh()
 
-            # machine = RidehailDriverTripStateMachine(start_value=self.trip['state'])
-            # machine.run('look_for_job', self.trip)
-            # updates = {
-            #     'sim_clock': sim_clock,
-            #     '_updated': sim_clock,
-            #     'current_loc': current_loc,
-            #     'routes': {
-            #         'planned': {
-            #             'looking_for_job': route,
-            #         }},
-            #     'state': machine.current_state.name
-            # }
-            # deep_update(self.trip, updates)
         else:
             raise WriteFailedException(f"{response.url}, {response.text}")
 
@@ -277,12 +213,6 @@ class DriverTripManager(TripManagerBase):
                 f'{self.run_id}/{self.trip["passenger"]}',
                 json.dumps(msg.__dict__)
             )
-
-            # self.messenger.client.publish(f'{self.run_id}/{self.trip["passenger"]}',
-            #                                 json.dumps({
-            #                                     "action": RideHailActions.ASSIGNED,
-            #                                     "driver_id": self.trip['driver'],
-            #                                 }))
 
         else:
             raise WriteFailedException(f"Failed sending Assigned message to passenger after receiving trip: {response.url}, {response.text}")
@@ -336,7 +266,7 @@ class DriverTripManager(TripManagerBase):
             # logging.exception(f"Unable to Ping: {response.text}")
 
     def refresh(self, project=None): #, from_server=True):
-        if (self.trip is not None): # and from_server:
+        if self.trip is not None: # and from_server:
             response = self._get_trip()
 
             if is_success(response.status_code):
@@ -344,27 +274,3 @@ class DriverTripManager(TripManagerBase):
             else:
                 raise RefreshException(f'DriverTripManager.refresh: Failed getting response for {self.trip["_id"]} Got {response.text}')
 
-
-    # def create_route(self, from_loc, to_loc):
-    #     ''' find a Feasible route using some routeing engine'''
-    #     if to_loc is not None:
-    #         active_route = OSRMClient.get_route(from_loc, to_loc)
-    #         projected_path = OSRMClient.get_coords_from_route(active_route)
-    #         traversed_path = []
-    #         # print(f"DriverAgentIndie[{self.unique_id}]: Setting route from {from_loc} to {to_loc}")
-    #         # print(f"DriverAgentIndie[{self.unique_id}]: Active route set with duration {self.active_route['duration']} seconds and distance {self.active_route['distance']} meters")
-    #     else:
-    #         active_route = None
-    #         projected_path = []
-    #         traversed_path = []
-    #         # print(f"DriverAgentIndie[{self.unique_id}]: No route set as to_loc is None")
-
-    #         return active_route, projected_path, traversed_path
-
-    # def get_tentative_travel_time(self, from_loc, to_loc):
-    #     ''' find a Feasible route using some routeing engine'''
-    #     try:
-    #         tentative_route = OSRMClient.get_route(from_loc, to_loc)
-    #         return tentative_route['duration']
-    #     except:
-    #         return 36000 # Some arbitrarily large number in Seconds

@@ -208,26 +208,8 @@ class DriverApp(ORSimApp, PassengerInteractionMixin):
                 except Exception as e:
                     logging.warning(f"Driver failed to respond to trip Request {payload=}: {str(e)}")
         else:
+            # CRITICAL: Ensure all messages are enqueued for processing in the next step
             self.enqueue_message(payload)
-
-        # # print('driver_app received_message', payload)
-        # print(type(payload), payload)
-
-        # if payload['action'] == RideHailActions.REQUESTED_TRIP:
-        #     passenger_id = payload['passenger_id']
-        #     requested_trip = payload['requested_trip']
-
-        #     try:
-        #         self.handle_requested_trip(self.latest_sim_clock,
-        #                                     current_loc=self.latest_loc,
-        #                                     requested_trip=requested_trip)
-        #     except Exception as e:
-        #         # logging.exception(traceback.format_exc())
-        #         logging.warning(f"Driver failed to respond to trip Request {payload=}: {str(e)}")
-        #         # raise e
-
-        # else:
-        #     self.enqueue_message(payload)
 
 
     def execute_step_actions(self, current_time, add_step_log_fn=None):
