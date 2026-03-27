@@ -116,7 +116,7 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
         self.trip.refresh()
 
     def handle_app_topic_messages(self, payload):
-        if payload['action'] == RideHailActions.ASSIGNED:
+        if payload['action'] == RideHailActions.ASSIGNED: # THis message may be coming from the assignment agent
             if validate_assigned_payload(payload) is False:
                 logging.warning(f"Invalid assigned payload ignored: {payload=}")
                 return
@@ -235,11 +235,11 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
         if (
             trip['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name
             # and (self.behavior['trip_request_time'] + (self.behavior['profile']['patience'] / self.step_size) < self.current_time_step)
-            and (self.behavior['trip_request_time'] + (self.behavior.get('profile', {}).get('patience', 0) / self.step_size) < self.current_time_step)
+            and (self.behavior['trip_request_time'] + (self.behavior.get('profile', {}).get('patience', 0) / self.agent_helper.step_size) < self.current_time_step)
         ):
             logging.info(
                 # f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps"
-                f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior.get('profile', {}).get('patience', 0)/self.step_size} steps"
+                f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior.get('profile', {}).get('patience', 0)/self.agent_helper.step_size} steps"
             )
             self.trip.cancel(self.current_time_str, current_loc=self.current_loc)
 

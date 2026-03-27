@@ -25,15 +25,15 @@ def to_dot(stm_cls_dict, interactions):
     # Cross-statemachine interactions
     for int_item in interactions:
         src_sm = int_item["source_statemachine"]
-        src_state = int_item["source_state"]
-        event = int_item["event"]
+        src_transition = int_item["source_transition"]
+        src_new_state = int_item["source_new_state"]
         tgt_sm = int_item["target_statemachine"]
-        tgt_state = int_item["target_state"]
+        tgt_new_state = int_item["target_new_state"]
         desc = int_item["description"]
 
-        src = get_node_name(src_sm, src_state)
-        tgt = get_node_name(tgt_sm, tgt_state)
-        label = f"{event}: {desc}".replace("_", " ")
+        src = get_node_name(src_sm, src_new_state)
+        tgt = get_node_name(tgt_sm, tgt_new_state)
+        label = f"{src_transition}: {desc}".replace("_", " ")
         lines.append(f"  {src} -> {tgt} [label=\"{label}\", style=dashed, color=blue];")
     lines.append("}")
     return "\n".join(lines)
@@ -59,15 +59,15 @@ def to_plantuml(stm_cls_dict, interactions):
     # Cross-statemachine interactions
     for int_item in interactions:
         src_sm = int_item["source_statemachine"]
-        src_state = int_item["source_state"]
-        event = int_item["event"]
+        src_transition = int_item["source_transition"]
+        src_new_state = int_item["source_new_state"]
         tgt_sm = int_item["target_statemachine"]
-        tgt_state = int_item["target_state"]
+        tgt_new_state = int_item["target_new_state"]
         desc = int_item["description"]
 
-        src = get_node_name(src_sm, src_state)
-        tgt = get_node_name(tgt_sm, tgt_state)
-        label = f"{event}: {desc}".replace("_", " ")
+        src = get_node_name(src_sm, src_new_state)
+        tgt = get_node_name(tgt_sm, tgt_new_state)
+        label = f"{src_transition}: {desc}".replace("_", " ")
         lines.append(f"{src} -[#blue,dashed]-> {tgt} : {label}")
     lines.append("@enduml")
     return "\n".join(lines)
@@ -131,15 +131,15 @@ def to_mermaid(stm_cls_dict, interactions):
     # Draw cross-statemachine interactions (sideways/horizontal)
     for int_item in interactions:
         src_sm = int_item["source_statemachine"]
-        src_state = int_item["source_state"]
-        event = int_item["event"]
+        src_transition = int_item["source_transition"]
+        src_new_state = int_item["source_new_state"]
         tgt_sm = int_item["target_statemachine"]
-        tgt_state = int_item["target_state"]
+        tgt_new_state = int_item["target_new_state"]
         desc = int_item["description"]
 
-        src = get_node_name(src_sm, src_state)
-        tgt = get_node_name(tgt_sm, tgt_state)
-        label = f"{event}: {desc}".replace("_", " ")
+        src = get_node_name(src_sm, src_new_state)
+        tgt = get_node_name(tgt_sm, tgt_new_state)
+        label = f"{src_transition}: {desc}".replace("_", " ")
         # Use -.-> for horizontal/sideways arrows
         lines.append(f"    {src} -. |{label}| .-> {tgt}")
     return "\n".join(lines)

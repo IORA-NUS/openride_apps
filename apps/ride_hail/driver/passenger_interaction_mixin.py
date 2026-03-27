@@ -18,7 +18,16 @@ class PassengerInteractionMixin():
     @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_CONFIRMED_TRIP)
     def _on_passenger_confirmed_trip(self, payload, data):
         self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.get_trip()['pickup_loc'])
-        self.trip.passenger_confirmed_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
+        # self.trip.passenger_confirmed_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
+        self.trip.apply_trip_transition_and_notify(
+            transition=RidehailDriverTripStateMachine.passenger_confirmed_trip.name,
+            data={
+                'sim_clock': self.current_time_str,
+                'current_loc': self.current_loc,
+                "routes.planned.moving_to_pickup": self.active_route,
+            },
+            context={}
+        )
 
     @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_REJECTED_TRIP)
     def _on_passenger_rejected_trip(self, payload, data):
@@ -34,16 +43,55 @@ class PassengerInteractionMixin():
     @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_PICKUP)
     def _on_passenger_acknowledge_pickup(self, payload, data):
         self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.get_trip()['dropoff_loc'])
-        self.trip.passenger_acknowledge_pickup(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
+        # self.trip.passenger_acknowledge_pickup(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
+        self.trip.apply_trip_transition_and_notify(
+            transition=RidehailDriverTripStateMachine.passenger_acknowledge_pickup.name,
+            data={
+                'sim_clock': self.current_time_str,
+                'current_loc': self.current_loc,
+                "routes.planned.moving_to_dropoff": self.active_route,
+            },
+            context={}
+        )
 
     @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_ACKNOWLEDGE_DROPOFF)
     def _on_passenger_acknowledge_dropoff(self, payload, data):
-        self.trip.passenger_acknowledge_dropoff(self.current_time_str, current_loc=self.current_loc)
+        # self.trip.passenger_acknowledge_dropoff(self.current_time_str, current_loc=self.current_loc)
+        self.trip.apply_trip_transition_and_notify(
+            transition=RidehailDriverTripStateMachine.passenger_acknowledge_dropoff.name,
+            data={
+                'sim_clock': self.current_time_str,
+                'current_loc': self.current_loc,
+            },
+            context={}
+        )
+
+
+    @message_handler(RideHailActions.PASSENGER_WORKFLOW_EVENT, RideHailEvents.PASSENGER_CANCEL_TRIP)
+    def _on_passenger_cancelled_trip(self, payload, data):
+        # self.trip.passenger_cancel_trip(self.current_time_str, current_loc=self.current_loc)
+        self.trip.apply_trip_transition_and_notify(
+            transition=RidehailDriverTripStateMachine.passenger_cancelled_trip.name,
+            data={
+                'sim_clock': self.current_time_str,
+                'current_loc': self.current_loc,
+            },
+            context={}
+        )
 
     @state_handler(RidehailDriverTripStateMachine.driver_looking_for_job.name)
     def _on_state_looking_for_job(self, time_since_last_event):
         if type(self.projected_path) == Point:
-            self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
+            # self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
+            self.trip.apply_trip_transition_and_notify(
+                transition=RidehailDriverTripStateMachine.end_trip.name,
+                data={
+                    'sim_clock': self.current_time_str,
+                    'current_loc': self.current_loc,
+                },
+                context={}
+            )
+
             self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.get_random_location())
             self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
 
@@ -52,10 +100,31 @@ class PassengerInteractionMixin():
         print(f"DriverApp [{self.manager.get_id()}]: Received Trip Request.")
         if random() <= self.agent_helper.get_transition_probability(('accept', self.get_trip()['state']), 1):
             estimated_time_to_arrive = get_tentative_travel_time(self.current_loc, self.get_trip()['pickup_loc'])
-            self.trip.confirm(self.current_time_str, current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
+            # self.trip.confirm(self.current_time_str, current_loc=self.current_loc, estimated_time_to_arrive=estimated_time_to_arrive)
+            self.trip.apply_trip_transition_and_notify(
+                transition=RidehailDriverTripStateMachine.confirm.name,
+                data={
+                    'sim_clock': self.current_time_str,
+                    'current_loc': self.current_loc,
+                    'estimated_time_to_arrive': estimated_time_to_arrive,
+                },
+                context={
+                    'location': self.current_loc,
+                    'driver_trip_id': self.get_trip()['_id'],
+                    'estimated_time_to_arrive': estimated_time_to_arrive,
+                }
+            )
             print(f"DriverApp [{self.manager.get_id()}]: Trip Confirmed.")
         else:
-            self.trip.reject(self.current_time_str, current_loc=self.current_loc)
+            # self.trip.reject(self.current_time_str, current_loc=self.current_loc)
+            self.trip.apply_trip_transition_and_notify(
+                transition=RidehailDriverTripStateMachine.reject.name,
+                data={
+                    'sim_clock': self.current_time_str,
+                    'current_loc': self.current_loc,
+                },
+                context={}
+            )
             self.create_new_unoccupied_trip(self.current_time_str, current_loc=self.current_loc, route=self.active_route)
             print(f"DriverApp [{self.manager.get_id()}]: Trip Rejected.")
 
@@ -69,12 +138,34 @@ class PassengerInteractionMixin():
             unit=hs.Unit.METERS,
         )
         if distance < 100:
-            self.trip.wait_to_pickup(self.current_time_str, current_loc=self.current_loc)
+            # self.trip.wait_to_pickup(self.current_time_str, current_loc=self.current_loc)
+            self.trip.apply_trip_transition_and_notify(
+                transition=RidehailDriverTripStateMachine.wait_to_pickup.name,
+                data={
+                    'sim_clock': self.current_time_str,
+                    'current_loc': self.current_loc,
+                },
+                context={
+                    'location': self.current_loc,
+                    'driver_trip_id': self.get_trip()['_id']
+                }
+            )
 
     @state_handler(RidehailDriverTripStateMachine.driver_pickedup.name)
     def _on_state_pickedup(self, time_since_last_event):
         if time_since_last_event >= self.behavior.get('transition_time_pickup', 0): #self.behavior['transition_time_pickup']:
-            self.trip.move_to_dropoff(self.current_time_str, current_loc=self.current_loc)
+            # self.trip.move_to_dropoff(self.current_time_str, current_loc=self.current_loc)
+            self.trip.apply_trip_transition_and_notify(
+                transition=RidehailDriverTripStateMachine.move_to_dropoff.name,
+                data={
+                    'sim_clock': self.current_time_str,
+                    'current_loc': self.current_loc,
+                },
+                context={
+                    'location': self.current_loc,
+                    'planned_route': self.get_trip()['routes']['planned']['moving_to_dropoff']
+                }
+            )
 
     @state_handler(RidehailDriverTripStateMachine.driver_moving_to_dropoff.name)
     def _on_state_moving_to_dropoff(self, time_since_last_event):
@@ -84,12 +175,30 @@ class PassengerInteractionMixin():
             unit=hs.Unit.METERS,
         )
         if distance < 100:
-            self.trip.wait_to_dropoff(self.current_time_str, current_loc=self.current_loc)
+            # self.trip.wait_to_dropoff(self.current_time_str, current_loc=self.current_loc)
+            self.trip.apply_trip_transition_and_notify(
+                transition=RidehailDriverTripStateMachine.wait_to_dropoff.name,
+                data={
+                    'sim_clock': self.current_time_str,
+                    'current_loc': self.current_loc,
+                },
+                context={
+                    'location': self.current_loc,
+                }
+            )
 
     @state_handler(RidehailDriverTripStateMachine.driver_droppedoff.name)
     def _on_state_droppedoff(self, time_since_last_event):
         if time_since_last_event >= self.behavior.get('transition_time_dropoff', 0): #self.behavior['transition_time_dropoff']:
-            self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
+            # self.trip.end_trip(self.current_time_str, current_loc=self.current_loc)
+            self.trip.apply_trip_transition_and_notify(
+                transition=RidehailDriverTripStateMachine.end_trip.name,
+                data={
+                    'sim_clock': self.current_time_str,
+                    'current_loc': self.current_loc,
+                },
+                context={}
+            )
 
             if self.behavior.get('action_when_free') == 'random_walk':
                 self.active_route, self.projected_path, self.traversed_path = create_route(self.current_loc, self.behavior.get('empty_dest_loc'))

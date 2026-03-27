@@ -9,9 +9,6 @@ This document summarizes the required and agent-specific fields for initializing
   - `domain` (string): Domain of the agent (e.g., 'ridehail-sim')
   - `role` (string): Role of the agent (e.g., 'driver', 'passenger', 'analytics', 'engine')
 - `profile` (dict):
-  - `market` (string): Market type (e.g., 'RideHail')
-  - `patience` (number, optional): Patience value (commonly used for driver/passenger)
-  - `service_score` (number, driver only)
 - `response_rate` (number): Probability of responding per step
 - `step_only_on_events` (bool): Whether to step only on events
 - `steps_per_action` (int): Number of steps per action

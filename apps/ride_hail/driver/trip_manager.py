@@ -12,17 +12,82 @@ from apps.ride_hail import RideHailActions, RideHailEvents
 from apps.utils.excepions import WriteFailedException, RefreshException
 from apps.loc_service import OSRMClient
 
-
+from apps.ride_hail.statemachine.driver_passenger_interactions import driver_passenger_interactions
 
 class DriverTripManager(TripManagerBase):
     ''' '''
     # trip = None
-    StateMachineCls = RidehailDriverTripStateMachine
 
     def __init__(self, run_id, sim_clock, user, messenger, update_passenger_loc=False, persona=None):
         super().__init__(run_id, user, messenger, persona=persona)
         self.update_passenger_loc = update_passenger_loc
         self.simulation_domain = simulation_domains['ridehail']
+
+    @property
+    def StateMachineCls(self):
+        return RidehailDriverTripStateMachine
+
+    @property
+    def message_channel(self):
+        return f'{self.run_id}/{self.trip["passenger"]}'
+
+    @property
+    def statemachine_interaction_mapping(self):
+        return driver_passenger_interactions
+
+    def message_template(self, event):
+        # NOTE This message template is critical. Ensure the action, self recognition and data with event is included
+        return {
+            'action': RideHailActions.DRIVER_WORKFLOW_EVENT,
+            'driver_id': self.trip.get('driver'),
+            'data': {
+                'event': event
+            }
+        }
+
+
+    # def post_transition_hook(self, source_transition, source_new_state, context=None):
+    #     """
+    #     Look up event from mapping using source_transition and source_new_state, then publish message.
+    #     """
+    #     event = None
+    #     for rule in self.statemachine_interaction_mapping:
+    #         if (
+    #             rule.get('source_statemachine') == self.StateMachineCls.__name__ and
+    #             rule.get('source_transition') == source_transition #and
+    #             # rule.get('source_new_state') == source_new_state
+    #         ):
+    #             event = rule.get('event')
+    #             break
+    #     if not event:
+    #         # Optionally log or raise if event not found
+    #         return
+    #     # msg = {
+    #     #     'action': self.action_header,
+    #     #     'driver_id': self.trip.get('driver'),
+    #     #     'data': {
+    #     #         'event': event
+    #     #     }
+    #     # }
+    #     msg = self.message_template(event)
+
+    #     if context:
+    #         msg['data'].update(context)
+    #     self.messenger.client.publish(
+    #         self.message_channel,
+    #         json.dumps(msg)
+    #     )
+
+    # def apply_trip_transition_and_notify(self, transition, data, context=None):
+    #     # Save previous state before transition
+    #     # prev_state = self.trip['state'] if self.trip else None
+    #     response = self._patch_trip_transition(transition, data)
+    #     # After transition, get new state
+    #     if is_success(response.status_code):
+    #         self.refresh()
+    #         new_state = self.trip['state']
+    #         self.post_transition_hook(transition, new_state, context=context)
+    #     return response
 
 
     def as_dict(self):
@@ -490,66 +555,6 @@ class DriverTripManager(TripManagerBase):
                 self.trip = None
             else:
                 raise WriteFailedException(f"{response.url}, {response.text}")
-
-
-    # def end_trip(self, sim_clock, current_loc):
-    #     '''
-    #     Send an end_trip signal to the current trip.
-    #     - Force Quit implies that the trip shall be terminated regardless of the current state (i.e. set is_active=False directly)
-    #         -- This will result in inconsistent states and should be used carefully
-    #     - Shutdown signal indicates if a new empty trip should be initiated
-    #         -- Driver should always have an active trip while logged on.
-    #         -- When Driver Logs off, then no new trip should be created. Shutdown signal handles this case.
-    #         -- Hence use with Care.
-    #     '''
-    #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
-
-    #     data = {
-    #         'sim_clock': sim_clock,
-    #         'current_loc': current_loc,
-    #     }
-
-    #     response = requests.patch(driver_trip_item_url,
-    #                             headers=self.user.get_headers(etag=self.trip['_etag']),
-    #                             data=json.dumps(data))
-
-    #     if is_success(response.status_code):
-    #         self.trip = None
-    #     else:
-    #         raise Exception(f"{response.url}, {response.text}")
-
-    # def force_quit(self, sim_clock, current_loc):
-    #     '''
-    #     Send an end_trip signal to the current trip.
-    #     - Force Quit implies that the trip shall be terminated regardless of the current state (i.e. set is_active=False directly)
-    #         -- This will result in inconsistent states and should be used carefully
-    #     - Shutdown signal indicates if a new empty trip should be initiated
-    #         -- Driver should always have an active trip while logged on.
-    #         -- When Driver Logs off, then no new trip should be created. Shutdown signal handles this case.
-    #         -- Hence use with Care.
-    #     '''
-    #     # try:
-    #     #     if force_quit == True:
-    #     #         driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
-    #     #     else:
-    #     #         driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/end_trip"
-    #     # except Exception as e:
-    #     #     raise e
-    #     driver_trip_item_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip/{self.trip['_id']}/force_quit"
-
-    #     data = {
-    #         'sim_clock': sim_clock,
-    #         'current_loc': current_loc,
-    #     }
-
-    #     response = requests.patch(driver_trip_item_url,
-    #                             headers=self.user.get_headers(etag=self.trip['_etag']),
-    #                             data=json.dumps(data))
-
-    #     if is_success(response.status_code):
-    #         self.trip = None
-    #     else:
-    #         raise Exception(f"{response.url}, {response.text}")
 
 
     def ping(self, sim_clock, current_loc, **kwargs):

@@ -13,9 +13,13 @@ from apps.ride_hail import RideHailActions, RideHailEvents
 from apps.utils.excepions import WriteFailedException, RefreshException
 from apps.config import settings, simulation_domains
 
+from apps.ride_hail.statemachine.driver_passenger_interactions import driver_passenger_interactions
+
 class PassengerTripManager(TripManagerBase):
     ''' '''
-    trip = None
+    # trip = None
+    # StateMachineCls = RidehailPassengerTripStateMachine
+    # action_header = RideHailActions.PASSENGER_WORKFLOW_EVENT
 
     def __init__(self, run_id, sim_clock, user, messenger, persona):
         super().__init__(run_id, user, messenger, persona=persona)
@@ -26,6 +30,29 @@ class PassengerTripManager(TripManagerBase):
         self.time_pickedup = None
         self.time_droppedoff = None
         self.simulation_domain = simulation_domains['ridehail']
+
+    @property
+    def StateMachineCls(self):
+        return RidehailPassengerTripStateMachine
+
+    @property
+    def message_channel(self):
+        return f'{self.run_id}/{self.trip["driver"]}'
+
+    @property
+    def statemachine_interaction_mapping(self):
+        return driver_passenger_interactions
+
+    def message_template(self, event):
+        # NOTE This message template is critical. Ensure the action, self recognition and data with event is included
+        return {
+            'action': RideHailActions.PASSENGER_WORKFLOW_EVENT,
+            'passenger_id': self.trip.get('passenger'),
+            'data': {
+                'event': event
+            }
+        }
+
 
     def as_dict(self):
         return self.trip
