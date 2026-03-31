@@ -79,7 +79,7 @@ class TripManagerBase(ABC):
         if context:
             msg['data'].update(context)
 
-        if self.message_channel:
+        if self.message_channel is not None:
             self.messenger.client.publish(
                 self.message_channel,
                 json.dumps(msg)

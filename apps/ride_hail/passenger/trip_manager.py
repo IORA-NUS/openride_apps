@@ -37,7 +37,10 @@ class PassengerTripManager(TripManagerBase):
 
     @property
     def message_channel(self):
-        return f'{self.run_id}/{self.trip["driver"]}'
+        if self.trip.get('driver'):
+            return f'{self.run_id}/{self.trip.get("driver")}'
+        else:
+            raise Exception(f'Passenger {self.trip.get("passenger")} Unable to create message channel: Driver not assigned yet for this trip')
 
     @property
     def statemachine_interaction_mapping(self):
@@ -194,25 +197,19 @@ class PassengerTripManager(TripManagerBase):
             raise WriteFailedException(f"{response.url}, {response.text}")
 
 
-    def end_active_trip(self, sim_clock, current_loc, force=False):
-        if force:
+    def end_active_trip(self, sim_clock, current_loc, transition=None):
+        if not transition:
+            transition = RidehailPassengerTripStateMachine.force_quit.name
+        try:
             self.apply_trip_transition_and_notify(
-                transition=RidehailPassengerTripStateMachine.force_quit.name,
+                transition=transition,
                 data={
                     'sim_clock': sim_clock,
                     'current_loc': current_loc,
                 },
-                context={}
             )
-        else:
-            self.apply_trip_transition_and_notify(
-                transition=RidehailPassengerTripStateMachine.end_trip.name,
-                data={
-                    'sim_clock': sim_clock,
-                    'current_loc': current_loc,
-                },
-                context={}
-            )
+        except Exception as e:
+            logging.debug(f"Error ending active trip for trip {self.trip.get('_id')}: {str(e)}")
 
     def refresh(self):
         if self.trip is not None:

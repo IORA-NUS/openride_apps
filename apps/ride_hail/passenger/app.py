@@ -100,7 +100,8 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
         logging.debug(f'logging out Passenger {self.manager.get_id()}')
         try:
             # self.trip.force_quit(sim_clock, current_loc)
-            self.trip.end_active_trip(sim_clock, self.current_loc, force=False)
+            self.trip.end_active_trip(sim_clock, self.current_loc,
+                                      transition=RidehailPassengerTripStateMachine.force_quit.name)
         except Exception as e:
             logging.exception(str(e))
 
@@ -192,8 +193,8 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
                         continue
 
                     trip = self.get_trip()
-                    channel_open = RidehailPassengerTripStateMachine.is_driver_channel_open(trip['state'])
-                    driver_id_match = trip['driver'] == payload['driver_id']
+                    channel_open = RidehailPassengerTripStateMachine.is_driver_channel_open(trip.get('state'))
+                    driver_id_match = trip.get('driver') == payload.get('driver_id')
 
                     if channel_open:
                         if driver_id_match:
@@ -210,9 +211,9 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
                                 self.current_loc = driver_data.get('location')
                                 self.ping(self.current_time_str, current_loc=self.current_loc)
                         else:
-                            logging.warning(f"WARNING: Mismatch {trip['driver']=} and {payload['driver_id']=}")
+                            logging.warning(f"WARNING: Mismatch {trip.get('driver')} and {payload.get('driver_id')=}")
                     else:
-                        logging.warning(f"WARNING: Passenger will not listen to Driver workflow events when {trip['state']=}")
+                        logging.warning(f"WARNING: Passenger will not listen to Driver workflow events when {trip.get('state')=}")
 
                 payload = self.dequeue_message()
             except WriteFailedException as e:
@@ -236,16 +237,18 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
             raise Exception(f"{passenger['state'] = } is not valid")
 
         # 2. Check patience timeout and cancel trip if needed
-        if (
-            trip['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name
-            # and (self.behavior['trip_request_time'] + (self.behavior['profile']['patience'] / self.step_size) < self.current_time_step)
+        if (trip['state'] == RidehailPassengerTripStateMachine.passenger_requested_trip.name
             and (self.behavior['trip_request_time'] + (self.behavior.get('profile', {}).get('patience', 0) / self.agent_helper.step_size) < self.agent_helper.current_time_step)
         ):
             logging.info(
                 # f"Passenger {self.unique_id} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior['profile']['patience']/self.step_size} steps"
                 f"Passenger {self.manager.get_id()} has run out of patience. Requested: {self.behavior['trip_request_time']}, Max patience: {self.behavior.get('profile', {}).get('patience', 0)/self.agent_helper.step_size} steps"
             )
-            self.trip.cancel(self.current_time_str, current_loc=self.current_loc)
+            # self.trip.cancel(self.current_time_str, current_loc=self.current_loc)
+            self.trip.end_active_trip(
+                self.current_time_str,
+                current_loc=self.current_loc,
+                transition=RidehailPassengerTripStateMachine.cancel.name)
 
         # 3. Process trip state actions in strict sequence using a for loop
         state_sequence = [
