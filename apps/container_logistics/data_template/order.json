@@ -1,0 +1,16 @@
+{
+  "order_id": "ORD12345",
+  "owner": "HaulierX",
+  "start_facility_id": "FAC001",
+  "end_facility_id": "FAC002",
+  "order_time": "2026-03-24T08:00:00Z",
+  "expiry_time": "2026-03-24T18:00:00Z",
+  "container": {
+    "count": 2,
+    "size": "2x20",
+    "laden": true
+  },
+  "priority": "normal", 
+  "special_handling": false,
+  "notes": "Requires seal check at pickup"
+}

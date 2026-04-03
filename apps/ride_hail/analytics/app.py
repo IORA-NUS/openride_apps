@@ -33,13 +33,30 @@ from apps.utils import time_to_str, str_to_time
 
 class AnalyticsApp(ORSimApp):
     ''' '''
+    @property
+    def managed_statemachine(self):
+        return None
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, persona):
+    @property
+    def interaction_ground_truth_list(self):
+        return []
+
+    @property
+    def runtime_behavior_schema(self):
+        return {
+            'paths_history_time_window': {'type': 'integer', 'required': True},
+            'publish_paths_history': {'type': 'boolean', 'required': True},
+            'publish_realtime_data': {'type': 'boolean', 'required': True},
+            'write_ph_output_to_file': {'type': 'boolean', 'required': True},
+            'write_ws_output_to_file': {'type': 'boolean', 'required': True},
+        }
+
+    def __init__(self, run_id, sim_clock, behavior, messenger):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
-                         credentials=credentials,
+                         behavior=behavior,
                          messenger=messenger,
-                         persona=persona)
+                        )
         self.kpi_collection = {
             'revenue': 0,
             'num_cancelled': 0,
@@ -55,23 +72,20 @@ class AnalyticsApp(ORSimApp):
         self.passenger_trips_for_metric = None
         self.driver_trips_for_metric = None
 
-    def create_user(self):
+    def _create_user(self):
         return UserRegistry(self.sim_clock, self.credentials, role='admin')
 
-    def create_manager(self):
+    def _create_manager(self):
         return AnalyticsManager(self.run_id, self.sim_clock, self.user, None)
         # pass
 
     def launch(self):
         pass
 
-    # def close(self):  # , sim_clock, current_loc):
-    #     ''' '''
-    #     logging.debug(f'logging out Analytics Service ')
-
-    #     # self.messenger.disconnect()
-
-    #     self.exited_market = True
+    def handle_app_topic_messages(self, payload):
+        ''' '''
+        # Handle any incoming messages on the app topic if needed
+        pass
 
     def compute_all_metrics(self, start_time, end_time):
         # logging.info(f"[compute_all_metrics] Starting metric computation for {time_to_str(start_time)} to {time_to_str(end_time)}")
@@ -128,18 +142,6 @@ class AnalyticsApp(ORSimApp):
         self.passenger_trips_for_metric = self.manager.get_passenger_trips_for_metric(start_time, end_time)
         self.driver_trips_for_metric = self.manager.get_driver_trips_for_metric(start_time, end_time)
 
-    # def get_passenger_trips_for_metric(self, start_time, end_time):
-    #     return self.manager.get_passenger_trips_for_metric(start_time, end_time)
-
-    # def get_driver_trips_for_metric(self, start_time, end_time):
-    #     return self.manager.get_driver_trips_for_metric(start_time, end_time)
-
-    # def active_driver_count(self):
-    #     return self.manager.active_driver_count()
-
-    # def active_passenger_count(self):
-    #     return self.manager.active_passenger_count()
-
     def compute_revenue(self):
         step_revenue = 0
         for item in self.passenger_trips_for_metric:
@@ -194,5 +196,3 @@ class AnalyticsApp(ORSimApp):
 
         return service_score
 
-    # def save_kpi(self, sim_clock, kpi_collection):
-    #     return self.manager.save_kpi(sim_clock, kpi_collection)

@@ -17,35 +17,24 @@ from orsim.lifecycle import ORSimAgent
 class AssignmentAgentIndie(ORSimAgent):
     ''' '''
 
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior):
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
+    def _create_app(self):
+        return AssignmentApp(
+            run_id=self.run_id,
+            sim_clock=self.get_current_time_str(),
+            behavior=self.behavior,
+            messenger=self.messenger,
+        )
 
-        self.credentials = {
-            'email': self.behavior.get('email'),
-            'password': self.behavior.get('password'),
-        }
+    @property
+    def process_payload_on_init(self):
+        return False
 
-        try:
-            self.app = AssignmentApp(
-                run_id=self.run_id,
-                sim_clock=self.get_current_time_str(),
-                credentials=self.credentials,
-                solver_name=self.behavior['solver'],
-                solver_params=self.behavior['solver_params'],
-                steps_per_action=self.behavior['steps_per_action'],
-                messenger=self.messenger,
-                persona=self.behavior.get('persona', {})
-            )
-        except Exception as e:
-            logging.exception(f"{self.unique_id = }: {str(e)}")
-            self.agent_failed = True
+    def entering_market(self, time_step):
+        # Be sure to set self.active = True at the end of this method, otherwise the agent will not step in the next time steps.
+        self.active = True
 
-    def process_payload(self, payload):
-        did_step = False
-        if payload.get('action') == 'step':
-            did_step = self.step(payload.get('time_step'))
-
-        return did_step
+    def exiting_market(self):
+        self.active = False
 
     def logout(self):
         self.app.close(self.get_current_time_str())

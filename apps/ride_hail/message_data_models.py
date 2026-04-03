@@ -1,17 +1,17 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from apps.ride_hail.events import RideHailActions
+from apps.ride_hail.statemachine.events import RideHailActions
 
 
 @dataclass
-class RequestedTripPayload:
+class RequestedTripActionPayload:
     action: str
     passenger_id: str
     requested_trip: Dict[str, Any]
 
     @classmethod
-    def parse(cls, payload: Any) -> Optional["RequestedTripPayload"]:
+    def parse(cls, payload: Any) -> Optional["RequestedTripActionPayload"]:
         if not isinstance(payload, dict):
             return None
         if payload.get("action") != RideHailActions.REQUESTED_TRIP:
@@ -24,12 +24,12 @@ class RequestedTripPayload:
 
 
 @dataclass
-class AssignedPayload:
+class AssignedActionPayload:
     action: str
     driver_id: str
 
     @classmethod
-    def parse(cls, payload: Any) -> Optional["AssignedPayload"]:
+    def parse(cls, payload: Any) -> Optional["AssignedActionPayload"]:
         if not isinstance(payload, dict):
             return None
         if payload.get("action") != RideHailActions.ASSIGNED:

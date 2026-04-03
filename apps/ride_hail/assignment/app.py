@@ -1,10 +1,12 @@
 import logging
 import os, sys, time
 
-from apps.utils.utils import is_success
 current_path = os.path.abspath('.')
 parent_path = os.path.dirname(current_path)
 sys.path.append(parent_path)
+
+from apps.utils.utils import is_success
+from apps.ride_hail.message_data_models import RequestedTripActionPayload
 
 import json, requests, traceback
 from datetime import datetime
@@ -15,7 +17,7 @@ from apps.common.user_registry import UserRegistry
 from apps.config import settings, simulation_domains
 
 from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine, RidehailDriverTripStateMachine
-from apps.ride_hail import RideHailActions
+from apps.ride_hail.statemachine import RideHailActions
 from .solver import *  # NOTE * is deliberate to load all solvers in globals()
 from .manager import AssignmentManager
 from orsim.lifecycle import ORSimApp
@@ -23,29 +25,48 @@ from orsim.lifecycle import ORSimApp
 
 class AssignmentApp(ORSimApp):
     ''' '''
+    @property
+    def managed_statemachine(self):
+        return None
 
-    def __init__(self, run_id, sim_clock, credentials, messenger, persona, solver_name, solver_params, steps_per_action):
+    @property
+    def interaction_ground_truth_list(self):
+        return []
+
+    @property
+    def runtime_behavior_schema(self):
+        return {
+            'solver': {'type': 'string', 'required': True},
+            'solver_params': {'type': 'dict', 'required': True},
+        }
+
+    def __init__(self, run_id, sim_clock, behavior, messenger):
         super().__init__(run_id=run_id,
                          sim_clock=sim_clock,
-                         credentials=credentials,
+                         behavior=behavior,
                          messenger=messenger,
-                         persona=persona,
-                         solver_name=solver_name,
-                         solver_params=solver_params,
-                         steps_per_action=steps_per_action)
+                    )
         self.server_max_results = 50  # make sure this is in sync with server
 
-    def create_user(self):
+    def _create_user(self):
         return UserRegistry(self.sim_clock, self.credentials, role='admin')
 
-    def create_manager(self):
-        solver = globals()[self.solver_name](self.solver_params)
+    def _create_manager(self):
+        solver = globals()[self.behavior.get('solver')](self.behavior.get('solver_params'))
 
-        return AssignmentManager(self.run_id, self.sim_clock, self.user, self.persona, solver)
+        return AssignmentManager(run_id=self.run_id,
+                                 sim_clock=self.sim_clock,
+                                 user=self.user,
+                                 persona=self.behavior.get('persona', {}),
+                                 solver=solver)
 
+    def handle_app_topic_messages(self, payload):
+        ''' '''
+        # Handle any incoming messages on the app topic if needed
+        pass
 
     def get_scale_factor(self, time_step):
-        if self.solver_params.get('online_metric_scale_strategy') == 'demand':
+        if self.behavior.get('solver_params').get('online_metric_scale_strategy') == 'demand':
             try:
                 # passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/passenger/ride_hail/trip/count"  # NOTE Absence of run_id in URL
                 passenger_trip_count_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip/count"  # NOTE Absence of run_id in URL
@@ -119,17 +140,18 @@ class AssignmentApp(ORSimApp):
             driver = item[0]
             passenger_trip = item[1]
 
-            passenger_assignment = {
-                "action": RideHailActions.REQUESTED_TRIP,
-                "passenger_id": passenger_trip['passenger'],
-                "requested_trip": passenger_trip
-            }
-
-            self.messenger.client.publish(f"{self.run_id}/{driver['driver']}", json.dumps(passenger_assignment))
+            passenger_assignment = RequestedTripActionPayload(
+                action=RideHailActions.REQUESTED_TRIP,
+                passenger_id=passenger_trip['passenger'],
+                requested_trip=passenger_trip
+            )
+            self.messenger.client.publish(
+                f"{self.run_id}/{driver['driver']}",
+                json.dumps(passenger_assignment.__dict__)
+            )
 
     def get_driver_trip(self):
         ''' '''
-        # driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/driver/ride_hail/trip"
         driver_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/driver/trip"
 
         got_results = True
@@ -169,7 +191,6 @@ class AssignmentApp(ORSimApp):
 
     def get_passenger_trip(self):
         ''' '''
-        # passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{self.run_id}/passenger/ride_hail/trip"
         passenger_trip_url = f"{settings['OPENRIDE_SERVER_URL']}/{simulation_domains['ridehail']}/{self.run_id}/passenger/trip"
 
         got_results = True
@@ -216,12 +237,6 @@ class AssignmentApp(ORSimApp):
         distance_matrix = OSRMClient.get_distance_matrix(driver_locs, passenger_locs, units='duration')
 
         return distance_matrix
-
-    # def close(self):
-    #     ''' '''
-    #     logging.debug(f'logging out Assignmenta Service {self.manager.get_id()}')
-
-    #     self.exited_market = True
 
 
 if __name__ == "__main__":

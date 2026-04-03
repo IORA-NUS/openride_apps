@@ -147,6 +147,23 @@ def cut(line, distance):
             return [LineString(coords[:i] + [(cp.x, cp.y)]),
                     LineString([(cp.x, cp.y)] + coords[i:])]
 
+
+def create_route(from_loc, to_loc):
+    ''' find a Feasible route using some routeing engine'''
+    if to_loc is not None:
+        active_route = OSRMClient.get_route(from_loc, to_loc)
+        projected_path = OSRMClient.get_coords_from_route(active_route)
+        traversed_path = []
+        # print(f"DriverAgentIndie[{self.unique_id}]: Setting route from {from_loc} to {to_loc}")
+        # print(f"DriverAgentIndie[{self.unique_id}]: Active route set with duration {self.active_route['duration']} seconds and distance {self.active_route['distance']} meters")
+    else:
+        active_route = None
+        projected_path = []
+        traversed_path = []
+        # print(f"DriverAgentIndie[{self.unique_id}]: No route set as to_loc is None")
+
+    return active_route, projected_path, traversed_path
+
 def cut_route(route, duration):
 
     # print(f"{duration=}")
@@ -194,6 +211,14 @@ def cut_route(route, duration):
 
 
     return traversed_path, projected_path, new_route
+
+def get_tentative_travel_time(from_loc, to_loc):
+    ''' find a Feasible route using some routeing engine'''
+    try:
+        tentative_route = OSRMClient.get_route(from_loc, to_loc)
+        return tentative_route['duration']
+    except:
+        return 36000 # Some arbitrarily large number in Seconds
 
 
 def get_angle(p1, p2):
