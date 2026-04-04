@@ -1,4 +1,4 @@
-from apps.ride_hail import (
+from apps.ridehail import (
     AssignmentAgentIndie,
     AssignmentApp,
     DriverAgentIndie,
@@ -10,17 +10,17 @@ from apps.ride_hail import (
     RideHailDriverAdapter,
     RideHailPassengerAdapter,
 )
-from apps.ride_hail.adapters import (
+from apps.ridehail.adapters import (
     RideHailAnalyticsAdapter as AnalyticsAdapterFromAdapters,
 )
-from apps.ride_hail.adapters import (
+from apps.ridehail.adapters import (
     RideHailAssignmentAdapter as AssignmentAdapterFromAdapters,
 )
-from apps.ride_hail.adapters import RideHailDriverAdapter as DriverAdapterFromAdapters
-from apps.ride_hail.adapters import (
+from apps.ridehail.adapters import RideHailDriverAdapter as DriverAdapterFromAdapters
+from apps.ridehail.adapters import (
     RideHailPassengerAdapter as PassengerAdapterFromAdapters,
 )
-from apps.ride_hail.analytics import AnalyticsAgentIndie, AnalyticsApp
+from apps.ridehail.analytics import AnalyticsAgentIndie, AnalyticsApp
 
 
 def test_ride_hail_adapter_exports_are_consistent_between_packages():

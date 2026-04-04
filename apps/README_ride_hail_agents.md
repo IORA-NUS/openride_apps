@@ -1,6 +1,6 @@
 # Ride-Hail Agent Architecture (Driver + Passenger)
 
-This document describes the high-level design of `apps/driver_app` and `apps/passenger_app`, which have now been archived. All core logic is now in `apps/ride_hail`. The archived folders remain for reference and legacy compatibility.
+This document describes the high-level design of `apps/driver_app` and `apps/passenger_app`, which have now been archived. All core logic is now in `apps/ridehail`. The archived folders remain for reference and legacy compatibility.
 
 
 For cross-domain reuse (including container logistics), see `apps/README_agent_common_layer.md`.
@@ -89,7 +89,7 @@ These are high-impact opportunities with minimal behavior risk.
 
 1. Shared base app class
 - Extract queue handling, `topic_params`, `update_current`, and `refresh` scaffolding from `DriverApp` and `PassengerApp`.
-- Candidate: `apps/ride_hail/base_role_app.py`.
+- Candidate: `apps/ridehail/base_role_app.py`.
 
 2. Shared base manager class
 - Extract repeated workflow transition loops (`dormant -> offline -> online`) and refresh logic.

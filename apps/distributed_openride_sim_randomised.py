@@ -14,14 +14,14 @@ import logging, time, json, traceback, requests
 from pprint import pprint
 from datetime import datetime
 
-from apps.ride_hail.analytics import AnalyticsAgentIndie
-from apps.ride_hail.assignment import AssignmentAgentIndie
-from apps.ride_hail.driver import DriverAgentIndie
-from apps.ride_hail.passenger import PassengerAgentIndie
+from apps.ridehail.analytics import AnalyticsAgentIndie
+from apps.ridehail.assignment import AssignmentAgentIndie
+from apps.ridehail.driver import DriverAgentIndie
+from apps.ridehail.passenger import PassengerAgentIndie
 
 from utils import id_generator, is_success
 # from utils.generate_behavior import GenerateBehavior
-from apps.ride_hail.scenario import ScenarioManager
+from apps.ridehail.scenario import ScenarioManager
 # from apps.utils.path_utils import get_run_data_dir
 
 from datetime import datetime
@@ -72,13 +72,13 @@ class DistributedOpenRideSimRandomised:
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
-                'init_time_step': behavior['shift_start_time'],
+                'init_time_step': behavior.get('profile', {}).get('shift_start_time'),
                 'behavior': behavior,
             }
-            self.agent_registry[behavior['shift_start_time']].append({
+            self.agent_registry[behavior.get('profile', {}).get('shift_start_time')].append({
                 'spec': spec,
                 'project_path': f'{parent_path}',
-                'agent_class': 'apps.ride_hail.driver.DriverAgentIndie',
+                'agent_class': 'apps.ridehail.driver.DriverAgentIndie',
             })
 
         for agent_id, behavior in self.scenario.passenger_collection.items():
@@ -86,13 +86,13 @@ class DistributedOpenRideSimRandomised:
                 'unique_id': agent_id,
                 'run_id': self.run_id,
                 'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
-                'init_time_step': behavior['trip_request_time'],
+                'init_time_step': behavior.get('profile', {}).get('trip_request_time'),
                 'behavior': behavior,
             }
-            self.agent_registry[behavior['trip_request_time']].append({
+            self.agent_registry[behavior.get('profile', {}).get('trip_request_time')].append({
                 'spec': spec,
                 'project_path': f'{parent_path}',
-                'agent_class': 'apps.ride_hail.passenger.PassengerAgentIndie',
+                'agent_class': 'apps.ridehail.passenger.PassengerAgentIndie',
             })
 
         for agent_id, behavior in self.scenario.assignment_collection.items():
@@ -106,7 +106,7 @@ class DistributedOpenRideSimRandomised:
             self.service_scheduler.add_agent(
                 spec=spec,
                 project_path=f'{parent_path}',
-                agent_class='apps.ride_hail.assignment.AssignmentAgentIndie',
+                agent_class='apps.ridehail.assignment.AssignmentAgentIndie',
             )
 
         for agent_id, behavior in self.scenario.analytics_collection.items():
@@ -122,14 +122,14 @@ class DistributedOpenRideSimRandomised:
             self.service_scheduler.add_agent(
                 spec=spec,
                 project_path=f'{parent_path}',
-                agent_class='apps.ride_hail.analytics.AnalyticsAgentIndie',
+                agent_class='apps.ridehail.analytics.AnalyticsAgentIndie',
             )
 
 
 
 
     def register_state_machines(self):
-        from apps.ride_hail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+        from apps.ridehail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
         from orsim.utils import WorkflowStateMachine
         statemachines = {
             'RidehailDriverTripStateMachine': RidehailDriverTripStateMachine,

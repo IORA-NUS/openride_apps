@@ -1,10 +1,10 @@
-from apps.ride_hail import (
+from apps.ridehail import (
     DriverWorkflowPayload,
     PassengerWorkflowPayload,
     RequestedTripPayload,
     RideHailActions,
 )
-from apps.ride_hail.models import AssignedPayload
+from apps.ridehail.models import AssignedPayload
 
 
 def test_requested_trip_payload_parse_rejects_invalid_shapes():

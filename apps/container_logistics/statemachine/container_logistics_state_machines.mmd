@@ -1,0 +1,44 @@
+%% Container logistics ecosystem workflow overview
+flowchart LR
+    A1[assignment model] -->|assign order to online truck| T2
+
+    subgraph TRUCKWF[Truck Availability]
+        TW1[dormant] --> TW2[offline]
+        TW2 --> TW3[online]
+    end
+
+    subgraph ORDER[Order Lifecycle]
+        O1[created] --> O2[unassigned]
+        O2 -->|assign| O3[assigned]
+        O3 -->|execution starts| O4[pickup_in_progress]
+        O4 -->|pickup_done| O5[in_transit]
+        O5 -->|dropoff_started| O6[dropoff_in_progress]
+        O6 -->|deliver| O7[completed]
+    end
+
+    subgraph HAULTRIP[Haul Trip Execution]
+        T1[created] -->|assign| T2[assigned]
+        T2 -->|start_empty_reposition| T3[repositioning_to_pickup]
+        T2 -->|arrive_pickup_queue| T4[queued_for_pickup]
+        T3 -->|arrive_pickup_queue| T4
+        T4 -->|enter_pickup_gate| T5[at_pickup_gate]
+        T5 -->|finish_pickup_service| T6[loaded_in_transit]
+        T6 -->|arrive_dropoff_queue| T7[queued_for_dropoff]
+        T7 -->|enter_dropoff_gate| T8[at_dropoff_gate]
+        T8 -->|finish_dropoff_service| T9[completed]
+    end
+
+    subgraph FACILITY[Facility Queue and Gates]
+        F1[truck joins FIFO queue] --> F2[first truck selected when any gate available]
+        F2 --> G1[gate busy_pickup or busy_dropoff]
+        G1 -->|service complete| G2[gate available]
+        G2 --> F2
+    end
+
+    TW3 -->|eligible for assignment| H2
+    T5 -->|pickup_started| O4
+    T6 -->|pickup_done| O5
+    T8 -->|dropoff_started / deliver| O6
+    T9 -->|trip closed| A1
+    T4 --> F1
+    T7 --> F1

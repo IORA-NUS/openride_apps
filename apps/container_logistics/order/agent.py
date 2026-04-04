@@ -1,7 +1,18 @@
 from orsim.lifecycle import ORSimAgent
+
 from .app import OrderApp
 
+
 class OrderAgent(ORSimAgent):
-    def __init__(self, unique_id, run_id, reference_time, init_time_step, scheduler, behavior):
-        super().__init__(unique_id, run_id, reference_time, init_time_step, scheduler, behavior)
-        self.app = OrderApp(run_id, self.get_current_time_str(), self.messenger, self.behavior.get('persona', {}))
+    def _create_app(self):
+        return OrderApp(
+            run_id=self.run_id,
+            sim_clock=self.get_current_time_str(),
+            behavior=self.behavior,
+            messenger=self.messenger,
+            agent_helper=self,
+        )
+
+    @property
+    def process_payload_on_init(self):
+        return True

@@ -43,7 +43,7 @@ mypy==1.19.1
 mypy_extensions==1.1.0
 nest-asyncio==1.6.0
 numpy==1.26.3
-orsim==1.2.0
+orsim==1.2.1
 packaging==23.2
 paho-mqtt==1.6.1
 pandas==2.1.4

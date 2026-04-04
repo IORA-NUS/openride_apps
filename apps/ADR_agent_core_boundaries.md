@@ -18,7 +18,7 @@ Keep in `apps/agent_core`:
 - Transport helpers for resource operations (`GET/PATCH/POST`) and refresh mechanics.
 - Lifecycle helpers that are independent of domain event vocabulary.
 
-Keep in domain packages (`apps/ride_hail`, `apps/container_logistics`):
+Keep in domain packages (`apps/ridehail`, `apps/container_logistics`):
 
 - Event/action vocabularies and payload contracts.
 - State machine transitions and domain workflow semantics.

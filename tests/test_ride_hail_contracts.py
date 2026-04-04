@@ -1,6 +1,6 @@
-from apps.ride_hail.driver import DriverAgentIndie, DriverApp
-from apps.ride_hail.passenger import PassengerAgentIndie, PassengerApp
-from apps.ride_hail import (
+from apps.ridehail.driver import DriverAgentIndie, DriverApp
+from apps.ridehail.passenger import PassengerAgentIndie, PassengerApp
+from apps.ridehail import (
     AssignedPayload,
     DriverWorkflowPayload,
     PassengerWorkflowPayload,
@@ -12,7 +12,7 @@ from apps.ride_hail import (
     validate_passenger_workflow_payload,
     validate_requested_trip_payload,
 )
-from apps.ride_hail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+from apps.ridehail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
 
 
 class _Recorder:

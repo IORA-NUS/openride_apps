@@ -24,7 +24,7 @@ class SimulationRuntime:
         scheduler_config,
     ):
         """
-        agent_classes: dict mapping role to agent class string (e.g., {'driver': 'apps.ride_hail.driver.DriverAgentIndie', ...})
+        agent_classes: dict mapping role to agent class string (e.g., {'driver': 'apps.ridehail.driver.DriverAgentIndie', ...})
         service_classes: dict mapping role to service class string
         scenario_manager: instance of the domain-specific ScenarioManager
         domain: e.g., 'ridehail-sim'
@@ -150,7 +150,7 @@ class SimulationRuntime:
                     'unique_id': agent_id,
                     'run_id': self.run_id,
                     'reference_time': datetime.strftime(self.reference_time, '%Y%m%d%H%M%S'),
-                    'init_time_step': behavior.get(cfg['init_time_step_key'], 0) if cfg['init_time_step_key'] else 0,
+                    'init_time_step': behavior.get('profile', {}).get(cfg['init_time_step_key'], 0) if cfg['init_time_step_key'] else 0,
                     'behavior': behavior,
                 }
                 if 'extra_fields' in cfg and cfg['extra_fields']:

@@ -1,20 +1,41 @@
+from apps.common.resource_client_mixin import ResourceClientMixin
+from apps.config import simulation_domains
 from orsim.lifecycle import ORSimManager
+from orsim.utils import WorkflowStateMachine
 
-from .trip_manager import TruckTripManager
 
-class TruckManager(ORSimManager):
-    def __init__(self, run_id, sim_clock, user, persona, messenger=None):
-        super().__init__()
-        self.trip_manager = TruckTripManager(run_id, sim_clock, user, messenger, persona)
+class TruckManager(ResourceClientMixin, ORSimManager):
+    def __init__(self, run_id, sim_clock, user, profile=None, persona=None):
+        self.run_id = run_id
+        self.user = user
+        self.profile = profile or {}
+        self.persona = {"role": "truck", **(persona or {})}
+        self.simulation_domain = simulation_domains.get("container_logistics", "container-logistics-sim")
 
-    def create_new_trip(self, sim_clock, current_loc, truck, order, route=None):
-        return self.trip_manager.create_new_trip(sim_clock, current_loc, truck, order, route)
+        data = {
+            "profile": self.profile,
+            "persona": self.persona,
+            "statemachine": {
+                "name": "WorkflowStateMachine",
+                "domain": self.simulation_domain,
+            },
+            "state": WorkflowStateMachine().initial_state.name,
+            "sim_clock": sim_clock,
+        }
+        self.resource = self.init_resource(sim_clock, data=data)
 
-    def get_trip(self):
-        return self.trip_manager.as_dict()
+    def on_init(self):
+        pass
 
-    def update_trip_state(self, new_state):
-        self.trip_manager.update_trip_state(new_state)
+    def as_dict(self):
+        return self.resource
 
-    def cancel_trip(self):
-        self.trip_manager.cancel_trip()
+    def get_id(self):
+        return self.resource.get("_id")
+
+    def refresh(self):
+        self.resource = self.resource_get(resource_id=self.resource.get("_id"))
+        return self.resource
+
+    def is_assignable(self, active_trip=None):
+        return self.resource.get("state") == WorkflowStateMachine.online.name and active_trip is None

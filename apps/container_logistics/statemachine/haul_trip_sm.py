@@ -1,29 +1,33 @@
 from statemachine import State, StateMachine
 
+
 class HaulTripStateMachine(StateMachine):
-    created = State('Created', initial=True)
-    assigned = State('Assigned')
-    en_route_to_pickup = State('En Route to Pickup')
-    waiting_at_pickup = State('Waiting at Pickup')
-    at_pickup_gate = State('At Pickup Gate')
-    loading = State('Loading')
-    loaded = State('Loaded')
-    en_route_to_dropoff = State('En Route to Dropoff')
-    waiting_at_dropoff = State('Waiting at Dropoff')
-    at_dropoff_gate = State('At Dropoff Gate')
-    unloading = State('Unloading')
-    completed = State('Completed', final=True)
-    cancelled = State('Cancelled', final=True)
+    created = State("created", initial=True)
+    assigned = State("assigned")
+    repositioning_to_pickup = State("repositioning_to_pickup")
+    queued_for_pickup = State("queued_for_pickup")
+    at_pickup_gate = State("at_pickup_gate")
+    loaded_in_transit = State("loaded_in_transit")
+    queued_for_dropoff = State("queued_for_dropoff")
+    at_dropoff_gate = State("at_dropoff_gate")
+    completed = State("completed", final=True)
+    cancelled = State("cancelled", final=True)
 
     assign = created.to(assigned)
-    start_trip_to_pickup = assigned.to(en_route_to_pickup)
-    arrive_at_pickup = en_route_to_pickup.to(waiting_at_pickup)
-    enter_pickup_gate = waiting_at_pickup.to(at_pickup_gate)
-    start_loading = at_pickup_gate.to(loading)
-    finish_loading = loading.to(loaded)
-    start_trip_to_dropoff = loaded.to(en_route_to_dropoff)
-    arrive_at_dropoff = en_route_to_dropoff.to(waiting_at_dropoff)
-    enter_dropoff_gate = waiting_at_dropoff.to(at_dropoff_gate)
-    start_unloading = at_dropoff_gate.to(unloading)
-    finish_unloading = unloading.to(completed)
-    cancel = (created | assigned | en_route_to_pickup | waiting_at_pickup | at_pickup_gate | loading | loaded | en_route_to_dropoff | waiting_at_dropoff | at_dropoff_gate | unloading).to(cancelled)
+    start_empty_reposition = assigned.to(repositioning_to_pickup)
+    arrive_pickup_queue = (assigned | repositioning_to_pickup).to(queued_for_pickup)
+    enter_pickup_gate = queued_for_pickup.to(at_pickup_gate)
+    finish_pickup_service = at_pickup_gate.to(loaded_in_transit)
+    arrive_dropoff_queue = loaded_in_transit.to(queued_for_dropoff)
+    enter_dropoff_gate = queued_for_dropoff.to(at_dropoff_gate)
+    finish_dropoff_service = at_dropoff_gate.to(completed)
+    cancel = (
+        created
+        | assigned
+        | repositioning_to_pickup
+        | queued_for_pickup
+        | at_pickup_gate
+        | loaded_in_transit
+        | queued_for_dropoff
+        | at_dropoff_gate
+    ).to(cancelled)

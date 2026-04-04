@@ -1,4 +1,4 @@
-from apps.ride_hail import (
+from apps.ridehail import (
     RideHailAnalyticsAdapter,
     RideHailAssignmentAdapter,
     RideHailDriverAdapter,

@@ -3,7 +3,7 @@ from __future__ import absolute_import
 from apps.celery_proj import app
 import time
 
-from apps.ride_hail import (
+from apps.ridehail import (
     RideHailAnalyticsAdapter,
     RideHailAssignmentAdapter,
     RideHailDriverAdapter,

@@ -1,4 +1,4 @@
-from apps.container_logistics import (
+from apps.container_logistics_old import (
     ContainerLogisticsActions,
     ContainerLogisticsEvents,
     FacilityInteractionAdapter,

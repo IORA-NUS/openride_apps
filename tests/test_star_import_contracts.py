@@ -5,36 +5,36 @@ def _star_imported_names(module_name):
 
 
 def test_ride_hail_star_import_matches_root_all():
-    import apps.ride_hail as pkg
+    import apps.ridehail as pkg
 
-    assert _star_imported_names("apps.ride_hail") == set(pkg.__all__)
+    assert _star_imported_names("apps.ridehail") == set(pkg.__all__)
 
 
 def test_ride_hail_adapters_star_import_matches_all():
-    import apps.ride_hail.adapters as pkg
+    import apps.ridehail.adapters as pkg
 
-    assert _star_imported_names("apps.ride_hail.adapters") == set(pkg.__all__)
+    assert _star_imported_names("apps.ridehail.adapters") == set(pkg.__all__)
 
 
 def test_canonical_driver_package_star_import_matches_all():
-    import apps.ride_hail.driver as pkg
+    import apps.ridehail.driver as pkg
 
-    assert _star_imported_names("apps.ride_hail.driver") == set(pkg.__all__)
+    assert _star_imported_names("apps.ridehail.driver") == set(pkg.__all__)
 
 
 def test_canonical_passenger_package_star_import_matches_all():
-    import apps.ride_hail.passenger as pkg
+    import apps.ridehail.passenger as pkg
 
-    assert _star_imported_names("apps.ride_hail.passenger") == set(pkg.__all__)
+    assert _star_imported_names("apps.ridehail.passenger") == set(pkg.__all__)
 
 
 def test_canonical_assignment_package_star_import_matches_all():
-    import apps.ride_hail.assignment as pkg
+    import apps.ridehail.assignment as pkg
 
-    assert _star_imported_names("apps.ride_hail.assignment") == set(pkg.__all__)
+    assert _star_imported_names("apps.ridehail.assignment") == set(pkg.__all__)
 
 
 def test_canonical_analytics_package_star_import_matches_all():
-    import apps.ride_hail.analytics as pkg
+    import apps.ridehail.analytics as pkg
 
-    assert _star_imported_names("apps.ride_hail.analytics") == set(pkg.__all__)
+    assert _star_imported_names("apps.ridehail.analytics") == set(pkg.__all__)

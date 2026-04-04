@@ -1,41 +1,21 @@
-"""
-Container Logistics Events and Actions
-Event constants for state machine transitions, following the ride_hail pattern.
-"""
+class ContainerLogisticsActions:
+    ASSIGNED_HAUL_TRIP = "assigned_haul_trip"
+    ORDER_WORKFLOW_EVENT = "order_workflow_event"
+    FACILITY_WORKFLOW_EVENT = "facility_workflow_event"
 
-# Haul Trip Events
-HAULTRIP_CREATED = "haultrip_created"
-HAULTRIP_ASSIGNED = "haultrip_assigned"
-HAULTRIP_EN_ROUTE_TO_PICKUP = "haultrip_en_route_to_pickup"
-HAULTRIP_WAITING_AT_PICKUP = "haultrip_waiting_at_pickup"
-HAULTRIP_AT_PICKUP_GATE = "haultrip_at_pickup_gate"
-HAULTRIP_LOADING = "haultrip_loading"
-HAULTRIP_LOADED = "haultrip_loaded"
-HAULTRIP_EN_ROUTE_TO_DROPOFF = "haultrip_en_route_to_dropoff"
-HAULTRIP_WAITING_AT_DROPOFF = "haultrip_waiting_at_dropoff"
-HAULTRIP_AT_DROPOFF_GATE = "haultrip_at_dropoff_gate"
-HAULTRIP_UNLOADING = "haultrip_unloading"
-HAULTRIP_COMPLETED = "haultrip_completed"
-HAULTRIP_CANCELLED = "haultrip_cancelled"
 
-# Truck Workflow Events
-TRUCK_OFF_DUTY = "truck_off_duty"
-TRUCK_ON_DUTY = "truck_on_duty"
-TRUCK_RESTING = "truck_resting"
+class ContainerLogisticsEvents:
+    ORDER_ASSIGNED_TO_TRUCK = "order_assigned_to_truck"
+    ORDER_PICKUP_STARTED = "order_pickup_started"
+    ORDER_PICKUP_COMPLETED = "order_pickup_completed"
+    ORDER_DROPOFF_STARTED = "order_dropoff_started"
+    ORDER_DELIVERED = "order_delivered"
+    ORDER_CANCELLED = "order_cancelled"
 
-# Facility Gate Events
-GATE_CLOSED = "gate_closed"
-GATE_AVAILABLE = "gate_available"
-GATE_OCCUPIED = "gate_occupied"
-GATE_SERVICE_IN_PROGRESS = "gate_service_in_progress"
-GATE_SERVICE_COMPLETE = "gate_service_complete"
-GATE_UNAVAILABLE = "gate_unavailable"
-
-# Order Events
-ORDER_CREATED = "order_created"
-ORDER_IN_MARKET = "order_in_market"
-ORDER_ASSIGNED = "order_assigned"
-ORDER_COMPLETED = "order_completed"
-ORDER_EXPIRED = "order_expired"
-ORDER_CANCELLED = "order_cancelled"
-
+    TRUCK_ARRIVED_PICKUP_QUEUE = "truck_arrived_pickup_queue"
+    TRUCK_ARRIVED_DROPOFF_QUEUE = "truck_arrived_dropoff_queue"
+    GATE_SLOT_ASSIGNED_FOR_PICKUP = "gate_slot_assigned_for_pickup"
+    GATE_SLOT_ASSIGNED_FOR_DROPOFF = "gate_slot_assigned_for_dropoff"
+    PICKUP_GATE_SERVICE_COMPLETED = "pickup_gate_service_completed"
+    DROPOFF_GATE_SERVICE_COMPLETED = "dropoff_gate_service_completed"
+    FACILITY_QUEUE_CANCELLED = "facility_queue_cancelled"

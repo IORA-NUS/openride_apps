@@ -64,7 +64,7 @@ Required extension points (domain adapters needed):
 - Recommendation: promote a generic `DomainInteractionAgentBase` into `agent_core` once a second non-ride-hail domain confirms identical shape.
 
 3. Typed contract parser abstractions for domains
-- Ride-hail now has typed payload models (`apps/ride_hail/models.py`).
+- Ride-hail now has typed payload models (`apps/ridehail/models.py`).
 - Recommendation: provide optional core parser protocol/interface, not concrete models, to keep schemas domain-owned.
 
 ## Risk Assessment

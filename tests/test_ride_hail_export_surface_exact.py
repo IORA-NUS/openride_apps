@@ -1,5 +1,5 @@
-import apps.ride_hail as ride_hail
-import apps.ride_hail.adapters as ride_hail_adapters
+import apps.ridehail as ridehail
+import apps.ridehail.adapters as ride_hail_adapters
 
 
 def test_ride_hail_root_all_matches_expected_symbols_exactly():
@@ -31,7 +31,7 @@ def test_ride_hail_root_all_matches_expected_symbols_exactly():
         "AnalyticsApp",
         "AnalyticsAgentIndie",
     }
-    assert set(ride_hail.__all__) == expected
+    assert set(ridehail.__all__) == expected
 
 
 def test_ride_hail_adapters_all_matches_expected_symbols_exactly():
