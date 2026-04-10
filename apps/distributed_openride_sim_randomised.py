@@ -1,6 +1,7 @@
 
 import os, sys
 import asyncio
+import argparse
 # macOS event loop policy fix
 # if sys.platform == "darwin":
 #     asyncio.set_event_loop_policy(asyncio.SelectorEventLoopPolicy())
@@ -41,6 +42,8 @@ from apps.utils import time_to_str, str_to_time
 
 from apps.common.statemachine_registry import StateMachineRegistry
 
+from apps.utils.kafka_utils import initialize_kafka_topics
+
 
 
 class DistributedOpenRideSimRandomised:
@@ -66,6 +69,8 @@ class DistributedOpenRideSimRandomised:
         self.register_state_machines()
 
         self.execution_start_time = time.time()
+
+        initialize_kafka_topics()
 
         for agent_id, behavior in self.scenario.driver_collection.items():
             spec = {
@@ -258,11 +263,10 @@ class DistributedOpenRideSimRandomised:
         except Exception as e:
             print(str(e))
 
-
-
 if __name__ == '__main__':
 
-    run_id = id_generator(12)
+    # run_id = id_generator(12)
+    run_id = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else id_generator(12)
     from apps.config import simulation_domains
     # from apps.utils.path_utils import get_run_data_dir
     domain = simulation_domains['ridehail']

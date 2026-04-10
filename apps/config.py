@@ -34,4 +34,28 @@ simulation_domains = {
     # Add other domains as needed
 }
 
+kafka_config = {
+    "bootstrap_servers": "localhost:9094",
+    "topics": {
+        "kpi": "kpi_stream",
+        "waypoint": "waypoint_stream",
+        "location_stream": "location_stream",
+        "route_stream": "route_stream",
+    },
+    "producer": {
+        "linger_ms": 20,
+        "batch_size": 262144,
+        "compression_type": "zstd",
+        "enable_idempotence": True,
+        "acks": "all",
+        "max_in_flight_requests_per_connection": 5,
+    },
+    "topic_bootstrap": {
+        "kpi": {"partitions": 1, "replication_factor": 1},
+        "waypoint": {"partitions": 256, "replication_factor": 1},
+        "location_stream": {"partitions": 128, "replication_factor": 1},
+        "route_stream": {"partitions": 128, "replication_factor": 1},
+    },
+}
+
 
