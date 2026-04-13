@@ -1,7 +1,19 @@
 import logging
+import os
+
+
+def _env_url(name: str, default: str) -> str:
+    """Use env override when set to a non-empty string (strips whitespace)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    return raw if raw else default
+
 
 settings = {
-    'OPENRIDE_SERVER_URL': 'http://localhost:11654', #'http://192.168.10.135:11654', #'http://127.0.0.1:11654',
+    # Sim workers and notebooks: set OPENRIDE_SERVER_URL if nginx is not on localhost (e.g. Docker host IP).
+    'OPENRIDE_SERVER_URL': _env_url('OPENRIDE_SERVER_URL', 'http://localhost:11654'),
 
     'ROUTING_SERVER': 'http://localhost:10001', # 'http://192.168.10.135:50001', #'http://localhost:50001',
 
