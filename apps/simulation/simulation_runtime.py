@@ -11,7 +11,6 @@ from apps.config import settings, simulation_domains
 from apps.common.user_registry import UserRegistry
 from apps.common.statemachine_registry import StateMachineRegistry
 
-
 class SimulationRuntime:
     def __init__(
         self,

@@ -1,7 +1,19 @@
 import logging
+import os
+
+
+def _env_url(name: str, default: str) -> str:
+    """Use env override when set to a non-empty string (strips whitespace)."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    raw = raw.strip()
+    return raw if raw else default
+
 
 settings = {
-    'OPENRIDE_SERVER_URL': 'http://localhost:11654', #'http://192.168.10.135:11654', #'http://127.0.0.1:11654',
+    # Sim workers and notebooks: set OPENRIDE_SERVER_URL if nginx is not on localhost (e.g. Docker host IP).
+    'OPENRIDE_SERVER_URL': _env_url('OPENRIDE_SERVER_URL', 'http://localhost:11654'),
 
     'ROUTING_SERVER': 'http://localhost:10001', # 'http://192.168.10.135:50001', #'http://localhost:50001',
 
@@ -32,6 +44,30 @@ messenger_backend = {
 simulation_domains = {
     'ridehail': 'ridehail-sim',
     # Add other domains as needed
+}
+
+kafka_config = {
+    "bootstrap_servers": "localhost:9094",
+    "topics": {
+        "kpi": "kpi_stream",
+        "waypoint": "waypoint_stream",
+        "location_stream": "location_stream",
+        "route_stream": "route_stream",
+    },
+    "producer": {
+        "linger_ms": 20,
+        "batch_size": 262144,
+        "compression_type": "zstd",
+        "enable_idempotence": True,
+        "acks": "all",
+        "max_in_flight_requests_per_connection": 5,
+    },
+    "topic_bootstrap": {
+        "kpi": {"partitions": 1, "replication_factor": 1},
+        "waypoint": {"partitions": 256, "replication_factor": 1},
+        "location_stream": {"partitions": 128, "replication_factor": 1},
+        "route_stream": {"partitions": 128, "replication_factor": 1},
+    },
 }
 
 
