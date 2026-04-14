@@ -205,6 +205,8 @@ class PassengerApp(ORSimApp, DriverInteractionMixin):
                     if channel_open:
                         if driver_id_match:
                             driver_data = payload['data']
+                            driver_data['sim_clock'] = self.current_time_str
+                            driver_data['current_loc'] = self.current_loc
                             handled = self._interaction_plugin.on_message(
                                 InteractionContext(
                                     action=RideHailActions.DRIVER_WORKFLOW_EVENT,

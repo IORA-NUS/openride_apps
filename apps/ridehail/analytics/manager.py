@@ -4,6 +4,7 @@ from http import HTTPStatus
 import logging
 from apps.config import settings, simulation_domains
 from apps.utils import id_generator, is_success
+from apps.utils.kafka_utils import push_kpi_to_topic, flush_producer
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 
@@ -287,11 +288,20 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         kpi_url = self._kpi_url()
         data = []
         for metric, value in kpi_collection.items():
+            kafka_message = {
+                'metric': metric,
+                'value': value,
+                'sim_clock': sim_clock,
+            }
+            print(f"Kafka message: {kafka_message}")
+            push_kpi_to_topic(self.run_id, kafka_message)
             data.append({
                 'metric': metric,
                 'value': value,
                 'sim_clock': sim_clock,
             })
+        flush_producer()
         self._post(kpi_url, data)
+
 
 
