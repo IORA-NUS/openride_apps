@@ -13,4 +13,5 @@ services:
     - "1883:1883"
     - "8883:8883"
     volumes:
-    - "$PWD/rabbit_enabled_plugins:/etc/rabbitmq/enabled_plugins"
+    - "./rabbit_enabled_plugins:/etc/rabbitmq/enabled_plugins"
+    - "./rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro"

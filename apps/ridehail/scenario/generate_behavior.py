@@ -1,8 +1,6 @@
-
 from random import randint, choice, random
 from shapely.geometry import Point, mapping
 from numpy.random import default_rng
-
 
 from apps.loc_service import BusStop, PlanningArea
 
@@ -219,6 +217,7 @@ class GenerateBehavior():
             },
             'profile': {
                 'publish_realtime_data': analytics_settings.get('profile', {}).get('publish_realtime_data', False),
+                'publish_trip_geo_kafka': analytics_settings.get('profile', {}).get('publish_trip_geo_kafka', True),
                 'write_ws_output_to_file': analytics_settings.get('profile', {}).get('write_ws_output_to_file', False),
 
                 'publish_paths_history': analytics_settings.get('profile', {}).get('publish_paths_history', False),

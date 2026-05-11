@@ -11,7 +11,8 @@ class GateStateMachine(StateMachine):
     open = closed.to(available)
     assign_pickup_truck = available.to(busy_pickup)
     assign_dropoff_truck = available.to(busy_dropoff)
-    complete_service = (busy_pickup | busy_dropoff).to(available)
+    # Compatibility: avoid `State | State` unions, use from_ for multi-source transitions.
+    complete_service = available.from_(busy_pickup, busy_dropoff)
     close = available.to(closed)
-    breakdown = (closed | available | busy_pickup | busy_dropoff).to(out_of_service)
+    breakdown = out_of_service.from_(closed, available, busy_pickup, busy_dropoff)
     repair = out_of_service.to(closed)

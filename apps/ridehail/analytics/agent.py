@@ -50,6 +50,8 @@ class AnalyticsAgentIndie(ORSimAgent):
             # print("before compute_all_metrics")
             try:
                 self.compute_all_metrics()
+                if self.behavior.get('profile', {}).get('publish_trip_geo_kafka', True):
+                    self._publish_trip_geo_kafka()
             except Exception as e:
                 logging.exception(f"Error computing metrics for agent {self.unique_id} at time_step {time_step}: {str(e)}")
                 # raise e
@@ -177,6 +179,15 @@ class AnalyticsAgentIndie(ORSimAgent):
             asyncio.run(publish_location_stream_async(location_stream))
             asyncio.run(publish_route_stream_async(route_stream))
         return location_stream, route_stream
+
+    def _publish_trip_geo_kafka(self):
+        from apps.ridehail.analytics.trip_geo_publisher import TripGeoPublisher
+
+        if not hasattr(self, '_trip_geo_publisher'):
+            self._trip_geo_publisher = TripGeoPublisher(self.run_id)
+        sim_clock = self.get_current_time_str()
+        driver_trips = self.app.get_active_driver_trips(sim_clock)
+        self._trip_geo_publisher.publish_from_driver_trips(driver_trips, sim_clock)
 
     def compute_all_metrics(self):
         start_time = self.current_time - relativedelta(seconds=(self.behavior['steps_per_action'] * self.orsim_settings['STEP_INTERVAL']))

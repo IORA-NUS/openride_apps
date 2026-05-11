@@ -17,7 +17,8 @@ class FacilityQueueController:
 
     gate_count: int
     state: FacilityQueueState = FacilityQueueState.CLOSED
-    queue: Deque[str] = field(default_factory=deque)
+    pickup_queue: Deque[str] = field(default_factory=deque)
+    dropoff_queue: Deque[str] = field(default_factory=deque)
     gate_assignments: Dict[int, Optional[str]] = field(default_factory=dict)
     gates: List[GateStateMachine] = field(default_factory=list)
 
@@ -36,8 +37,11 @@ class FacilityQueueController:
     def close_facility(self) -> None:
         self.state = FacilityQueueState.CLOSED
 
-    def enqueue_truck(self, truck_id: str) -> None:
-        self.queue.append(truck_id)
+    def enqueue_truck(self, truck_id: str, is_pickup_leg: bool) -> None:
+        if is_pickup_leg:
+            self.pickup_queue.append(truck_id)
+        else:
+            self.dropoff_queue.append(truck_id)
 
     def assign_waiting_trucks(self, is_pickup_leg: bool) -> Dict[int, str]:
         """
@@ -48,12 +52,13 @@ class FacilityQueueController:
         if self.state != FacilityQueueState.OPEN:
             return assignments
 
+        queue = self.pickup_queue if is_pickup_leg else self.dropoff_queue
         for idx, gate in enumerate(self.gates):
-            if not self.queue:
+            if not queue:
                 break
             if gate.current_state.id != "available":
                 continue
-            truck_id = self.queue.popleft()
+            truck_id = queue.popleft()
             if is_pickup_leg:
                 gate.assign_pickup_truck()
             else:

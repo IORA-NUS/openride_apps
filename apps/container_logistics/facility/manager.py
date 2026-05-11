@@ -39,8 +39,8 @@ class FacilityManager(ResourceClientMixin, ORSimManager):
     def open_facility(self):
         self.queue_controller.open_facility()
 
-    def enqueue_arrival(self, truck_id):
-        self.queue_controller.enqueue_truck(truck_id)
+    def enqueue_arrival(self, truck_id, is_pickup_leg: bool):
+        self.queue_controller.enqueue_truck(truck_id, is_pickup_leg=is_pickup_leg)
 
     def assign_waiting_trucks(self, is_pickup_leg):
         assignments = self.queue_controller.assign_waiting_trucks(is_pickup_leg=is_pickup_leg)

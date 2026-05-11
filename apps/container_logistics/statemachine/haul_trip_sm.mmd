@@ -1,0 +1,24 @@
+stateDiagram-v2
+    direction LR
+    [*] --> created
+    created --> assigned: assign
+    assigned --> repositioning_to_pickup: start_empty_reposition
+    assigned --> queued_for_pickup: arrive_pickup_queue
+    repositioning_to_pickup --> queued_for_pickup: arrive_pickup_queue
+    queued_for_pickup --> at_pickup_gate: enter_pickup_gate
+    at_pickup_gate --> loaded_in_transit: finish_pickup_service
+    loaded_in_transit --> queued_for_dropoff: arrive_dropoff_queue
+    queued_for_dropoff --> at_dropoff_gate: enter_dropoff_gate
+    at_dropoff_gate --> completed: finish_dropoff_service
+
+    created --> cancelled: cancel
+    assigned --> cancelled: cancel
+    repositioning_to_pickup --> cancelled: cancel
+    queued_for_pickup --> cancelled: cancel
+    at_pickup_gate --> cancelled: cancel
+    loaded_in_transit --> cancelled: cancel
+    queued_for_dropoff --> cancelled: cancel
+    at_dropoff_gate --> cancelled: cancel
+
+    completed --> [*]
+    cancelled --> [*]

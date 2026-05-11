@@ -1,6 +1,7 @@
 from orsim.lifecycle import ORSimApp
 from orsim.messenger.interaction import CallbackRouterPlugin, InteractionContext
 import json
+from datetime import timedelta
 
 from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import FacilityWorkflowPayload
@@ -44,6 +45,8 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
         self.current_time_str = None
         self.latest_sim_clock = sim_clock
         self._interaction_plugin = CallbackRouterPlugin(handler_obj=self)
+        # gate_index -> service end time (datetime)
+        self._gate_service_ends = {}
 
     def _create_user(self):
         return UserRegistry(self.sim_clock, self.credentials)
@@ -65,9 +68,14 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
         self.manager.refresh()
 
     def enqueue_arrival(self, truck_id, is_pickup_leg):
-        self.manager.enqueue_arrival(truck_id)
+        self.manager.enqueue_arrival(truck_id, is_pickup_leg=is_pickup_leg)
         assignments = self.manager.assign_waiting_trucks(is_pickup_leg=is_pickup_leg)
         for gate_index, assigned_truck in assignments.items():
+            service_time = self.behavior.get(
+                "pickup_service_time" if is_pickup_leg else "dropoff_service_time", 0
+            )
+            if self.current_time is not None and service_time and service_time > 0:
+                self._gate_service_ends[gate_index] = self.current_time + timedelta(seconds=service_time)
             self._publish_gate_assignment(
                 truck_id=assigned_truck,
                 gate_index=gate_index,
@@ -77,6 +85,7 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
 
     def complete_gate_service(self, gate_index):
         truck_id, is_pickup_leg = self.manager.complete_gate_service(gate_index)
+        self._gate_service_ends.pop(gate_index, None)
         if truck_id is not None and is_pickup_leg is not None:
             self._publish_gate_service_completed(
                 truck_id=truck_id,
@@ -157,7 +166,52 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
             payload = self.dequeue_message()
 
     def perform_workflow_actions(self):
-        pass
+        # 1) Allocate any waiting trucks to available gates (both legs).
+        for is_pickup_leg in (True, False):
+            assignments = self.manager.assign_waiting_trucks(is_pickup_leg=is_pickup_leg)
+            for gate_index, assigned_truck in assignments.items():
+                service_time = self.behavior.get(
+                    "pickup_service_time" if is_pickup_leg else "dropoff_service_time", 0
+                )
+                if self.current_time is not None and service_time and service_time > 0:
+                    self._gate_service_ends[gate_index] = self.current_time + timedelta(
+                        seconds=service_time
+                    )
+                self._publish_gate_assignment(
+                    truck_id=assigned_truck,
+                    gate_index=gate_index,
+                    is_pickup_leg=is_pickup_leg,
+                )
+
+        # 2) Complete service for any gates whose timers have elapsed.
+        if self.current_time is None:
+            return
+
+        due_gate_indices = [
+            gate_index
+            for gate_index, end_time in list(self._gate_service_ends.items())
+            if end_time is not None and self.current_time >= end_time
+        ]
+        for gate_index in due_gate_indices:
+            self.complete_gate_service(gate_index)
+
+        # 3) After releasing gates, try allocating again (keeps utilization high).
+        if due_gate_indices:
+            for is_pickup_leg in (True, False):
+                assignments = self.manager.assign_waiting_trucks(is_pickup_leg=is_pickup_leg)
+                for gate_index, assigned_truck in assignments.items():
+                    service_time = self.behavior.get(
+                        "pickup_service_time" if is_pickup_leg else "dropoff_service_time", 0
+                    )
+                    if service_time and service_time > 0:
+                        self._gate_service_ends[gate_index] = self.current_time + timedelta(
+                            seconds=service_time
+                        )
+                    self._publish_gate_assignment(
+                        truck_id=assigned_truck,
+                        gate_index=gate_index,
+                        is_pickup_leg=is_pickup_leg,
+                    )
 
     def execute_step_actions(self, current_time, add_step_log_fn=None):
         self.current_time = current_time

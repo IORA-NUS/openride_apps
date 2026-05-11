@@ -17,11 +17,12 @@ class OrderStateMachine(StateMachine):
     pickup_done = pickup_in_progress.to(in_transit)
     dropoff_started = in_transit.to(dropoff_in_progress)
     deliver = dropoff_in_progress.to(completed)
-    cancel = (
-        created
-        | unassigned
-        | assigned
-        | pickup_in_progress
-        | in_transit
-        | dropoff_in_progress
-    ).to(cancelled)
+    # Compatibility: avoid `State | State` unions, use from_ for multi-source transitions.
+    cancel = cancelled.from_(
+        created,
+        unassigned,
+        assigned,
+        pickup_in_progress,
+        in_transit,
+        dropoff_in_progress,
+    )

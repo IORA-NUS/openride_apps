@@ -6,6 +6,8 @@ analytics_settings = {
 
     'profile': {
         'publish_realtime_data': False, #True, #False,
+        # Emit trip_route / trip_end to Kafka topic trip_geo_stream (full OSRM polylines; key = run_id).
+        'publish_trip_geo_kafka': True,
         'write_ws_output_to_file': True,
 
         'publish_paths_history': False,

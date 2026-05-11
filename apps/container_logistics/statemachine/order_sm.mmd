@@ -1,0 +1,19 @@
+stateDiagram-v2
+    direction LR
+    [*] --> created
+    created --> unassigned: publish
+    unassigned --> assigned: assign
+    assigned --> pickup_in_progress: pickup_started
+    pickup_in_progress --> in_transit: pickup_done
+    in_transit --> dropoff_in_progress: dropoff_started
+    dropoff_in_progress --> completed: deliver
+
+    created --> cancelled: cancel
+    unassigned --> cancelled: cancel
+    assigned --> cancelled: cancel
+    pickup_in_progress --> cancelled: cancel
+    in_transit --> cancelled: cancel
+    dropoff_in_progress --> cancelled: cancel
+
+    completed --> [*]
+    cancelled --> [*]

@@ -51,6 +51,7 @@ class AnalyticsApp(ORSimApp):
                     'paths_history_time_window': {'type': 'integer', 'required': True},
                     'publish_paths_history': {'type': 'boolean', 'required': True},
                     'publish_realtime_data': {'type': 'boolean', 'required': True},
+                    'publish_trip_geo_kafka': {'type': 'boolean', 'required': False},
                     'write_ph_output_to_file': {'type': 'boolean', 'required': True},
                     'write_ws_output_to_file': {'type': 'boolean', 'required': True},
                 }

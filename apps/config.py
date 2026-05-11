@@ -1,9 +1,11 @@
+import os
 import logging
 
 settings = {
-    'OPENRIDE_SERVER_URL': 'http://localhost:11654', #'http://192.168.10.135:11654', #'http://127.0.0.1:11654',
+    # Allow override for local development/testing.
+    'OPENRIDE_SERVER_URL': os.getenv('OPENRIDE_SERVER_URL', 'http://localhost:11654'),
 
-    'ROUTING_SERVER': 'http://localhost:10001', # 'http://192.168.10.135:50001', #'http://localhost:50001',
+    'ROUTING_SERVER': os.getenv('ROUTING_SERVER', 'http://localhost:10001'),
 
 
     'EXECUTION_STRATEGY': 'CELERY', #  'CELERY'
@@ -31,7 +33,7 @@ messenger_backend = {
 # Simulation domains mapping
 simulation_domains = {
     'ridehail': 'ridehail-sim',
-    # Add other domains as needed
+    'container_logistics': 'container-logistics-sim',
 }
 
 
@@ -40,9 +42,7 @@ kafka_config = {
     "topics": {
         "run_status": "run_status",
         "kpi": "kpi_stream",
-        "waypoint": "waypoint_stream",
-        "location_stream": "location_stream",
-        "route_stream": "route_stream",
+        "trip_geo": "trip_geo_stream",
     },
     "producer": {
         "linger_ms": 20,
@@ -52,11 +52,18 @@ kafka_config = {
         "acks": "all",
         "max_in_flight_requests_per_connection": 5,
     },
+    # Dedicated low-latency producer for trip geometry (small batches, no linger).
+    "producer_trip_geo": {
+        "linger_ms": 0,
+        "batch_size": 65536,
+        "compression_type": "zstd",
+        "enable_idempotence": True,
+        "acks": "all",
+        "max_in_flight_requests_per_connection": 5,
+    },
     "topic_bootstrap": {
         "run_status": {"partitions": 1, "replication_factor": 1, "config": {"cleanup.policy": "compact"}},
         "kpi": {"partitions": 1, "replication_factor": 1},
-        "waypoint": {"partitions": 256, "replication_factor": 1},
-        "location_stream": {"partitions": 128, "replication_factor": 1},
-        "route_stream": {"partitions": 128, "replication_factor": 1},
+        "trip_geo": {"partitions": 1, "replication_factor": 1},
     },
 }

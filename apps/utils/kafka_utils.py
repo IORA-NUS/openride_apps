@@ -14,9 +14,13 @@ def _kafka_admin_conf(config=None):
     return {'bootstrap.servers': selected_config['bootstrap_servers']}
 
 
-def _kafka_producer_conf(config=None):
+def _kafka_producer_conf(config=None, producer_key='producer'):
     selected_config = config or kafka_config
-    producer_cfg = selected_config.get('producer', {})
+    base = selected_config.get('producer', {})
+    if producer_key == 'producer':
+        producer_cfg = base
+    else:
+        producer_cfg = {**base, **selected_config.get(producer_key, {})}
     kafka_conf = {
         'bootstrap.servers': selected_config['bootstrap_servers'],
     }
@@ -47,6 +51,21 @@ def _get_producer(config=None):
     if producer is None:
         producer = Producer(_kafka_producer_conf(config))
     return producer
+
+
+trip_geo_producer = None
+
+
+def _get_trip_geo_producer(config=None):
+    global trip_geo_producer
+    if trip_geo_producer is None:
+        trip_geo_producer = Producer(_kafka_producer_conf(config, producer_key='producer_trip_geo'))
+    return trip_geo_producer
+
+
+def trip_geo_topic_name(config=None):
+    selected = config or kafka_config
+    return selected.get('topics', {}).get('trip_geo', 'trip_geo_stream')
 
 def create_topic_if_not_exists(topic_name, num_partitions=2, replication_factor=1, config=None):
     admin_client = _get_admin(kafka_config)
@@ -92,9 +111,32 @@ def flush_producer(timeout=5):
         return 0
     return producer.flush(timeout)
 
+
+def flush_trip_geo_producer(timeout=1):
+    if trip_geo_producer is None:
+        return 0
+    return trip_geo_producer.flush(timeout)
+
 def push_kpi_to_topic(run_id, kpi_data):
     validate_kpi_payload(kpi_data)
     push_event("kpi_stream", payload=kpi_data, key=f"{run_id}")
+
+
+def push_trip_geo_to_topic(run_id, payload, config=None):
+    """
+    Publish trip_route / trip_end JSON to trip_geo_stream. Key = run_id (same as kpi_stream).
+    Uses producer_trip_geo (linger.ms=0) for lower end-to-end latency than KPI batches.
+    """
+    topic = trip_geo_topic_name(config)
+    client = _get_trip_geo_producer(config)
+    client.poll(0)
+    client.produce(
+        topic,
+        key=f"{run_id}",
+        value=json.dumps(payload),
+        on_delivery=_on_delivery,
+    )
+    client.poll(0)
 
 
 def initialize_kafka_topics():

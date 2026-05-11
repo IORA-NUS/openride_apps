@@ -28,6 +28,18 @@ class FacilityAgent(ORSimAgent):
     def exiting_market(self):
         return False
 
+    def logout(self):
+        app = getattr(self, "app", None)
+        if app is not None:
+            try:
+                app.close(self.get_current_time_str())
+            except Exception:
+                pass
+
+    def estimate_next_event_time(self):
+        # Facility progression is timer-driven, but in the first pass we allow it to tick.
+        return getattr(self, "current_time", None)
+
     def step(self, time_step):
         self.app.update_current(self.get_current_time_str())
         if (
