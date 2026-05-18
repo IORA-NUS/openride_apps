@@ -1,3 +1,6 @@
+import apps.ridehail.analytics as analytics_pkg
+import apps.ridehail.assignment as assignment_pkg
+import apps.ridehail.driver as driver_pkg
 import pytest
 
 import apps.ridehail.analytics as analytics_pkg

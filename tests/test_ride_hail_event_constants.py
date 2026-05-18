@@ -1,3 +1,6 @@
+from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
 from openride_apps.apps.ridehail.statemachine.events import RideHailActions, RideHailEvents
 
 

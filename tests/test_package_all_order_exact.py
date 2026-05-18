@@ -1,3 +1,6 @@
+from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
 
 import apps.ridehail as ridehail
 import apps.ridehail.adapters as ride_hail_adapters

@@ -1,4 +1,7 @@
 from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
+from apps.ridehail import (
     RideHailAnalyticsAdapter,
     RideHailAssignmentAdapter,
     RideHailDriverAdapter,

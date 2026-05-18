@@ -1,3 +1,6 @@
+from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
 from apps.ridehail.driver import DriverAgentIndie
 from apps.ridehail.passenger import PassengerAgentIndie
 from apps.ridehail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine

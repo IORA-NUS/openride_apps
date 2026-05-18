@@ -1,3 +1,6 @@
+from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
 import pytest
 
 from apps.ridehail import (

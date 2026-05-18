@@ -1,3 +1,6 @@
+from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
 def _star_imported_names(module_name):
     namespace = {}
     exec(f"from {module_name} import *", {}, namespace)

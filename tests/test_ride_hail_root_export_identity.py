@@ -1,3 +1,6 @@
+from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
 import apps.ridehail as ridehail
 import pytest
 from apps.ridehail.analytics import AnalyticsAgentIndie, AnalyticsApp

@@ -1,3 +1,6 @@
+from apps.container_logistics.truck.trip_manager import TruckTripManager
+from apps.container_logistics import ContainerLogisticsActions
+from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from types import MethodType
 
 from apps.container_logistics.truck.trip_manager import TruckTripManager

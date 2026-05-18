@@ -1,3 +1,6 @@
+from apps.ridehail import (
+	DriverWorkflowPayload,
+	PassengerWorkflowPayload,
 # import apps.ridehail.analytics.agent as canonical_analytics_agent_mod
 # import apps.ridehail.analytics.app as canonical_analytics_app_mod
 # import apps.ridehail.assignment.agent as canonical_assignment_agent_mod

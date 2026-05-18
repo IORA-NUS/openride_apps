@@ -1,3 +1,6 @@
+from apps.ridehail import (
+    DriverWorkflowPayload,
+    PassengerWorkflowPayload,
 from orsim.messenger.interaction import (
     CallbackRouterPlugin,
     InteractionContext,

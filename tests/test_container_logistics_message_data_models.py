@@ -1,6 +1,9 @@
 from apps.container_logistics.message_data_models import (
     AssignedHaulTripPayload,
     FacilityWorkflowPayload,
+from apps.container_logistics.message_data_models import (
+    AssignedHaulTripPayload,
+    FacilityWorkflowPayload,
     OrderWorkflowPayload,
 )
 from apps.container_logistics.statemachine import ContainerLogisticsActions

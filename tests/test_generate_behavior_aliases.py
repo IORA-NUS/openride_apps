@@ -1,3 +1,6 @@
+from apps.ridehail import (
+	DriverWorkflowPayload,
+	PassengerWorkflowPayload,
 # from apps.ridehail.datahub.scenario.generate_behavior import GenerateBehavior
 
 
