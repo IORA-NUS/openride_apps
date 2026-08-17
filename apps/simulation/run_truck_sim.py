@@ -55,12 +55,13 @@ def main():
             kafka_utils = _kafka_utils
             print(f"Initializing Kafka for {run_id}...")
             kafka_utils.initialize_kafka_topics()
-            kafka_utils.push_event("run_status", {"status": "RUNNING"}, key=run_id)
+            kafka_utils.push_run_status(kafka_utils.resolve_topic("run_status"), run_id, "RUNNING")
         except Exception as e:
             print(f"Kafka init skipped/failed: {e}")
 
     # Create one truck agent in-process (no Celery), while still using the real
     # OpenRide + routing + messaging backends.
+    from apps.container_logistics.analytics.agent import AnalyticsAgentIndie
     from apps.container_logistics.truck.agent import TruckAgent
 
     truck_unique_id = "truck_000001"
@@ -68,13 +69,26 @@ def main():
     truck_behavior["shift_start_time"] = 0
     truck_behavior["shift_end_time"] = max(truck_behavior.get("shift_end_time", 0), 3600)
 
+    _ref = datetime.strftime(datetime(2020, 1, 1, 8, 0, 0), "%Y%m%d%H%M%S")
+    _sched = {"id": "local", "orsim_settings": {**orsim_settings, "DOMAIN": domain}}
+
     truck_agent = TruckAgent(
         unique_id=truck_unique_id,
         run_id=run_id,
-        reference_time=datetime.strftime(datetime(2020, 1, 1, 8, 0, 0), "%Y%m%d%H%M%S"),
+        reference_time=_ref,
         init_time_step=0,
-        scheduler={"id": "local", "orsim_settings": {**orsim_settings, "DOMAIN": domain}},
+        scheduler=_sched,
         behavior=truck_behavior,
+    )
+
+    analytics_unique_id = "analytics_000"
+    analytics_agent = AnalyticsAgentIndie(
+        unique_id=analytics_unique_id,
+        run_id=run_id,
+        reference_time=_ref,
+        init_time_step=0,
+        scheduler=_sched,
+        behavior=GenerateBehavior.container_analytics(analytics_unique_id),
     )
 
     # Register state machines using an admin user (independent of agent object return value).
@@ -108,9 +122,12 @@ def main():
     for step_idx in range(max_steps):
         # Advance local simulation clock.
         truck_agent.bootstrap_step(step_idx)
+        analytics_agent.bootstrap_step(step_idx)
         # Ensure agent has launched.
         truck_agent.entering_market(step_idx)
+        analytics_agent.entering_market(step_idx)
         truck_agent.step(step_idx)
+        analytics_agent.step(step_idx)
 
         truck_res = truck_agent.app.get_truck()
         haul_trip = truck_agent.app.get_trip()
@@ -220,7 +237,7 @@ def main():
     try:
         if kafka_utils is None:
             raise RuntimeError("kafka_utils unavailable")
-        kafka_utils.push_event("run_status", {"status": "COMPLETED", "summary": summary}, key=run_id)
+        kafka_utils.push_run_status(kafka_utils.resolve_topic("run_status"), run_id, "COMPLETED", summary=summary)
     except Exception:
         pass
 

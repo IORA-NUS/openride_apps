@@ -1,5 +1,10 @@
 from .events import ContainerLogisticsActions, ContainerLogisticsEvents
-from .facility_queue_sm import FacilityQueueController, FacilityQueueState
+from .facility_queue_sm import (
+    FacilityQueueController,
+    FacilityQueueState,
+    FacilityVisitType,
+    QueueEntry,
+)
 from .gate_sm import GateStateMachine
 from .haul_trip_sm import HaulTripStateMachine
 from .haultrip_gate_interactions import haultrip_gate_interactions
@@ -12,6 +17,8 @@ __all__ = [
     "ContainerLogisticsEvents",
     "FacilityQueueController",
     "FacilityQueueState",
+    "FacilityVisitType",
+    "QueueEntry",
     "GateStateMachine",
     "HaulTripStateMachine",
     "haultrip_gate_interactions",

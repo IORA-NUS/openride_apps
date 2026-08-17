@@ -28,9 +28,9 @@ flowchart LR
         T8 -->|finish_dropoff_service| T9[completed]
     end
 
-    subgraph FACILITY[Facility Queue and Gates]
-        F1[truck joins FIFO queue] --> F2[first truck selected when any gate available]
-        F2 --> G1[gate busy_pickup or busy_dropoff]
+    subgraph FACILITY[Facility Gate Queue]
+        F1[truck joins FIFO gate queue] --> F2[first truck when gate available]
+        F2 --> G1[gate busy — facility service]
         G1 -->|service complete| G2[gate available]
         G2 --> F2
     end

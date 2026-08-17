@@ -67,7 +67,7 @@ def main():
             kafka_utils = _kafka_utils
             print(f"Initializing Kafka for {run_id}...")
             kafka_utils.initialize_kafka_topics()
-            kafka_utils.push_event("run_status", {"status": "RUNNING"}, key=run_id)
+            kafka_utils.push_run_status(kafka_utils.resolve_topic("run_status"), run_id, "RUNNING")
         except Exception as e:
             print(f"Kafka init skipped/failed: {e}")
 
@@ -183,7 +183,7 @@ def main():
     try:
         if kafka_utils is None:
             raise RuntimeError("kafka_utils unavailable")
-        kafka_utils.push_event("run_status", {"status": "COMPLETED", "summary": summary}, key=run_id)
+        kafka_utils.push_run_status(kafka_utils.resolve_topic("run_status"), run_id, "COMPLETED", summary=summary)
     except Exception:
         pass
 

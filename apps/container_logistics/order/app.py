@@ -69,7 +69,7 @@ class OrderApp(ORSimApp):
     @message_handler(ContainerLogisticsActions.ORDER_WORKFLOW_EVENT, ContainerLogisticsEvents.ORDER_ASSIGNED_TO_TRUCK)
     def _on_order_assigned(self, payload, data):
         order_id = (data or {}).get("order_id") or payload.get("order_id")
-        if order_id and order_id != self.manager.get_id():
+        if order_id and str(order_id) != str(self.manager.get_id()):
             return
         truck_id = (data or {}).get("truck_id") or payload.get("truck_id")
         self.manager.assign_to_truck(sim_clock=self.latest_sim_clock, truck_id=truck_id)
@@ -77,35 +77,35 @@ class OrderApp(ORSimApp):
     @message_handler(ContainerLogisticsActions.ORDER_WORKFLOW_EVENT, ContainerLogisticsEvents.ORDER_PICKUP_STARTED)
     def _on_pickup_started(self, payload, data):
         order_id = (data or {}).get("order_id") or payload.get("order_id")
-        if order_id and order_id != self.manager.get_id():
+        if order_id and str(order_id) != str(self.manager.get_id()):
             return
         self.manager.mark_pickup_started(sim_clock=self.latest_sim_clock)
 
     @message_handler(ContainerLogisticsActions.ORDER_WORKFLOW_EVENT, ContainerLogisticsEvents.ORDER_PICKUP_COMPLETED)
     def _on_pickup_completed(self, payload, data):
         order_id = (data or {}).get("order_id") or payload.get("order_id")
-        if order_id and order_id != self.manager.get_id():
+        if order_id and str(order_id) != str(self.manager.get_id()):
             return
         self.manager.mark_pickup_done(sim_clock=self.latest_sim_clock)
 
     @message_handler(ContainerLogisticsActions.ORDER_WORKFLOW_EVENT, ContainerLogisticsEvents.ORDER_DROPOFF_STARTED)
     def _on_dropoff_started(self, payload, data):
         order_id = (data or {}).get("order_id") or payload.get("order_id")
-        if order_id and order_id != self.manager.get_id():
+        if order_id and str(order_id) != str(self.manager.get_id()):
             return
         self.manager.mark_dropoff_started(sim_clock=self.latest_sim_clock)
 
     @message_handler(ContainerLogisticsActions.ORDER_WORKFLOW_EVENT, ContainerLogisticsEvents.ORDER_DELIVERED)
     def _on_delivered(self, payload, data):
         order_id = (data or {}).get("order_id") or payload.get("order_id")
-        if order_id and order_id != self.manager.get_id():
+        if order_id and str(order_id) != str(self.manager.get_id()):
             return
         self.manager.mark_delivered(sim_clock=self.latest_sim_clock)
 
     @message_handler(ContainerLogisticsActions.ORDER_WORKFLOW_EVENT, ContainerLogisticsEvents.ORDER_CANCELLED)
     def _on_cancelled(self, payload, data):
         order_id = (data or {}).get("order_id") or payload.get("order_id")
-        if order_id and order_id != self.manager.get_id():
+        if order_id and str(order_id) != str(self.manager.get_id()):
             return
         self.manager.cancel(sim_clock=self.latest_sim_clock)
 

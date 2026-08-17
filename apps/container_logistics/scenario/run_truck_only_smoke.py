@@ -133,7 +133,7 @@ def main():
 
         # When the truck arrives pickup queue, simulate facility queue/gate.
         if state == HaulTripStateMachine.queued_for_pickup.name and not pickup_gate_assigned:
-            facility_app.enqueue_arrival(truck_id=truck.get("_id"), is_pickup_leg=True)
+            facility_app.enqueue_arrival(truck_id=truck.get("_id"), visit_type="pickup")
             pickup_gate_assigned = True
 
         # After gate assignment, the truck will enter pickup gate. Complete service immediately.
@@ -144,7 +144,7 @@ def main():
 
         # When the truck arrives dropoff queue, simulate gate assignment.
         if state == HaulTripStateMachine.queued_for_dropoff.name and not dropoff_gate_assigned:
-            facility_app.enqueue_arrival(truck_id=truck.get("_id"), is_pickup_leg=False)
+            facility_app.enqueue_arrival(truck_id=truck.get("_id"), visit_type="dropoff")
             dropoff_gate_assigned = True
 
         if state == HaulTripStateMachine.at_dropoff_gate.name:

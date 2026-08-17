@@ -196,5 +196,7 @@ class TripGeoPublisher:
                     "run_id": self.run_id,
                     "sim_clock": sim_clock_iso,
                     "passenger_trip_id": ptid,
+                    "lifecycle_scope": "passenger_trip",
+                    "note": "Passenger trip left active set; simulation may still be running.",
                 },
             )

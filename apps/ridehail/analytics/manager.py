@@ -2,9 +2,10 @@ import requests, json
 from http import HTTPStatus
 
 import logging
-from apps.config import settings, simulation_domains
+from apps.config import kpi_ecosystems, settings, simulation_domains
 from apps.utils import id_generator, is_success
-from apps.utils.kafka_utils import push_kpi_to_topic, flush_producer
+from apps.utils.kpi_save import save_kpi_batch
+from apps.utils.kpi_catalog_client import KpiCatalogClient
 # from apps.agent_core.state_machine.workflow_sm import WorkflowStateMachine
 
 
@@ -21,6 +22,7 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         self.resource_type = 'kpi'
 
         self.simulation_domain = simulation_domains['ridehail']
+        self._kpi_catalog = KpiCatalogClient(kpi_ecosystems["ridehail"], user)
 
 
         # AnalyticsManager does not require initialization of a resource in the same way as other managers, since it is primarily responsible for saving KPIs. However, we can still create a resource to store metadata about the analytics if needed. For now, we'll skip resource initialization for AnalyticsManager.
@@ -285,23 +287,14 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
             logging.error(str(e))
 
     def save_kpi(self, sim_clock, kpi_collection):
-        kpi_url = self._kpi_url()
-        data = []
-        for metric, value in kpi_collection.items():
-            kafka_message = {
-                'metric': metric,
-                'value': value,
-                'sim_clock': sim_clock,
-            }
-            print(f"Kafka message: {kafka_message}")
-            push_kpi_to_topic(self.run_id, kafka_message)
-            data.append({
-                'metric': metric,
-                'value': value,
-                'sim_clock': sim_clock,
-            })
-        flush_producer()
-        self._post(kpi_url, data)
+        save_kpi_batch(
+            self.run_id,
+            sim_clock,
+            kpi_collection,
+            self._kpi_catalog,
+            ecosystem_label="ridehail",
+            mongo_post=lambda rows: self._post(self._kpi_url(), rows),
+        )
 
 
 

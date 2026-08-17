@@ -96,7 +96,7 @@ def main():
             kafka_utils = _kafka_utils
             print(f"Initializing Kafka for {run_id}...")
             kafka_utils.initialize_kafka_topics()
-            kafka_utils.push_event("run_status", {"status": "RUNNING"}, key=run_id)
+            kafka_utils.push_run_status(kafka_utils.resolve_topic("run_status"), run_id, "RUNNING")
         except Exception as e:
             print(f"Kafka init skipped/failed: {e}")
 
@@ -112,12 +112,10 @@ def main():
 
     facility_unique_id = "facility_000001"
     facility_behavior = GenerateBehavior.container_facility(facility_unique_id, facility_index=0)
-    facility_behavior["pickup_service_time"] = 3
-    facility_behavior["dropoff_service_time"] = 3
+    facility_behavior["service_time"] = 3
     facility_behavior["step_only_on_events"] = False
     if isinstance(facility_behavior.get("profile"), dict):
-        facility_behavior["profile"]["pickup_service_time"] = 3
-        facility_behavior["profile"]["dropoff_service_time"] = 3
+        facility_behavior["profile"]["service_time"] = 3
 
     facility_spec = {
         "unique_id": facility_unique_id,
@@ -168,8 +166,8 @@ def main():
             )
             pickup_arrival_sent = True
 
-        pickup_assigned = pickup_assigned or (pickup_truck_id in qc.gate_assignments.values())
-        if pickup_assigned and (pickup_truck_id not in qc.gate_assignments.values()):
+        pickup_assigned = pickup_assigned or (pickup_truck_id in qc.active_truck_ids())
+        if pickup_assigned and (pickup_truck_id not in qc.active_truck_ids()):
             pickup_completed = True
 
         if pickup_completed and (not dropoff_arrival_sent):
@@ -182,8 +180,8 @@ def main():
             )
             dropoff_arrival_sent = True
 
-        dropoff_assigned = dropoff_assigned or (dropoff_truck_id in qc.gate_assignments.values())
-        if dropoff_assigned and (dropoff_truck_id not in qc.gate_assignments.values()):
+        dropoff_assigned = dropoff_assigned or (dropoff_truck_id in qc.active_truck_ids())
+        if dropoff_assigned and (dropoff_truck_id not in qc.active_truck_ids()):
             dropoff_completed = True
 
         if pickup_completed and dropoff_completed:
@@ -207,7 +205,7 @@ def main():
     try:
         if kafka_utils is None:
             raise RuntimeError("kafka_utils unavailable")
-        kafka_utils.push_event("run_status", {"status": "COMPLETED", "summary": summary}, key=run_id)
+        kafka_utils.push_run_status(kafka_utils.resolve_topic("run_status"), run_id, "COMPLETED", summary=summary)
     except Exception:
         pass
 

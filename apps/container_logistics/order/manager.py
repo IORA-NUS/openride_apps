@@ -1,3 +1,5 @@
+from typing import Any
+
 from apps.common.resource_client_mixin import ResourceClientMixin
 from apps.config import simulation_domains, settings
 from apps.container_logistics.statemachine import OrderStateMachine
@@ -28,6 +30,20 @@ class OrderManager(ResourceClientMixin, ORSimManager):
 
     def on_init(self):
         pass
+
+    def login(self, sim_clock: Any) -> Any:
+        """Orders use ``OrderStateMachine``, not ``WorkflowStateMachine``; skip generic dormant/offline/online login."""
+        return self.resource
+
+    def logout(self, sim_clock: Any) -> Any:
+        """Orders reach a terminal OrderStateMachine state (completed/cancelled) on their own.
+
+        The generic ``ORSimManager.logout`` attempts a ``WorkflowStateMachine`` 'offline'
+        transition, which is invalid here and raised "<state> is not a valid state value"
+        on every finished order. Orders hold no external resource to release, so this is a
+        no-op — mirrors the ``login`` override above.
+        """
+        return self.resource
 
     def as_dict(self):
         return self.resource

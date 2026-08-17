@@ -43,7 +43,8 @@ mypy==1.19.1
 mypy_extensions==1.1.0
 nest-asyncio==1.6.0
 numpy==1.26.3
-orsim==1.2.1
+# TEMP: local orsim feature branch — revert to orsim==1.2.1 after verification
+-e file:///home/user/orsim
 packaging==23.2
 paho-mqtt==1.6.1
 pandas==2.1.4
@@ -66,6 +67,9 @@ pyparsing==3.3.2
 pyproj==3.6.1
 pytest==7.4.4
 python-dateutil==2.8.2
+duckdb>=1.0.0
+pymongo>=3.12.0
+confluent-kafka>=2.0.0
 python-statemachine==3.0.0
 pytz==2023.3.post1
 pyzmq==27.1.0

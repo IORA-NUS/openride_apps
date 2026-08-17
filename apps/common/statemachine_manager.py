@@ -1,3 +1,5 @@
+import logging
+
 from statemachine import StateMachine, State
 from graphviz import Digraph
 
@@ -6,6 +8,9 @@ from orsim.utils import StateMachineSerializer
 
 
 import requests
+
+from apps.common.resource_client_mixin import get_http_session
+
 
 class StateMachineManager:
     """Manager for registering and validating state machines with the server."""
@@ -31,8 +36,10 @@ class StateMachineManager:
             })
         }
 
-        # Check if statemachine exists
-        resp = requests.get(endpoint, headers=headers, params=params)
+        # Check if statemachine exists. Pooled session — registration runs
+        # for every agent during bootstrap (3.6k agents = ~7k HTTP hits).
+        session = get_http_session()
+        resp = session.get(endpoint, headers=headers, params=params)
         # print(f"GET {endpoint} with params {params} returned status {resp.status_code}")
         # print(resp.url)
         # print(f"Checked statemachine {statemachine_name} existence: {resp.status_code}")
@@ -45,19 +52,43 @@ class StateMachineManager:
                 "name": statemachine_name,
                 "definition": definition
             }
-            create_resp = requests.post(endpoint, headers=headers, json=data)
+            create_resp = session.post(endpoint, headers=headers, json=data)
             if create_resp.status_code != 201:
                 raise RuntimeError(f"Failed to create statemachine: {create_resp.text}")
             return "created"
         else:
         # elif resp.status_code == 200:
-            # Exists, validate
-            existing = resp.json()['_items'][0].get("definition", {})
-            # print(f"{existing = }")
-            # print(f"{definition = }")
-
+            # Exists, validate (or update when the code-side definition evolved)
+            item = resp.json()["_items"][0]
+            existing = item.get("definition", {})
             if existing != definition:
-                raise ValueError(f"Statemachine definition mismatch for {statemachine_name} (domain={domain})")
+                sm_id = item.get("_id")
+                if not sm_id:
+                    raise ValueError(
+                        f"Statemachine definition mismatch for {statemachine_name} "
+                        f"(domain={domain}) and no _id to patch"
+                    )
+                logging.warning(
+                    "Updating stored definition for %s (domain=%s) — "
+                    "local code no longer matches the server copy.",
+                    statemachine_name,
+                    domain,
+                )
+                patch_headers = dict(headers)
+                etag = item.get("_etag")
+                if etag:
+                    patch_headers["If-Match"] = str(etag)
+                patch_resp = session.patch(
+                    f"{endpoint}/{sm_id}",
+                    headers=patch_headers,
+                    json={"definition": definition},
+                )
+                if patch_resp.status_code not in (200, 201):
+                    raise RuntimeError(
+                        f"Failed to update statemachine {statemachine_name}: "
+                        f"{patch_resp.status_code} {patch_resp.text}"
+                    )
+                return "updated"
             return "validated"
         # else:
         #     raise RuntimeError(f"Unexpected response: {resp.status_code} {resp.text}")

@@ -17,6 +17,11 @@ class BaseScenarioManager(ABC):
         self.domain = domain
         # self.run_data_dir = run_data_dir
         self.reference_time = datetime(2020, 1, 1, 8, 0, 0)
+        # Folder segment scenarios live under, e.g. <datahub>/<domain>/<segment>/<name>.
+        # Overridable per-domain; defaults to the historical "dataset" so ecosystems
+        # that haven't migrated (ridehail) keep their existing on-disk layout.
+        if not getattr(self, "scenario_folder_segment", None):
+            self.scenario_folder_segment = "dataset"
         # Global simulation configuration for the scenario (must be set by subclass)
         self._orsim_settings = None
         self.collections = {}  # e.g., {'driver': {...}, 'passenger': {...}}
@@ -43,7 +48,9 @@ class BaseScenarioManager(ABC):
         #     # fallback for legacy usage
         #     project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         #     self.base_datahub = os.path.join(project_root, 'datahub', self.domain)
-        behavior_dir = os.path.join(self.datahub_dir, self.domain, 'dataset', self.scenario_name)
+        behavior_dir = os.path.join(
+            self.datahub_dir, self.domain, self.scenario_folder_segment, self.scenario_name
+        )
         os.makedirs(behavior_dir, exist_ok=True)
         return behavior_dir
 

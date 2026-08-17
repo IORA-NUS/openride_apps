@@ -162,3 +162,65 @@ def test_finish_pickup_service_includes_dropoff_route_eta_and_service_time():
     assert context["planned_route"] == dropoff_route
     assert context["estimated_time_to_dropoff"] == 2400
     assert context["service_time"] == 300
+
+
+# --- order-lifecycle service mode: shared-topic emitter (WP2) ------------------
+
+
+def _trip_manager(order_events_topic=None):
+    return TruckTripManager(
+        run_id="r1",
+        sim_clock="Mon, 01 Jan 2024 00:00:00 GMT",
+        user=_DummyUser(),
+        messenger=_DummyMessenger(),
+        persona={"role": "truck"},
+        order_events_topic=order_events_topic,
+    )
+
+
+def test_order_event_topic_defaults_to_the_per_order_topic():
+    """Pins the ``agents``-mode path: unstamped trucks keep publishing to run_id/<order_id>."""
+    manager = _trip_manager()
+    manager.trip = {"_id": "trip-1", "order": "order-42", "sim_clock": "Mon, 01 Jan 2024 00:00:00 GMT"}
+
+    assert manager._mqtt_topic_for_workflow_event("order_delivered") == "r1/order-42"
+
+
+def test_order_event_topic_uses_the_shared_topic_when_stamped():
+    manager = _trip_manager(order_events_topic="order_lifecycle")
+    manager.trip = {"_id": "trip-1", "order": "order-42", "sim_clock": "Mon, 01 Jan 2024 00:00:00 GMT"}
+
+    assert manager._mqtt_topic_for_workflow_event("order_delivered") == "r1/order_lifecycle"
+
+
+def test_order_event_topic_is_none_without_an_order_in_both_modes():
+    for topic in (None, "order_lifecycle"):
+        manager = _trip_manager(order_events_topic=topic)
+        manager.trip = {"_id": "trip-1", "order": None}
+        assert manager._mqtt_topic_for_workflow_event("order_delivered") is None
+
+
+def test_order_message_template_carries_event_order_id_and_trip_sim_clock():
+    manager = _trip_manager(order_events_topic="order_lifecycle")
+    manager.trip = {
+        "_id": "trip-1",
+        "truck": "truck-7",
+        "order": "order-42",
+        "sim_clock": "Mon, 01 Jan 2024 03:04:05 GMT",
+    }
+
+    msg = manager.message_template("order_delivered")
+
+    assert msg["truck_id"] == "truck-7"
+    assert msg["data"]["event"] == "order_delivered"
+    assert msg["data"]["order_id"] == "order-42"
+    assert msg["data"]["sim_clock"] == "Mon, 01 Jan 2024 03:04:05 GMT"
+
+
+def test_facility_message_template_is_unchanged():
+    manager = _trip_manager(order_events_topic="order_lifecycle")
+    manager.trip = {"_id": "trip-1", "truck": "truck-7", "order": "order-42", "sim_clock": "x"}
+
+    msg = manager.message_template("truck_arrived_pickup_queue")
+
+    assert set(msg["data"]) == {"event"}

@@ -10,9 +10,39 @@ orsim_settings = {
     'AGENT_LAUNCH_TIMEOUT': 15,
     'STEP_TIMEOUT': 60, # Max Compute time for each step (seconds) in CPU time
     'STEP_TIMEOUT_TOLERANCE': 0.1,
+    # Once the unresponsive fraction is within STEP_TIMEOUT_TOLERANCE and this many
+    # seconds have elapsed, stop waiting the full STEP_TIMEOUT — the straggler agents
+    # are pruned and the step continues. Keeps a single slow agent from costing 30-60s.
+    'STEP_SETTLE_SECONDS': 2,
     'HEARTBEAT_INTERVAL': 5, # seconds
 
+    # Post-horizon drain (paired with ALLOW_POST_HORIZON_DRAIN + HorizonDrainTermination).
+    # Orders that can never be served must terminalize so the agent scheduler drains and the
+    # run ends, instead of looping forever (see CLAUDE.md §6.4).
+    #   POST_HORIZON_GRACE_STEPS: at/after the horizon, unassigned/created orders cancel
+    #     immediately; already-assigned/in-flight orders get this many extra steps to finish
+    #     (trucks complete their current trip before going offline), after which any still
+    #     non-terminal order is force-cancelled.
+    #   POST_HORIZON_DRAIN_MAX_STEPS: hard cap — once the run is this many steps past the
+    #     horizon, HorizonDrainTermination ends it regardless of remaining agents (backstop
+    #     against any stuck agent). Keep > POST_HORIZON_GRACE_STEPS so clean self-cancel wins.
+    'POST_HORIZON_GRACE_STEPS': 60,
+    'POST_HORIZON_DRAIN_MAX_STEPS': 90,
+
     'REFERENCE_TIME': '2020-01-01 04:00:00',
+
+    # perf_stream — step_tick every step; step_detail sampling interval
+    'PERF_TICK_EVERY_STEP': True,
+    'PERF_DETAIL_INTERVAL_STEPS': 10,
+    'PERF_DETAIL_ON_NEW_MAX': True,
+    'PERF_SLOW_AGENT_TOP_N': 10,
+    'PERF_INCLUDE_PROCESS_METRICS': False,
+    'PERF_KAFKA_FLUSH_EVERY_STEPS': 10,
+    'PERF_KAFKA_INTERVAL_STEPS': 10,
+    'RUNTIME_STATUS_UPDATE_INTERVAL_STEPS': 10,
+    # Publish a run_status "step X/total" heartbeat to Kafka every N steps so the
+    # dashboard progress counter advances during the run (0 disables the heartbeat).
+    'KAFKA_HEARTBEAT_INTERVAL_STEPS': 5,
 }
 
 # analytics_settings = {

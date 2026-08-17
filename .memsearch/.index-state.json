@@ -1,0 +1,18 @@
+{
+  "collection": "ms_openride_apps_2f139fba",
+  "failed_files": [],
+  "indexed_chunks": 3,
+  "indexed_files": 8,
+  "last_completed_at": "2026-08-17T04:08:32.193072Z",
+  "last_started_at": "2026-08-17T04:08:29.627178Z",
+  "last_success_at": "2026-08-17T04:08:32.193072Z",
+  "milvus_uri": "~/.memsearch/milvus.db",
+  "operation": "index",
+  "paths": [
+    "/home/user/openride_apps/.memsearch/memory"
+  ],
+  "schema_version": 1,
+  "status": "ok",
+  "total_files": 8,
+  "updated_at": "2026-08-17T04:08:32.193072Z"
+}

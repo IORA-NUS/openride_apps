@@ -20,6 +20,7 @@ from apps.ridehail.statemachine import RidehailPassengerTripStateMachine, Rideha
 from apps.ridehail.statemachine import RideHailActions
 from .solver import *  # NOTE * is deliberate to load all solvers in globals()
 from .manager import AssignmentManager
+from apps.utils.perf_metrics import timed_block
 from orsim.lifecycle import ORSimApp
 
 
@@ -108,20 +109,21 @@ class AssignmentApp(ORSimApp):
         driver_locs = {k: v['current_loc'] for k, v in driver_trip.items()}
         passenger_locs = {k: v['pickup_loc'] for k, v in passenger_trip.items()}
 
-        distance_matrix = self.get_distance_matrix(driver_locs, passenger_locs)
+        with timed_block() as osrm_timer:
+            distance_matrix = self.get_distance_matrix(driver_locs, passenger_locs)
+        osrm_matrix_ms = osrm_timer.elapsed_ms
 
         driver_list = [d for k, d in driver_trip.items()]
         passenger_trip_list = [p for k, p in passenger_trip.items()]
 
-        start = time.time()
-        try:
-            assignment, matched_pairs = self.manager.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
-        except Exception as e:
-            logging.exception(traceback.format_exc())
-            assignment = []
-            matched_pairs = []
+        with timed_block() as solver_timer:
+            try:
+                assignment, matched_pairs = self.manager.solver.solve(driver_list, passenger_trip_list, distance_matrix, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
+            except Exception as e:
+                logging.exception(traceback.format_exc())
+                assignment = []
+                matched_pairs = []
 
-        end = time.time()
         scale_factor = self.get_scale_factor(time_step)
 
         online_params = self.manager.solver.update_online_params(scale_factor, driver_list, passenger_trip_list, matched_pairs, self.manager.as_dict().get('offline_params'), self.manager.as_dict().get('online_params'))
@@ -131,12 +133,66 @@ class AssignmentApp(ORSimApp):
             'passenger_trip': item[1]['_id']
         } for item in assignment]
 
+        solver_name = self.behavior.get('profile', {}).get('solver', 'unknown')
         performance = {
-            "run_time": end-start,
+            "run_time": solver_timer.elapsed_ms / 1000.0,
+            "solver_ms": round(solver_timer.elapsed_ms, 2),
+            "osrm_matrix_ms": round(osrm_matrix_ms, 2),
+            "osrm_last_call_ms": round(getattr(OSRMClient, "last_call_ms", 0), 2),
+            "solver": solver_name,
             "num_drivers": len(driver_list),
             "num_passenger_trips": len(passenger_trip_list),
-            "result": result
+            "matrix_size": f"{len(driver_list)}x{len(passenger_trip_list)}",
+            "result": result,
         }
+        try:
+            from apps.utils.perf_metrics import publish_perf
+
+            publish_perf(
+                self.run_id,
+                "assignment",
+                {
+                    "solver": solver_name,
+                    "solver_ms": performance["solver_ms"],
+                    "osrm_matrix_ms": performance["osrm_matrix_ms"],
+                    "num_drivers": performance["num_drivers"],
+                    "num_passenger_trips": performance["num_passenger_trips"],
+                    "sim_clock": sim_clock,
+                    "time_step": time_step,
+                    "spans": [
+                        {
+                            "name": "assignment_solver",
+                            "ms": performance["solver_ms"],
+                        },
+                        {
+                            "name": "osrm_matrix",
+                            "ms": performance["osrm_matrix_ms"],
+                        },
+                    ],
+                    "bottlenecks": [
+                        {
+                            "component": "assignment_solver",
+                            "label": f"Assignment solver ({solver_name})",
+                            "ms": performance["solver_ms"],
+                            "pct": 100.0,
+                        },
+                        {
+                            "component": "osrm_matrix",
+                            "label": "OSRM distance matrix",
+                            "ms": performance["osrm_matrix_ms"],
+                            "pct": round(
+                                100.0
+                                * performance["osrm_matrix_ms"]
+                                / max(performance["solver_ms"] + performance["osrm_matrix_ms"], 1),
+                                1,
+                            ),
+                        },
+                    ],
+                },
+                sim_step=time_step,
+            )
+        except Exception:
+            pass
         # self.manager.update_engine(sim_clock, online_params, performance)
         self.manager.update_resource({"online_params": online_params, "last_run_performance": performance, "sim_clock": sim_clock})
 

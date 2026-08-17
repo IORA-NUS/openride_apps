@@ -3,6 +3,10 @@ services:
   rabbit:
     image: "rabbitmq"
     container_name: rabbit
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     ports:
     - "5671:5671"
     - "5672:5672"

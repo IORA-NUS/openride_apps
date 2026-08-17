@@ -55,7 +55,11 @@ from apps.config import simulation_domains
 #     'step_metrics': {},
 # }
 
-run_id = f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+# Honor an externally-injected run id (set by the control layer at launch) so the id is
+# known before the process starts producing — eliminates the discovery race where the
+# dashboard could attach to the previous, already-completed run. Falls back to a
+# timestamp when not provided (e.g. direct CLI invocation).
+run_id = os.environ.get("ORSIM_RUN_ID", "").strip() or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
 def main():
     global run_id
@@ -131,6 +135,8 @@ def main():
         }
     }
 
+    from apps.simulation.container_logistics_wiring import kafka_progress_listener
+
     sim = SimulationRuntime(
         run_id=run_id,
         scenario_manager=scenario_manager,
@@ -138,22 +144,27 @@ def main():
         domain=domain,
         agent_config=agent_config,
         statemachine_collection=ridehail_statemachines,
-        scheduler_config=scheduler_config
+        scheduler_config=scheduler_config,
+        progress_listener=kafka_progress_listener,
     )
 
     print(f"Initializing Kafka for {run_id}...")
     kafka_utils.initialize_kafka_topics()
-    kafka_utils.push_event("run_status", {"status": "RUNNING"}, key=run_id)
+    run_status_topic = kafka_utils.resolve_topic("run_status")
+    kafka_utils.push_run_status(run_status_topic, run_id, "RUNNING")
+    kafka_utils.flush_producer(10)
 
     print("Running simulation .... ")
     try:
         sim.run_simulation()
         print("Simulation completed!")
-        kafka_utils.push_event("run_status", {"status": "COMPLETED"}, key=run_id)
+        kafka_utils.push_run_status(run_status_topic, run_id, "COMPLETED")
+        kafka_utils.flush_producer(10)
     except Exception as e:
         print(f"Simulation Error: {e}")
         # Still try to send a failure event if possible
-        kafka_utils.push_event("run_status", {"status": "FAILED", "msg": str(e)}, key=run_id)
+        kafka_utils.push_run_status(run_status_topic, run_id, "FAILED", msg=str(e))
+        kafka_utils.flush_producer(10)
 
 
 if __name__ == "__main__":

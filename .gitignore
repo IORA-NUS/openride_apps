@@ -10,6 +10,15 @@ nohup*
 datahub/
 run_logs/
 
+# Container-logistics scenarios live in a global folder outside the domain package
+# (openride_apps/scenarios/). Commit the SOURCES (spec.json, scenario_gen.py, inputs/);
+# ignore the derived, regenerable COMPILE ARTIFACTS (rebuild with `compile-scenario`).
+scenarios/_index.json
+scenarios/_registry.json
+scenarios/*/scenario.json
+scenarios/*/index.json
+scenarios/**/*.tmp
+
 
 # user_db.py
 .DS_Store

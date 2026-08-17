@@ -11,15 +11,27 @@ class FacilityQueueState(str, Enum):
     CLOSED = "closed"
 
 
+class FacilityVisitType(str, Enum):
+    PICKUP = "pickup"
+    DROPOFF = "dropoff"
+
+
+@dataclass(frozen=True)
+class QueueEntry:
+    """Truck waiting at or being served through a gate."""
+
+    truck_id: str
+    visit_type: FacilityVisitType
+
+
 @dataclass
 class FacilityQueueController:
-    """FIFO queue allocator over one or more gates within a facility."""
+    """FIFO gate queue for a facility — one queue, N parallel gates."""
 
     gate_count: int
     state: FacilityQueueState = FacilityQueueState.CLOSED
-    pickup_queue: Deque[str] = field(default_factory=deque)
-    dropoff_queue: Deque[str] = field(default_factory=deque)
-    gate_assignments: Dict[int, Optional[str]] = field(default_factory=dict)
+    queue: Deque[QueueEntry] = field(default_factory=deque)
+    gate_assignments: Dict[int, Optional[QueueEntry]] = field(default_factory=dict)
     gates: List[GateStateMachine] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -37,44 +49,44 @@ class FacilityQueueController:
     def close_facility(self) -> None:
         self.state = FacilityQueueState.CLOSED
 
-    def enqueue_truck(self, truck_id: str, is_pickup_leg: bool) -> None:
-        if is_pickup_leg:
-            self.pickup_queue.append(truck_id)
-        else:
-            self.dropoff_queue.append(truck_id)
+    def enqueue_truck(self, truck_id: str, *, visit_type: FacilityVisitType | str) -> None:
+        if isinstance(visit_type, str):
+            visit_type = FacilityVisitType(visit_type)
+        self.queue.append(QueueEntry(truck_id=truck_id, visit_type=visit_type))
 
-    def assign_waiting_trucks(self, is_pickup_leg: bool) -> Dict[int, str]:
-        """
-        Assign trucks from queue to available gates in FIFO order.
-        Returns map gate_index -> truck_id for assignments performed in this call.
-        """
-        assignments: Dict[int, str] = {}
+    def assign_available_gates(self) -> Dict[int, QueueEntry]:
+        """Assign trucks from the FIFO queue to every available gate."""
+        assignments: Dict[int, QueueEntry] = {}
         if self.state != FacilityQueueState.OPEN:
             return assignments
 
-        queue = self.pickup_queue if is_pickup_leg else self.dropoff_queue
         for idx, gate in enumerate(self.gates):
-            if not queue:
+            if not self.queue:
                 break
             if gate.current_state.id != "available":
                 continue
-            truck_id = queue.popleft()
-            if is_pickup_leg:
-                gate.assign_pickup_truck()
-            else:
-                gate.assign_dropoff_truck()
-            self.gate_assignments[idx] = truck_id
-            assignments[idx] = truck_id
+            entry = self.queue.popleft()
+            gate.assign_truck()
+            self.gate_assignments[idx] = entry
+            assignments[idx] = entry
 
         return assignments
 
-    def release_gate(self, gate_index: int) -> Optional[str]:
-        """Marks gate service complete and frees it for next truck."""
+    def release_gate(self, gate_index: int) -> Optional[QueueEntry]:
+        """Mark gate service complete and free it for the next truck."""
         if gate_index < 0 or gate_index >= len(self.gates):
             raise IndexError("Invalid gate index")
         gate = self.gates[gate_index]
-        if gate.current_state.id in {"busy_pickup", "busy_dropoff"}:
+        if gate.current_state.id == "busy":
             gate.complete_service()
-        truck_id = self.gate_assignments[gate_index]
+        entry = self.gate_assignments[gate_index]
         self.gate_assignments[gate_index] = None
-        return truck_id
+        return entry
+
+    def active_truck_ids(self) -> set[str]:
+        """Truck ids currently assigned to a gate (in service)."""
+        return {
+            entry.truck_id
+            for entry in self.gate_assignments.values()
+            if entry is not None
+        }

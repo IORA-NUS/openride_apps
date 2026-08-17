@@ -50,13 +50,19 @@ class TruckIdleTripManager(ResourceClientMixin):
     def ping(self, sim_clock, current_loc):
         if self.resource is None:
             return self.create_new(sim_clock=sim_clock, current_loc=current_loc)
+        if self.resource.get("current_loc") == current_loc:
+            return self.resource
         data = {
             "sim_clock": sim_clock,
             "current_loc": current_loc,
             "next_dest_loc": current_loc,
         }
-        self.resource_patch(resource_id=self.resource.get("_id"), data=data, etag=self.resource.get("_etag"))
-        self.refresh()
+        updated = self.resource_patch(
+            resource_id=self.resource.get("_id"),
+            data=data,
+            etag=self.resource.get("_etag"),
+        )
+        self.resource = updated
         return self.resource
 
     def end(self, sim_clock, current_loc):
@@ -70,7 +76,11 @@ class TruckIdleTripManager(ResourceClientMixin):
             "current_loc": current_loc,
             "next_dest_loc": current_loc,
         }
-        self.resource_patch(resource_id=self.resource.get("_id"), data=data, etag=self.resource.get("_etag"))
-        self.refresh()
+        updated = self.resource_patch(
+            resource_id=self.resource.get("_id"),
+            data=data,
+            etag=self.resource.get("_etag"),
+        )
+        self.resource = updated
         return self.resource
 

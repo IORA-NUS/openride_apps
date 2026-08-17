@@ -1,0 +1,86 @@
+%% KPI metrics pipeline — stream → DuckDB (live OLAP) → MongoDB (archive)
+%% Platform-wide workflow (ridehail + container logistics). Live dashboard unchanged (Kafka SSE).
+
+flowchart TB
+    subgraph SIM["Simulation (each analytics tick)"]
+        COMP["AnalyticsApp.compute_all_metrics()"]
+        SAVE["AnalyticsManager.save_kpi()"]
+        CAT["KpiCatalogClient.is_allowed()"]
+        COMP --> CAT --> SAVE
+    end
+
+    subgraph KAFKA["Kafka"]
+        KPI_TOPIC[("kpi_stream<br/>key = run_id")]
+        RS_TOPIC[("run_status<br/>compact topic")]
+    end
+
+    subgraph SINK["kpi-duckdb-sink (new service)"]
+        CONS["Consumer group: kpi-duckdb-sink"]
+        BATCH["Batch INSERT<br/>(metric, value, sim_clock)"]
+        DUCK[("DuckDB per run<br/>{run_id}.duckdb")]
+        EXPORT["Bulk export on terminal run_status"]
+        CONS --> BATCH --> DUCK
+        RS_TOPIC --> EXPORT
+        DUCK --> EXPORT
+    end
+
+    subgraph MONGO["MongoDB (persistent archive)"]
+        KPI_COLL[("kpi collection<br/>run_id, metric, value, sim_clock")]
+    end
+
+    subgraph LIVE["Live dashboard (unchanged v1)"]
+        SSE["SSE /api/stream"]
+        REDUX["Redux pushLiveMetric"]
+        HUD["HUD tiles + live charts"]
+        SSE --> REDUX --> HUD
+    end
+
+    subgraph HIST["Post-run dashboard (unchanged v1)"]
+        FETCH["POST /api/getMetricsByRunId"]
+        MONGO_READ["Mongo read"]
+        CHARTS["Charts / compare / builder"]
+        FETCH --> MONGO_READ --> CHARTS
+    end
+
+    SAVE -->|"JSON: metric, value, sim_clock"| KPI_TOPIC
+    SAVE -.->|"removed v1<br/>no per-tick POST"| KPI_COLL
+
+    KPI_TOPIC --> CONS
+    KPI_TOPIC --> SSE
+
+    EXPORT -->|"insert_many on any stop/completion"| KPI_COLL
+
+    RS_TOPIC -->|"COMPLETED / FAILED / CANCELLED"| SSE
+    KPI_COLL --> FETCH
+    EXPORT -.->|"triggers fetchMetrics()<br/>on simulation_terminal"| FETCH
+
+%% ── Row shape (logical) ─────────────────────────────────────────────
+%% Kafka value:  { metric, value, sim_clock }
+%% Kafka key:    run_id
+%% DuckDB row:   run_id, metric, value, sim_clock, ingested_at
+%% Mongo doc:    run_id, metric, value, sim_clock, _created, _updated
+
+sequenceDiagram
+    autonumber
+    participant Sim as Simulation
+    participant K as kpi_stream
+    participant Sink as kpi-duckdb-sink
+    participant DB as DuckDB
+    participant RS as run_status
+    participant M as MongoDB
+    participant UI as Live dashboard
+
+    loop Each analytics tick
+        Sim->>Sim: compute_all_metrics()
+        Sim->>K: produce(key=run_id, {metric, value, sim_clock})
+        K->>Sink: consume
+        Sink->>DB: batch INSERT kpi_events
+        K->>UI: SSE onmessage → pushLiveMetric
+    end
+
+    Sim->>RS: COMPLETED | FAILED | CANCELLED | STOPPED | …
+    RS->>Sink: terminal event
+    RS->>UI: simulation_terminal SSE
+    Sink->>DB: flush pending batch
+    Sink->>M: bulk insert_many(all rows for run_id)
+    UI->>M: fetchMetrics(run_id) — post-run reload

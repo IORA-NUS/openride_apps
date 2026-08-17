@@ -19,6 +19,18 @@ from pymongo.cursor import CursorType
 
 pd.options.display.float_format = '{:.2f}'.format
 
+# KPI rows where ``value`` is already a level / run-to-date total at ``sim_clock`` (not a per-tick increment).
+# Applying ``.cumsum()`` to these (as for ride-hail ``num_served``) inflates dashboards (e.g. summed "active" counts).
+_KPI_GAUGE_METRICS = frozenset(
+    {
+        "active_haul_trips",
+        "active_orders",
+        "active_driver_count",
+        "active_passenger_count",
+    }
+)
+
+
 def _connect_mongo(host, port, username, password, db):
     """ A util for making a connection to mongo """
 
@@ -132,9 +144,15 @@ def get_kpi_time_series(run_id_dict, metric_list, db_option=None):
 
             # print(len(df[slice]['cumulative']), len(slice), len(time_step[:len(slice)-1]))
             # print(run_id, metric, len(time_step))
-            df.loc[slice, 'cumulative'] = df[slice]['value'].cumsum()
-            df.loc[slice, 'avg_by_time'] = df[slice]['cumulative'] / time_step[:len(df[slice]['cumulative'])]
-            df.loc[slice, 'avg_by_trip'] = df[slice]['cumulative'] / num_served[:len(df[slice]['cumulative'])]
+            if metric in _KPI_GAUGE_METRICS:
+                # Point-in-time / run cumulative snapshot: do not sum across sim_clock ticks.
+                df.loc[slice, 'cumulative'] = df[slice]['value']
+                df.loc[slice, 'avg_by_time'] = df[slice]['value']
+                df.loc[slice, 'avg_by_trip'] = df[slice]['value']
+            else:
+                df.loc[slice, 'cumulative'] = df[slice]['value'].cumsum()
+                df.loc[slice, 'avg_by_time'] = df[slice]['cumulative'] / time_step[:len(df[slice]['cumulative'])]
+                df.loc[slice, 'avg_by_trip'] = df[slice]['cumulative'] / num_served[:len(df[slice]['cumulative'])]
 
     df.run_id.replace(run_id_dict,inplace=True)
     return df

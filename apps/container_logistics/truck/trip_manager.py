@@ -1,10 +1,20 @@
+import json
 import logging
 from datetime import timedelta
+from typing import Any, Optional
 
+import requests
+
+from apps.common.resource_client_mixin import get_http_session
 from apps.common.trip_manager_base import TripManagerBase
-from apps.config import simulation_domains
+from apps.config import settings, simulation_domains
+from apps.container_logistics.haul_trip_duration import (
+    apply_haul_trip_duration_floors,
+    patch_route_duration,
+)
 from apps.container_logistics.statemachine import (
     ContainerLogisticsActions,
+    ContainerLogisticsEvents,
     HaulTripStateMachine,
     haultrip_gate_interactions,
     haultrip_order_interactions,
@@ -13,10 +23,37 @@ from apps.utils import is_success, str_to_time
 from apps.utils.excepions import WriteFailedException
 
 
+_PLANNED_ROUTE_KEYS = ("planned_reposition_route", "planned_dropoff_route")
+
+
+def _without_planned_routes(profile):
+    """Truck profile minus the transported route payloads (see `create_new_trip`)."""
+    if not isinstance(profile, dict):
+        return profile
+    if not any(k in profile for k in _PLANNED_ROUTE_KEYS):
+        return profile
+    return {k: v for k, v in profile.items() if k not in _PLANNED_ROUTE_KEYS}
+
+
+def _route_summary(route):
+    """The only parts of an OSRM route any consumer reads, for the MQTT context."""
+    if not isinstance(route, dict):
+        return route
+    summary = {k: route[k] for k in ("geometry", "distance", "duration") if k in route}
+    if "geometry_source" in route:
+        summary["geometry_source"] = route["geometry_source"]
+    return summary or route
+
+
 class TruckTripManager(TripManagerBase):
-    def __init__(self, run_id, sim_clock, user, messenger, persona=None):
+    def __init__(self, run_id, sim_clock, user, messenger, persona=None, order_events_topic: Optional[str] = None):
         super().__init__(run_id, user, messenger, persona=persona or {"role": "truck"})
         self.simulation_domain = simulation_domains.get("container_logistics", "container-logistics-sim")
+        # ``service`` order-lifecycle mode: address every ORDER_* event to ONE shared topic
+        # suffix instead of the per-order ``run_id/<order_id>`` topic. Ships as data on the
+        # truck behavior profile (the stream_geo pattern), so switching modes needs no celery
+        # restart. ``None`` (default) = today's per-order topics, byte-identically.
+        self._order_events_topic = order_events_topic
 
     @property
     def StateMachineCls(self):
@@ -24,18 +61,121 @@ class TruckTripManager(TripManagerBase):
 
     @property
     def message_channel(self):
+        # Workflow notifications are routed in post_transition_hook (order vs facility topics).
         return None
 
     @property
     def statemachine_interaction_mapping(self):
         return haultrip_order_interactions + haultrip_gate_interactions
 
+    def post_transition_hook(self, source_transition, source_new_state, context=None):
+        """
+        Publish MQTT workflow messages after a successful haul-trip REST transition.
+
+        TripManagerBase skips publishing when ``message_channel`` is None; ride-hail uses a
+        single passenger topic, but container logistics must notify **order** agents
+        (``run_id/<order _id>``) and **facility** agents (``run_id/<facility _id>``). Without
+        this, orders stay ``unassigned`` in Eve, facilities never see queue arrivals, and
+        hauls eventually cancel on shutdown with ``num_hauls_completed`` stuck at zero.
+        """
+        event: Optional[str] = None
+        for rule in self.statemachine_interaction_mapping:
+            if (
+                rule.get("source_statemachine") == self.StateMachineCls.__name__
+                and rule.get("source_transition") == source_transition
+            ):
+                event = rule.get("event")
+                break
+        if not event:
+            return
+        msg = self.message_template(event)
+        if context:
+            msg["data"].update(context)
+        channel = self._mqtt_topic_for_workflow_event(event)
+        if not channel or self.messenger is None:
+            return
+        try:
+            self.messenger.client.publish(channel, json.dumps(msg, default=str))
+        except Exception:
+            logging.exception("TruckTripManager: failed to publish workflow event %s to %s", event, channel)
+
+    def _mqtt_topic_for_workflow_event(self, event: str) -> Optional[str]:
+        if event.startswith("order_"):
+            oid = (self.trip or {}).get("order")
+            if not oid:
+                # No order on the trip => nothing to notify, in BOTH modes.
+                return None
+            if self._order_events_topic:
+                return f"{self.run_id}/{self._order_events_topic}"
+            return f"{self.run_id}/{oid}"
+        meta = (self.trip or {}).get("meta") or {}
+        if event == ContainerLogisticsEvents.TRUCK_ARRIVED_PICKUP_QUEUE:
+            fid = meta.get("pickup_facility_resource_id")
+            if fid:
+                return f"{self.run_id}/{fid}"
+            name = meta.get("order_profile", {}).get("pickup_facility_name")
+            return self._facility_topic_for_profile_name(name)
+        if event == ContainerLogisticsEvents.TRUCK_ARRIVED_DROPOFF_QUEUE:
+            fid = meta.get("dropoff_facility_resource_id")
+            if fid:
+                return f"{self.run_id}/{fid}"
+            name = meta.get("order_profile", {}).get("dropoff_facility_name")
+            return self._facility_topic_for_profile_name(name)
+        return None
+
+    def _facility_resource_id_by_profile_name(self, facility_name: Any) -> Optional[str]:
+        if not facility_name:
+            return None
+        url = f"{settings['OPENRIDE_SERVER_URL']}/{self.simulation_domain}/{self.run_id}/facility"
+        params = {
+            "where": json.dumps(
+                {"$and": [{"run_id": self.run_id}, {"profile.name": str(facility_name)}]}
+            ),
+            "page": 1,
+            "max_results": 1,
+        }
+        try:
+            response = get_http_session().get(
+                url,
+                headers=self.user.get_headers(),
+                params=params,
+                timeout=settings.get("NETWORK_REQUEST_TIMEOUT", 10),
+            )
+        except Exception:
+            logging.exception("TruckTripManager: facility lookup failed for %r", facility_name)
+            return None
+        if not is_success(response.status_code):
+            logging.warning(
+                "TruckTripManager: facility lookup HTTP %s for %r",
+                response.status_code,
+                facility_name,
+            )
+            return None
+        items = response.json().get("_items") or []
+        if not items:
+            logging.warning("TruckTripManager: no facility document for profile.name=%r", facility_name)
+            return None
+        fid = items[0].get("_id")
+        return str(fid) if fid is not None else None
+
+    def _facility_topic_for_profile_name(self, facility_name: Any) -> Optional[str]:
+        fid = self._facility_resource_id_by_profile_name(facility_name)
+        return f"{self.run_id}/{fid}" if fid else None
+
     def message_template(self, event):
         if event.startswith("order_"):
             return {
                 "action": ContainerLogisticsActions.ORDER_WORKFLOW_EVENT,
                 "truck_id": self.trip.get("truck"),
-                "data": {"event": event, "order_id": self.trip.get("order")},
+                # F10: carry the trip's own sim time so a batched applier can bucket
+                # completions by the true event time rather than its own step clock.
+                # (post_transition_hook merges the transition ``context`` into ``data``;
+                # no context key is named ``sim_clock``, so this is never clobbered.)
+                "data": {
+                    "event": event,
+                    "order_id": self.trip.get("order"),
+                    "sim_clock": self.trip.get("sim_clock"),
+                },
             }
         return {
             "action": ContainerLogisticsActions.FACILITY_WORKFLOW_EVENT,
@@ -63,6 +203,12 @@ class TruckTripManager(TripManagerBase):
         eta_d = truck_prof.get("estimated_time_to_dropoff")
         if eta_d is None:
             eta_d = o.get("estimated_time_to_dropoff", 0)
+        eta_p, eta_d = apply_haul_trip_duration_floors(
+            eta_p,
+            eta_d,
+            order=o,
+            profile=truck_prof,
+        )
         plan_repo = truck_prof.get("planned_reposition_route")
         if plan_repo is None:
             plan_repo = o.get("planned_reposition_route")
@@ -70,13 +216,39 @@ class TruckTripManager(TripManagerBase):
         if plan_drop is None:
             plan_drop = o.get("planned_dropoff_route")
 
+        # Cross-haulier job sharing (cooperation structures): the tag rides in on
+        # the order copy from handle_assignment; lift it onto the trip's meta so
+        # analytics can attribute owner/carrier gains. Popped so it never leaks
+        # into the order payload PATCHed elsewhere.
+        collaboration = o.pop("_collaboration", None) if isinstance(o, dict) else None
+
+        order_prof = o.get("profile") or {}
+        pickup_facility_id = o.get("pickup_facility_resource_id") or self._facility_resource_id_by_profile_name(
+            order_prof.get("pickup_facility_name")
+        )
+        dropoff_facility_id = o.get("dropoff_facility_resource_id") or self._facility_resource_id_by_profile_name(
+            order_prof.get("dropoff_facility_name")
+        )
+
         data = {
             "truck": truck.get("_id"),
             "order": order.get("_id"),
             "persona": self.persona,
             "meta": {
-                "truck_profile": truck.get("profile", {}),
+                # The planned routes are transported on the truck profile (see
+                # `handle_assignment`) purely to reach `routes.planned` just below.
+                # Keeping them here too stored the SAME polylines a second time in the
+                # same document for no reader — pure bloat on every haul doc.
+                "truck_profile": _without_planned_routes(truck.get("profile", {})),
                 "order_profile": order.get("profile", {}),
+                "pickup_facility_resource_id": pickup_facility_id,
+                "dropoff_facility_resource_id": dropoff_facility_id,
+                # Truck location at assignment = start of the empty repositioning leg. Captured
+                # here because current_loc is overwritten as the truck advances, leaving completed
+                # trips with current_loc == dropoff (which makes the empty/loaded haversine fallback
+                # degenerate to a 0.5 deadhead ratio).
+                "reposition_origin_loc": current_loc,
+                **({"collaboration": collaboration} if collaboration else {}),
             },
             "current_loc": current_loc,
             "pickup_loc": order.get("pickup_loc"),
@@ -116,6 +288,12 @@ class TruckTripManager(TripManagerBase):
         eta_d = tp.get("estimated_time_to_dropoff")
         if eta_d is None:
             eta_d = o.get("estimated_time_to_dropoff", 0)
+        eta_p, eta_d = apply_haul_trip_duration_floors(
+            eta_p,
+            eta_d,
+            order=o,
+            profile=tp,
+        )
         return self.apply_trip_transition_and_notify(
             transition=HaulTripStateMachine.assign.name,
             data={
@@ -221,16 +399,35 @@ class TruckTripManager(TripManagerBase):
             return current_time
 
     def start_empty_reposition(self, sim_clock, current_loc, route=None, estimated_time_to_pickup=0):
+        # Symmetric with `finish_pickup_service`: never let a None argument blank the route
+        # stored at assignment. This path does not currently regress (its caller reads the
+        # route back off the refreshed trip, so repositioning coverage is 100%), but the
+        # unguarded write is the same shape as the bug that silently reduced loaded-leg
+        # coverage to 5.4%, so close the class rather than the instance.
+        if route is None:
+            route = ((self.trip or {}).get("routes") or {}).get("planned", {}).get(
+                "repositioning_to_pickup"
+            )
         return self.apply_trip_transition_and_notify(
             transition=HaulTripStateMachine.start_empty_reposition.name,
             data={
                 "sim_clock": sim_clock,
+                # PER-LEG start time. `sim_clock` is overwritten by every later transition,
+                # so it only ever records the LAST one; without a per-leg stamp the replay
+                # reader has to give both legs the same trip-level window, and the leg
+                # lookup (which takes the first leg containing the target time) then always
+                # picks repositioning — the loaded leg would never render and the truck
+                # would crawl the empty leg across the whole trip. Written in the
+                # transition that already patches this document: no extra write.
+                "stats.reposition_started_at": sim_clock,
                 "current_loc": current_loc,
                 "routes.planned.repositioning_to_pickup": route,
                 "stats.estimated_time_to_pickup": estimated_time_to_pickup,
             },
             context={
-                "planned_route": route,
+                # Slimmed: the full OSRM route rides the MQTT wire on every assignment.
+                # Only these three fields are ever read downstream.
+                "planned_route": _route_summary(route),
                 "estimated_time_to_pickup": estimated_time_to_pickup,
             },
         )
@@ -265,10 +462,38 @@ class TruckTripManager(TripManagerBase):
         )
 
     def finish_pickup_service(self, sim_clock, current_loc, route_to_dropoff=None, estimated_time_to_dropoff=0, service_time=None):
+        trip = self.trip or {}
+        stats = trip.get("stats") or {}
+        meta = trip.get("meta") or {}
+        truck_prof = meta.get("truck_profile") or {}
+        order_stub = {
+            "pickup_service_time": stats.get("pickup_service_time"),
+            "dropoff_service_time": service_time if service_time is not None else stats.get("dropoff_service_time"),
+        }
+        _, estimated_time_to_dropoff = apply_haul_trip_duration_floors(
+            stats.get("estimated_time_to_pickup", 0),
+            estimated_time_to_dropoff,
+            order=order_stub,
+            profile=truck_prof,
+        )
+        # PRESERVE the route planned at assignment. This transition is driven by the
+        # facility's gate-service-completed message, which has no idea what the truck's
+        # route is — so `route_to_dropoff` arrives as None on essentially every trip, and
+        # writing that through blanked `routes.planned.loaded_to_dropoff`, which
+        # `create_new_trip` had already filled in at assignment. Measured before this fix:
+        # only 193 of 3,601 loaded legs still had geometry (5.4%) while repositioning legs
+        # were at 100%. Only overwrite when the caller genuinely supplies a route.
+        if route_to_dropoff is None:
+            route_to_dropoff = ((trip.get("routes") or {}).get("planned") or {}).get(
+                "loaded_to_dropoff"
+            )
+        route_to_dropoff = patch_route_duration(route_to_dropoff, estimated_time_to_dropoff)
         return self.apply_trip_transition_and_notify(
             transition=HaulTripStateMachine.finish_pickup_service.name,
             data={
                 "sim_clock": sim_clock,
+                # PER-LEG start time for the loaded leg — see `start_empty_reposition`.
+                "stats.loaded_started_at": sim_clock,
                 "current_loc": current_loc,
                 "routes.planned.loaded_to_dropoff": route_to_dropoff,
                 "stats.estimated_time_to_dropoff": estimated_time_to_dropoff,
@@ -276,7 +501,7 @@ class TruckTripManager(TripManagerBase):
             },
             context={
                 "location": current_loc,
-                "planned_route": route_to_dropoff,
+                "planned_route": _route_summary(route_to_dropoff),
                 "estimated_time_to_dropoff": estimated_time_to_dropoff,
                 "service_time": service_time,
             },

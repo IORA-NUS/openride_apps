@@ -1,11 +1,12 @@
 from random import random
 
-from orsim.lifecycle import ORSimAgent
+from dateutil.relativedelta import relativedelta
 
+from ..openride_agent import OpenRideAgent
 from .app import TruckApp
 
 
-class TruckAgent(ORSimAgent):
+class TruckAgent(OpenRideAgent):
     def _create_app(self):
         return TruckApp(
             run_id=self.run_id,
@@ -57,7 +58,10 @@ class TruckAgent(ORSimAgent):
         except Exception:
             return getattr(self, "current_time", None)
         if trip is None:
-            return self.current_time
+            # No active haul: idle ping only on steps_per_action cadence.
+            interval = int(getattr(self, "orsim_settings", {}).get("STEP_INTERVAL", 30))
+            spa = max(1, int(self.behavior.get("steps_per_action", 1)))
+            return self.current_time + relativedelta(seconds=interval * spa)
         try:
             return app.trip.estimate_next_event_time(self.current_time)
         except Exception:

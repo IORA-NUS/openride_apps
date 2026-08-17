@@ -211,6 +211,7 @@ class DistributedOpenRideSimRandomised:
         data = {
             "run_id": self.run_id,
             "name": self.scenario_name,
+            "status": "In Progress",
             "meta": {
                 'num_driver_agents': len(self.scenario.driver_collection),
                 'num_passenger_agents': len(self.scenario.passenger_collection),

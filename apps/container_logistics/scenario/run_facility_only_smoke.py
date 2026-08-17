@@ -102,11 +102,9 @@ def main():
     facility_behavior = GenerateBehavior.container_facility(facility_id, facility_index=0)
 
     # Keep the smoke run fast/deterministic.
-    facility_behavior["pickup_service_time"] = 3
-    facility_behavior["dropoff_service_time"] = 3
+    facility_behavior["service_time"] = 3
     if isinstance(facility_behavior.get("profile"), dict):
-        facility_behavior["profile"]["pickup_service_time"] = 3
-        facility_behavior["profile"]["dropoff_service_time"] = 3
+        facility_behavior["profile"]["service_time"] = 3
 
     facility_spec = {
         "unique_id": facility_id,
@@ -166,8 +164,8 @@ def main():
             pickup_arrival_sent = True
 
         # Observe assignment/completion via in-memory controller state.
-        pickup_assigned = pickup_assigned or (pickup_truck_id in qc.gate_assignments.values())
-        if pickup_assigned and (pickup_truck_id not in qc.gate_assignments.values()):
+        pickup_assigned = pickup_assigned or (pickup_truck_id in qc.active_truck_ids())
+        if pickup_assigned and (pickup_truck_id not in qc.active_truck_ids()):
             pickup_completed = True
 
         if pickup_completed and (not dropoff_arrival_sent):
@@ -176,8 +174,8 @@ def main():
             )
             dropoff_arrival_sent = True
 
-        dropoff_assigned = dropoff_assigned or (dropoff_truck_id in qc.gate_assignments.values())
-        if dropoff_assigned and (dropoff_truck_id not in qc.gate_assignments.values()):
+        dropoff_assigned = dropoff_assigned or (dropoff_truck_id in qc.active_truck_ids())
+        if dropoff_assigned and (dropoff_truck_id not in qc.active_truck_ids()):
             dropoff_completed = True
 
         if pickup_completed and dropoff_completed:
@@ -194,8 +192,7 @@ def main():
                 "dropoff_completed": dropoff_completed,
                 "gate_assignments": app.manager.queue_controller.gate_assignments,
                 "gate_states": [g.current_state.id for g in app.manager.queue_controller.gates],
-                "pickup_queue_len": len(app.manager.queue_controller.pickup_queue),
-                "dropoff_queue_len": len(app.manager.queue_controller.dropoff_queue),
+                "queue_len": len(app.manager.queue_controller.queue),
             },
             indent=2,
             default=str,
