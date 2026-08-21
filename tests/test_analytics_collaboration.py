@@ -138,3 +138,102 @@ def test_roster_seed_repairs_owner_created_name():
     }
     m._seed_haulier_roster()
     assert m._haulier_acc["borax"]["haulier_name"] == "Borax"
+
+
+def test_benefit_aggregate_reports_undefined_count_and_does_not_impute():
+    """R3-11 / review LOW-14. `benefit_km` is None on the MAJORITY of shared awards
+    and that is a FINDING, not missing data: it means the owner had no free feasible
+    truck, so the share was strictly ENABLING.
+
+    The contract: never impute a value, report the mean over the DEFINED subset
+    only, and always ship both counts so the denominator cannot be mistaken.
+    """
+    from apps.container_logistics.analytics.manager import AnalyticsManager
+
+    acc = AnalyticsManager._new_haulier_acc("acme", "acme")
+    # Two enabling shares (no benefit number) and one measurable 10 km share.
+    acc["jobs_shared_out"] = 3
+    acc["benefit_km_received"] = 10.0
+    acc["benefit_defined_n"] = 1
+    acc["unserveable_shares"] = 2
+    acc["jobs_enabled"] = 2
+
+    row = AnalyticsManager._entity_row(acc, 1.0)
+    assert row["benefit_defined_n"] == 1
+    assert row["benefit_undefined_n"] == 2
+    assert row["jobs_enabled"] == 2
+    # The mean is over the defined subset ONLY: 10.0 / 1, never 10.0 / 3.
+    assert row["mean_benefit_km"] == 10.0, (
+        f"mean was diluted across undefined shares: {row['mean_benefit_km']}"
+    )
+    assert row["benefit_km_received"] == 10.0
+
+
+def test_mean_benefit_is_none_rather_than_zero_when_nothing_is_defined():
+    """A 0.0 mean would read as 'cooperation saved nothing'; None reads as
+    'no measurable share', which is the truth."""
+    from apps.container_logistics.analytics.manager import AnalyticsManager
+
+    acc = AnalyticsManager._new_haulier_acc("acme", "acme")
+    acc["jobs_shared_out"] = 2
+    acc["unserveable_shares"] = 2
+    acc["jobs_enabled"] = 2
+    row = AnalyticsManager._entity_row(acc, 1.0)
+    assert row["mean_benefit_km"] is None
+    assert row["benefit_defined_n"] == 0
+
+
+def test_planner_mean_benefit_km_is_not_null_beside_a_nonzero_numerator():
+    """R3-3 / rebate review R2-9 — a COOPERATION defect that rebate work surfaced.
+
+    ``_PLANNER_NON_SUMMABLE`` excluded ``benefit_defined_n`` and ``jobs_enabled`` with
+    the note "published via ``_entity_row``'s own logic". That justification was false:
+    ``_entity_row`` reads both straight off the accumulator. So a planner row summed
+    ``benefit_km_received`` across its members while its denominator stayed at the
+    freshly-built zero, and ``mean_benefit_km`` published as ``None`` beside a non-zero
+    numerator — breaking the "never impute, always publish the denominator" contract on
+    a cooperation metric, not a rebate one.
+
+    This test lives cooperation-side deliberately: the number it protects is
+    ``mean_benefit_km``, and it must not be guarded from inside a rebate branch.
+    """
+    m = _mgr()
+    m.set_cooperation({"structure_id": "pair", "components": [["acme", "borax"]]})
+    m.accumulate_completed_trips(
+        [
+            _trip("t1", "borax",
+                  collab={"shared": True, "owner_haulier_id": "acme",
+                          "carrier_haulier_id": "borax", "benefit_km": 4.0}),
+            _trip("t2", "borax",
+                  collab={"shared": True, "owner_haulier_id": "acme",
+                          "carrier_haulier_id": "borax", "benefit_km": 6.0}),
+        ],
+        END,
+    )
+
+    (row,) = m.build_planner_breakdown(END)
+    assert row["benefit_km_received"] == 10.0, "the numerator must still aggregate"
+    assert row["benefit_defined_n"] == 2, (
+        "the DENOMINATOR was dropped from the planner aggregate, so the mean below "
+        "cannot be computed and publishes as None beside a non-zero numerator"
+    )
+    assert row["mean_benefit_km"] == 5.0
+    assert row["jobs_enabled"] == 0
+
+
+def test_planner_jobs_enabled_aggregates_over_members():
+    """The other key the false comment excluded."""
+    m = _mgr()
+    m.set_cooperation({"structure_id": "pair", "components": [["acme", "borax"]]})
+    m.accumulate_completed_trips(
+        [
+            _trip("t1", "borax",
+                  collab={"shared": True, "owner_haulier_id": "acme",
+                          "carrier_haulier_id": "borax", "benefit_km": None}),
+        ],
+        END,
+    )
+    (row,) = m.build_planner_breakdown(END)
+    assert row["jobs_enabled"] == 1
+    assert row["benefit_defined_n"] == 0
+    assert row["mean_benefit_km"] is None, "no defined benefit => no mean, never zero"

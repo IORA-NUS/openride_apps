@@ -23,8 +23,15 @@ from typing import Any, Dict, List, Tuple
 # match quality) at the cost of per-tick solve time.
 _DEFAULT_MAX_TRUCKS_PER_HAULIER = 500
 
+# How often the pooled market's round provenance is pushed onto run_config.
+# Cheap (two HTTP calls, a few dozen times per run) and bounded: the recorded
+# stats can lag the true tick count by at most this many ticks, but a truncation
+# event is pushed immediately, so `ticks_truncated_by_backstop` is never stale.
+_ROUND_STATS_PATCH_EVERY = 5
+
 from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import AssignedHaulTripPayload
+from apps.container_logistics.rebate import RebateBook
 from apps.container_logistics.statemachine import ContainerLogisticsActions
 from .solver import get_solver
 from orsim.lifecycle import ORSimApp
@@ -141,6 +148,76 @@ class AssignmentApp(ORSimApp):
             return "pooled"
         return topology if topology in ("partitioned", "pooled") else "partitioned"
 
+    # --- the solver seam (plan §3.2, §7 R-I1b) --------------------------------
+
+    @staticmethod
+    def _rebate_aware(prof: Dict[str, Any]) -> bool:
+        """Whether the compiled profile opts a solver into rebate pricing.
+
+        Read from the profile on every call, matching ``_resolved_topology``'s
+        deliberate re-read policy, so a behavior patched after construction takes
+        effect. Defaults ``false`` — and no shipped scenario sets it — so the book
+        below is constructed, and ``set_rebate_book`` is called, on **no** shipped
+        path today (plan §3.2).
+        """
+        planner = (prof or {}).get("planner") or {}
+        return bool(planner.get("rebate_aware", False))
+
+    def _inject_rebate_book(self, prof: Dict[str, Any]) -> None:
+        """Build and inject a :class:`RebateBook`, but ONLY when opted in.
+
+        With ``planner.rebate_aware`` false (the default, and every shipped
+        scenario's value), this is a no-op: no facility documents are fetched, no
+        book is constructed, and ``set_rebate_book`` is never called — so this
+        injection can never be the thing that perturbs an allocation (R-I1b). The
+        existing truck/order candidate projections (``assign()`` above) are
+        untouched by this method; it reads facility documents over a SEPARATE,
+        narrowly-projected request, only when opted in.
+        """
+        if not self._rebate_aware(prof):
+            return
+        book = getattr(self, "_rebate_book_cache", None)
+        if book is None:
+            # Cached for the life of the app, and that is a correctness-neutral
+            # choice: `profile.rebate` is COMPILED data stamped at generation and
+            # never mutated during a run (unlike `avg_queue_wait_seconds`, which the
+            # facility agent patches onto the same documents). Without the cache this
+            # pages the whole facility collection over HTTP on EVERY assignment tick
+            # — 300 documents × ~2500 ticks — which is precisely the per-arrival
+            # HTTP cost the plan cited when rejecting a truck-side lookup (§3.1
+            # option (b)). An opt-in seam must not smuggle that back in.
+            try:
+                docs = self.manager._paged_where(
+                    self.manager._facility_url(),
+                    {"run_id": self.manager.run_id},
+                    projection={"_id": 1, "profile.rebate": 1},
+                )
+                book = RebateBook.from_facility_docs(docs)
+            except Exception:  # pragma: no cover - never block a tick on this opt-in read
+                # R2-9 / review F10: fall through to CLEARING the book, never `return`.
+                # Returning left whatever book was injected on a previous tick attached
+                # to the solver, so a mid-run read failure would silently keep pricing
+                # from stale data — a solver would go on believing a schedule it can no
+                # longer read. An explicit None is a legible "I do not know", and the
+                # seam's own contract already defines None as "never injected".
+                logging.exception(
+                    "AssignmentApp: failed to build the opt-in RebateBook — clearing "
+                    "any previously injected book rather than pricing from stale data"
+                )
+                book = None
+            # Only a SUCCESSFUL read is cached (mirroring `_haulier_roster_cache`):
+            # facilities may not be created yet on the first tick, and freezing an
+            # empty book would silently disable pricing for the whole run. An empty
+            # book from a successful read of a rebate-less scenario is still cached —
+            # re-paging 300 documents every tick to rediscover "nothing" is the bug
+            # this cache exists to prevent.
+            if book is not None and docs:
+                self._rebate_book_cache = book
+        try:
+            self._solver.set_rebate_book(book)
+        except AttributeError:  # pragma: no cover - a third-party solver without it
+            pass
+
     @staticmethod
     def _tick_seed(run_id: str, time_step: int) -> int:
         """Stable 64-bit per-tick seed. Identical inputs => identical awards (I-P5).
@@ -182,41 +259,149 @@ class AssignmentApp(ORSimApp):
         return cached
 
     def round_stats(self) -> Dict[str, Any]:
-        """Per-run round provenance for the pooled market (plan §13.4 FIX-1 step 5).
+        """Per-run round provenance for the pooled market (plan §14.4 R3-5/R3-6).
 
-        ``ticks_truncated_by_backstop > 0`` means the safety backstop bound on at
+        ``ticks_truncated_by_backstop > 0`` means the auction was cut short on at
         least one tick, so that tick under-served and the run's throughput and
-        deadhead numbers are suspect. A trustworthy cooperation result requires
-        this to be exactly 0.
+        deadhead numbers are suspect. A trustworthy cooperation result needs 0.
+
+        Two round-2 corrections are baked in here:
+
+        * ``rounds_mean`` averages over **auction ticks only** (``rounds_used >= 1``).
+          Averaging in the no-op ticks — where the market opened with nothing free to
+          allocate — diluted the figure that is quoted as *auction depth* and made a
+          deeper auction look shallower (review MEDIUM-9). Idle ticks are still
+          reported, as ``ticks_idle``, because losing them would hide the opposite
+          error.
+        * ``ticks`` is split into ``ticks_in_horizon`` / ``ticks_drain`` so the count
+          sits on the same horizon as the KPI block beside it (review HIGH-4).
         """
         s = getattr(self, "_round_stats", None)
         if not s or not s.get("ticks"):
             return {
-                "ticks": 0, "rounds_min": None, "rounds_mean": None, "rounds_max": None,
+                "ticks": 0, "ticks_in_horizon": 0, "ticks_drain": 0,
+                "ticks_idle": 0, "auction_ticks": 0,
+                "rounds_min": None, "rounds_mean": None, "rounds_max": None,
                 "ticks_truncated_by_backstop": 0, "max_rounds_backstop": None,
+                "candidate_pairs_round1": 0, "candidate_pairs_total": 0,
             }
+        auction = s["auction_ticks"]
         return {
             "ticks": s["ticks"],
+            "ticks_in_horizon": s["ticks_in_horizon"],
+            "ticks_drain": s["ticks_drain"],
+            "ticks_idle": s["ticks_idle"],
+            "auction_ticks": auction,
+            # min/mean over ticks where an auction actually ran; max over all.
             "rounds_min": s["rounds_min"],
-            "rounds_mean": round(s["rounds_sum"] / s["ticks"], 3),
+            "rounds_mean": (round(s["rounds_sum"] / auction, 3) if auction else None),
             "rounds_max": s["rounds_max"],
             "ticks_truncated_by_backstop": s["truncated"],
             "max_rounds_backstop": s.get("backstop"),
+            "candidate_pairs_round1": s["cand_round1"],
+            "candidate_pairs_total": s["cand_total"],
         }
 
-    def _record_round_stats(self, result) -> None:
+    def _patch_round_stats_to_run_config(self, *, force: bool = False) -> bool:
+        """Write the market's round provenance onto ``run_config.meta.market``.
+
+        **Why it is done from the AGENT and not at finalize.** The pooled market runs
+        inside the long-lived celery workers (CLAUDE.md §8) and the run record is
+        written by a different process, so there is no in-process handoff. The wire
+        cannot carry it either: ``trip.meta.collaboration`` only rides along on
+        SHARED assignments (``truck/app.py`` attaches ``_collaboration`` only when
+        ``shared`` is true), so a tick that truncated while awarding nothing
+        cross-haulier would leave no trace at all — and truncation is exactly the
+        condition that must never be silent.
+
+        So the agent PATCHes the run record itself, using the admin REST client it
+        already holds. ``run_config.meta`` is an unschema'd dict in the Eve model, so
+        this needs **no new resource and no api container rebuild** (CLAUDE.md §8).
+
+        Best-effort by construction: any failure is logged at debug and swallowed —
+        provenance must never be able to break an assignment tick.
+        """
+        stats = getattr(self, "_round_stats", None)
+        if not stats or not stats.get("ticks"):
+            return False
+        # Push on a schedule, and additionally whenever the round profile grows —
+        # a new maximum is new information and there may be few ticks in total, so
+        # a pure modulo cadence can leave the final snapshot stale.
+        grew = stats.get("rounds_max") != stats.get("_last_pushed_max")
+        if not force and not grew and stats["ticks"] % _ROUND_STATS_PATCH_EVERY:
+            return False
+        stats["_last_pushed_max"] = stats.get("rounds_max")
+        try:
+            from apps.common.resource_client_mixin import get_http_session
+            from apps.config import settings
+
+            base = settings["OPENRIDE_SERVER_URL"]
+            timeout = settings.get("NETWORK_REQUEST_TIMEOUT", 10)
+            session = get_http_session()
+            found = session.get(
+                f"{base}/run-config",
+                headers=self.user.get_headers(),
+                params={"where": json.dumps({"run_id": self.run_id})},
+                timeout=timeout,
+            )
+            items = (found.json() or {}).get("_items") or []
+            if not items:
+                return False
+            doc = items[0]
+            # Dotted patch: leaves every other meta key untouched, and mirrors how
+            # SimulationRuntime.update_status patches `step_metrics.<k>`.
+            response = session.patch(
+                f"{base}/run-config/{doc['_id']}",
+                headers=self.user.get_headers(etag=doc["_etag"]),
+                data=json.dumps({"meta.market": self.round_stats()}),
+                timeout=timeout,
+            )
+            return response.status_code in (200, 201)
+        except Exception:
+            logging.debug("Round-stats provenance patch failed (non-fatal).", exc_info=True)
+            return False
+
+    def _record_round_stats(self, result, max_rounds=None, time_step=None) -> None:
         s = getattr(self, "_round_stats", None)
         if s is None:
-            s = {"ticks": 0, "rounds_sum": 0, "rounds_min": None, "rounds_max": None,
-                 "truncated": 0, "backstop": None, "warned": False}
+            s = {"ticks": 0, "ticks_in_horizon": 0, "ticks_drain": 0, "ticks_idle": 0,
+                 "auction_ticks": 0, "rounds_sum": 0, "rounds_min": None,
+                 "rounds_max": None, "truncated": 0, "backstop": None, "warned": False,
+                 "cand_round1": 0, "cand_total": 0}
             self._round_stats = s
         r = int(result.rounds_used)
+        # Candidate provenance (plan §14.4 R3-2): round-1 parity with `partitioned`
+        # is the guarantee; the per-tick total legitimately exceeds it in a
+        # multi-round auction. Recording both makes the ratio auditable instead of
+        # arguable.
+        s["cand_round1"] += int(getattr(result, "candidate_pairs_round1", 0) or 0)
+        s["cand_total"] += int(getattr(result, "candidate_pairs_total", 0) or 0)
+        if max_rounds is not None:
+            s["backstop"] = int(max_rounds)
         s["ticks"] += 1
-        s["rounds_sum"] += r
-        s["rounds_min"] = r if s["rounds_min"] is None else min(s["rounds_min"], r)
+
+        # Horizon split: a tick past the simulation horizon is post-horizon DRAIN,
+        # not part of the measured window the KPI block covers.
+        horizon = getattr(self, "_sim_horizon_steps", None)
+        if horizon and time_step is not None and int(time_step) >= int(horizon):
+            s["ticks_drain"] += 1
+        else:
+            s["ticks_in_horizon"] += 1
+
+        if r >= 1:
+            s["auction_ticks"] += 1
+            s["rounds_sum"] += r
+            s["rounds_min"] = r if s["rounds_min"] is None else min(s["rounds_min"], r)
+        else:
+            # The market opened with nothing free to allocate. Real, but not depth.
+            s["ticks_idle"] += 1
         s["rounds_max"] = r if s["rounds_max"] is None else max(s["rounds_max"], r)
+
         if not result.converged:
             s["truncated"] += 1
+            # Push immediately: truncation is the one condition that must never be
+            # silent, and the run may end before the next scheduled patch.
+            self._patch_round_stats_to_run_config(force=True)
             if not s["warned"]:
                 # Loud, once, and greppable in celery_log.txt — agent-side logs do
                 # not reach simulation_log.txt (CLAUDE.md §8).
@@ -228,6 +413,19 @@ class AssignmentApp(ORSimApp):
                     s["ticks"], r,
                 )
                 s["warned"] = True
+
+    def close(self, sim_clock):
+        """FINAL FLUSH of the market provenance before the agent leaves (R3-5).
+
+        Without this the stamp was whatever the last scheduled push happened to
+        catch — the review measured ``ticks: 15`` against a true 17. A provenance
+        stamp that stops early is worse than none, because it reads exact.
+        """
+        try:
+            self._patch_round_stats_to_run_config(force=True)
+        except Exception:  # pragma: no cover - never block shutdown
+            logging.debug("final market-provenance flush failed", exc_info=True)
+        return super().close(sim_clock)
 
     def _assign_pooled(
         self,
@@ -319,7 +517,8 @@ class AssignmentApp(ORSimApp):
         )
         assignment, share_tags = result.assignment, result.share_tags
         self._share_tags = share_tags
-        self._record_round_stats(result)
+        self._record_round_stats(result, max_rounds, time_step=time_step)
+        self._patch_round_stats_to_run_config()
         if share_tags:
             logging.info(
                 "Pooled cooperation: %d cross-haulier award(s) this tick "
@@ -335,6 +534,9 @@ class AssignmentApp(ORSimApp):
         # leave a previous tick's tags to be paired with a later tick's matches.
         self._share_tags = {}
         prof = self._assignment_profile()
+        # Opt-in solver seam (plan §3.2): a no-op unless planner.rebate_aware is
+        # true, which no shipped scenario sets. See `_inject_rebate_book`.
+        self._inject_rebate_book(prof)
         respect_online = bool(prof.get("respect_truck_online_state", True))
         reject_busy = bool(prof.get("reject_if_active_haul_trip", True))
         max_pickup_travel = prof.get("max_travel_time_pickup")

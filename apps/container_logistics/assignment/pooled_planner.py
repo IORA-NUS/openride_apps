@@ -139,6 +139,10 @@ class PooledMarketResult:
     share_tags: Dict[Tuple[str, str], Dict[str, Any]]
     rounds_used: int
     converged: bool
+    #: Candidate pairs built in round 1 (the figure that must equal partitioned's
+    #: total) and across all rounds of this tick (the inherent, inert excess).
+    candidate_pairs_round1: int = 0
+    candidate_pairs_total: int = 0
 
 
 @dataclass
@@ -234,12 +238,23 @@ def build_round_candidates(
 
     **Why this exists (plan §13.4 FIX-2 / review F4).** Building candidates
     *per company* meant an order visible to ``H`` companies drew up to
-    ``per_order × H`` candidate trucks per round, while ``partitioned`` draws
-    ``per_order`` total. That is a systematic, treatment-correlated difference in
-    candidate width between the two arms — and audit P3 measured that candidate
-    width ALONE moves mean deadhead from 5.25 km to 7.57 km, orders of magnitude
-    above the effect this experiment is trying to detect. A topology A/B must hold
-    candidate generation fixed.
+    ``per_order × H`` candidate trucks in a SINGLE round, while ``partitioned``
+    draws ``per_order`` total — a treatment-correlated difference in candidate
+    width, and audit P3 measured that candidate width alone moves mean deadhead
+    from 5.25 km to 7.57 km.
+
+    **What this guarantees, precisely (plan §14.9 errata).** ROUND-1 parity, exactly:
+    the first round builds the same number of candidate pairs as ``partitioned``
+    builds in total. It does **not** give per-tick parity, and the earlier claim that
+    "a topology A/B must hold candidate generation fixed" overclaimed. A multi-round
+    auction re-indexes over the shrinking free set, so the per-tick total exceeds
+    partitioned's by a ratio > 1; that is inherent, and it is **causally inert** —
+    review §16.3 shows arm A's cost equals a joint greedy over the POOLED arm's own
+    candidate union, exactly, on every seed, so enlarging the candidate set does not
+    change what a good allocator achieves. The pooled arm draws *more* candidates and
+    still performs worse, so the disparity cannot be manufacturing the effect.
+    Freezing the index per tick would make rounds 2+ match against stale free-sets —
+    degrading the simulation to flatter a metric.
 
     Orders are grouped by their eligible-carrier set, and each group gets one
     index over the union of those fleets — exactly mirroring ``partitioned``'s
@@ -415,6 +430,8 @@ def run_pooled_market(
     max_rounds = max(1, min(MAX_ROUNDS_CEILING, int(ctx.max_rounds or DEFAULT_MAX_ROUNDS)))
     rounds_used = 0
     converged = False
+    candidate_pairs_round1 = 0
+    candidate_pairs_total = 0
     for rnd in range(1, max_rounds + 1):
         if not any(market.is_order_free(oid) for oid in input_order_ids):
             converged = True  # nothing left to allocate: a legitimate convergence
@@ -455,8 +472,20 @@ def run_pooled_market(
                 pair_allowed_for=_pair_allowed_for,
                 spatial_params=ctx.spatial_params,
             )
+            _round_pairs = sum(len(v) for v in candidates_by_haulier.values())
+            candidate_pairs_total += _round_pairs
+            if rnd == 1:
+                candidate_pairs_round1 = _round_pairs
 
         round_bids = []
+        # Private commits COUNT as progress. Missing this was the premature-
+        # convergence bug (plan §14.5 R3-7): §4.1 step 5.5 said "break if no bids
+        # were produced", which ignores the private-commit path introduced two steps
+        # earlier in the same section. A round that commits privately but bids
+        # nothing was declared converged, ending the auction early. Latent under the
+        # default OfferAll (which contributes everything, so nothing is private) but
+        # live under OfferSpare — the configuration experiment E6 is built on.
+        private_commits_this_round = 0
         for hid in company_ids:
             own_trucks = free_trucks_by_haulier.get(hid) or []
             if not own_trucks:
@@ -524,7 +553,7 @@ def run_pooled_market(
             # for one company — a ranked-preference policy would — property (1)
             # fails and the two paths stop being equivalent. Revisit this then.
             for truck, order in own_private_pairs:
-                market.commit(
+                private_commits_this_round += market.commit(
                     Award(
                         order_id=_entity_id(order),
                         truck_id=_entity_id(truck),
@@ -558,8 +587,9 @@ def run_pooled_market(
                 continue
             round_bids.extend(bids or ())
 
-        if not round_bids:
-            converged = True  # nobody wants anything else this tick
+        if not round_bids and not private_commits_this_round:
+            # Converged only when the round committed NOTHING AT ALL.
+            converged = True
             break
 
         awards = ctx.arbitration.resolve(
@@ -569,7 +599,7 @@ def run_pooled_market(
             owner_of=_owner_of,
             rng=ctx.rng,
         )
-        committed_any = False
+        committed_any = bool(private_commits_this_round)
         for award in awards or ():
             # I-P4 re-asserted at commit: a carrier may only be awarded an order it
             # owns, or one contributed to a pool it belongs to.
@@ -666,4 +696,6 @@ def run_pooled_market(
         share_tags=share_tags,
         rounds_used=rounds_used,
         converged=converged,
+        candidate_pairs_round1=candidate_pairs_round1,
+        candidate_pairs_total=candidate_pairs_total,
     )

@@ -77,6 +77,19 @@ class Curve(Distribution):
     def records_have_hours(records, hour_field: str = "hour") -> bool:
         return any(isinstance(r, dict) and r.get(hour_field) is not None for r in (records or []))
 
+    def value_at(self, hour: int) -> float:
+        """The stored weight for an hour-of-day, verbatim.
+
+        Additive: ``Curve`` had no value accessor at all, only ``sample(rng)``. Reads
+        ``bin_weights`` straight out — no normalization, no clamping — because
+        ``__init__`` stores them verbatim and a *signed* curve (a rebate schedule)
+        must survive the round trip. Out-of-range hours wrap, matching
+        ``from_records``' ``% HOURS_PER_DAY``.
+        """
+        if not self.bin_weights:
+            return 0.0
+        return float(self.bin_weights[int(hour) % len(self.bin_weights)])
+
     def sample(self, rng: random.Random) -> int:
         """Weighted hour-of-day within the business window."""
         bh_start = max(0, min(23, self.business_hour_start))

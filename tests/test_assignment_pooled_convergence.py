@@ -125,6 +125,20 @@ def test_backstop_binding_is_recorded():
     assert converged.round_stats()["ticks_truncated_by_backstop"] == 0
 
 
+def test_round_stats_record_the_configured_backstop():
+    """The run must record WHICH backstop was in force, not just whether it bound —
+    otherwise `ticks_truncated_by_backstop == 0` is uninterpretable (0 because the
+    market converged, or 0 because the cap was enormous?)."""
+    trucks, orders, clique, _ = _clique_fixture(3, 3, 3)
+    app = _app(trucks, orders, cooperation=clique, market={"max_rounds": 7})
+    app.assign("2020-01-01 08:00:00")
+    assert app.round_stats()["max_rounds_backstop"] == 7
+
+    default_app = _app(trucks, orders, cooperation=clique)
+    default_app.assign("2020-01-01 08:00:00")
+    assert default_app.round_stats()["max_rounds_backstop"] == DEFAULT_MAX_ROUNDS
+
+
 def test_round_stats_accumulate_across_ticks():
     trucks, orders, clique, _ = _clique_fixture(3, 3, 3)
     app = _app(trucks, orders, cooperation=clique)
@@ -224,3 +238,113 @@ def test_stamp_market_matches_what_the_app_actually_instantiates():
     assert max_rounds == stamp["market"]["max_rounds"] == 6
     assert type(offer).__name__.startswith("OfferNone")
     assert stamp["market"]["offer"]["type"] == "OfferNone"
+
+
+# --- R3-7: private commits count as progress (plan §14.5, review MEDIUM-10) ---
+
+def _all_private_market(**extra):
+    """OfferSpare with `only_when_short=False` and the default `keep_below_km=inf`
+    keeps every servable order PRIVATE — the regime experiment E6 runs in."""
+    return {"offer": {"type": "OfferSpare", "params": {"only_when_short": False}},
+            "max_rounds": 20, **extra}
+
+
+def _private_fixture():
+    trucks = [_truck("t_a1", "acme", 103.851, 1.30), _truck("t_a2", "acme", 103.852, 1.30),
+              _truck("t_b1", "borax", 103.951, 1.30), _truck("t_b2", "borax", 103.952, 1.30)]
+    orders = [_order("o_a1", "acme", 103.850, 1.30), _order("o_a2", "acme", 103.853, 1.30),
+              _order("o_b1", "borax", 103.950, 1.30), _order("o_b2", "borax", 103.953, 1.30)]
+    return trucks, orders, _coop([["acme", "borax"]])
+
+
+def _app_private(trucks, orders, coop):
+    """One truck per company per round (the non-spatial sample cap), so round 1
+    cannot finish the work and a premature break is observable as lost awards."""
+    app = _app(trucks, orders, cooperation=coop, market=_all_private_market())
+    app.behavior["profile"]["use_spatial_matching"] = False
+    app.behavior["profile"]["max_trucks_per_haulier"] = 1
+    return app
+
+
+def test_offer_spare_mixed_round_does_not_declare_convergence():
+    """A round that commits PRIVATELY but produces no bids has made progress and
+    must not end the auction.
+
+    §4.1 step 5.5 said "break if no bids were produced this round", which ignores
+    the private-commit path defined two steps earlier — so the auction stopped while
+    work remained. Latent under the default `OfferAll` (nothing stays private), live
+    under `OfferSpare`.
+
+    Verified to have teeth: restoring `if not round_bids:` drops this to 2 awards.
+    """
+    trucks, orders, coop = _private_fixture()
+    app = _app_private(trucks, orders, coop)
+    matches = app.assign("2020-01-01 08:00:00")
+
+    assert len(matches) == 4, (
+        f"premature convergence: {len(matches)} awards, expected 4 — a round that "
+        f"committed privately but bid nothing ended the auction"
+    )
+    assert app.round_stats()["rounds_max"] >= 2, "the fixture no longer needs a second round"
+    assert app.round_stats()["ticks_truncated_by_backstop"] == 0
+
+
+def test_a_round_that_commits_nothing_at_all_still_converges():
+    """The terminator must still fire — R3-7 must not turn convergence into a
+    max_rounds spin."""
+    trucks, orders, coop = _private_fixture()
+    app = _app_private(trucks, orders, coop)
+    app.assign("2020-01-01 08:00:00")
+    stats = app.round_stats()
+    assert stats["ticks_truncated_by_backstop"] == 0, "the auction ran to the backstop"
+    assert stats["rounds_max"] < 20
+
+
+# --- R3-5 / R3-6: the provenance stamp must be complete and undiluted ---------
+
+def test_rounds_mean_excludes_idle_ticks():
+    """A tick where the market opened with nothing free to allocate is not an
+    auction of depth zero — averaging it in diluted the figure quoted as auction
+    depth (review MEDIUM-9)."""
+    trucks, orders, clique, _ = _clique_fixture(3, 3, 3)
+    app = _app(trucks, orders, cooperation=clique)
+    app.assign("2020-01-01 08:00:00", time_step=0)          # real auction
+    # Every order is now committed in the market's eyes only within a tick, so a
+    # second tick over an EMPTY order list is the idle case.
+    app.manager._orders = []
+    app.assign("2020-01-01 08:00:00", time_step=1)          # idle
+
+    stats = app.round_stats()
+    assert stats["ticks"] == 2
+    assert stats["ticks_idle"] == 1
+    assert stats["auction_ticks"] == 1
+    assert stats["rounds_mean"] == stats["rounds_max"], (
+        f"idle tick diluted rounds_mean: {stats}"
+    )
+
+
+def test_ticks_are_split_into_horizon_and_drain():
+    """`ticks` must sit on the same horizon as the KPI block beside it (R3-5)."""
+    trucks, orders, clique, _ = _clique_fixture(3, 3, 3)
+    app = _app(trucks, orders, cooperation=clique)
+    app._sim_horizon_steps = 10
+    app.assign("2020-01-01 08:00:00", time_step=5)    # in horizon
+    app.assign("2020-01-01 08:00:00", time_step=12)   # post-horizon drain
+
+    stats = app.round_stats()
+    assert stats["ticks"] == 2
+    assert stats["ticks_in_horizon"] == 1
+    assert stats["ticks_drain"] == 1
+
+
+def test_market_stamp_is_flushed_at_close():
+    """Without a final flush the stamp is whatever the last scheduled push caught —
+    the review measured `ticks: 15` against a true 17."""
+    trucks, orders, clique, _ = _clique_fixture(3, 3, 3)
+    app = _app(trucks, orders, cooperation=clique)
+    app.assign("2020-01-01 08:00:00", time_step=0)
+
+    flushed = []
+    app._patch_round_stats_to_run_config = lambda force=False: flushed.append(force) or True
+    app.close("2020-01-01 09:00:00")
+    assert flushed == [True], "close() did not force a final provenance flush"

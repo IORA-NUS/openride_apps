@@ -8,6 +8,7 @@ import re
 import shutil
 from contextlib import contextmanager
 from copy import deepcopy
+from enum import Enum, auto
 from datetime import datetime, timezone
 from typing import Any
 
@@ -145,9 +146,53 @@ def container_logistics_scenarios_root() -> str:
 
 
 def scenario_root(datahub_dir: str = "", domain: str = "") -> str:
-    # datahub_dir / domain are retained for call-site compatibility but no longer
-    # used — container_logistics scenarios are anchored to the code package.
-    return container_logistics_scenarios_root()
+    """The container_logistics scenarios root — anchored, not derived from ``datahub_dir``.
+
+    The anchoring is deliberate (plan §14.1): scenarios live in one global folder, not
+    per-datahub. What was NOT deliberate is that this signature accepted a path and
+    silently discarded it, so a caller that passed a temporary directory expecting
+    isolation got the REAL ``scenarios/`` tree and wrote into it. That is how a probe
+    ended up writing into the source tree (review R2-15).
+
+    So the parameter stays — removing it would break every call site — but a non-empty
+    ``datahub_dir`` that the resolved root does **not** live under is now an error
+    rather than a silent no-op. A caller passing the repo root (the normal case) or a
+    tmp root together with ``ORSIM_SCENARIOS_DIR`` (the test-isolation case) is
+    consistent and passes; a caller passing an unrelated path is told, loudly, that its
+    isolation is not real.
+    """
+    root = container_logistics_scenarios_root()
+    # The rule is "is this caller plausibly talking about THIS checkout?", NOT "does
+    # datahub_dir contain the scenarios root". The latter looks tempting and is wrong:
+    # the production caller passes `<repo>/datahub`, which of course does not contain
+    # `<repo>/scenarios`, so it rejects the normal path. (It did — this exact mistake
+    # broke `list-scenarios` and a 500-truck verification run before the test below
+    # existed. The suite missed it because every test used a synthetic path.)
+    #
+    # A caller inside this checkout is legitimately using the anchored root. A caller
+    # passing an unrelated absolute path — a tmp dir, which is what a probe expecting
+    # isolation passes — is not, and is told so instead of silently getting the real
+    # tree. Tests that genuinely want isolation set ORSIM_SCENARIOS_DIR, which is
+    # honoured and exempt.
+    if (
+        datahub_dir
+        and str(datahub_dir).strip()
+        and not os.environ.get("ORSIM_SCENARIOS_DIR", "").strip()
+    ):
+        base = os.path.abspath(str(datahub_dir).strip())
+        repo_root = os.path.dirname(os.path.abspath(root))
+        inside_checkout = base == repo_root or base.startswith(repo_root + os.sep)
+        if not inside_checkout:
+            raise ValueError(
+                f"scenario_root: datahub_dir={datahub_dir!r} is outside this "
+                f"checkout, but container_logistics scenarios are anchored to "
+                f"{root!r} and are NOT derived from datahub_dir. This path would have "
+                f"been silently ignored and you would have read/written the REAL "
+                f"scenarios tree — which is how a probe once wrote into the source "
+                f"tree. For isolation set ORSIM_SCENARIOS_DIR; for the anchored root "
+                f"pass no datahub_dir."
+            )
+    return root
 
 
 # Back-compat alias (older callers / tests may import the previous name).
@@ -220,6 +265,13 @@ def scenario_meta_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
         "orderDemandCurve": recipe.get("orderDemandCurve"),
         "hauliers": recipe.get("hauliers"),
         "roleSettings": recipe.get("roleSettings"),
+        # The FOURTH closed literal this key passes through (the facility rules plan
+        # names three). Carried so a loaded bundle can still say which rules produced
+        # its facilities: the run provenance stamp derives its VALUES from the
+        # compiled collection, but it can only attribute them to a rule if it can see
+        # the authored rules, and this is the only channel that survives a bundle load.
+        "facilityRules": recipe.get("facilityRules"),
+        "facilityRulesWorld": recipe.get("facilityRulesWorld"),
     }
 
 
@@ -367,6 +419,240 @@ def _carry_authored_pools(incoming: Any, previous: Any) -> Any:
     return {**incoming, "structures": out}
 
 
+class Carry(Enum):
+    """How ``assemble_spec`` decides a key's value when merging over a saved spec.
+
+    Plan §14.5 (R3-3). ``assemble_spec`` used to RECONSTRUCT the spec from a flat
+    18-key dict literal in which exactly one key consulted ``previous``. A dashboard
+    save sends ``cooperation`` but not ``planner``/``solverParams``/``overrides``/
+    ``earlyOrderCount``, so all four were rewritten to ``null`` — and because
+    ``_normalize_planner(None)`` rebuilds ``topology="partitioned"``, **a save
+    silently turned shared-pool planning off while leaving the user's pools visibly
+    intact in the UI**. That is the class defect; adding ``planner`` to the payload
+    would have left the other three broken and key nineteen broken by default.
+    """
+
+    #: The body (or a derived value) is authoritative; never inherited.
+    FROM_BODY = auto()
+    #: The body wins if it SUPPLIED the key; otherwise inherit from ``previous``.
+    CARRY_IF_ABSENT = auto()
+    #: Structural merge against ``previous`` (cooperation's authored pools today).
+    MERGE_NESTED = auto()
+
+
+#: Every top-level key ``spec.json`` may carry, and how it survives a save.
+#: ``assemble_spec`` ITERATES this, so a key that is not registered is not emitted
+#: at all — a loud, immediate failure rather than a silent null.
+#: Order is the historical key order, so a written spec.json is byte-comparable.
+SPEC_KEYS: dict[str, Carry] = {
+    "name": Carry.FROM_BODY,
+    "slug": Carry.FROM_BODY,
+    "domain": Carry.FROM_BODY,
+    "source": Carry.FROM_BODY,
+    "simulationDays": Carry.CARRY_IF_ABSENT,
+    "seed": Carry.CARRY_IF_ABSENT,
+    "orderCountUnit": Carry.CARRY_IF_ABSENT,
+    # A scenario's own simulation epoch. Registered rather than defaulted so a
+    # scenario can DECLARE its hour axis instead of inheriting a global constant —
+    # the P8 shape this feature must not reproduce. Unregistered, it would be
+    # silently dropped on every dashboard save (G23), which is exactly the defect
+    # F1 found one level down in `_normalize_planner`.
+    "referenceTime": Carry.CARRY_IF_ABSENT,
+    "agents": Carry.CARRY_IF_ABSENT,
+    "earlyOrderCount": Carry.CARRY_IF_ABSENT,
+    "orderDemandCurve": Carry.CARRY_IF_ABSENT,
+    "tripMatrix": Carry.CARRY_IF_ABSENT,
+    "hauliers": Carry.CARRY_IF_ABSENT,
+    "cooperation": Carry.MERGE_NESTED,
+    "planner": Carry.CARRY_IF_ABSENT,
+    "solver": Carry.CARRY_IF_ABSENT,
+    "solverParams": Carry.CARRY_IF_ABSENT,
+    "roleSettings": Carry.CARRY_IF_ABSENT,
+    "overrides": Carry.CARRY_IF_ABSENT,
+    # --- per-facility rules (facility rules plan §9) -------------------------
+    # Registered at the TOP LEVEL on purpose. An unregistered key is silently
+    # stripped from every saved spec.json — ``assemble_spec`` builds its output
+    # solely from this table — which is the G23/F1 defect the rebate work walked
+    # into one level down in ``_normalize_planner``. Rules are not overrides: an
+    # override is blanket, a rule is targeted, and burying the two in one key is
+    # what made ``rebate_by_code`` read like a sub-feature of the blanket merge.
+    #
+    # CARRY_IF_ABSENT, matching ``overrides``/``referenceTime``. Note that
+    # ``_key_supplied`` is PRESENCE-based, so ``"facilityRules": []`` is a supplied
+    # empty list ("this scenario deliberately has no rules") that CLEARS an
+    # inherited one, while an absent key inherits.
+    #
+    # CORRECTED (F1). This comment used to read "Neither key belongs in
+    # _NULL_MEANS_UNSUPPLIED" and that instruction was WRONG: `[]` is in a list's
+    # domain and legitimately clears, but `null` is NOT, and honouring it as a clear
+    # wipes the rule list. Both keys are now NullPolicy.UNSUPPLIED — see
+    # SPEC_KEY_NULL_POLICY, whose completeness is enforced at import so the next key
+    # cannot skip the question.
+    "facilityRules": Carry.CARRY_IF_ABSENT,
+    # The recorded facility world the rules were authored against. It lives in
+    # spec.json and is never RECOMPUTED in the compiled scenario.json — but it IS
+    # echoed verbatim through $.recipe, and that echo is what makes
+    # recompile-from-bundle work. (Corrected: this used to say "never in
+    # scenario.json", which licenses deleting the echo.) What must never happen is
+    # the bundle regenerating the digest: it would then always match and guard
+    # nothing, while looking exactly like a guard.
+    "facilityRulesWorld": Carry.CARRY_IF_ABSENT,
+}
+
+#: Accepted spellings per key. A client that speaks any alias has SUPPLIED the key.
+SPEC_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "simulationDays": ("simulationDays", "simulation_days"),
+    "roleSettings": ("roleSettings", "roleProfiles"),
+    "agents": ("agents", "numTrucks", "numOrders", "numFacilities"),
+}
+
+
+class NullPolicy(Enum):
+    """What an explicit ``null`` MEANS for one spec key.
+
+    The question every key must answer is **"is ``null`` inside this key's value
+    domain?"** — not "is this key important?". A list's clear is spelled ``[]``, a
+    string's is ``""``; for those, ``null`` is a malformed value and the only thing
+    it can honestly mean is *the client did not speak this key*.
+    """
+
+    #: ``null`` is OUT of the domain -> treat as "not spoken" and inherit.
+    UNSUPPLIED = auto()
+    #: ``null`` is IN the domain -> honour the clear.
+    CLEARS = auto()
+
+
+#: **Mandatory, one entry per SPEC_KEYS key**, enforced at import below.
+#:
+#: This replaces an opt-in ``frozenset`` in which every newly registered key defaulted
+#: to the dangerous behaviour. That list was added for ``referenceTime`` and then not
+#: maintained: ``facilityRules`` was registered with an explicit code comment saying it
+#: did **not** belong here, and a save payload carrying ``"facilityRules": null`` would
+#: have wiped the rule list and silently reverted every per-facility physics value.
+#: Two rounds, two keys, same hole — so the question is now unanswerable-by-default
+#: rather than answered-by-default-wrongly.
+#:
+#: Each ``CLEARS`` entry carries its own justification. ``UNSUPPLIED`` is the safe
+#: answer and needs one only where it is surprising.
+SPEC_KEY_NULL_POLICY: dict[str, NullPolicy] = {
+    # --- identity: required strings, FROM_BODY (policy not consulted, answered anyway
+    # so a future Carry change inherits a decision rather than a default) ------------
+    "name": NullPolicy.UNSUPPLIED,
+    "slug": NullPolicy.UNSUPPLIED,
+    "domain": NullPolicy.UNSUPPLIED,
+    "source": NullPolicy.UNSUPPLIED,
+    # --- calendar / generation inputs -----------------------------------------------
+    # Every one of these falls back to a GLOBAL DEFAULT when absent, so honouring a
+    # null as a clear silently reverts an authored scenario to the caller's default —
+    # the P8 shape, and exactly how referenceTime was lost.
+    "simulationDays": NullPolicy.UNSUPPLIED,
+    "seed": NullPolicy.UNSUPPLIED,
+    "orderCountUnit": NullPolicy.UNSUPPLIED,
+    "referenceTime": NullPolicy.UNSUPPLIED,
+    "agents": NullPolicy.UNSUPPLIED,
+    # CLEARS: `null` is the ONLY spelling of "this scenario has no demand curve"
+    # (uniform arrival time). An empty list is not a curve, and the compile path
+    # already reads absent-or-null as "uniform" rather than as a default curve, so
+    # null is genuinely inside this key's domain.
+    "orderDemandCurve": NullPolicy.CLEARS,
+    # A null trip matrix silently substitutes D.DEFAULT_TRIP_MATRIX, which
+    # re-partitions the facility code mix (the per-code counts are matrix-derived) —
+    # i.e. it moves facilities. Never a clear.
+    "tripMatrix": NullPolicy.UNSUPPLIED,
+    # A null haulier list rebuilds a default single haulier, which silently collapses
+    # the multi-haulier experiment this project exists to run. "No hauliers" is `[]`.
+    "hauliers": NullPolicy.UNSUPPLIED,
+    # MERGE_NESTED (policy not consulted). A null cooperation block rebuilds
+    # topology="partitioned" — the CRITICAL-1 defect that turned shared-pool planning
+    # off while the pools stayed visibly intact in the editor.
+    "cooperation": NullPolicy.UNSUPPLIED,
+    # --- keys whose existing, TESTED contract is that null clears --------------------
+    # `test_presence_not_truthiness_so_a_client_can_clear_a_field` pins these four.
+    # For each, null is the established spelling of "no override at all", and there is
+    # no second spelling that means the same thing.
+    "earlyOrderCount": NullPolicy.CLEARS,
+    "planner": NullPolicy.CLEARS,
+    "solverParams": NullPolicy.CLEARS,
+    "overrides": NullPolicy.CLEARS,
+    # CLEARS: solver and planner.deployment.type are ONE dial and `solver` wins when
+    # both are given, so null is how an author says "defer to the planner". No other
+    # spelling expresses that.
+    "solver": NullPolicy.CLEARS,
+    # CLEARS: the legacy sibling of `overrides`; same semantics, same reasoning.
+    "roleSettings": NullPolicy.CLEARS,
+    # --- per-facility rules ----------------------------------------------------------
+    # THE F1 DEFECT. A rule list's clear is `[]`; `null` is a malformed list and is
+    # what a generic form serialiser emits for an untouched field. Honouring it as a
+    # clear reverts every per-facility gate_count/service_time/rebate to the blanket
+    # layer — 300 facilities at one gate each — with nothing in the bundle saying so.
+    "facilityRules": NullPolicy.UNSUPPLIED,
+    # There is no "cleared world": a baseline is either recorded or deleted outright.
+    # A null here would also orphan the rules it was recorded for.
+    "facilityRulesWorld": NullPolicy.UNSUPPLIED,
+}
+
+# Completeness is enforced at IMPORT, so it fires on test collection rather than on
+# the one save payload that happens to carry a null. Precedent: the RuntimeError below
+# for a registered key with no value builder — the one other place this module refuses
+# to let an author skip a question.
+_missing_null_policy = set(SPEC_KEYS) - set(SPEC_KEY_NULL_POLICY)
+if _missing_null_policy:
+    raise RuntimeError(
+        f"SPEC_KEYS entries with no declared null policy: {sorted(_missing_null_policy)}. "
+        f"Every key must answer whether an explicit null means 'clear it' (NullPolicy."
+        f"CLEARS) or 'the client did not speak it' (NullPolicy.UNSUPPLIED). The test is "
+        f"whether null is inside the key's value domain — a list clears with [], a "
+        f"string with ''. An unanswered key silently meant 'clear it', which is how "
+        f"referenceTime (R3-1) and facilityRules (F1) were both lost."
+    )
+_stale_null_policy = set(SPEC_KEY_NULL_POLICY) - set(SPEC_KEYS)
+if _stale_null_policy:
+    raise RuntimeError(
+        f"SPEC_KEY_NULL_POLICY declares keys that are not in SPEC_KEYS: "
+        f"{sorted(_stale_null_policy)}. Remove them, or register them."
+    )
+
+#: Back-compat view, DERIVED from the table above so it can never disagree with it.
+#: Kept because existing tests and callers import it; it is no longer authored.
+_NULL_MEANS_UNSUPPLIED = frozenset(
+    k for k, v in SPEC_KEY_NULL_POLICY.items() if v is NullPolicy.UNSUPPLIED
+)
+
+
+def _key_supplied(raw: dict[str, Any], key: str) -> bool:
+    """Did the client actually speak this key (under any accepted spelling)?
+
+    **Presence, not truthiness.** ``key in raw`` is what distinguishes *"the client
+    omitted this"* (inherit) from *"the client cleared it"* (honour the clear).
+    A truthiness test would make clearing a field impossible — the bug the obvious
+    fix introduces.
+    """
+    if not isinstance(raw, dict):
+        return False
+    supplied = any(alias in raw for alias in SPEC_KEY_ALIASES.get(key, (key,)))
+    if supplied and SPEC_KEY_NULL_POLICY.get(key) is NullPolicy.UNSUPPLIED:
+        # For a key whose domain excludes null, an explicit `null` is NOT a "clear" —
+        # it is how a declared value is silently LOST. A generic form serialiser emits
+        # null for an untouched field, which would otherwise stand the carry down and
+        # wipe the value, reverting the scenario to a caller/global default.
+        #
+        # This was a per-key exception (`referenceTime` only) and that is precisely
+        # why it failed a second time: an opt-in safety list leaves every NEW key
+        # defaulting to the dangerous behaviour, and `facilityRules` was registered
+        # with a comment explicitly declining to join it. It is now a MANDATORY,
+        # import-checked table (SPEC_KEY_NULL_POLICY), so the question cannot be
+        # skipped rather than merely being answerable.
+        #
+        # Clearing stays possible for every key whose domain contains null, and for
+        # the rest it is spelled with the empty value: `[]`, `""`, `{}`.
+        value = next(
+            (raw[a] for a in SPEC_KEY_ALIASES.get(key, (key,)) if a in raw), None
+        )
+        if value is None or (isinstance(value, str) and not value.strip()):
+            return False
+    return supplied
+
+
 def assemble_spec(
     raw: dict[str, Any], domain: str, *, previous: dict[str, Any] | None = None
 ) -> dict[str, Any]:
@@ -419,7 +705,10 @@ def assemble_spec(
     solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
     overrides = raw.get("overrides") if isinstance(raw.get("overrides"), dict) else None
 
-    return {
+    # The value each key takes IF the client supplied it (or if it is derived).
+    # Identical to the old dict literal, so with ``previous=None`` the result is
+    # byte-identical to before this registry existed.
+    from_body: dict[str, Any] = {
         "name": name,
         "slug": slug,
         "domain": str(raw.get("domain") or domain or "container-logistics-sim"),
@@ -427,6 +716,7 @@ def assemble_spec(
         "simulationDays": raw.get("simulationDays", raw.get("simulation_days")),
         "seed": raw.get("seed"),
         "orderCountUnit": raw.get("orderCountUnit"),
+        "referenceTime": raw.get("referenceTime"),
         "agents": {
             "truck": _role("truck", "numTrucks"),
             "order": _role("order", "numOrders"),
@@ -445,7 +735,28 @@ def assemble_spec(
         "solverParams": deepcopy(solver_params) if solver_params else None,
         "roleSettings": deepcopy(role_settings) if role_settings else None,
         "overrides": deepcopy(overrides) if overrides else None,
+        # Echoed verbatim — never normalised here. ``Preprocessor`` is the single
+        # validation surface, and a "helpful" tidy-up in this literal is how the
+        # authored and compiled forms drift apart.
+        "facilityRules": deepcopy(raw.get("facilityRules")),
+        "facilityRulesWorld": deepcopy(raw.get("facilityRulesWorld")),
     }
+    # Every declared key must have a value builder — a key added to SPEC_KEYS
+    # without one is a loud failure here rather than a silent null in the spec.
+    missing = [k for k in SPEC_KEYS if k not in from_body]
+    if missing:
+        raise RuntimeError(f"assemble_spec: SPEC_KEYS without a value builder: {missing}")
+
+    prev = previous if isinstance(previous, dict) else None
+    out: dict[str, Any] = {}
+    for key, policy in SPEC_KEYS.items():
+        if policy is Carry.CARRY_IF_ABSENT and not _key_supplied(raw, key) and prev and key in prev:
+            # The client did not speak this key and the saved spec has it: inherit.
+            # PRESENCE, not truthiness — see the Carry docstring.
+            out[key] = deepcopy(prev[key])
+        else:
+            out[key] = from_body[key]
+    return out
 
 
 def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
@@ -561,6 +872,11 @@ def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
         "solverParams": deepcopy(solver_params) if solver_params else None,
         "roleSettings": deepcopy(role_settings) if role_settings else None,
         "overrides": deepcopy(overrides) if overrides else None,
+        # Carried so the LEGACY path can REFUSE a rules-carrying scenario (R2-2).
+        # This normalizer does not implement rules and must not: two implementations
+        # of a precedence rule is how they diverge.
+        "facilityRules": deepcopy(raw.get("facilityRules")),
+        "facilityRulesWorld": deepcopy(raw.get("facilityRulesWorld")),
     }
 
 
@@ -643,6 +959,7 @@ def frontend_scenario_config_override(spec: dict[str, Any]):
     import apps.container_logistics.scenario.scenario_config as cfg
 
     backup = {
+        "FACILITY_RULES": deepcopy(getattr(cfg, "FACILITY_RULES", None)),
         "SIMULATION_DAYS": cfg.SIMULATION_DAYS,
         "HAULIERS": deepcopy(cfg.HAULIERS),
         "truck_settings": deepcopy(cfg.truck_settings),
@@ -651,6 +968,9 @@ def frontend_scenario_config_override(spec: dict[str, Any]):
         "assignment_settings": deepcopy(cfg.assignment_settings),
         "analytics_settings": deepcopy(cfg.analytics_settings),
     }
+    # Carried onto the module so the legacy generation path can SEE a rule list and
+    # refuse it. Never consumed as configuration — build_generation_spec raises.
+    cfg.FACILITY_RULES = deepcopy(spec.get("facilityRules")) or []
     cfg.SIMULATION_DAYS = spec["simulationDays"]
     cfg.HAULIERS = cfg.normalize_hauliers(spec.get("hauliers"))
     cfg.truck_settings["num_trucks"] = spec["agents"]["truck"]["count"]
@@ -716,6 +1036,7 @@ def frontend_scenario_config_override(spec: dict[str, Any]):
     try:
         yield
     finally:
+        cfg.FACILITY_RULES = backup["FACILITY_RULES"]
         cfg.SIMULATION_DAYS = backup["SIMULATION_DAYS"]
         cfg.HAULIERS = backup["HAULIERS"]
         cfg.truck_settings = backup["truck_settings"]
@@ -1462,6 +1783,25 @@ class CooperationResetRequired(ValueError):
     """
 
 
+def _previous_exists_but_is_unreadable(scenario_path: str, previous: Any) -> bool:
+    """A saved spec is PRESENT on disk but could not be parsed.
+
+    Review finding 12: the loader swallows ``OSError``/``JSONDecodeError`` and
+    returns ``None``, which is indistinguishable from "brand-new scenario". The
+    destructive-save guard keys off ``previous``, so it silently **fails open** —
+    it protects least the folder most in need of protection (a corrupted one).
+    """
+    if previous is not None:
+        return False
+    if not os.path.isdir(scenario_path):
+        return False  # genuinely new: nothing to protect
+    for name in ("spec.json", "scenario.json"):
+        candidate = os.path.join(scenario_path, name)
+        if os.path.isfile(candidate) and os.path.getsize(candidate) > 0:
+            return True
+    return False
+
+
 def _guard_cooperation_not_emptied(
     previous: dict[str, Any] | None,
     incoming_cooperation: Any,
@@ -1501,6 +1841,39 @@ def _guard_cooperation_not_emptied(
     )
 
 
+def _previous_scoped_to_untouched_structures(
+    previous: dict[str, Any] | None, incoming_cooperation: Any
+) -> dict[str, Any] | None:
+    """``previous`` with the structures being RESET removed from its cooperation.
+
+    Review finding 11: an explicit ``allow_cooperation_reset`` used to stand the
+    layer-1 pools carry down **globally** (``previous=None``), so structures the
+    user never touched lost their authored pools too — an n-member pool silently
+    reshaped into pairwise pools. The escape hatch re-created the original bug
+    inside itself.
+
+    Scope it: only the structures whose content the incoming body actually empties
+    stand down; every other structure keeps its carry. Reset one, keep the rest.
+    """
+    if not isinstance(previous, dict):
+        return None
+    being_reset = (
+        cooperation_content_structure_ids(previous.get("cooperation"))
+        - cooperation_content_structure_ids(incoming_cooperation)
+    )
+    if not being_reset:
+        return previous
+    scoped = deepcopy(previous)
+    coop = scoped.get("cooperation")
+    structures = _cooperation_structures(coop)
+    if isinstance(coop, dict) and isinstance(structures, list):
+        coop["structures"] = [
+            st for st in structures
+            if str((st or {}).get("id") or "").strip() not in being_reset
+        ]
+    return scoped
+
+
 def generate_scenario(
     datahub_dir: str,
     domain: str,
@@ -1532,10 +1905,33 @@ def generate_scenario(
     previous = _load_generation_spec_from_disk(target) if os.path.isdir(target) else None
     if not isinstance(previous, dict):
         previous = None
+    if _previous_exists_but_is_unreadable(target, previous) and not allow_cooperation_reset:
+        # FAIL CLOSED (review finding 12). An unreadable saved spec means the guard
+        # cannot tell what would be lost, so it must refuse rather than assume there
+        # is nothing to lose.
+        raise CooperationResetRequired(
+            f"Refusing to overwrite scenario {slug!r}: a spec file exists on disk but "
+            "could not be read, so the destructive-save guard cannot tell what this "
+            "save would destroy. Fix or remove the unreadable spec, or pass "
+            "allow_cooperation_reset=True to overwrite it deliberately."
+        )
     _guard_cooperation_not_emptied(
         previous, payload.get("cooperation"), slug, allow_reset=allow_cooperation_reset
     )
-    spec = assemble_spec(payload, domain, previous=previous)
+    # An explicit reset makes the CLIENT authoritative about cooperation, so the
+    # layer-1 pools carry must stand down: carrying an authored ``pools`` back onto
+    # a body that just emptied ``edges`` makes the two disagree and the Preprocessor
+    # rejects the save ("'pools' and 'edges' disagree"), which left the hatch dead
+    # for exactly the pools-authored structures it exists for.
+    spec = assemble_spec(
+        payload,
+        domain,
+        previous=(
+            _previous_scoped_to_untouched_structures(previous, payload.get("cooperation"))
+            if allow_cooperation_reset
+            else previous
+        ),
+    )
     # Fresh generation: no pre-existing sources to carry (a brand-new spec).
     return _compile_into_folder(datahub_dir, domain, slug, spec=spec, carry_sources=False)
 
@@ -1615,7 +2011,12 @@ def stage_sources(
 
 
 def edit_scenario(
-    datahub_dir: str, domain: str, slug: str, patch: dict[str, Any]
+    datahub_dir: str,
+    domain: str,
+    slug: str,
+    patch: dict[str, Any],
+    *,
+    allow_cooperation_reset: bool = False,
 ) -> dict[str, Any]:
     """Patch an existing scenario's recipe and recompile, preserving its sources.
 
@@ -1625,6 +2026,16 @@ def edit_scenario(
     ``spec.json``), then recompiles via ``carry_sources=True`` so any ``scenario_gen.py``
     override / ``inputs/`` already in the folder survive the edit. This is why edit goes
     through compile (not a fresh ``generate_scenario``, which would drop those sources).
+
+    **Merging does NOT make this path safe** (FIX-6 layer 2). The merge is *shallow and
+    top-level*, so a ``patch`` that mentions ``cooperation`` at all REPLACES the whole
+    block rather than deepening into it: ``{"cooperation": {"structures": [{"id": "c",
+    "edges": []}]}}`` empties a pools-authored consortium just as thoroughly as the
+    generate path does, and ``{"cooperation": {"structures": []}}`` deletes the structure
+    outright. Only a patch that *omits* ``cooperation`` is protected by the merge. So the
+    same guard applies here, evaluated on the POST-merge block — an omitted key is not a
+    reset — and on the raw incoming block *before* :func:`assemble_spec` runs, since the
+    layer-1 pools carry would otherwise mask the loss it is meant to report.
     """
     slug_err = validate_slug(slug)
     if slug_err:
@@ -1637,7 +2048,20 @@ def edit_scenario(
     if not isinstance(base, dict):
         base = {}
     merged = {**base, **(patch or {}), "slug": slug, "domain": domain}
-    spec = assemble_spec(merged, domain)
+    _guard_cooperation_not_emptied(
+        base, merged.get("cooperation"), slug, allow_reset=allow_cooperation_reset
+    )
+    # See generate_scenario: an explicit reset stands the pools carry down, otherwise
+    # the carried pools contradict the emptied edges and the Preprocessor rejects it.
+    spec = assemble_spec(
+        merged,
+        domain,
+        previous=(
+            _previous_scoped_to_untouched_structures(base, merged.get("cooperation"))
+            if allow_cooperation_reset
+            else base
+        ),
+    )
     return _compile_into_folder(datahub_dir, domain, slug, spec=spec, carry_sources=True)
 
 

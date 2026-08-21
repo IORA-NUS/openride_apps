@@ -12,12 +12,23 @@ the ``scenario_config`` global reads + ``scenario_datagen.build_generation_spec`
 
 from __future__ import annotations
 
+import json
+import logging
 import os
 import re
 from copy import deepcopy
+from datetime import datetime
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from apps.container_logistics.rebate import (
+    CANONICAL_EPOCH_FORMAT,
+    RebateSpecError,
+    parse_rebate_schedule,
+)
+from apps.container_logistics.rebate import reference_hour as _rebate_reference_hour
+
+from . import facility_rules
 from .catalog import LocationCatalog, default_locations_csv, default_sg_mask_path
 from .codes import CodeRegistry
 from . import defaults as D
@@ -193,7 +204,37 @@ class Preprocessor:
             "deployment": deployment,
             "sharing": sharing,
             "market": Preprocessor._normalize_market(raw_planner.get("market")),
+            # R2-7 / review F1 — HIGH-1. This closed dict literal is the SECOND instance
+            # of the G23 silent-drop mechanism in this feature. The plan checked
+            # SPEC_KEYS because the project had a scar there, registered the authoring
+            # surface under `overrides.facility` to sidestep it, and then walked into the
+            # identical failure one level down: `rebate_aware` was stripped here, so the
+            # opt-in seam could not be enabled from a scenario file AT ALL and the
+            # feature's stated purpose was unreachable. The generalisable rule is that
+            # "is this key registered?" is a question about EVERY dict literal a config
+            # passes through, not about the one that burned us last time.
+            #
+            # Defaults false, and no shipped scenario sets it, so this restores the
+            # ABILITY to switch the seam on without switching it on.
+            # R3-9 / review R2-8: a boolean POLICY flag gets no truthiness coercion.
+            # `bool("false")` is True, so a JSON-ish client sending the string "false"
+            # would have SWITCHED THE SEAM ON. Matches the house discipline at
+            # `preprocess.py` max_rounds and `rebate.py::_is_real_number`.
+            "rebate_aware": Preprocessor._strict_bool(
+                raw_planner.get("rebate_aware", False), "planner.rebate_aware"
+            ),
         }
+
+    @staticmethod
+    def _strict_bool(value, where: str) -> bool:
+        """A real boolean, or a spec error. No truthiness coercion on a policy flag."""
+        if isinstance(value, bool):
+            return value
+        raise SpecValidationError(
+            f"{where}: must be a boolean true/false (got {value!r} of type "
+            f"{type(value).__name__}). Strings are refused rather than coerced: "
+            f"bool(\"false\") is True, which would silently ENABLE the flag."
+        )
 
     @staticmethod
     def _normalize_market(raw_market) -> dict:
@@ -201,7 +242,9 @@ class Preprocessor:
 
         Validated: ``market`` is an object; ``offer``/``claim``/``arbitration`` are each
         an object with a string ``type`` and a dict ``params`` (missing -> the default);
-        ``max_rounds`` is an int in ``1..10``. Algorithm NAMES are deliberately NOT
+        ``max_rounds`` is an int in ``MARKET_MAX_ROUNDS_MIN..MARKET_MAX_ROUNDS_MAX``
+        (1..100 — a safety backstop, not a tuning knob; the market terminates on
+        convergence, plan §13.4 FIX-1). Algorithm NAMES are deliberately NOT
         checked against any registry — a typo must degrade a run at runtime, not abort
         the compile (plan §7).
         """
@@ -267,6 +310,67 @@ class Preprocessor:
     ) -> Compiled:
         if not isinstance(raw, dict):
             raise SpecValidationError("spec.json must be a JSON object")
+
+        # --- the simulation epoch (R3-1 + R3-5; review R2-3, R2-4) ---------------
+        # Validated UNCONDITIONALLY, for every spec, rebate or not. The previous guard
+        # was scoped to specs carrying a rebate schedule, justified in §18.3 as
+        # "it touches no existing scenario" — which optimised for blast radius and
+        # thereby protected exactly ONE ARM of a two-arm experiment. The control arm is
+        # the one nobody inspects: it declared midnight, a save stood the carry down to
+        # `null`, and it silently reverted to the 08:00 caller default. A paired
+        # estimator is structurally BLIND to that, because each arm is internally
+        # consistent while their demand curves sit on different wall clocks.
+        #
+        # Safe because it refuses nothing that exists: all 15 compiled bundles use the
+        # canonical "%Y-%m-%d %H:%M:%S" form (13x 08:00:00, 1x 04:00:00 in
+        # smoke_container_logistics_1d, 1x 00:00:00 in the rebate scenario), surveyed
+        # 2026-08-21. If a later scenario fails to compile here, that survey is where to
+        # start: a NON-canonical epoch is now refused rather than silently stamped.
+        #
+        # ABSENT is fine (the 13 scenarios predating the key carry no `referenceTime`
+        # at all, and inherit the caller default as they always did). PRESENT-BUT-NULL
+        # is the error: it is what a save produces when the carry is stood down by
+        # presence, and it is indistinguishable in the compiled bundle from a scenario
+        # that never declared an epoch.
+        # A null/empty `referenceTime` is treated as ABSENT here, not as an error.
+        #
+        # DEVIATION from §19.4 R3-1's literal "present-but-null refused for every spec",
+        # with the reason measured: `assemble_spec` writes `referenceTime: None` into
+        # EVERY spec that never declared one, so present-but-null is the ordinary
+        # post-save state rather than an anomaly. Refusing it here failed 84 tests
+        # across 10 files — ordinary scenario saves, not edge cases.
+        #
+        # The loss R2-3 describes is prevented at the layer where it actually happens:
+        # `frontend_scenario_spec._NULL_MEANS_UNSUPPLIED` makes an explicit null on this
+        # key inherit rather than stand the carry down, so a DECLARED epoch can no
+        # longer be wiped by a save. That is the reviewer's own option (b), and it is
+        # strictly stronger than refusing at compile — it protects the value instead of
+        # detecting its absence after the fact. A surviving null now means only "nobody
+        # ever declared an epoch", which is exactly the harmless case.
+        if raw.get("referenceTime") is not None and not (
+            isinstance(raw.get("referenceTime"), str) and not raw["referenceTime"].strip()
+        ):
+            if cls._reference_hour(raw["referenceTime"]) is None:
+                raise SpecValidationError(
+                    f"spec: declared 'referenceTime' {raw['referenceTime']!r} is not in "
+                    f"the canonical {CANONICAL_EPOCH_FORMAT!r} form "
+                    f"(e.g. '2020-01-01 00:00:00')."
+                )
+
+        # The epoch that will actually be compiled in must be readable by the ONE shared
+        # rule (rebate.reference_hour). The `None` exemption is deliberately GONE: an
+        # unparseable epoch used to be waved through and, in the ISO-offset case, even
+        # stamped `axes_aligned: true` — a confident, wrong provenance record.
+        if cls._reference_hour(reference_time) is None:
+            raise SpecValidationError(
+                f"spec: simulation epoch {reference_time!r} is not in the canonical "
+                f"{CANONICAL_EPOCH_FORMAT!r} form (e.g. '2020-01-01 00:00:00'). "
+                f"Offset/ISO spellings are refused rather than guessed: an offset makes "
+                f"'which wall clock' ambiguous, and the permissive parser this replaces "
+                f"blessed '2020-01-01T00:00:00+08:00' as hour 0 and stamped the run "
+                f"axes_aligned=true. All 15 existing bundles already use the canonical "
+                f"form, so this refuses nothing that exists."
+            )
 
         # --- identity ---
         name = str(raw.get("name") or "").strip()
@@ -335,6 +439,28 @@ class Preprocessor:
         authored_pool_ids = H.authored_pool_structure_ids(raw.get("cooperation"))
         planner_cfg = cls._normalize_planner(raw.get("planner"))
 
+        # The arm must always be NAMED, never inherited silently (plan §14.7 item 5).
+        # A scenario that declares cooperation pools but resolves to `partitioned`
+        # runs the LEGACY planner while its pools sit visibly intact in the editor —
+        # which is exactly the state CRITICAL-1 leaves behind when a save drops the
+        # `planner` key. This warning is a cheap detector for that silent flip; it is
+        # deliberately NOT an error, because partitioned + cooperation is a legitimate
+        # (and currently default) configuration.
+        try:
+            _active_struct = H.active_structure(cooperation)
+            _declared_pools = _active_struct.get("pools") or []
+            if _declared_pools and planner_cfg.get("topology") == "partitioned":
+                logging.warning(
+                    "Scenario %r declares %d cooperation pool(s) on structure %r but "
+                    "planner.topology resolves to 'partitioned', so shared-pool "
+                    "planning is OFF for this scenario. If that is not intended, set "
+                    "planner.topology='pooled' (or run with ORSIM_PLANNER_TOPOLOGY="
+                    "pooled). A dropped 'planner' key silently produces this state.",
+                    slug, len(_declared_pools), _active_struct.get("id"),
+                )
+        except Exception:  # pragma: no cover - a warning must never break a compile
+            logging.debug("pools/topology mismatch check failed", exc_info=True)
+
         # --- order location distribution (matrix/random/historical) ---
         catalog = cls.catalog()
         codes = list(catalog.codes())
@@ -386,6 +512,8 @@ class Preprocessor:
         # --- build the *_settings the builders read (defaults + overrides) ---
         settings = D.role_settings()
         overrides = cls._merged_overrides(raw)
+        cls._reject_rebate_by_code(overrides, slug=slug)
+        cls._validate_blanket_facility_overrides(overrides, slug=slug)
         settings["truck"]["num_trucks"] = num_trucks
         settings["order"]["num_orders"] = num_orders
         settings["order"]["early_order_count"] = early
@@ -408,6 +536,32 @@ class Preprocessor:
                 s["service_time"] = fac_profile["service_time"]
             if fac_profile.get("gate_count") is not None:
                 s["gate_count"] = fac_profile["gate_count"]
+        # --- facilityRules: the targeted layer (plan §4, §7, §8.3) --------------
+        # ORDERING TRAP (§8.3.1): this MUST run *after* the blanket re-stamp above,
+        # which is rank 0. Applying rules first would let the blanket layer overwrite
+        # them — an inverted precedence that no test of the pure resolver can catch,
+        # because the resolver would be correct and only the wiring wrong.
+        # The values land on the SITE, not the profile (§8.3.2): both builders read
+        # gate_count/service_time off the site, and the facility agent emits
+        # gate_count BOTH at the top level (which the runtime schema validates) and
+        # inside profile (which facility/manager.py actually reads). Stamping the
+        # site gives both; patching either alone is silently wrong in one direction.
+        facility_rules_list = cls._resolve_facility_rules(
+            raw, sites, codes, fac_profile, slug=slug
+        )
+        # RE-POINTED (facility rules plan §11.2 — the top migration hazard).
+        # This used to run BEFORE any of the above and to early-return when
+        # `overrides.facility.rebate` and `.rebate_by_code` were both absent. The
+        # migration makes both absent, which would have silently disarmed the
+        # midnight-epoch refusal, the mixed-currency refusal and two warnings — with
+        # NO test failing, because the tests covering them authored the very key
+        # being removed. It now judges the POST-RESOLUTION set (`site["rebate"]`),
+        # so it covers rules-authored and blanket-authored schedules identically and
+        # cannot be disarmed by the authoring surface changing again.
+        cls._validate_facility_rebate(
+            overrides, facility_rules_list, sites,
+            slug=slug, reference_time=reference_time,
+        )
         fac_profile["facilities"] = sites
         # Solver selection. The planner's deployment algorithm and the legacy
         # 'solver' knob are ONE dial: 'solver' wins if both are given, and the
@@ -455,6 +609,31 @@ class Preprocessor:
             "slug": slug,
             "simulationDays": days,
             "seed": seed,
+            # The scenario's declared epoch, round-tripped so a recompile keeps the
+            # hour axis it was authored on rather than silently inheriting the caller
+            # default (which is how the two axes drifted apart in the first place).
+            "referenceTime": reference_time,
+            # --- hour-axis provenance (plan §18.3 step 1, review F2) -------------
+            # These two curves in the SAME spec.json are measured on DIFFERENT clocks,
+            # and nothing said so. Stamped so every bundle is self-describing about
+            # which clock each curve speaks — retroactively legible for bundles
+            # compiled before the midnight rule existed.
+            "hour_axis": {
+                "orderDemandCurve": (
+                    "hours since REFERENCE_TIME (sampling.py never reads the epoch, so "
+                    "authored hour H is realised at wall hour (H + reference_hour) % 24)"
+                ),
+                "rebate": (
+                    "sim wall clock; epoch = REFERENCE_TIME (price_at parses the "
+                    "recorded RFC-1123 arrival stamp)"
+                ),
+                "reference_time": reference_time,
+                "reference_hour": cls._reference_hour(reference_time),
+                # 0 means the two axes coincide. Anything else is the offset by which
+                # an authored demand hour is displaced from its wall-clock label.
+                "demand_to_wall_offset_hours": cls._reference_hour(reference_time),
+                "axes_aligned": cls._reference_hour(reference_time) == 0,
+            },
             "orderCountUnit": order_unit,
             "agents": {
                 "truck": {"count": num_trucks, "policy": role_policies["truck"]},
@@ -484,6 +663,14 @@ class Preprocessor:
             "solver": strategy,
             "solverParams": deepcopy(sp) if isinstance(sp, dict) else None,
             "overrides": deepcopy(overrides) if overrides else None,
+            # Echoed VERBATIM (facility rules plan §9, literal 2). scenario.json's
+            # $.recipe is the round-trip source for _load_generation_spec_from_disk,
+            # the editor's index.json.editForm, and the back-compat "synthesise a
+            # spec from the bundle" path — miss it and a recompile from the bundle
+            # silently drops the rules. The raw authored value is echoed, not the
+            # normalised one, so an empty list stays an empty list.
+            "facilityRules": deepcopy(raw.get("facilityRules")),
+            "facilityRulesWorld": deepcopy(raw.get("facilityRulesWorld")),
             "behaviorRevision": D.BEHAVIOR_REVISION,
         }
 
@@ -546,6 +733,263 @@ class Preprocessor:
             if patch:
                 merged.setdefault(role, {}).update(patch)
         return merged
+
+    #: R3-4: the epoch rule lives in ONE place. This shim keeps the internal call sites
+    #: unchanged while delegating to the shared helper, so ``recipe.hour_axis`` and
+    #: ``meta.rebate.hour_axis`` can never disagree about the same run again.
+    _reference_hour = staticmethod(_rebate_reference_hour)
+
+    @classmethod
+    def _resolve_facility_rules(
+        cls, raw: dict, sites: list, codes: list, fac_profile: dict, *, slug: str,
+    ) -> list:
+        """Validate + apply ``facilityRules`` onto the freshly sampled sites.
+
+        Returns the validated rule list, used only to tell
+        :meth:`_validate_facility_rebate` whether pricing was INTENDED. The recipe
+        echoes ``raw`` directly rather than anything returned here, so the persisted
+        form is the AUTHORED one verbatim — an empty list stays an empty list, and a
+        "helpful" normalisation cannot drift the authored and compiled forms apart.
+
+        The staleness fingerprint is checked FIRST, before rule schema validation:
+        if the facility world moved, "these rules were written against a different
+        world" is the useful thing to be told, and a zero-match error would be a
+        misleading answer to it (§4.6 / §18.3).
+        """
+        rules_raw = raw.get("facilityRules")
+        world = raw.get("facilityRulesWorld")
+        try:
+            facility_rules.validate_world_baseline(world, sites, rules_raw, slug=slug)
+            rules = facility_rules.validate_facility_rules(
+                rules_raw, sites, codes, slug=slug
+            )
+            resolution = facility_rules.resolve_facility_rules(
+                rules, sites, fac_profile, slug=slug
+            )
+            facility_rules.apply_resolution(sites, resolution)
+        except facility_rules.FacilityRulesError as exc:
+            # Re-raised as the house type so the single validation surface stays
+            # single; facility_rules keeps its own error class to avoid a back-edge
+            # import into this module.
+            raise SpecValidationError(str(exc)) from exc
+        return rules
+
+    @classmethod
+    def _validate_blanket_facility_overrides(cls, overrides: dict, *, slug: str) -> None:
+        """Run the rule layer's own coercers over ``overrides.facility`` (R2-3 / F2).
+
+        Until now ``SETTABLE_KEYS`` validated rank 10/30 and nothing validated rank 0,
+        so the two authoring paths to the same key disagreed about what a legal value
+        is. The rules validator's own comment says it exists to stop an agent-boot
+        crash 500 agents into a run — and it stopped it on one of the two doors that
+        can cause it. ``overrides.facility.gate_count: 0`` still reached
+        ``FacilityQueueController``, whose assert fires at boot.
+
+        **Unconditional and hard**, deliberately. Measured blast radius is zero: of
+        the 15 shipped specs, 6 carry ``gate_count``/``service_time`` and every one is
+        ``1``/``1800``, which these coercers accept. A warning-first phase or a
+        presence-scoped exemption would be caution bought with nothing — and scoping a
+        guard for a reason that turns out to cost more than it saves is the exact
+        failure this feature has already paid for once.
+
+        Only the intersection with ``SETTABLE_KEYS`` is touched. The blanket layer
+        legitimately carries dead keys (``facility_type``, ``fifo_queue_policy``,
+        ``max_queue_size``, ``operating_hours``, ``status``) that every shipped spec
+        sets, and those must keep flowing untouched — the allow-list governs what a
+        RULE may set, not what the blanket layer may carry.
+        """
+        facility_overrides = (
+            overrides.get("facility") if isinstance(overrides.get("facility"), dict) else {}
+        )
+        for key, spec_ in facility_rules.SETTABLE_KEYS.items():
+            if key not in facility_overrides:
+                continue
+            value = facility_overrides[key]
+            if value is None:
+                # The blanket merge itself skips None (`if v is not None`), so a null
+                # here means "not set" rather than "set to null" — the one place this
+                # layer's semantics legitimately differ from a rule's.
+                continue
+            try:
+                spec_.coerce(value, f"spec {slug!r}: overrides.facility.{key}")
+            except facility_rules.FacilityRulesError as exc:
+                raise SpecValidationError(str(exc)) from exc
+
+    @classmethod
+    def _reject_rebate_by_code(cls, overrides: dict, *, slug: str) -> None:
+        """``overrides.facility.rebate_by_code`` is REJECTED, not deprecated.
+
+        Not silently translated either. Three reasons, in order of weight (facility
+        rules plan §11.1):
+
+        1. The blast radius was ONE scenario, migrated in the same change — there is
+           no installed base to protect.
+        2. Silent translation creates two mechanisms that must agree forever, and
+           their precedence semantics are not identical (``rebate_by_code[code] =
+           null`` is a rank-10 ``{"rebate": null}``). Encoding that equivalence is a
+           permanent correctness obligation for one file's worth of value.
+        3. Accept-with-deprecation is the P11 shape: a key that still works is a key
+           new scenarios will use, and the boundary audit's verdict on config that
+           advertises a seam it no longer has is that it is *worse* than no key.
+
+        The rejection carries the translation, so the error IS the migration guide.
+
+        Checked against the MERGED overrides, so the key cannot ride in through the
+        legacy ``roleSettings.facility.profile`` back door either.
+        """
+        facility_overrides = (
+            overrides.get("facility") if isinstance(overrides.get("facility"), dict) else {}
+        )
+        if "rebate_by_code" not in facility_overrides:
+            return
+        raise SpecValidationError(
+            f"spec {slug!r}: overrides.facility.rebate_by_code is no longer supported. "
+            f"It was one per-key mechanism; facilityRules is one mechanism for every "
+            f"per-facility key.\n\n"
+            f"Translate:\n"
+            f'    "overrides": {{ "facility": {{ "rebate_by_code": {{ "CT": {{…}}, "MT": null }} }} }}\n'
+            f"into:\n"
+            f'    "facilityRules": [\n'
+            f'      {{ "match": {{"code": "CT"}}, "set": {{"rebate": {{…}}}} }},\n'
+            f'      {{ "match": {{"code": "MT"}}, "set": {{"rebate": null}} }}\n'
+            f"    ]\n"
+            f'An explicit null still means "this code gets NO schedule, overriding the\n'
+            f'scenario-wide overrides.facility.rebate" — in facilityRules, what counts is\n'
+            f'the presence of "rebate" in "set", exactly as it did here.\n'
+            f"Then record the facility world these rules target:\n"
+            f"    openride scenario rules-baseline {slug}"
+        )
+
+    @classmethod
+    def _validate_facility_rebate(
+        cls, overrides: dict, rules: list, sites: list, *, slug: str,
+        reference_time: str = "",
+    ) -> None:
+        """Judge the EFFECTIVE, post-rule-resolution set of facility rebate schedules.
+
+        **Re-pointed by the facilityRules migration (plan §11.2), and this is the
+        single most likely way this feature ships broken.** The previous version
+        keyed off the two AUTHORED keys (``overrides.facility.rebate`` and
+        ``.rebate_by_code``) and early-returned when both were absent. Migration
+        makes both absent. Every check below would then have stopped running,
+        silently and green, because the tests that exercised them authored the very
+        key the migration removes. That is R2-3's defect shape exactly: a guard
+        scoped by the presence of the treatment.
+
+        What it now reads is ``site["rebate"]`` — what the run will actually price,
+        whether it arrived via a rule or via the scenario-wide blanket override. By
+        construction that cannot be disarmed by the authoring surface changing again.
+
+        Per-point shape/value validation stays delegated to
+        :func:`parse_rebate_schedule`; this method only owns the cross-facility
+        questions that no single schedule can answer.
+        """
+        facility_overrides = (
+            overrides.get("facility") if isinstance(overrides.get("facility"), dict) else {}
+        )
+        rebate_raw = facility_overrides.get("rebate")
+        if rebate_raw is not None:
+            try:
+                parse_rebate_schedule(rebate_raw, where="overrides.facility.rebate")
+            except RebateSpecError as exc:
+                raise SpecValidationError(str(exc))
+
+        # "Was pricing INTENDED?" — used only to decide whether silence deserves a
+        # warning. Never used to decide whether the refusals below run.
+        rules = list(rules or [])
+        rule_authored = any(
+            isinstance(r, dict)
+            and isinstance(r.get("set"), dict)
+            and r["set"].get("rebate") is not None
+            for r in rules
+        )
+        authored = rebate_raw is not None or rule_authored
+
+        # The effective set: what this run will actually price.
+        effective = [(s, s.get("rebate")) for s in sites if s.get("rebate") is not None]
+
+        if not effective:
+            if authored:
+                logging.warning(
+                    "spec %r: a facility rebate was authored but NO facility resolves "
+                    "to a schedule — check the rule matchers and values "
+                    "(overrides.facility.rebate=%s, facilityRules setting 'rebate'=%d).",
+                    slug,
+                    "present" if rebate_raw is not None else "absent",
+                    sum(1 for r in rules
+                        if isinstance(r, dict) and isinstance(r.get("set"), dict)
+                        and "rebate" in r["set"]),
+                )
+            return
+
+        # --- the hour-axis collision (rebate plan §18.3, review F2) -------------
+        # A rebate schedule is priced on the TRUE WALL CLOCK: `price_at` parses the
+        # recorded RFC-1123 stamp. The order-demand curve is NOT — `sampling.py`
+        # never reads the epoch, so its authored hour H is realised at wall hour
+        # `(H + reference_hour) % 24`. At the historical 08:00 default the two axes
+        # in one spec.json are EIGHT HOURS APART, which silently inverts what a
+        # schedule means. This is not warned about, it is REFUSED.
+        #
+        # It now fires for a RULES-authored schedule too — see this method's
+        # docstring. `test_midnight_epoch_guard_fires_for_a_rules_authored_schedule`
+        # and mutation M10 are what keep that true.
+        ref_hour = cls._reference_hour(reference_time)
+        if ref_hour != 0:
+            raise SpecValidationError(
+                f"spec {slug!r}: a facility rebate schedule requires a midnight "
+                f"simulation epoch, but reference_time is {reference_time!r} "
+                f"(hour {ref_hour}). A rebate is priced on the true wall clock, while "
+                f"the order-demand curve's authored hour H is realised at wall hour "
+                f"(H + {ref_hour}) % 24 — so the two axes in this spec are {ref_hour} "
+                f"hours apart and every schedule would mean something other than it "
+                f"says. Fix: add \"referenceTime\": \"2020-01-01 00:00:00\" to "
+                f"spec.json and recompile. (Generation is byte-identical under this "
+                f"change; only wall-clock LABELS move — plan §18.3.)"
+            )
+
+        # --- R2-6 / review F5: mixed currency is unauthorable ---------------------
+        # `RebateBook.currency` reduces a set of labels to ONE by taking the
+        # alphabetically first, and the haulier ledger publishes a single
+        # `rebate_currency` beside a single `rebate_credited`. So two currencies in one
+        # bundle produce a scalar that silently sums unlike units and labels the total
+        # with whichever name sorts first — a number nobody can audit, on money.
+        currencies = sorted({
+            str((blk or {}).get("currency"))
+            for _site, blk in effective
+            if isinstance(blk, dict) and blk.get("currency") is not None
+        })
+        if len(currencies) > 1:
+            examples = {}
+            for site, blk in effective:
+                cur = str((blk or {}).get("currency"))
+                examples.setdefault(cur, site.get("name") or site.get("code"))
+            raise SpecValidationError(
+                f"spec {slug!r}: rebate schedules resolve to {len(currencies)} different "
+                f"currencies {currencies} across this scenario's facilities "
+                f"(e.g. {', '.join(f'{c!r} at {examples[c]!r}' for c in currencies)}). "
+                f"The haulier ledger publishes ONE signed total beside ONE currency "
+                f"label, so mixed units would be summed together and labelled with "
+                f"whichever name sorts first. There is no conversion and no FX in this "
+                f"model — use a single currency label for the whole scenario."
+            )
+
+        # --- R2-6 companion / review F7: a flat schedule is not an incentive -------
+        # A zero-variance schedule is a participation payment: it changes every
+        # haulier's total by a constant and can never shift behaviour by hour, so an
+        # author who believed they were creating a time-of-day incentive should be
+        # told. Non-fatal: a flat schedule is a legitimate thing to want.
+        for _digest, block in {
+            json.dumps(blk, sort_keys=True): blk for _s, blk in effective
+        }.items():
+            amounts = [p.get("amount") for p in (block or {}).get("points") or []]
+            if amounts and len(set(amounts)) == 1:
+                logging.warning(
+                    "spec %r: a rebate schedule is FLAT (every hour pays %s), so it is a "
+                    "participation payment, not a time-of-day incentive — it shifts every "
+                    "haulier's total by a constant and can never change behaviour by hour. "
+                    "If a time-of-day effect was intended, vary the amounts.",
+                    slug, amounts[0],
+                )
 
     @classmethod
     def _resolve_order_matrix(cls, order_pol, otype, codes, scenario_dir, raw=None, records=None):

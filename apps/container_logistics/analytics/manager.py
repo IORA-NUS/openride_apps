@@ -2,7 +2,7 @@ import json
 import logging
 import math
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import requests
 
@@ -417,6 +417,115 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         ]
         return sum(values) / len(values) if values else 0.0
 
+    def rebate_book(self):
+        """The run's ``{facility_id -> RebateSchedule}`` book, read once from facility docs.
+
+        Settlement (:meth:`accumulate_completed_trips`) prices every arrival through this,
+        so it runs on every completed trip of every run — the schedule is *decision-inert
+        but never read-inert* (plan §3.3). Facilities that publish no ``profile.rebate``
+        are simply absent, and their arrivals count as ``rebate_arrivals_unpriced``.
+
+        Never raises into the analytics tick: a failed read degrades to an empty book (all
+        arrivals unpriced) with a warning, exactly like :meth:`fleet_haulier_roster`.
+
+        Caching rule — a deliberate refinement of the roster precedent, not a copy of it.
+        The roster caches only a NON-EMPTY result so an early read (trucks not created yet)
+        or a failed read retries instead of freezing empty. Here an *empty book* is the
+        normal steady state: no shipped scenario carries a ``rebate`` block, so caching on
+        "book is non-empty" would re-page the whole facility collection on every analytics
+        tick, forever, in every run. We therefore cache whenever the fetch **succeeded and
+        the facility collection was non-empty** — which is the roster's actual intent
+        ("did the read work?"), expressed on the collection rather than on the derived
+        book. Zero facility docs still means "not created yet / read failed" and retries.
+        """
+        cached = getattr(self, "_rebate_book_cache", None)
+        if cached is not None:
+            return cached
+        from apps.container_logistics.rebate import RebateBook
+
+        try:
+            facilities = self._paged_where(
+                self._facility_url(),
+                {"run_id": self.run_id},
+                # ``_id`` is what keys the book; named explicitly rather than relying on
+                # it riding along for free, because a doc without it is silently skipped
+                # and the failure mode is an empty book, not an error.
+                projection={"_id": 1, "profile": 1},
+            )
+        except Exception as exc:
+            logger.warning(
+                "rebate book fetch failed (%s) — this window's arrivals count as unpriced", exc
+            )
+            return RebateBook()
+        try:
+            book = RebateBook.from_facility_docs(facilities)
+        except Exception as exc:  # pragma: no cover - from_facility_docs already degrades
+            logger.warning("rebate book build failed (%s) — arrivals count as unpriced", exc)
+            return RebateBook()
+        # R2-11 / review F14 — be LOUD when the run says it prices something and the
+        # book is empty. That combination cannot be legitimate: the provenance stamp is
+        # derived from the same compiled facilities the book is built from, so
+        # `enabled: true` with zero schedules means the read or the id join broke. Left
+        # silent, it produces an entirely plausible all-zero ledger — a number a reader
+        # would quote — instead of an error. This is the §6.7 blank-panel shape on money.
+        # R3-7 / review R2-6. The previous check required a *declared* rebate block to
+        # be visible before it would alarm — which made it silent for BOTH causes its
+        # own message named:
+        #   * an id-join / where-clause failure returns ZERO documents, so the outer
+        #     `if facilities` was false and nothing fired;
+        #   * a projection that drops `profile` returns documents with no rebate block,
+        #     so `declared == 0` — and that path went on to CACHE the empty book,
+        #     freezing the ledger silently at zero for the whole run.
+        # It only fired for two shapes nobody had named. The rule is now simply
+        # "documents came back and the book is empty", which covers the projection
+        # failure, and an empty fetch is treated as a non-result rather than a fact.
+        if not facilities:
+            # Zero documents is NOT evidence of a rebate-less run: it is equally the
+            # shape of a failed id join or a bad where-clause. Do not cache it, and say
+            # so once — the §6.7 silent-empty-read discipline, applied to money.
+            logger.warning(
+                "rebate: the facility read returned NO documents for run %s. This is "
+                "not cached — an empty fetch cannot distinguish 'no facilities' from a "
+                "failed query, and freezing it would zero the ledger for the whole run.",
+                self.run_id,
+            )
+            return book
+        if not book:
+            # DEVIATION from plan §19.4 R3-7's literal rule ("refuse to cache an empty
+            # book when documents were returned"), with the reason measured rather than
+            # argued: `_settle_rebate_arrivals` calls this once PER TRIP, so on the 12
+            # rebate-less scenarios that rule pages all 300 facility documents ~3300
+            # times per run and emits ~3300 ERROR lines. Measured directly: 50 trips ->
+            # 50 facility pages. That is the exact per-lookup HTTP cost §3.1 rejected
+            # option (b) over, reintroduced on the common path.
+            #
+            # The reviewer's real concern is discriminated instead of approximated. A
+            # PROJECTION failure returns documents with no `profile` at all; a genuinely
+            # rebate-less scenario returns documents that HAVE a profile and simply no
+            # `rebate` in it. Those are distinguishable locally and for free.
+            with_profile = sum(
+                1 for d in facilities
+                if isinstance(d, Mapping) and isinstance(d.get("profile"), Mapping)
+            )
+            if not with_profile:
+                logger.error(
+                    "rebate: %d facility documents were returned but NONE carries a "
+                    "`profile`, so the built book is EMPTY and every arrival will count "
+                    "as unpriced — the ledger will read zero, a plausible number rather "
+                    "than an error. This is the shape of a PROJECTION failure. Not "
+                    "cached, so it cannot freeze silent for the rest of the run.",
+                    len(facilities),
+                )
+                return book
+            # Profiles are present and none declares a rebate: a genuinely rebate-less
+            # scenario, which is the steady state for 12 of 13 shipped scenarios. Cache
+            # it (quietly) — re-paging 300 documents per trip to rediscover "nothing" is
+            # precisely the bug the cache exists to prevent.
+            self._rebate_book_cache = book
+            return book
+        self._rebate_book_cache = book
+        return book
+
     def compute_peak_queue_length(self) -> int:
         """Maximum queue length seen across all facilities."""
         facilities = self._paged_where(
@@ -607,6 +716,81 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
             "jobs_carried_for_partners": 0, # as CARRIER: partner jobs my trucks ran
             "benefit_km_received": 0.0,     # as OWNER: deadhead saved vs my best own option
             "unserveable_shares": 0,        # as OWNER: shares where I had no free truck
+            # Reporting contract for benefit_km (plan §14.6 LOW-14). benefit_km is
+            # None on the MAJORITY of shared awards, and that is not missing data:
+            # it means the owner had NO free feasible truck, i.e. the share was
+            # strictly ENABLING — the job would not have been served by the owner
+            # that tick. Arguably the most valuable class of cooperation.
+            # So: never impute a value (that would silently redefine the metric);
+            # COUNT it, and always publish the denominator alongside the mean.
+            "benefit_defined_n": 0,         # shares with a real benefit number
+            "jobs_enabled": 0,              # shares the owner could not have served
+            # Facility rebates (plan §10). A LEDGER, strictly separate from every
+            # kilometre accumulator: settlement must never touch empty_km/loaded_km/
+            # active_seconds/benefit_km_received. Credited to the CARRIER (the haulier
+            # whose truck showed up), never the owner — a facility pays whoever arrives.
+            "rebate_credited": 0.0,         # signed sum, this haulier as CARRIER
+            # R2-2 / review F7+F8 — the total alone cannot answer the question the
+            # ledger exists to answer. Split by LEG, which the settlement loop already
+            # knows. This matters beyond decomposition: plan §16.1 records (and it was
+            # re-verified on 785/785 completed trips) that the laden leg takes ZERO sim
+            # time, so `dropoff_queue_arrival_time` is not an independent clock — it is
+            # determined entirely by pickup-side queueing. The PICKUP half is therefore
+            # the research-valid number and the dropoff half is quarantined, rather than
+            # the two being mixed into one figure that is half-invalid and says nothing
+            # about which half. `rebate_credited` stays as the derived sum.
+            "rebate_credited_pickup": 0.0,
+            "rebate_credited_dropoff": 0.0,
+            "rebate_arrivals_priced": 0,    # arrivals that resolved to a schedule
+            # R2-3 / review F6 — one counter conflated three structurally different
+            # conditions. They mean different things and demand different responses:
+            #   _no_schedule  : the facility publishes nothing. EXPECTED, and it is the
+            #                   scenario's design showing through (all 2075 in the first
+            #                   run were Depots suppressed by an explicit `null`).
+            #   _no_stamp     : the arrival was never recorded. A DATA defect.
+            #   _unparseable  : a stamp exists but could not be read. A CODE defect.
+            # Collapsed together, a wiring failure is indistinguishable from a scenario
+            # that simply chose not to pay depots.
+            "rebate_arrivals_unpriced": 0,  # derived total of the three below
+            "rebate_arrivals_unpriced_no_schedule": 0,
+            "rebate_arrivals_unpriced_no_stamp": 0,
+            # R3-10 / review R2-10: a missing facility id is an ASSIGNMENT-wiring
+            # defect; a missing timestamp is a TRUCK-side defect. Same argument as the
+            # split one level up. **The counter set is FROZEN here** (plan §19.5):
+            # past four unpriced reasons a scalar-per-reason design costs more than it
+            # explains, and the duck-typed row emission plus derived planner summing
+            # make a nested dict awkward to introduce later.
+            "rebate_arrivals_unpriced_no_facility_id": 0,
+            "rebate_arrivals_unpriced_unparseable": 0,
+            # R2-4 / review F4 — "priced on arrival, paid on completion" means a truck
+            # can arrive, earn a price, and be paid nothing because the job never
+            # completed. Those arrivals never reach the settlement loop at all, so they
+            # appeared in NEITHER counter and `priced + unpriced` was structurally
+            # pinned to exactly 2x completed trips — a denominator incapable of showing
+            # the thing it should have been showing. Forfeiture is intended (plan
+            # §16.4); being invisible was not.
+            # R3-2 / review R2-1 (HIGH-2) — RENAMED, then split by cause.
+            #
+            # These were `rebate_arrivals_forfeited` / `rebate_forfeited_value`, and the
+            # name was the defect. Verified on run_20260821_055316: **all 400**
+            # non-completed trips are cancelled at ONE instant, 2020-01-08 06:00:00 —
+            # the horizon. Not one job died mid-run, because cancel probability is zero.
+            # A trip still in flight when the horizon cuts it off did not *forfeit*
+            # anything; in a longer run it would mostly have been paid. So the quantity
+            # is not an economic loss that happens to be miscounted — it is **not an
+            # economic quantity at all**. It is a censoring diagnostic, and it is now
+            # named as one so it cannot be quoted as money lost.
+            #
+            # Splitting alone would have left half of it still badly named, which is why
+            # the rename came first (plan §19.5).
+            "rebate_arrivals_in_flight_at_horizon": 0,
+            "rebate_value_in_flight_at_horizon": 0.0,   # CENSORED, not lost
+            # Genuine mid-run death, i.e. cancelled strictly before the terminal
+            # instant. Zero on every run to date; it exists so that if attrition is ever
+            # introduced, it is visible and is NOT silently pooled with censoring.
+            "rebate_arrivals_abandoned": 0,
+            "rebate_value_abandoned": 0.0,
+            "rebate_currency": None,        # label only; None until the first credit
         }
 
     def _trip_sort_key(self, trip: Dict[str, Any]):
@@ -730,6 +914,11 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
                 acc["active_seconds"] += active_seconds
             h_acc["trucks"].add(truck_id)
 
+            # Facility rebates: settle both arrivals to the CARRIER (h_acc). Deliberately
+            # AFTER the km accumulators and BEFORE the collaboration block, whose credit
+            # goes to the OWNER — do not let that shape bleed upward into this call.
+            self._settle_rebate_arrivals(trip, meta, h_acc)
+
             # Collaboration gains (haulier job sharing): the trip's km already
             # accrue to the CARRIER (this trip's truck haulier) above; here we
             # credit both sides of the share for the Companies/gains views.
@@ -748,9 +937,11 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
                     if benefit is not None:
                         try:
                             o_acc["benefit_km_received"] += float(benefit)
+                            o_acc["benefit_defined_n"] += 1
                         except (TypeError, ValueError):
                             pass
                     else:
+                        o_acc["jobs_enabled"] += 1
                         # Owner had no free feasible truck: served only thanks
                         # to the partner ("unserveable otherwise").
                         o_acc["unserveable_shares"] += 1
@@ -769,6 +960,82 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
                 haulier_name,
                 loaded_km,
             )
+
+    #: The two arrivals a completed haul trip records. A facility pays whoever shows up,
+    #: so these are SYMMETRIC — one loop, no pickup/dropoff role logic (plan §3.3).
+    _REBATE_ARRIVAL_LEGS = ("pickup", "dropoff")
+
+    def _settle_rebate_arrivals(
+        self, trip: Dict[str, Any], meta: Dict[str, Any], h_acc: Dict[str, Any]
+    ) -> None:
+        """Credit this trip's two facility arrivals to the CARRIER's rebate ledger.
+
+        The carrier is ``h_acc`` — the haulier of the truck that ran the trip. NOT the
+        owner: ``benefit_km_received`` fifteen lines below credits ``collaboration.
+        owner_haulier_id``, and copying that here would pay the wrong company
+        (plan §15.4, ``test_carrier_is_credited_not_the_owner``).
+
+        **No stamp ⇒ no rebate** (plan §10), mirroring the replay-geometry rule that a
+        leg with no timestamp was never driven: the price is for an arrival that actually
+        happened. Everything that cannot be priced is COUNTED, never imputed — which is
+        why ``rebate_arrivals_unpriced`` ships beside the money, exactly as
+        ``benefit_defined_n`` does.
+
+        Flat per arrival, never scaled by container count. Touches only the three ledger
+        keys; no kilometre accumulator is readable from here by construction.
+        """
+        stats = trip.get("stats") or {}
+        book = None  # fetched lazily: a trip with no priceable arrival reads nothing
+        for leg in self._REBATE_ARRIVAL_LEGS:
+            when = stats.get(f"{leg}_queue_arrival_time")
+            facility_id = meta.get(f"{leg}_facility_resource_id")
+            if when is None:
+                # No timestamp — a TRUCK-side condition.
+                self._count_unpriced(h_acc, "no_stamp")
+                continue
+            if facility_id is None:
+                # A stamp but no facility — an ASSIGNMENT-wiring condition (R3-10).
+                self._count_unpriced(h_acc, "no_facility_id")
+                continue
+            if book is None:
+                book = self.rebate_book()
+            try:
+                amount = book.price_at(facility_id, when)
+            except (ValueError, TypeError) as exc:
+                # A stamp exists but could not be read — a CODE condition. Worth
+                # surfacing loudly, but it must not kill the analytics tick.
+                logger.warning(
+                    "rebate: unpriceable %s arrival at facility %s (%r): %s",
+                    leg, facility_id, when, exc,
+                )
+                self._count_unpriced(h_acc, "unparseable")
+                continue
+            if amount is None:
+                # This facility publishes no schedule at all — the EXPECTED condition.
+                self._count_unpriced(h_acc, "no_schedule")
+                continue
+            h_acc["rebate_credited"] += float(amount)
+            # Per-leg (R2-2). `rebate_credited` remains the total; the split is what
+            # makes the §16.1 dropoff-clock caveat actionable instead of merely stated.
+            h_acc[f"rebate_credited_{leg}"] = (
+                h_acc.get(f"rebate_credited_{leg}", 0.0) + float(amount)
+            )
+            h_acc["rebate_arrivals_priced"] += 1
+            if h_acc.get("rebate_currency") is None:
+                h_acc["rebate_currency"] = book.currency
+
+    @staticmethod
+    def _count_unpriced(h_acc: Dict[str, Any], reason: str) -> None:
+        """Count one unpriceable arrival under its specific reason AND the total.
+
+        The total is kept as a real accumulator rather than derived at emit time so that
+        every existing reader of `rebate_arrivals_unpriced` keeps working unchanged, and
+        so the three sub-counters can be checked to sum to it (which a test does).
+        """
+        h_acc["rebate_arrivals_unpriced"] += 1
+        h_acc[f"rebate_arrivals_unpriced_{reason}"] = (
+            h_acc.get(f"rebate_arrivals_unpriced_{reason}", 0) + 1
+        )
 
     def _fold_loaded_lane(
         self,
@@ -898,6 +1165,47 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
             row["jobs_carried_for_partners"] = acc["jobs_carried_for_partners"]
             row["benefit_km_received"] = round(acc["benefit_km_received"], 3)
             row["unserveable_shares"] = acc["unserveable_shares"]
+            # No imputation: the mean is over the DEFINED subset only, and both
+            # counts ship with it so a reader can never mistake the denominator.
+            defined_n = acc.get("benefit_defined_n", 0)
+            row["benefit_defined_n"] = defined_n
+            row["benefit_undefined_n"] = acc["unserveable_shares"]
+            row["jobs_enabled"] = acc.get("jobs_enabled", 0)
+            row["mean_benefit_km"] = (
+                round(acc["benefit_km_received"] / defined_n, 3) if defined_n else None
+            )
+        if "rebate_credited" in acc:
+            # Same reporting contract as benefit_km above: publish the denominator, never
+            # impute. A ledger of 12.0 over 2 priced arrivals and 900 unpriced ones is a
+            # very different claim from 12.0 over 900 priced ones, and only the counts
+            # let a reader tell them apart.
+            row["rebate_credited"] = round(acc["rebate_credited"], 3)
+            # R2-2: per-leg. The pickup half is the research-valid number; the dropoff
+            # half is priced on a clock the run's own stamp declares non-independent
+            # (plan §16.1), so it is published SEPARATELY rather than mixed in.
+            row["rebate_credited_pickup"] = round(acc.get("rebate_credited_pickup", 0.0), 3)
+            row["rebate_credited_dropoff"] = round(acc.get("rebate_credited_dropoff", 0.0), 3)
+            row["rebate_arrivals_priced"] = acc.get("rebate_arrivals_priced", 0)
+            row["rebate_arrivals_unpriced"] = acc.get("rebate_arrivals_unpriced", 0)
+            # R2-3: which KIND of unpriced. "the scenario chose not to pay depots" and
+            # "the arrival stamp is missing" are the same number here only by accident.
+            row["rebate_arrivals_unpriced_no_schedule"] = acc.get(
+                "rebate_arrivals_unpriced_no_schedule", 0)
+            row["rebate_arrivals_unpriced_no_stamp"] = acc.get(
+                "rebate_arrivals_unpriced_no_stamp", 0)
+            row["rebate_arrivals_unpriced_no_facility_id"] = acc.get(
+                "rebate_arrivals_unpriced_no_facility_id", 0)
+            row["rebate_arrivals_unpriced_unparseable"] = acc.get(
+                "rebate_arrivals_unpriced_unparseable", 0)
+            # R3-2: a CENSORING diagnostic, not money lost. Deliberately never folded
+            # into rebate_credited, and named so it cannot be quoted as a loss.
+            row["rebate_arrivals_in_flight_at_horizon"] = acc.get(
+                "rebate_arrivals_in_flight_at_horizon", 0)
+            row["rebate_value_in_flight_at_horizon"] = round(
+                acc.get("rebate_value_in_flight_at_horizon", 0.0), 3)
+            row["rebate_arrivals_abandoned"] = acc.get("rebate_arrivals_abandoned", 0)
+            row["rebate_value_abandoned"] = round(acc.get("rebate_value_abandoned", 0.0), 3)
+            row["rebate_currency"] = acc.get("rebate_currency")
         return row
 
     def build_breakdown(self, scope: str, end_time: Any) -> List[Dict[str, Any]]:
@@ -905,6 +1213,37 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         elapsed_days = self._elapsed_days(end_time)
         acc_map = self._truck_acc if scope == "truck" else self._haulier_acc
         return [self._entity_row(acc, elapsed_days) for acc in acc_map.values()]
+
+    #: Accumulator fields that must NOT be summed across a planner group's members.
+    #: Identity/labels, per-truck bookkeeping, and sets. Everything else in
+    #: ``_new_haulier_acc`` is additive and is aggregated automatically (R2-5).
+    _PLANNER_NON_SUMMABLE = frozenset({
+        "id", "haulier_name", "trucks",
+        "rebate_currency",              # a LABEL, not a quantity
+        "last_dropoff_facility_id", "last_dropoff_loc",
+        # `benefit_defined_n` and `jobs_enabled` were excluded here with the note
+        # "published via _entity_row's own logic". That justification was FALSE
+        # (review R2-9, re-verified first-hand): `_entity_row` reads both straight off
+        # the accumulator. Excluding them meant a planner row summed
+        # `benefit_km_received` across members while its denominator stayed 0, so
+        # `mean_benefit_km` published as None beside a non-zero numerator — breaking
+        # §14's "never impute, always publish the denominator" contract for a
+        # COOPERATION metric. They are additive counts and are summed like any other.
+    })
+
+    @classmethod
+    def _planner_summable_keys(cls) -> tuple:
+        """Every additive accumulator key, derived from ``_new_haulier_acc``.
+
+        Derived rather than listed so a newly added ledger key cannot be silently
+        dropped from planner rows — the failure this method exists to prevent.
+        """
+        template = cls._new_haulier_acc("_", "_")
+        return tuple(
+            k for k, v in template.items()
+            if k not in cls._PLANNER_NON_SUMMABLE and isinstance(v, (int, float))
+            and not isinstance(v, bool)
+        )
 
     def build_planner_breakdown(self, end_time: Any) -> List[Dict[str, Any]]:
         """One row per multi-member planner group (connected component of the active
@@ -924,11 +1263,19 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
                 if acc is None:
                     continue
                 found = True
-                for key in ("empty_km", "loaded_km", "trip_count", "active_seconds",
-                            "dual_cycle_count", "chain_opportunities", "jobs_shared_out",
-                            "jobs_carried_for_partners", "benefit_km_received",
-                            "unserveable_shares"):
+                # R2-5 / the G30 trap. This used to be a HARDCODED tuple, and the
+                # counter split added six more chances to trip it: a key omitted here is
+                # silently dropped from planner rows, producing a plausible wrong number
+                # rather than an error. It is now DERIVED from the accumulator itself, so
+                # the next key anyone adds is aggregated automatically and this list can
+                # never fall behind. Only genuinely non-additive fields are excluded, and
+                # they are named explicitly so the exclusion is a decision, not an
+                # oversight.
+                for key in self._planner_summable_keys():
                     agg[key] += acc.get(key, 0)
+                # Currency is a LABEL, not a summable quantity: take the first member's.
+                if agg.get("rebate_currency") is None and acc.get("rebate_currency"):
+                    agg["rebate_currency"] = acc["rebate_currency"]
                 agg["trucks"].update(acc.get("trucks") or ())
             if not found:
                 continue
@@ -1007,6 +1354,12 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         # Seed all configured hauliers (zero rows) so the Companies tab lists every company
         # from the first snapshot, rather than only those that have completed a trip yet.
         self._seed_haulier_roster()
+        # R3-2: the RUN-LEVEL censoring verdict, published beside the haulier rows so a
+        # reader of `rebate_value_in_flight_at_horizon` can see in the same document
+        # whether that number is pure horizon truncation (it is, on every run to date)
+        # or contains real job attrition. Rides `breakdown`'s allow_unknown (G13).
+        censoring = getattr(self, "_rebate_censoring", None)
+        extra = {"rebate_censoring": censoring} if censoring else None
         for scope in ("truck", "haulier"):
             rows = self.build_breakdown(scope, end_time)
             persist_kpi_breakdown(
@@ -1016,6 +1369,7 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
                 sim_clock=clock_str,
                 rows=rows,
                 final=final,
+                extra=extra if scope == "haulier" else None,
             )
         persist_kpi_breakdown(
             self.user,
@@ -1063,6 +1417,16 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         # them with the accs or a second invocation on the same manager double-counts.
         self._shared_trip_count = 0
         self._total_benefit_km = 0.0
+        # The rebate ledger needs NO reset here, and that is a checked claim, not an
+        # assumption: every rebate key lives inside a per-haulier accumulator built by
+        # _new_haulier_acc (rebate_credited / rebate_arrivals_priced /
+        # rebate_arrivals_unpriced / rebate_currency), and `self._haulier_acc = {}` above
+        # discards every one of them, so the replay starts from zero. Settlement adds NO
+        # run-level scalar on `self`. If one is ever added, it MUST be reset right here or
+        # the authoritative final=True document double-counts it.
+        # `_rebate_book_cache` is deliberately NOT cleared: it is immutable per-run
+        # reference data (facility profiles), not an accumulator — clearing it would only
+        # buy an extra full facility read.
         trips = self._paged_where(
             self._haul_trip_url(),
             {
@@ -1074,6 +1438,11 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
             projection=self._COMPLETED_TRIP_PROJECTION,
         )
         if not trips:
+            # R3-6 / review R2-2: the forfeiture scan must run in BOTH branches. This
+            # early return skipped it entirely — on the exact run where censoring is the
+            # WHOLE story (nothing completed), the run reported zero censored value and
+            # looked like a clean empty result rather than a totally truncated one.
+            self.accumulate_forfeited_arrivals()
             self.set_metric_window(None, sim_clock)
             self.save_breakdowns(sim_clock, final=True)
             return
@@ -1109,7 +1478,128 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         # Final authoritative snapshot: fold any remaining trips, persist final=True.
         if chunk:
             self.accumulate_completed_trips(chunk, end_time)
+        # Forfeiture is a RUN-END fact and is folded only into the final document: a
+        # trip that is incomplete at an intermediate checkpoint may still complete, so
+        # attributing forfeiture at a mid-run boundary would report money as lost while
+        # it was merely in flight.
+        self.accumulate_forfeited_arrivals()
         _flush(end_time or sim_clock, final=True)
+
+    #: States a haul trip can hold that mean "this job will never pay out". Anything
+    #: else that is non-terminal at finalize is ALSO forfeit — see the query below,
+    #: which is written as "not completed" rather than as a terminal-state whitelist so
+    #: a state added later cannot silently escape the count.
+    def accumulate_forfeited_arrivals(self) -> None:
+        """Count arrivals that were priced but will never be paid (R2-4, review F4).
+
+        "Priced at arrival, paid at job completion" means a truck can arrive, earn a
+        price, and receive nothing because the job died before completing. Plan §16.4
+        settled that forfeiture is the intended behaviour; what was NOT intended is that
+        it was invisible. Because settlement only ever saw completed trips, these
+        arrivals landed in neither counter, and `priced + unpriced` was structurally
+        pinned to exactly ``2 x completed`` — a denominator arithmetically incapable of
+        revealing the thing it should have revealed.
+
+        This credits nothing. It records the count and the value that WOULD have been
+        paid, kept strictly out of `rebate_credited`, so the published ledger can be read
+        as "earned and paid" beside "earned and lost". Never raises: a reporting extra
+        must not be able to fail a run finalize.
+        """
+        try:
+            trips = self._paged_where(
+                self._haul_trip_url(),
+                {"$and": [
+                    {"run_id": self.run_id},
+                    {"state": {"$ne": HaulTripStateMachine.completed.name}},
+                ]},
+                projection=self._COMPLETED_TRIP_PROJECTION,
+            )
+        except Exception as exc:  # pragma: no cover - reporting must not break finalize
+            logger.warning(
+                "rebate: forfeited-arrival scan failed (%s) — the forfeiture counters "
+                "will read zero for this run, which is NOT the same as no forfeiture", exc,
+            )
+            return
+        self._rebate_censoring = {
+            "non_completed_trips": len(trips or []),
+            "terminal_instant": None,
+            "is_horizon_censoring": None,
+        }
+        if not trips:
+            return
+
+        # The TERMINAL INSTANT: the latest clock at which any non-completed trip was
+        # cut off. Trips at that instant were still in flight when the run ended;
+        # anything strictly earlier died on its own. Derived from the data rather than
+        # assumed, so a run that DOES have attrition classifies correctly without any
+        # tuning constant.
+        def _clock(trip):
+            raw = trip.get("sim_clock")
+            try:
+                from apps.utils import str_to_time
+                dt = raw if isinstance(raw, datetime) else str_to_time(raw)
+                return dt.replace(tzinfo=None) if dt.tzinfo else dt
+            except Exception:
+                return None
+
+        clocks = [c for c in (_clock(t) for t in trips) if c is not None]
+        terminal = max(clocks) if clocks else None
+        self._rebate_censoring["terminal_instant"] = (
+            terminal.isoformat() if terminal else None
+        )
+        # Pure censoring == every single non-completed trip died at the same instant.
+        # Verified true on run_20260821_055316: 400/400 at 2020-01-08 06:00:00.
+        self._rebate_censoring["is_horizon_censoring"] = bool(
+            clocks and len(clocks) == len(trips) and all(c == terminal for c in clocks)
+        )
+
+        book = None
+        for trip in trips:
+            truck_id = trip.get("truck")
+            if not truck_id:
+                continue
+            haulier_id, haulier_name = self._haulier_of_trip(trip)
+            h_acc = self._haulier_acc.get(haulier_id)
+            if h_acc is None:
+                h_acc = self._new_haulier_acc(haulier_id, haulier_name)
+                self._haulier_acc[haulier_id] = h_acc
+            # R3-11 / review R2-11: a haulier that ONLY has censored arrivals still owns
+            # the truck that made them. Without this its row published a monetary
+            # quantity with num_trucks: 0.
+            h_acc["trucks"].add(str(truck_id))
+            clock = _clock(trip)
+            # At the terminal instant => censored by the horizon. Strictly earlier =>
+            # genuinely abandoned. An unreadable clock is treated as censored, the
+            # conservative choice: it keeps an unknown out of the ATTRITION bucket,
+            # which is the one that would be read as a behavioural finding.
+            censored = (terminal is None) or (clock is None) or (clock == terminal)
+            arrivals_key = ("rebate_arrivals_in_flight_at_horizon" if censored
+                            else "rebate_arrivals_abandoned")
+            value_key = ("rebate_value_in_flight_at_horizon" if censored
+                         else "rebate_value_abandoned")
+            stats = trip.get("stats") or {}
+            meta = trip.get("meta") or {}
+            for leg in self._REBATE_ARRIVAL_LEGS:
+                when = stats.get(f"{leg}_queue_arrival_time")
+                facility_id = meta.get(f"{leg}_facility_resource_id")
+                # No stamp => the truck never arrived, so nothing was ever earned and
+                # there is nothing to censor. Only a RECORDED arrival counts.
+                if when is None or facility_id is None:
+                    continue
+                if book is None:
+                    book = self.rebate_book()
+                try:
+                    amount = book.price_at(facility_id, when)
+                except (ValueError, TypeError):
+                    continue
+                if amount is None:
+                    continue
+                h_acc[arrivals_key] = h_acc.get(arrivals_key, 0) + 1
+                h_acc[value_key] = h_acc.get(value_key, 0.0) + float(amount)
+                # R3-11: a published monetary quantity must carry its unit, whether it
+                # was credited or merely censored.
+                if h_acc.get("rebate_currency") is None:
+                    h_acc["rebate_currency"] = book.currency
 
     def get_active_haul_trips(self) -> List[Dict[str, Any]]:
         """Non-terminal haul trips (for live map geometry)."""

@@ -40,6 +40,8 @@
     ]
   },
   "earlyOrderCount": 24,
+  "facilityRules": null,
+  "facilityRulesWorld": null,
   "frozen": true,
   "hauliers": [
     {
@@ -61,6 +63,14 @@
       "order_share": 30.0
     }
   ],
+  "hour_axis": {
+    "axes_aligned": false,
+    "demand_to_wall_offset_hours": 8,
+    "orderDemandCurve": "hours since REFERENCE_TIME (sampling.py never reads the epoch, so authored hour H is realised at wall hour (H + reference_hour) % 24)",
+    "rebate": "sim wall clock; epoch = REFERENCE_TIME (price_at parses the recorded RFC-1123 arrival stamp)",
+    "reference_hour": 8,
+    "reference_time": "2020-01-01 08:00:00"
+  },
   "name": "Collab Smoke 12t",
   "orderCountUnit": "total",
   "orderDemandCurve": {
@@ -173,12 +183,29 @@
       },
       "type": "GreedyNearest"
     },
+    "market": {
+      "arbitration": {
+        "params": {},
+        "type": "LowestCost"
+      },
+      "claim": {
+        "params": {},
+        "type": "ClaimAllPlanned"
+      },
+      "max_rounds": 20,
+      "offer": {
+        "params": {},
+        "type": "OfferAll"
+      }
+    },
+    "rebate_aware": false,
     "sharing": null,
     "timing": {
       "mode": "online"
     },
     "topology": "partitioned"
   },
+  "referenceTime": "2020-01-01 08:00:00",
   "seed": 424242,
   "simulationDays": 1,
   "slug": "collab_smoke_12t",

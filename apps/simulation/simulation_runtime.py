@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import os
+import random
 import time
 from datetime import datetime
+from enum import Enum
 from typing import Callable, Optional
 
 import cerberus
@@ -18,6 +20,67 @@ from apps.simulation.openride_scheduler import OpenRideScheduler
 from apps.simulation.run_status_hooks import install_terminal_status_publisher
 
 logger = logging.getLogger(__name__)
+
+
+class StatusWrite(Enum):
+    """Outcome of a ``run_config`` status PATCH (R3-4).
+
+    THE GOVERNING PRINCIPLE, and the reason this enum exists at all:
+
+        **Fail-soft is correct for an *input*** — an unknown policy name degrades to a
+        default, the run continues, and nothing persisted is wrong.
+        **Fail-soft is WRONG for a *state write*** — swallowing it leaves stored state
+        contradicting reality.
+
+    The previous implementation collapsed 412-after-retry, 500, 401, timeout and exception
+    into a single ``None``, and both call sites then wrote ``... or self.run_record``. That
+    traded a loud crash for silent wrong state: a run that completed successfully could
+    record ``status: "In Progress"`` forever while the runtime proceeded as if the write had
+    landed. That is CLAUDE.md §6.12's stale-run family reintroduced at the writer.
+
+    ``OK``/``RETRIED_OK`` are successes; ``RETRIED_OK`` specifically is NOT a failure — the
+    run record legitimately has more than one writer (the pooled assignment agent stamps
+    ``meta.market`` from inside celery), so Eve's optimistic concurrency rejecting a cached
+    etag is expected traffic, not an error.
+    """
+
+    OK = "ok"
+    RETRIED_OK = "retried_ok"
+    STALE_ETAG_EXHAUSTED = "stale_etag_exhausted"
+    SERVER_ERROR = "server_error"
+    EXCEPTION = "exception"
+
+    @property
+    def succeeded(self) -> bool:
+        return self in (StatusWrite.OK, StatusWrite.RETRIED_OK)
+
+
+# R3-9: bounded 412-only retry. Kept short — this sits on the sim's per-step status path.
+STATUS_PATCH_MAX_ATTEMPTS = 3
+STATUS_PATCH_BACKOFF_BASE_S = 0.05
+STATUS_PATCH_BACKOFF_CAP_S = 0.5
+
+# The terminal ("success") write decides whether the run is discoverable as finished, so it
+# is retried as a whole — including the outcomes update_status itself refuses to retry.
+TERMINAL_STATUS_PATCH_MAX_ATTEMPTS = 3
+TERMINAL_STATUS_BACKOFF_BASE_S = 0.25
+TERMINAL_STATUS_BACKOFF_CAP_S = 2.0
+
+# R3-12: eve 1.1.5 runs with BANDWIDTH_SAVER defaulting True and openride_server sets no
+# override, so a POST/PATCH response body carries ONLY these keys.
+RUN_RECORD_METADATA_KEYS = frozenset(
+    {"_id", "_etag", "_updated", "_created", "_status", "_links", "_version", "_latest_version"}
+)
+
+
+def _backoff_delay_s(attempt: int, base: float, cap: float) -> float:
+    """Exponential backoff with full jitter, bounded by ``cap``.
+
+    Jitter matters because the competing writer is a periodic celery tick: a fixed backoff
+    re-collides with it at the same phase on every retry.
+    """
+    ceiling = min(cap, base * (2 ** max(0, attempt - 1)))
+    return random.uniform(0.0, ceiling)
 
 
 class SimulationRuntime(ORSimRuntime):
@@ -129,8 +192,43 @@ class SimulationRuntime(ORSimRuntime):
         )
 
         self.user = None
+        # R3-12: a METADATA STUB after ``init_run_config``, never the run's own document.
         self.run_record = None
         self.execution_start_time = 0.0
+        self._terminal_status_publisher = None
+        self._init_status_write_counters()
+
+    def _init_status_write_counters(self) -> None:
+        """R3-4 ledger of status-write outcomes, surfaced in the perf summary."""
+        self.status_write_failures = 0
+        self.status_write_outcomes: dict = {}
+        self.consecutive_status_write_failures = 0
+        self.terminal_status_write: Optional[StatusWrite] = None
+
+    def _record_status_write(self, outcome: StatusWrite) -> None:
+        self.status_write_outcomes[outcome.value] = (
+            self.status_write_outcomes.get(outcome.value, 0) + 1
+        )
+        if outcome.succeeded:
+            self.consecutive_status_write_failures = 0
+        else:
+            self.status_write_failures += 1
+            self.consecutive_status_write_failures += 1
+
+    def _apply_status_write(self, result: tuple) -> StatusWrite:
+        """Keep the returned record ONLY on ``OK``/``RETRIED_OK``; count anything else.
+
+        On a failure the cached etag is knowingly stale, so the next PATCH is guaranteed to
+        412 and pay a GET — that is the reconciliation path, and it is bounded (R3-9).
+        Keeping the stale record here is deliberate (``_id`` must survive so a later attempt
+        can address the document at all); what must NOT survive is the pretence that the
+        write landed.
+        """
+        record, outcome = result
+        self._record_status_write(outcome)
+        if outcome.succeeded:
+            self.run_record = record
+        return outcome
 
     def _instantiate_schedulers(self, scheduler_config: dict) -> dict:
         # Use the app-side OpenRideScheduler (incremental O(1) step barrier +
@@ -203,8 +301,68 @@ class SimulationRuntime(ORSimRuntime):
     def on_simulation_complete(self, elapsed: float):
         self._finalize_unserved_orders()
         self._finalize_kpi_breakdowns()
+        # R3-4: the terminal status write happens BEFORE the perf summary, so the summary
+        # can carry its outcome. That ordering is what makes a failed terminal write
+        # detectable from the perf stream instead of only by reading Mongo.
+        self._write_terminal_status(elapsed)
         self._publish_perf_summary(elapsed)
-        self.run_record = self.update_status("success", elapsed)
+
+    def _write_terminal_status(self, elapsed: float) -> StatusWrite:
+        """Write the terminal ``success`` status, retrying with backoff, and be LOUD if it fails.
+
+        This is the write that decides whether the run is discoverable as finished, so unlike
+        the per-step writes it retries every failing outcome, not just stale etags. If it
+        still fails, a terminal ``run_status`` is published so the run does not sit as
+        "In Progress" with no other trace — plus a ``logging.error`` and a counter carried in
+        the perf summary, because a failure that is only inferable from a missing field is
+        not detectable (the gate reads run status from Mongo and would see the lie, not the
+        failure).
+        """
+        outcome = StatusWrite.EXCEPTION
+        for attempt in range(1, TERMINAL_STATUS_PATCH_MAX_ATTEMPTS + 1):
+            outcome = self._apply_status_write(self.update_status("success", elapsed))
+            if outcome.succeeded:
+                self.terminal_status_write = outcome
+                return outcome
+            if attempt < TERMINAL_STATUS_PATCH_MAX_ATTEMPTS:
+                time.sleep(
+                    _backoff_delay_s(
+                        attempt, TERMINAL_STATUS_BACKOFF_BASE_S, TERMINAL_STATUS_BACKOFF_CAP_S
+                    )
+                )
+        self.terminal_status_write = outcome
+        logging.error(
+            "TERMINAL STATUS WRITE FAILED run_id=%s outcome=%s attempts=%s: the run COMPLETED "
+            "but run_config.status stays 'In Progress'. Publishing a terminal run_status so the "
+            "run is still discoverable as finished.",
+            self.run_id,
+            outcome.value,
+            TERMINAL_STATUS_PATCH_MAX_ATTEMPTS,
+        )
+        self._publish_terminal_run_status(
+            f"terminal run_config PATCH failed ({outcome.value}) after "
+            f"{TERMINAL_STATUS_PATCH_MAX_ATTEMPTS} attempts; run_config.status is stale"
+        )
+        return outcome
+
+    def _publish_terminal_run_status(self, reason: str, status: str = "COMPLETED") -> None:
+        publisher = self._terminal_status_publisher
+        try:
+            if publisher is not None:
+                publisher(reason, status=status)
+                return
+            from apps.utils import kafka_utils
+
+            kafka_utils.push_run_status(
+                kafka_utils.resolve_topic("run_status"), self.run_id, status, msg=reason
+            )
+            kafka_utils.flush_producer(3)
+        except Exception:
+            logger.exception(
+                "run_id=%s: terminal run_status publish ALSO failed after a failed terminal "
+                "status PATCH — the run has no terminal record anywhere.",
+                self.run_id,
+            )
 
     def _finalize_kpi_breakdowns(self):
         """Authoritative end-of-run per-truck/haulier breakdown recompute (container_logistics).
@@ -280,8 +438,39 @@ class SimulationRuntime(ORSimRuntime):
             timeout=settings.get("NETWORK_REQUEST_TIMEOUT", 10),
         )
         if response.status_code in (200, 201):
-            return response.json()
+            return self._assert_run_record_shape(response.json())
         raise Exception(f"{response.url}, {response.text}")
+
+    def _assert_run_record_shape(self, record):
+        """Pin what ``self.run_record`` actually is: a METADATA STUB, not the run record (R3-12).
+
+        eve 1.1.5 with ``BANDWIDTH_SAVER`` defaulting True (openride_server sets no override)
+        returns only ``_id/_etag/_updated/_created/_status/_links`` from a POST or PATCH. So
+        ``self.run_record`` has never carried the run's own fields after ``init_run_config``:
+        ``self.run_record["meta"]`` raises KeyError in production, on a line that looks
+        obviously correct. Only ``_id`` and ``_etag`` are ever read, and both are required —
+        without them no later PATCH can even address the document, so a missing one is fatal
+        and raises here rather than at some later dereference.
+        """
+        if not isinstance(record, dict):
+            raise TypeError(
+                f"run-config response is {type(record).__name__}, expected a dict of eve metadata"
+            )
+        missing = [key for key in ("_id", "_etag") if key not in record]
+        if missing:
+            raise ValueError(
+                f"run-config response is missing required eve metadata {missing}; "
+                f"got keys {sorted(record)}"
+            )
+        payload_keys = sorted(set(record) - RUN_RECORD_METADATA_KEYS)
+        if payload_keys:
+            logger.warning(
+                "run-config response carries non-metadata keys %s — BANDWIDTH_SAVER appears to "
+                "be off. run_record is still treated as a metadata stub; do not start reading "
+                "run fields off it without re-GETting the document.",
+                payload_keys,
+            )
+        return record
 
     def register_state_machines(self):
         StateMachineRegistry(
@@ -473,6 +662,15 @@ class SimulationRuntime(ORSimRuntime):
             summary = {
                 "total_wall_s": round(total_run_time, 2),
                 "steps": self.steps,
+                # R3-4: the status-write ledger rides the perf summary so a failed PATCH is
+                # detectable from the perf stream. A run whose terminal write failed records
+                # ``status: "In Progress"`` in Mongo — reading Mongo alone cannot distinguish
+                # that from a run still in flight, so the counter is the signal.
+                "status_write_failures": self.status_write_failures,
+                "status_write_outcomes": dict(self.status_write_outcomes),
+                "terminal_status_write": (
+                    self.terminal_status_write.value if self.terminal_status_write else None
+                ),
             }
             if wall_times:
                 sorted_w = sorted(wall_times)
@@ -548,6 +746,9 @@ class SimulationRuntime(ORSimRuntime):
             self.store_step_metrics,
         )
         publish_cancelled = install_terminal_status_publisher(self.run_id)
+        # Reused by _write_terminal_status when the terminal PATCH fails, so a completed run
+        # still gets a terminal run_status even though run_config.status is stale.
+        self._terminal_status_publisher = publish_cancelled
         self.on_before_run()
 
         async def _simulation_loop() -> None:
@@ -576,10 +777,14 @@ class SimulationRuntime(ORSimRuntime):
                 if self._should_update_status(step):
                     patch_start = time.perf_counter()
                     step_metric = self._build_step_metric(step)
-                    self.run_record = self.update_status(
-                        "In Progress",
-                        time.time() - self.execution_start_time,
-                        step_metric,
+                    # R3-4: keep the record only on OK/RETRIED_OK; every other outcome is
+                    # counted and surfaced (perf summary) rather than silently swallowed.
+                    self._apply_status_write(
+                        self.update_status(
+                            "In Progress",
+                            time.time() - self.execution_start_time,
+                            step_metric,
+                        )
                     )
                     api_patch_ms = (time.perf_counter() - patch_start) * 1000
 
@@ -616,7 +821,15 @@ class SimulationRuntime(ORSimRuntime):
         logger.info("Simulation complete run_id=%s", self.run_id)
         self.on_simulation_complete(total)
 
-    def update_status(self, status, execution_time=0, step_metric=None):
+    def update_status(self, status, execution_time=0, step_metric=None) -> tuple:
+        """PATCH ``run_config.status``; returns ``(record | None, StatusWrite)`` (R3-4/R3-9).
+
+        The record is non-None exactly when the outcome succeeded. Callers must branch on the
+        outcome — there is deliberately no ``None``-collapsing return left to swallow, because
+        a swallowed *state write* leaves stored state contradicting reality (see
+        ``StatusWrite``). Only a 412 (stale etag) is retried, bounded and jittered; every
+        other failure returns immediately, loudly and classified.
+        """
         run_config_item_url = (
             f"{settings['OPENRIDE_SERVER_URL']}/run-config/{self.run_record['_id']}"
         )
@@ -628,16 +841,83 @@ class SimulationRuntime(ORSimRuntime):
             for k, v in step_metric.items():
                 data[f"step_metrics.{k}"] = v
                 break
-        try:
-            response = get_http_session().patch(
+        timeout = settings.get("NETWORK_REQUEST_TIMEOUT", 10)
+
+        def _patch(etag):
+            return get_http_session().patch(
                 run_config_item_url,
-                headers=self.user.get_headers(etag=self.run_record["_etag"]),
+                headers=self.user.get_headers(etag=etag),
                 data=json.dumps(data),
-                timeout=settings.get("NETWORK_REQUEST_TIMEOUT", 10),
+                timeout=timeout,
             )
-            if response.status_code in (200, 201):
-                return response.json()
-            logging.error(f"Failed to update status: {response.url}, {response.text}")
+
+        try:
+            etag = self.run_record["_etag"]
+            for attempt in range(1, STATUS_PATCH_MAX_ATTEMPTS + 1):
+                response = _patch(etag)
+                if response.status_code in (200, 201):
+                    return (
+                        response.json(),
+                        StatusWrite.OK if attempt == 1 else StatusWrite.RETRIED_OK,
+                    )
+                if response.status_code != 412:
+                    # NOT a concurrency problem — a 500/401/404/… is a genuine failure of
+                    # the write. Never retried (retrying a 401 or a 500 just repeats it) and
+                    # always loud: the caller counts it and surfaces it.
+                    logging.error(
+                        "Failed to update status run_id=%s status=%s http=%s attempt=%s/%s: %s, %s",
+                        self.run_id,
+                        status,
+                        response.status_code,
+                        attempt,
+                        STATUS_PATCH_MAX_ATTEMPTS,
+                        response.url,
+                        response.text,
+                    )
+                    return None, StatusWrite.SERVER_ERROR
+
+                # 412 == STALE ETAG, not a real failure. The run record has other legitimate
+                # writers — the pooled assignment agent stamps its market provenance onto
+                # ``meta.market`` from inside celery — and Eve's optimistic concurrency
+                # rejects our cached etag the moment anyone else writes. Before any retry
+                # existed, ONE concurrent write poisoned every subsequent update_status, and
+                # the final call returning None set ``self.run_record = None``, so the next
+                # ``self.run_record["_id"]`` raised TypeError and ABORTED A HEALTHY RUN.
+                if attempt == STATUS_PATCH_MAX_ATTEMPTS:
+                    break
+                # Backoff BEFORE the re-GET: the GET→PATCH window is a full round trip, so a
+                # retry that fires immediately tends to lose to the same competing writer.
+                time.sleep(
+                    _backoff_delay_s(
+                        attempt, STATUS_PATCH_BACKOFF_BASE_S, STATUS_PATCH_BACKOFF_CAP_S
+                    )
+                )
+                refreshed = get_http_session().get(
+                    run_config_item_url,
+                    headers=self.user.get_headers(),
+                    timeout=timeout,
+                )
+                if refreshed.status_code != 200:
+                    logging.error(
+                        "Failed to refresh etag for status update run_id=%s status=%s http=%s: %s",
+                        self.run_id,
+                        status,
+                        refreshed.status_code,
+                        refreshed.text,
+                    )
+                    return None, StatusWrite.SERVER_ERROR
+                etag = refreshed.json()["_etag"]
+
+            logging.error(
+                "Status update lost the etag race run_id=%s status=%s after %s attempts; "
+                "run_config was NOT updated.",
+                self.run_id,
+                status,
+                STATUS_PATCH_MAX_ATTEMPTS,
+            )
+            return None, StatusWrite.STALE_ETAG_EXHAUSTED
         except Exception as e:
-            logging.error(f"Exception in update_status: {e}")
-        return None
+            logging.error(
+                "Exception in update_status run_id=%s status=%s: %s", self.run_id, status, e
+            )
+            return None, StatusWrite.EXCEPTION

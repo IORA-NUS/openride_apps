@@ -12,7 +12,7 @@ NOT policies of their own):
 
 from __future__ import annotations
 
-from ..builders import geojson_point
+from ..builders import geojson_point, order_facility_view
 from ..demand import hourly_weights_from_spec
 from ..distributions import Curve, ProbabilityMatrix
 from ..distributions.base import Distribution
@@ -168,8 +168,8 @@ class OrderAgent(Agent):
                 "delivery_code": dropoff_code,
                 "pickup_loc": pickup_loc,
                 "dropoff_loc": dropoff_loc,
-                "pickup_facility": pickup_facility,
-                "dropoff_facility": dropoff_facility,
+                "pickup_facility": order_facility_view(pickup_facility),
+                "dropoff_facility": order_facility_view(dropoff_facility),
                 "pickup_service_time": pickup_service_time,
                 "dropoff_service_time": dropoff_service_time,
                 "order_size": profile_cfg.get("order_size", "1x20"),

@@ -35,7 +35,14 @@ class FacilityAgent(Agent):
         spec = self.spec
         profile_cfg = spec.facility_settings.get("profile", {})
         count = len(self.facilities)
-        profile_clean = {k: v for k, v in profile_cfg.items() if k != "facilities"}
+        # ``rebate`` is stripped here and re-read from the SITE below: the
+        # scenario-wide ``overrides.facility.rebate`` is rank 0 and has already been
+        # folded into the site's resolved value, so letting it ride the blanket merge
+        # would let it shadow a rule that deliberately overrode it (including a rule
+        # that set it to null).
+        profile_clean = {
+            k: v for k, v in profile_cfg.items() if k not in ("facilities", "rebate")
+        }
 
         out = {}
         for idx in range(max(1, count)):
@@ -58,6 +65,15 @@ class FacilityAgent(Agent):
             }
             if facility.get("footprint") is not None:
                 profile["footprint"] = facility.get("footprint")
+            # THIS facility's resolved schedule, read off the SITE (facility rules
+            # plan §8.1). Both builders read the same site rather than sharing a
+            # resolver function, which removes the divergence class instead of
+            # mitigating it. Zero RNG here — a dict lookup, nothing else.
+            resolved_rebate = facility.get("rebate")
+            if resolved_rebate is not None:
+                profile["rebate"] = resolved_rebate
+            else:
+                profile.pop("rebate", None)
             out[agent_id] = {
                 "email": f"{agent_id}@test.com",
                 "password": "password",

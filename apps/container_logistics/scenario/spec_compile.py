@@ -94,6 +94,14 @@ def compile_spec_to_bundle(
     reference_time: str = "2020-01-01 08:00:00",
 ) -> dict[str, Any]:
     """Preprocess + generate + persist the bundle into ``scenario_dir``. Returns the bundle."""
+    # A scenario may DECLARE its own epoch (spec key ``referenceTime``). Without this
+    # the caller's default always won, so no scenario could sit on a midnight hour axis
+    # and plan §18.3 step 3 was unreachable. Declared beats default; nothing global is
+    # flipped (that would be the P8 shape).
+    declared_ref = spec_json.get("referenceTime") if isinstance(spec_json, dict) else None
+    if isinstance(declared_ref, str) and declared_ref.strip():
+        reference_time = declared_ref.strip()
+
     compiled = Preprocessor.compile(
         spec_json, domain=domain, scenario_dir=scenario_dir, reference_time=reference_time
     )

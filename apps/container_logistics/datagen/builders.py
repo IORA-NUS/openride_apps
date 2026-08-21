@@ -11,7 +11,7 @@ addresses, and code/type/coordinate coherence for orders).
 from __future__ import annotations
 
 import random
-from typing import Optional
+from typing import Any, Optional
 
 # Pure, side-effect-free leaf utilities (no scenario/global coupling, no back-edge
 # to this package) — reused rather than duplicated to stay single-source-of-truth.
@@ -54,6 +54,40 @@ def geojson_point(lon: float, lat: float) -> dict:
     return {"type": "Point", "coordinates": [lon, lat]}
 
 
+#: Site keys an ORDER's embedded facility snapshot must NOT carry.
+_ORDER_FACILITY_EXCLUDED = ("rebate",)
+
+
+def order_facility_view(site: dict) -> dict:
+    """The facility snapshot embedded in an order behavior — **provenance only.**
+
+    **This snapshot has no runtime reader and never reaches Mongo.** The order
+    document is built from ``behavior["profile"]`` alone (``precreate.py`` in service
+    mode, ``order/manager.py`` fed by ``order/app.py`` in agents mode); this key sits
+    one level up, on the behavior, and is never copied down. Every key in it is dead
+    *here*, ``gate_count`` and ``service_time`` included.
+
+    The exclusion rule is therefore **bulk, not readership**: a 24-point rebate
+    schedule copied into every one of 5,000 orders is real bundle bloat, while two
+    integers are not. It also keeps a rule that only PRICES a facility from rewriting
+    the whole ORDER collection, which a facility-collection equivalence proof cannot
+    see.
+
+    **Corrected (F5/F12).** This docstring previously justified keeping
+    ``gate_count``/``service_time`` as *"world physics, so a rule that changes them is
+    supposed to be visible here"* — which asserts a consumer that does not exist, and
+    is exactly the P11 shape the feature's own allow-list was written to avoid. It
+    also made the cut look backwards, because it implied the kept keys were live.
+
+    The live ``service_time`` is a **different field one level up**:
+    ``profile.pickup_service_time`` / ``profile.dropoff_service_time``, flattened from
+    the same site a few lines below. Those DO reach Mongo and have three hot readers —
+    the assignment payload, the haul-duration floor, and the trip-stats seed. See
+    ``test_service_time_rule_rewrites_only_matched_orders_profile_service_time``.
+    """
+    return {k: v for k, v in site.items() if k not in _ORDER_FACILITY_EXCLUDED}
+
+
 def resolve_facilities(facility_settings: dict) -> list[dict]:
     """Validate and return the facility site list.
 
@@ -86,6 +120,13 @@ def resolve_facilities(facility_settings: dict) -> list[dict]:
         # Real footprint polygon ("mask"), when the generator matched one.
         if item.get("footprint") is not None:
             entry["footprint"] = item["footprint"]
+        # This facility's resolved rebate schedule, stamped onto the site by the
+        # Preprocessor's facilityRules step. An OPT-IN passthrough, exactly like
+        # ``footprint`` above: this projection is a whitelist, so a site key that is
+        # not named here is silently dropped — which is how a resolved schedule would
+        # vanish between the Preprocessor and the builders with nothing to show for it.
+        if item.get("rebate") is not None:
+            entry["rebate"] = item["rebate"]
         resolved.append(entry)
     return resolved
 
@@ -259,8 +300,8 @@ class OrderBuilder(_BaseBuilder):
             "delivery_code": dropoff_code,
             "pickup_loc": pickup_loc,
             "dropoff_loc": dropoff_loc,
-            "pickup_facility": pickup_facility,
-            "dropoff_facility": dropoff_facility,
+            "pickup_facility": order_facility_view(pickup_facility),
+            "dropoff_facility": order_facility_view(dropoff_facility),
             "pickup_service_time": pickup_service_time,
             "dropoff_service_time": dropoff_service_time,
             "order_size": profile_cfg.get("order_size", "1x20"),
@@ -299,7 +340,14 @@ class FacilityBuilder(_BaseBuilder):
         # Don't re-embed the whole site list in every facility's stored profile —
         # it's config bloat (nothing reads profile.facilities at runtime) and with
         # per-facility footprints it would duplicate every mask N×N.
-        profile_cfg_clean = {k: v for k, v in profile_cfg.items() if k != "facilities"}
+        # ``rebate`` is stripped here and re-read from the SITE below: the
+        # scenario-wide ``overrides.facility.rebate`` is rank 0 and has already been
+        # folded into the site's resolved value, so letting it ride the blanket merge
+        # would let it shadow a rule that deliberately overrode it (including a rule
+        # that set it to null).
+        profile_cfg_clean = {
+            k: v for k, v in profile_cfg.items() if k not in ("facilities", "rebate")
+        }
 
         profile = {
             **profile_cfg_clean,
@@ -316,6 +364,16 @@ class FacilityBuilder(_BaseBuilder):
         # This facility's own real footprint polygon ("mask"), when matched.
         if facility.get("footprint") is not None:
             profile["footprint"] = facility.get("footprint")
+        # THIS facility's resolved schedule, read off the SITE (facility rules plan
+        # §8.1). Both builders read the same site rather than sharing a resolver
+        # function, which removes the divergence class instead of mitigating it: a
+        # patch to one builder can no longer leave the other emitting rebate-less
+        # facilities — the hardest class of this bug to diagnose.
+        resolved_rebate = facility.get("rebate")
+        if resolved_rebate is not None:
+            profile["rebate"] = resolved_rebate
+        else:
+            profile.pop("rebate", None)
 
         return {
             "email": f"{agent_id}@test.com",

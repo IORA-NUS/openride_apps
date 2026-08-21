@@ -56,6 +56,7 @@ def persist_kpi_breakdown(
     sim_clock: Any,
     rows: List[Dict[str, Any]],
     final: bool = False,
+    extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     if user is None:
         return
@@ -69,7 +70,9 @@ def persist_kpi_breakdown(
         "scope": scope,
         "sim_clock": clock,
         "final": bool(final),
-        "breakdown": {"entities": rows, "count": len(rows)},
+        # ``breakdown`` is allow_unknown on the Eve model (G13), so a RUN-LEVEL
+        # diagnostic can ride alongside the per-entity rows with no api rebuild.
+        "breakdown": {"entities": rows, "count": len(rows), **(extra or {})},
     }
     # Phase 2: also publish to kpi_breakdown_stream so the DuckDB sink can store rows for the
     # SQL-backed read API. Best-effort, independent of the Mongo POST below (kept during

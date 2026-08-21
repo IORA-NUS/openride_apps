@@ -22,6 +22,15 @@ class AssignmentAgent(ORSimAgent):
     def entering_market(self, time_step):
         app = getattr(self, "app", None)
         if self.active is False and app is not None:
+            # Hand the app the simulation horizon so its market provenance can
+            # separate in-horizon ticks from post-horizon drain ticks, putting the
+            # tick count on the same window as the KPI block beside it (plan R3-5).
+            try:
+                app._sim_horizon_steps = (self.orsim_settings or {}).get(
+                    "SIMULATION_LENGTH_IN_STEPS"
+                )
+            except Exception:
+                app._sim_horizon_steps = None
             app.launch(sim_clock=self.get_current_time_str())
         self.active = True
 

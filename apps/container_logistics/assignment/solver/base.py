@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from apps.container_logistics.rebate import RebateBook
+
 Truck = Dict[str, Any]
 Order = Dict[str, Any]
 PairAllowed = Callable[[Truck, Order], bool]
@@ -16,7 +18,7 @@ class BaseAssignmentSolver(ABC):
     """Plug-and-play contract for container-logistics order/truck matching.
 
     Solvers are *pure*: they receive the candidate trucks/orders for a single
-    haulier bucket plus two injected callables and return a list of
+    haulier bucket plus two SOLVE ARGUMENTS and return a list of
     ``(truck, order)`` pairs. They must not query the DB, import constraints, or
     know how feasibility/cost are computed — the :class:`AssignmentApp` owns that.
 
@@ -26,6 +28,11 @@ class BaseAssignmentSolver(ABC):
       better; e.g. repositioning/deadhead distance). Solvers that don't optimise
       a cost (random) may ignore it.
 
+    Separate from those two solve arguments, three callables/values may be
+    INJECTED before ``solve``/``solve_pairs`` is called: ``set_rng``,
+    ``set_tiebreak``, and ``set_rebate_book``. All three are opt-in — a solver
+    that never reads the injected value keeps its historical behaviour exactly.
+
     A solver must never assign the same truck or the same order twice.
     """
 
@@ -33,6 +40,7 @@ class BaseAssignmentSolver(ABC):
         self._params = params or {}
         self._rng: Optional[_random_module.Random] = None
         self._tiebreak_seed: Optional[int] = None
+        self._rebate_book: Optional[RebateBook] = None
 
     @property
     def params(self) -> Dict[str, Any]:
@@ -73,6 +81,31 @@ class BaseAssignmentSolver(ABC):
     @property
     def tiebreak_seed(self) -> Optional[int]:
         return self._tiebreak_seed
+
+    def set_rebate_book(self, book: Optional[RebateBook]) -> None:
+        """Inject a :class:`RebateBook` so a solver MAY price a decision (plan §3.2).
+
+        Opt-in, scoped exactly like :meth:`set_rng` and :meth:`set_tiebreak`: when
+        this is never called — the whole shipped ``partitioned`` path AND the whole
+        shipped ``pooled`` path, today — :attr:`rebate_book` stays ``None`` and the
+        solver keeps its historical behaviour, byte-identical to today, not merely
+        equivalent. Nothing shipped calls this. ``AssignmentApp`` constructs a book
+        and calls it only when the compiled profile carries
+        ``planner.rebate_aware: true``, which defaults ``false`` and is set by no
+        shipped scenario — so the injection itself can never be the thing that
+        breaks the allocation-inertness invariant (plan §7, R-I1b).
+
+        A solver that opts in reads ``self.rebate_book.price_at(facility_id, when)``
+        for a *decision-time estimate*; the framework does not supply a predicted
+        arrival time, because "when do I think I will arrive" is a company's
+        belief — SOLVER territory by plan §2, not this seam's problem.
+        """
+        self._rebate_book = book
+
+    @property
+    def rebate_book(self) -> Optional[RebateBook]:
+        """The injected :class:`RebateBook`, or ``None`` when never injected."""
+        return self._rebate_book
 
     @abstractmethod
     def solve(

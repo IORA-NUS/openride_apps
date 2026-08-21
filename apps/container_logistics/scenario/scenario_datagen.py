@@ -54,6 +54,28 @@ def _truck_origin_codes() -> Optional[tuple]:
     return tuple(codes) if codes else None
 
 
+def _refuse_facility_rules() -> None:
+    """Raise when the active scenario_config carries a non-empty rule list.
+
+    Reached only when ``frontend_scenario_config_override`` stamped one on, i.e. when
+    a rules-carrying scenario is regenerating on the legacy path. A rules-less
+    scenario is untouched, which matters: 13 of the 15 shipped scenarios carry none.
+    """
+    rules = getattr(scenario_config, "FACILITY_RULES", None)
+    if not rules:
+        return
+    raise RuntimeError(
+        f"This scenario carries {len(rules)} facilityRules, and the legacy "
+        f"GenerateBehavior path cannot honour them.\n"
+        f"Compiling here would produce a complete, internally consistent, RULES-FREE "
+        f"world — every per-facility gate_count/service_time/rebate silently reverted "
+        f"to the scenario-wide blanket layer, with nothing in the bundle saying so.\n"
+        f"Use the Preprocessor path (`openride scenario compile <slug>`), which is the "
+        f"single validation surface and the only implementation of rule precedence.\n"
+        f"Rules: {[r.get('match') for r in rules if isinstance(r, dict)]}"
+    )
+
+
 def build_generation_spec(
     domain: str,
     *,
@@ -62,7 +84,18 @@ def build_generation_spec(
     generation_spec_meta: Optional[dict] = None,
     reference_time: Optional[str] = None,
 ) -> GenerationSpec:
-    """Read the current scenario_config (post-override) into a frozen spec."""
+    """Read the current scenario_config (post-override) into a frozen spec.
+
+    **Refuses a rules-carrying scenario (R2-2 / F3).** This is the LEGACY generation
+    path; it has no facilityRules implementation and must not acquire one — two
+    implementations of a precedence rule is how they diverge. It raises rather than
+    warns because the alternative outcome is the most expensive one available: a
+    complete, internally consistent, RULES-FREE world, silently reverting every
+    per-facility value to the blanket layer, for a feature that exists precisely
+    because those values were unexpressible. Eight call sites reach GenerateBehavior
+    and every one of them is better off failing loudly.
+    """
+    _refuse_facility_rules()
     truck_settings = deepcopy(scenario_config.truck_settings)
     order_settings = deepcopy(scenario_config.order_settings)
     facility_settings = deepcopy(scenario_config.facility_settings)

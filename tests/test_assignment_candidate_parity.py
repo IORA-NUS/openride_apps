@@ -119,25 +119,34 @@ def test_pooled_and_partitioned_build_the_same_candidate_count(companies, chain)
 
 
 @pytest.mark.parametrize("chain", [False, True], ids=["clique", "chain"])
-def test_candidate_amplification_does_not_scale_with_company_count(chain):
-    """The F4 signature was that the pooled/partitioned ratio GREW with the number
-    of cooperating companies. After FIX-2 it must not."""
-    ratios = {}
+def test_round1_candidate_parity_is_exact_at_every_company_count(chain):
+    """The guarantee is EXACT round-1 parity, at every company count.
+
+    Replaces an earlier `ratio < 2.0` / `ratios[5] < 2.0 * ratios[2]` assertion —
+    the same soft-tolerance pattern §13 criticised elsewhere, and one that would
+    have passed under a genuine regression. The F4 signature was that the
+    pooled/partitioned ratio GREW with company count; exact round-1 equality at
+    every H rules that out without a magic threshold.
+
+    The per-tick TOTAL is recorded, not asserted against a bound: a multi-round
+    auction re-indexes over the shrinking free set, so a ratio > 1 is inherent and
+    (review §16.3) causally inert.
+    """
+    observed = {}
     for companies in (2, 3, 5):
         per = max(4, 100 // companies)
         trucks, orders, coop = _fleet(companies, per, per, chain=chain)
-        pooled = sum(_pooled_candidates_per_round(trucks, orders, coop))
+        pooled_rounds = _pooled_candidates_per_round(trucks, orders, coop)
         partitioned = sum(_candidate_calls("partitioned", trucks, orders, coop))
-        ratios[companies] = pooled / max(1, partitioned)
+        assert pooled_rounds, f"H={companies}: pooled built no candidates"
+        assert pooled_rounds[0] == partitioned, (
+            f"H={companies}: round-1 parity broken — pooled {pooled_rounds[0]} vs "
+            f"partitioned {partitioned}"
+        )
+        observed[companies] = (sum(pooled_rounds), partitioned)
 
-    # Every ratio stays close to 1; the residual is convergence rounds on the
-    # shrinking free-order set, not per-company amplification.
-    for companies, ratio in ratios.items():
-        assert ratio < 2.0, f"H={companies}: candidate ratio {ratio:.2f}x is amplifying"
-    # And it must not grow with H the way the un-fixed code did (5.8x at H=5).
-    assert ratios[5] < 2.0 * ratios[2], (
-        f"ratio scales with company count: {ratios} — the F4 confound is back"
-    )
+    # Recorded for the run's provenance, deliberately NOT thresholded.
+    print("per-tick totals (pooled, partitioned):", observed)
 
 
 def test_convergence_rounds_process_a_shrinking_residual():
