@@ -1,5 +1,0 @@
-# Optional: the ride-hail domain's MIP assignment solvers
-# (apps/ridehail/assignment/solver/*). Not needed to run container logistics.
--r requirements.txt
-
-Pyomo==6.7.0
