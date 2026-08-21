@@ -7,7 +7,6 @@
 # imports.
 #
 # Dev/test tooling: requirements-dev.txt
-# Optional extras:  requirements-ridehail.txt
 #
 # Python 3.11 (the tree is developed and tested on 3.11.2).
 
@@ -58,3 +57,23 @@ polyline==2.0.1
 # ── Process / telemetry ──────────────────────────────────────────────────────
 psutil==7.2.2
 python-dateutil==2.8.2
+
+# ── Present under protest: a domain should not have dependencies ─────────────
+# Pyomo is a MIP modelling library needed by six ride-hail assignment solvers
+# (pickup_optimal, revenue_optimal, service_optimal and the three compromise_*
+# variants). Nothing in container logistics uses it.
+#
+# It is in this file, rather than an optional extra, because it is not optional
+# TODAY: `apps/ridehail/assignment/solver/__init__.py` eagerly imports all ten
+# solvers, and `app.py` does `from .solver import *` to populate `globals()` for
+# a `globals()[solver_name]` lookup. So importing the ride-hail assignment app
+# pulls in Pyomo whether or not a MIP solver is ever selected -- verified: it
+# lands in sys.modules as a side effect, and five test modules fail to import
+# without it.
+#
+# That is the defect, not the dependency. Container logistics does the same job
+# with an explicit `SOLVER_REGISTRY` dict and a fail-soft `get_solver(name)`, and
+# needs no heavy dependency at all. Once the ride-hail solvers are loaded lazily
+# or behind a registry, Pyomo becomes an extra keyed on the SOLVER that needs it
+# -- never on the domain -- and this block goes away.
+Pyomo==6.7.0

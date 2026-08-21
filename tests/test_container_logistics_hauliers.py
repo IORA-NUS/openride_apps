@@ -16,8 +16,11 @@ from apps.container_logistics.assignment.app import AssignmentApp
 # --- normalize / distribute -------------------------------------------------
 
 def test_normalize_defaults_to_single_haulier():
+    # Shares are PERCENTAGES summing to HAULIER_SHARE_TOTAL (100), not fractions.
+    # This changed at behavior revision 10; the assertions below were left on the
+    # old fractional model and failed from then until 2026-08-21.
     assert sc.normalize_hauliers(None) == [
-        {"id": "haulier", "name": "Haulier", "fleet_share": 1.0, "order_share": 1.0}
+        {"id": "haulier", "name": "Haulier", "fleet_share": 100.0, "order_share": 100.0}
     ]
 
 
@@ -27,14 +30,17 @@ def test_normalize_slugifies_and_dedupes_ids():
     )
     ids = [h["id"] for h in out]
     assert ids == ["haulier_a", "haulier_b", "haulier_a_1"]
-    # missing shares backfill to an equal split.
-    assert all(abs(h["fleet_share"] - 1 / 3) < 1e-9 for h in out)
+    # missing shares backfill to an equal split -- of 100, not of 1.
+    assert all(abs(h["fleet_share"] - sc.HAULIER_SHARE_TOTAL / 3) < 1e-9 for h in out)
+    assert abs(sum(h["fleet_share"] for h in out) - sc.HAULIER_SHARE_TOTAL) < 1e-9
 
 
 def test_distribute_by_share_matches_counts_exactly():
+    # A 2:1 fleet split, expressed as percentages of 100 -- raw 2 and 1 are now
+    # rejected outright, since the shares must sum to HAULIER_SHARE_TOTAL.
     hauliers = [
-        {"id": "a", "name": "A", "fleet_share": 2, "order_share": 1},
-        {"id": "b", "name": "B", "fleet_share": 1, "order_share": 1},
+        {"id": "a", "name": "A", "fleet_share": 200 / 3, "order_share": 50.0},
+        {"id": "b", "name": "B", "fleet_share": 100 / 3, "order_share": 50.0},
     ]
     dist = sc.distribute_by_share(9, hauliers, "fleet_share")
     counts = Counter(h["id"] for h in dist)
