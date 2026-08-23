@@ -18,7 +18,6 @@
 #   dashboard  IORA-NUS/openroad_viz         (Next.js, :3000)
 #   REST API   openride_server/openroad_platform (Eve, :11654)
 
-name: openride
 
 x-app: &app
   build:
@@ -29,16 +28,16 @@ x-app: &app
     MONGODB_HOST: mongo
     MONGODB_PORT: "27017"
     MONGODB_URI: mongodb://mongo:27017/OpenRoadDB
-    RABBITMQ_HOST: rabbitmq
+    RABBITMQ_HOST: rabbit
     KAFKA_BOOTSTRAP_SERVERS: kafka:9092
     OSRM_HOST: http://osrm:5000
   volumes:
     - ./scenarios:/app/scenarios
     - openride-output:/data/output
-    - ${LOCATIONS_DATA:-../openroad_locations}:/data/openroad_locations:ro
+    - ${LOCATIONS_DATA:-./data/openroad_locations}:/data/openroad_locations:ro
   depends_on:
     mongo: {condition: service_healthy}
-    rabbitmq: {condition: service_healthy}
+    rabbit: {condition: service_healthy}
     kafka: {condition: service_started}
 
 services:
@@ -53,7 +52,11 @@ services:
       timeout: 5s
       retries: 10
 
-  rabbitmq:
+  # Named `rabbit`, not `rabbitmq`: openride_control/registry.py looks up the
+  # compose service by that exact name, and the container already running on this
+  # box is compose-service `rabbit`. Renaming it made /services report RabbitMQ
+  # as stopped while it was up.
+  rabbit:
     image: rabbitmq:3-management
     ports: ["5672:5672", "15672:15672"]
     healthcheck:

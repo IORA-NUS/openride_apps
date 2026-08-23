@@ -6,7 +6,21 @@ import os
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# The WORKSPACE root -- the directory that CONTAINS openride_apps, openride_server,
+# kafka_broker and friends -- not this repo.
+#
+# This read `parent.parent` until 2026-08-24, which was right while this package
+# lived at /home/user/openride_control. Moving it to
+# /home/user/openride_apps/openride_control silently shifted ROOT down one level
+# to /home/user/openride_apps, and every derived path gained a doubled segment:
+# compose dirs became /home/user/openride_apps/openride_server (absent), so
+# `docker compose ps` raised FileNotFoundError, the exception was swallowed, and
+# the /services page reported the entire running stack as "stopped"; and the
+# simulation spawn cwd became /home/user/openride_apps/openride_apps, so launching
+# a run failed before exec. Mirrors OPENRIDE_WORKSPACE_ROOT in openride/config.py.
+ROOT = Path(
+    os.environ.get("OPENRIDE_WORKSPACE_ROOT", str(Path(__file__).resolve().parents[2]))
+)
 
 # openride_apps/venv has simulation + Celery deps (eventlet, orsim, etc.).
 # pyjupenv is only for the CLI (rich, questionary).
