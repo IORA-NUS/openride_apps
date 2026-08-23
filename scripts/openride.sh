@@ -14,7 +14,13 @@
 #   scripts/openride.sh run 200_trucks_7_days --solver GreedyNearest
 #   scripts/openride.sh analyze run_20260623_103824
 set -euo pipefail
-ROOT="${OPENRIDE_WORKSPACE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+# Resolve THIS script through symlinks before walking up: /home/user/scripts is a
+# symlink into this repo, and the script is often invoked by a relative path from
+# another directory (systemd units do exactly this). Using $BASH_SOURCE unresolved
+# made ROOT depend on the caller's cwd -- from /home/user it computed ROOT=/ and
+# fell through to a bare `python3`, which has no openride module.
+_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+ROOT="${OPENRIDE_WORKSPACE_ROOT:-$(cd "$(dirname "$_SELF")/../.." && pwd)}"
 if [ -n "${OPENRIDE_CLI_PYTHON:-}" ]; then PY="$OPENRIDE_CLI_PYTHON"
 elif [ -x "$ROOT/openride_apps/venv/bin/python" ]; then PY="$ROOT/openride_apps/venv/bin/python"
 elif [ -x "$ROOT/pyjupenv/bin/python" ]; then PY="$ROOT/pyjupenv/bin/python"
