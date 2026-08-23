@@ -79,3 +79,15 @@ python-dateutil==2.8.2
 # or behind a registry, Pyomo becomes an extra keyed on the SOLVER that needs it
 # -- never on the domain -- and this block goes away.
 Pyomo==6.7.0
+
+# ── The `openride` CLI ───────────────────────────────────────────────────────
+# The CLI moved into this repo but its dependencies did not: it was launched by
+# scripts/openride.sh under a *separate* interpreter (~/pyjupenv), which is a
+# general-purpose Jupyter environment no requirements file describes. A fresh
+# clone therefore installed a tree whose CLI could not start -- `openride
+# scenario compile` died on `ModuleNotFoundError: rich`, which matters because
+# compiling is the step that produces the scenario bundles the suite needs.
+# Declared here so one environment built from this file runs both the CLI and
+# the simulation, and ~/pyjupenv stops being load-bearing.
+rich==15.0.0
+questionary==2.1.1

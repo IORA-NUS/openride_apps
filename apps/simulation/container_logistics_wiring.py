@@ -16,11 +16,23 @@ from apps.simulation.terminations import HorizonDrainTermination
 
 
 def get_datahub_dir():
+    """Absolute path to the run/output tree, created on first use.
+
+    ``datahub/`` is generated output (816 MB on the development box) and is
+    correctly gitignored -- so it is absent from every fresh clone. It used to
+    be *required* to pre-exist, which made `scenario compile` fail on a new
+    machine with a message about an absolute path that told the reader nothing
+    about the real fix. It is pure output, so creating it is always safe.
+
+    The old ``isabs`` half of that guard could never fire: ``abspath`` returns
+    an absolute path by construction.
+    """
     datahub_dir = os.path.abspath(
         os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "datahub")
     )
-    if not os.path.exists(datahub_dir) or not os.path.isabs(datahub_dir):
-        raise ValueError(f"datahub_dir does not exist or is not an absolute path. Got: {datahub_dir}")
+    os.makedirs(datahub_dir, exist_ok=True)
+    if not os.path.isdir(datahub_dir):
+        raise ValueError(f"datahub_dir exists but is not a directory. Got: {datahub_dir}")
     return datahub_dir
 
 
