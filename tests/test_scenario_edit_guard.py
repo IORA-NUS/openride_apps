@@ -1,3 +1,4 @@
+from pathlib import Path
 """FIX-6 layer 2 on the CLI ``edit_scenario`` path (plan §13.4, review finding F2).
 
 ``generate_scenario`` got the destructive-save guard; ``edit_scenario`` did not. It was
@@ -33,7 +34,7 @@ import tempfile
 
 import pytest
 
-sys.path.insert(0, "/home/user")  # openride_control lives beside openride_apps
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # openride_control now lives IN the repo
 
 from apps.container_logistics.scenario.frontend_scenario_spec import (  # noqa: E402
     CooperationResetRequired,

@@ -23,11 +23,11 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, "/home/user")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openride import control  # importable: no `rich` dependency
 
-_SCENARIO_CMD = Path("/home/user/openride/scenario_cmd.py")
+_SCENARIO_CMD = Path(__file__).resolve().parents[1] / "openride" / "scenario_cmd.py"
 
 
 def _tree():
@@ -103,7 +103,7 @@ def test_reseed_is_not_blocked_for_a_rules_carrying_scenario():
 # T23 — the writer touches only the world block
 # --------------------------------------------------------------------------- #
 
-_FLAGSHIP = Path("/home/user/openride_apps/scenarios/rebate_ports_500_trucks")
+_FLAGSHIP = Path(__file__).resolve().parents[1] / "scenarios" / "rebate_ports_500_trucks"
 
 
 @pytest.fixture

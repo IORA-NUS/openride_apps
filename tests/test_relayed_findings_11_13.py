@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, "/home/user")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from apps.container_logistics.scenario import frontend_scenario_spec as F
 
@@ -118,7 +118,7 @@ def test_cli_surfaces_the_reset_remedy_for_the_typed_code():
     """Finding 13, REPRODUCED: `ControlError.code` was set and read NOWHERE on the
     CLI path — `cli.py` printed only the message, so the user was told a save was
     refused and never told the override existed."""
-    src = Path("/home/user/openride/cli.py").read_text()
+    src = (Path(__file__).resolve().parents[1] / "openride" / "cli.py").read_text()
     tree = ast.parse(src)
     reads_code = any(
         isinstance(n, ast.Call) and getattr(n.func, "id", "") == "getattr"

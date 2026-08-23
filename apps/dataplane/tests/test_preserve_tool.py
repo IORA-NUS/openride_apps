@@ -18,7 +18,7 @@ import pytest
 
 from apps.dataplane.tools import preserve_surviving_runs as tool
 
-VENV_PYTHON = "/home/user/openride_apps/venv/bin/python"
+VENV_PYTHON = str(Path(__file__).resolve().parents[3] / "venv" / "bin" / "python")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kpi_events (

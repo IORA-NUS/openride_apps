@@ -1,11 +1,11 @@
 {
   "collection": "ms_openride_apps_2f139fba",
   "failed_files": [],
-  "indexed_chunks": 3,
-  "indexed_files": 9,
-  "last_completed_at": "2026-08-21T06:35:37.145433Z",
-  "last_started_at": "2026-08-21T06:35:34.683263Z",
-  "last_success_at": "2026-08-21T06:35:37.145433Z",
+  "indexed_chunks": 2,
+  "indexed_files": 10,
+  "last_completed_at": "2026-08-23T09:20:55.914603Z",
+  "last_started_at": "2026-08-23T09:20:52.916356Z",
+  "last_success_at": "2026-08-23T09:20:55.914603Z",
   "milvus_uri": "~/.memsearch/milvus.db",
   "operation": "index",
   "paths": [
@@ -13,6 +13,6 @@
   ],
   "schema_version": 1,
   "status": "ok",
-  "total_files": 9,
-  "updated_at": "2026-08-21T06:35:37.145433Z"
+  "total_files": 10,
+  "updated_at": "2026-08-23T09:20:55.914603Z"
 }

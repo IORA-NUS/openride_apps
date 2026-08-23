@@ -1,3 +1,4 @@
+from pathlib import Path
 """The destructive-save guard must be RECOVERABLE (plan §13.4 FIX-6 layer 2).
 
 The guard refuses a save that would empty a structure's cooperation content, which
@@ -14,7 +15,7 @@ import sys
 
 import pytest
 
-sys.path.insert(0, "/home/user")  # openride_control lives beside openride_apps
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # openride_control now lives IN the repo
 
 from apps.container_logistics.scenario.frontend_scenario_spec import (  # noqa: E402
     CooperationResetRequired,

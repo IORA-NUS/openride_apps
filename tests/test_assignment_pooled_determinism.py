@@ -1,3 +1,4 @@
+from pathlib import Path
 """I-P5 order-independence with EXACT COST TIES, and non-finite discipline.
 
 Plan §13.4 FIX-3 (review F3) and FIX-5 (review F6 + F10).
@@ -116,7 +117,7 @@ def test_tied_awards_are_pythonhashseed_independent():
         env = dict(os.environ, PYTHONHASHSEED=seed)
         out = subprocess.run(
             [sys.executable, "-c", script], env=env, capture_output=True, text=True,
-            cwd="/home/user/openride_apps",
+            cwd=str(Path(__file__).resolve().parents[1]),
         )
         assert out.returncode == 0, f"subprocess failed (PYTHONHASHSEED={seed}): {out.stderr[-2000:]}"
         results.add(out.stdout.strip())
@@ -412,7 +413,7 @@ def test_non_spatial_tied_awards_are_pythonhashseed_independent():
         env = dict(os.environ, PYTHONHASHSEED=seed)
         out = subprocess.run(
             [sys.executable, "-c", script], env=env, capture_output=True, text=True,
-            cwd="/home/user/openride_apps",
+            cwd=str(Path(__file__).resolve().parents[1]),
         )
         assert out.returncode == 0, f"subprocess failed (PYTHONHASHSEED={seed}): {out.stderr[-2000:]}"
         results.add(out.stdout.strip())

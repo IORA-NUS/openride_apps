@@ -22,11 +22,11 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, "/home/user")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from openride import control  # importable: no `rich` dependency
 
-_SCENARIO_CMD = Path("/home/user/openride/scenario_cmd.py")
+_SCENARIO_CMD = Path(__file__).resolve().parents[1] / "openride" / "scenario_cmd.py"
 _FLAG = "--allow-cooperation-reset"
 _DEST = "allow_cooperation_reset"
 
