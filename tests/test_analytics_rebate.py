@@ -812,9 +812,19 @@ def test_no_code_path_patches_facility_rebate_during_a_run():
 
     repo = pathlib.Path(__file__).resolve().parent.parent
     roots = [repo / "apps"]
-    orsim = repo.parent / "orsim" / "orsim"
-    if orsim.is_dir():
-        roots.append(orsim)          # where the generic resource PATCH helper lives
+
+    # Locate orsim through the IMPORT SYSTEM, not as a sibling directory. This
+    # scan used to look for `<workspace>/orsim/orsim`, which exists only on a
+    # machine that happens to keep an engine source checkout next to this repo.
+    # Since orsim became a released dependency it installs into site-packages,
+    # so on any clean install the sibling was absent and this assertion fired --
+    # correctly: the scan really would have narrowed. Resolving it by import
+    # also scans the engine that will actually run, rather than a checkout that
+    # may be at a different revision.
+    import orsim as _orsim
+    orsim_pkg = pathlib.Path(_orsim.__file__).resolve().parent
+    assert orsim_pkg.is_dir(), f"orsim package dir not found at {orsim_pkg}"
+    roots.append(orsim_pkg)          # where the generic resource PATCH helper lives
     assert len(roots) == 2, "orsim/ was not found; the scan would silently narrow"
 
     # Patterns run over the JOINED file text with DOTALL, so a $set spread across lines
