@@ -40,7 +40,7 @@ def _default_apps_python() -> str:
     override = os.environ.get("OPENRIDE_PYTHON")
     if override:
         return override
-    venv_python = WORKSPACE_ROOT / "openride_apps" / "venv" / "bin" / "python"
+    venv_python = _REPO_ROOT / "venv" / "bin" / "python"
     if venv_python.is_file():
         return str(venv_python)
     return sys.executable

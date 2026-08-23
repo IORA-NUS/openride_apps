@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from openride_control.paths import (
+    REPO_ROOT,
     ROOT,
     SIMULATION_LOG_FILE,
     SIMULATION_RUN_MODULE,
@@ -143,7 +144,7 @@ def _celery_ping_subprocess(timeout: float) -> bool:
     try:
         result = subprocess.run(
             [VENV_PYTHON, "-m", "celery", "-A", "apps.celery_worker", "inspect", "ping", f"--timeout={inspect_timeout}"],
-            cwd=ROOT / "openride_apps",
+            cwd=REPO_ROOT,
             env=openride_apps_env(),
             capture_output=True,
             text=True,
@@ -382,7 +383,7 @@ def _ready_perf_vm_sink(_mgr: ServiceManager, _spec: ServiceSpec) -> None:
 
 
 def _ready_rabbit(_mgr: ServiceManager, _spec: ServiceSpec) -> None:
-    wait_for_compose_service(ROOT / "openride_apps", "rabbit")
+    wait_for_compose_service(REPO_ROOT, "rabbit")
     wait_for_port("RabbitMQ AMQP", "127.0.0.1", 5672)
     wait_for_port("RabbitMQ management", "127.0.0.1", 15672)
     wait_for_http("RabbitMQ management API", "http://127.0.0.1:15672")
@@ -467,7 +468,7 @@ def spawn_simulation_process(
             stdout=log_handle,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
-            cwd=ROOT / "openride_apps",
+            cwd=REPO_ROOT,
             env=env,
         )
 
@@ -476,7 +477,7 @@ def spawn_simulation_process(
         start_new_session=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        cwd=ROOT / "openride_apps",
+        cwd=REPO_ROOT,
         text=True,
         bufsize=1,
         env=env,
@@ -611,7 +612,7 @@ SERVICES: dict[str, ServiceSpec] = {
         key="rabbit",
         label="RabbitMQ",
         kind="compose",
-        compose_dir=ROOT / "openride_apps",
+        compose_dir=REPO_ROOT,
         compose_service="rabbit",
         log_file=ROOT / "rabbitmq_log.txt",
         description="Task queue (ports 5672, 15672)",

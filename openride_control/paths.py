@@ -22,10 +22,17 @@ ROOT = Path(
     os.environ.get("OPENRIDE_WORKSPACE_ROOT", str(Path(__file__).resolve().parents[2]))
 )
 
+# THIS repo, anchored to this file rather than rebuilt as `ROOT / "openride_apps"`.
+# That reconstruction only resolves when the checkout is literally named
+# openride_apps: in a clone named anything else the CLI shelled out with a
+# PYTHONPATH pointing at a directory that does not exist, and every
+# `scenario compile` died with "No module named 'openride_control'" -- 0 of 16.
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
 # openride_apps/venv has simulation + Celery deps (eventlet, orsim, etc.).
 # pyjupenv is only for the CLI (rich, questionary).
 _PYTHON_CANDIDATES = (
-    ROOT / "openride_apps" / "venv" / "bin" / "python",
+    REPO_ROOT / "venv" / "bin" / "python",
     ROOT / "venv" / "bin" / "python",
     ROOT / "pyjupenv" / "bin" / "python",
 )
@@ -74,7 +81,7 @@ def celery_worker_count() -> int:
 
 def openride_apps_env() -> dict[str, str]:
     env = os.environ.copy()
-    base = str(ROOT / "openride_apps")
+    base = str(REPO_ROOT)
     env["PYTHONPATH"] = base + os.pathsep + env.get("PYTHONPATH", "")
     env.setdefault("OPENRIDE_SERVER_URL", DEFAULT_OPENRIDE_SERVER_URL)
     env.setdefault("CELERY_BROKER_URL", "amqp://guest:guest@127.0.0.1:5672//")
