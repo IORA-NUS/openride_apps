@@ -1,0 +1,15 @@
+# Build context hygiene. Without this the context includes datahub/ (816 MB of
+# generated run output) and venv/, which is both slow and wrong — the image
+# builds its own environment from requirements.txt.
+venv/
+datahub/
+.git/
+**/__pycache__/
+*.pyc
+.memsearch/
+scenarios/*/scenario.json
+scenarios/*/index.json
+scenarios/_index.json
+scenarios/_registry.json
+*.log
+*_log.txt

@@ -42,17 +42,27 @@ COPY scenarios/ ./scenarios/
 COPY openride_control/ ./openride_control/
 COPY openride/ ./openride/
 
-# Real-address catalogue used by scenario generation. Kept as a mount point so a
-# deployment can supply its own without rebuilding.
-VOLUME ["/data/openroad_locations", "/data/output"]
+# The real-address catalogue (2.2 MB). This is COPIED, not mounted: the catalog
+# is built at module import time, so an image without it cannot even import the
+# scenario package. Point OPENRIDE_LOCATIONS_DIR at a mount to override it.
+COPY data/ ./data/
 
-# Fail fast and loudly if the engine is not the pinned fork: the published
-# orsim 1.2.1 imports cleanly but has no `orsim.runtime`, so without this the
-# first failure would be a confusing ImportError deep inside a run.
+VOLUME ["/data/output"]
+
+# Fail fast and loudly on the wrong engine. orsim 1.2.1 — which is what a bare
+# `pip install orsim` used to get — imports cleanly but has no `orsim.runtime`,
+# so without this the first failure would be a confusing ImportError deep inside
+# a run. 1.3.0 released that API, and requirements.txt pins it.
 RUN python -c "import orsim.runtime as r; \
     assert hasattr(r, 'AgentSource') and hasattr(r, 'ORSimRuntime'), \
-    'orsim.runtime is missing — you have published orsim, not the pinned fork'; \
-    print('orsim.runtime OK')"
+    'orsim.runtime is missing — this is orsim < 1.3.0'; \
+    import orsim; print('orsim', orsim.__version__, 'runtime OK')"
+
+# The scenario package builds facility tables at import time, so this proves the
+# location data actually landed in the image rather than failing at first run.
+RUN python -c "import apps.container_logistics.scenario; \
+    from apps.container_logistics.datagen.catalog import default_locations_csv; \
+    print('locations:', default_locations_csv())"
 
 # Default role: the Celery agent host. Overridden per service in compose.
 CMD ["celery", "-A", "apps.celery_worker", "worker", "--pool", "eventlet", "--concurrency", "64", "--loglevel", "WARNING"]

@@ -7,14 +7,46 @@ command, domain) so the CLI reads exactly the same data the dashboard does.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
-WORKSPACE_ROOT = Path(os.environ.get("OPENRIDE_WORKSPACE_ROOT", "/home/user"))
+# The repo this file lives in: openride/config.py -> openride/ -> <repo>.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# The simulation + control code runs under the apps venv (has orsim/eventlet/pymongo/etc.).
-APPS_PYTHON = Path(
-    os.environ.get("OPENRIDE_PYTHON", str(WORKSPACE_ROOT / "openride_apps" / "venv" / "bin" / "python"))
-)
+# Defaults to the repo's PARENT rather than a literal "/home/user", so a checkout
+# somewhere else still resolves. Still overridable for a split deployment.
+WORKSPACE_ROOT = Path(os.environ.get("OPENRIDE_WORKSPACE_ROOT", str(_REPO_ROOT.parent)))
+
+
+def _default_apps_python() -> str:
+    """Interpreter that can import the simulation packages.
+
+    Historically this was always ``<workspace>/openride_apps/venv/bin/python``:
+    the CLI ran under a *separate* interpreter (~/pyjupenv, for rich/questionary)
+    and shelled out to the apps venv for anything importing orsim. That default
+    is a literal absolute path, so on any machine without that exact tree the CLI
+    started fine and then died mid-command — `scenario compile` failed with
+    "No such file or directory: /home/user/openride_apps/venv/bin/python".
+
+    It survived a fresh-clone test, because a clone still runs on a box where
+    that path happens to exist. Only a container, with no /home/user at all,
+    exposed it.
+
+    Now that the CLI's own dependencies are declared in requirements.txt, one
+    environment can serve both roles, so ``sys.executable`` is the right answer
+    whenever it can import the apps. The venv is still preferred when it exists,
+    which keeps the development box behaving exactly as before.
+    """
+    override = os.environ.get("OPENRIDE_PYTHON")
+    if override:
+        return override
+    venv_python = WORKSPACE_ROOT / "openride_apps" / "venv" / "bin" / "python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return sys.executable
+
+
+APPS_PYTHON = Path(_default_apps_python())
 
 # Mongo — same db/collections the analytics frontend reads (see analytics/lib/mongodb.ts
 # and lib/kpiMetrics.ts / app/api/breakdown/route.ts).
