@@ -29,7 +29,19 @@ from typing import Optional
 
 
 def _default_dir() -> Path:
-    return Path(__file__).resolve().parents[4] / "openroad_locations"
+    """Delegate to the ONE resolver, in catalog.py.
+
+    This used to carry its own copy of `parents[4] / "openroad_locations"`, which
+    meant it ignored OPENRIDE_LOCATIONS_DIR and never saw the in-repo copy. The
+    failure was silent, which is what made it dangerous: a clone (or the Docker
+    image, where parents[4] is `/openroad_locations` while the data sits at
+    `/app/data/openroad_locations`) still compiled scenarios and exited 0, but
+    every facility came out with no footprint polygon -- 9 footprints on this box
+    versus 0 in a clone, from the same spec.
+    """
+    from .catalog import _openroad_locations_dir
+
+    return _openroad_locations_dir()
 
 
 # Nearest-parcel fallback only accepts a match within this centroid/edge distance

@@ -70,7 +70,9 @@ DATAPLANE_TIMEOUT_S = float(os.environ.get("DATAPLANE_TIMEOUT_S", "2.0"))
 DEFAULT_DOMAIN = os.environ.get("ORSIM_DOMAIN", "container_logistics")
 
 # Per-run reports land next to the sim's own output.
-REPORT_BASE = WORKSPACE_ROOT / "openride_apps" / "apps" / "output"
+# Anchored to THIS repo, not rebuilt as `<workspace>/openride_apps/...`, which
+# only resolves when the checkout happens to be named openride_apps.
+REPORT_BASE = _REPO_ROOT / "apps" / "output"
 
 # Assignment solver strategies (mirror SOLVER_REGISTRY / the dashboard select).
 SOLVERS = ["GreedyNearest", "RandomAssignment"]

@@ -18,7 +18,11 @@ import pytest
 
 from apps.dataplane.tools import preserve_surviving_runs as tool
 
-VENV_PYTHON = str(Path(__file__).resolve().parents[3] / "venv" / "bin" / "python")
+# `sys.executable`, not a hardcoded venv path: this test runs under whatever
+# interpreter collected it. The old line also said `Path` while the module only
+# imports `pathlib`, so it raised NameError at import and all 18 tests here had
+# never once run.
+VENV_PYTHON = sys.executable
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS kpi_events (
