@@ -18,6 +18,7 @@ What this deliberately removes / avoids
 from __future__ import annotations
 
 import csv
+import os
 import random
 from pathlib import Path
 from typing import Iterable, Optional
@@ -31,6 +32,29 @@ _FACILITY_SAMPLE_SEED = 20260617
 
 
 def _openroad_locations_dir() -> Path:
+    """Directory holding the real address book and the region/land masks.
+
+    Resolution order, most explicit first:
+
+    1. ``OPENRIDE_LOCATIONS_DIR`` — operator override, for a deployment that
+       mounts the data somewhere else.
+    2. ``<repo>/data/openroad_locations`` — the committed copy.
+    3. The legacy sibling ``<workspace>/openroad_locations``, kept so an existing
+       checkout that holds the data outside the repo keeps working unchanged.
+
+    Step 2 is why a fresh clone is importable at all. This function used to
+    resolve *only* to the sibling, which no packaging artifact provided, and the
+    catalog is built at module import time (``scenario_config`` builds facility
+    tables as module-level constants) — so on any machine without that folder,
+    ``import apps.container_logistics.scenario`` raised FileNotFoundError during
+    collection. It took out 38 of 46 test modules on a second-machine trial.
+    """
+    env = os.environ.get("OPENRIDE_LOCATIONS_DIR")
+    if env:
+        return Path(env)
+    in_repo = Path(__file__).resolve().parents[3] / "data" / "openroad_locations"
+    if in_repo.is_dir():
+        return in_repo
     return Path(__file__).resolve().parents[4] / "openroad_locations"
 
 

@@ -104,7 +104,7 @@ def test_tied_awards_are_pythonhashseed_independent():
 
     script = (
         "import random, json, sys;"
-        "sys.path.insert(0, '/home/user/openride_apps');"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r});"
         "from tests.test_assignment_pooled_determinism import _tied_fleet;"
         "from tests.test_assignment_cooperation import _coop;"
         "from tests.test_assignment_pooled import _app, _ids;"
@@ -400,7 +400,7 @@ def test_non_spatial_tied_awards_are_pythonhashseed_independent():
 
     script = (
         "import random, json, sys;"
-        "sys.path.insert(0, '/home/user/openride_apps');"
+        f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1])!r});"
         "from tests.test_assignment_pooled_determinism import _tied_fleet, _non_spatial_app;"
         "from tests.test_assignment_cooperation import _coop;"
         "from tests.test_assignment_pooled import _ids;"

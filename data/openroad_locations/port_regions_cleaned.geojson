@@ -1,0 +1,3222 @@
+{
+  "type": "FeatureCollection",
+  "name": "port_regions",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "element": "relation",
+        "id": "15401088",
+        "access": null,
+        "alt_name": null,
+        "industrial": "port",
+        "landuse": "industrial",
+        "name": "Pasir Panjang Container Terminal",
+        "name:ms": "Terminal Kontena Pasir Panjang",
+        "name:ta": null,
+        "name:zh": "巴西班让货柜码头",
+        "natural": null,
+        "operator": null,
+        "place": null,
+        "ref:LOCODE": null,
+        "website": null,
+        "wikidata": null,
+        "wikimedia_commons": null,
+        "wikipedia": null,
+        "name:en": null,
+        "shop": null,
+        "name:ko": null,
+        "name:th": null,
+        "tourism": null,
+        "fixme:zh": null,
+        "short_name": null,
+        "addr:city": null,
+        "addr:housenumber": null,
+        "addr:postcode": null,
+        "addr:street": null,
+        "building": null,
+        "building:levels": null,
+        "check_date": null,
+        "opening_hours": null,
+        "start_date": null,
+        "wheelchair": null,
+        "addr:country": null,
+        "height": null,
+        "disused:school": null,
+        "old_name": null,
+        "old_name:zh": null,
+        "cargo": "container",
+        "surface": null,
+        "man_made": null,
+        "source": null,
+        "addr:housename": null,
+        "leisure": null,
+        "layer": null,
+        "location": null,
+        "barrier": null,
+        "air_conditioning": null,
+        "toilets:wheelchair": null,
+        "not:name:zh": null,
+        "smoking": null,
+        "amenity": null,
+        "email": null,
+        "phone": null,
+        "residential": null,
+        "description": null,
+        "image": null,
+        "designation": null,
+        "name:zh-Hans": null,
+        "name:zh-Hant": null,
+        "level": null,
+        "year": null,
+        "plant:method": null,
+        "plant:output:electricity": null,
+        "plant:source": null,
+        "plant:type": null,
+        "power": null,
+        "emergency": null,
+        "healthcare": null,
+        "healthcare:speciality": null,
+        "operator:type": null,
+        "addr:suburb": null,
+        "branch": null,
+        "brand": null,
+        "brand:wikidata": null,
+        "brand:wikipedia": null,
+        "addr:place": null,
+        "developer": null,
+        "facebook": null,
+        "is_in:country": null,
+        "note": null,
+        "restricted": null,
+        "old_name:en": null,
+        "ref": null,
+        "plant:output:cold_water": null,
+        "plant:output:steam": null,
+        "full_name": null,
+        "studio": null,
+        "operator:wikidata": null,
+        "operator:wikipedia": null,
+        "office": null,
+        "internet_access": null,
+        "internet_access:fee": null,
+        "stars": null,
+        "year_of_construction": null,
+        "source:name": null,
+        "addr:state": null,
+        "golf": null,
+        "bus": null,
+        "cuisine": null,
+        "diet:halal": null,
+        "diet:vegetarian": null,
+        "outdoor_seating": null,
+        "payment:cash": null,
+        "payment:credit_cards": null,
+        "payment:debit_cards": null,
+        "toilets": null,
+        "commercial": null,
+        "disused:power": null,
+        "addr:province": null,
+        "fax": null,
+        "depot": null,
+        "wholesale": null,
+        "official_name": null,
+        "owner": null,
+        "plant:storage": null,
+        "voltage": null,
+        "addr:subdistrict": null,
+        "fixme": null,
+        "compressed_air": null,
+        "plant:output:hot_water": null,
+        "fenced": null,
+        "operator:en": null,
+        "contact:facebook": null,
+        "contact:instagram": null,
+        "building:colour": null,
+        "building:material": null,
+        "roof:colour": null,
+        "roof:material": null,
+        "name:ja": null,
+        "resort": null,
+        "type": "multipolygon",
+        "end_date": null,
+        "bench": null,
+        "bin": null,
+        "building:part": null,
+        "highway": null,
+        "lit": null,
+        "mapillary": null,
+        "public_transport": null,
+        "route_ref": null,
+        "shelter": null,
+        "tactile_paving": null,
+        "stroller": null,
+        "building:levels:underground": null,
+        "contact:phone": null,
+        "brand:en": null,
+        "brand:zh": null,
+        "brand:zh-Hans": null,
+        "drive_through": null,
+        "takeaway": null,
+        "roof:shape": null,
+        "old_name:1983-1995": null,
+        "old_name:1995-2011": null,
+        "foot": null,
+        "indoor_seating": null,
+        "wheelchair:description": null,
+        "roof:levels": null,
+        "addr:neighbourhood": null,
+        "second_hand": null,
+        "contact:whatsapp": null,
+        "bar": null,
+        "capacity": null,
+        "delivery": null,
+        "diet:healthy": null,
+        "diet:organic": null,
+        "diet:vegan": null,
+        "opening_hours:kitchen": null,
+        "organic": null,
+        "payment:paynow": null,
+        "building:use": null,
+        "roof:orientation": null,
+        "fuel:diesel": null,
+        "fuel:octane_92": null,
+        "fuel:octane_95": null,
+        "fuel:octane_98": null,
+        "self_service": null,
+        "parking": null,
+        "construction": null,
+        "building:min_level": null,
+        "min_height": null,
+        "postal_code": null,
+        "damage:date": null,
+        "damage:type": null,
+        "abandoned:operator": null,
+        "note:operator": null,
+        "int_name": null,
+        "architect": null,
+        "service:bicycle:repair": null,
+        "service:bicycle:retail": null,
+        "service:vehicle:new_car_sales": null,
+        "guest_house": null,
+        "payment:coins": null,
+        "payment:mastercard": null,
+        "payment:visa": null,
+        "payment:visa_debit": null,
+        "rooms": null,
+        "building_1": null,
+        "craft": null,
+        "payment:nets": null,
+        "reservation": null,
+        "diet:local": null,
+        "diet:meat": null,
+        "toilets:level": null,
+        "toilets:panoramax": null,
+        "building:levels:roof": null,
+        "contact:email": null,
+        "source_1": null,
+        "cooling:method": null,
+        "atm": null,
+        "disused:shop": null,
+        "brewery": null,
+        "payment:jcb": null,
+        "pet": null,
+        "survey:date": null,
+        "fruit": null,
+        "was:name": null,
+        "covered": null,
+        "fee": null,
+        "substation": null,
+        "building:height": null,
+        "name:nan": null,
+        "name:nan-Hant": null,
+        "name:nan-Latn-pehoeji": null,
+        "name:nan-Latn-tailo": null,
+        "roof:angle": null,
+        "roof:height": null,
+        "payment:apple_pay": null,
+        "payment:google_pay": null,
+        "religion": null,
+        "source:geometry": null,
+        "baby_feeding": null,
+        "addr:block": null,
+        "frequency": null,
+        "gas_insulated": null,
+        "date": null,
+        "park_ride": null,
+        "supervised": null,
+        "opening_date": null,
+        "colour": null,
+        "indoor": null,
+        "addr:floor": null,
+        "addr:unit": null,
+        "telecom": null,
+        "payment:contactless": null,
+        "aeroway": null,
+        "created_by": null,
+        "maxheight": null,
+        "payment:Cashcard": null,
+        "entrance": null,
+        "maxstay": null,
+        "note:name:zh": null,
+        "capacity:car_sharing": null,
+        "capacity:disabled": null,
+        "parking_space": null,
+        "orientation": null,
+        "hgv": null,
+        "motorcar": null,
+        "charge": null,
+        "amenity_1": null,
+        "name:pl": null,
+        "capacity:motorcar": null,
+        "capacity:motorcycle": null,
+        "fee:conditional": null,
+        "payment:cards": null,
+        "payment:electronic_purses": null,
+        "capacity:hgv": null,
+        "smoothness": null,
+        "check_date:fee": null,
+        "tunnel": null,
+        "area:highway": null,
+        "ele": null,
+        "roof:level": null,
+        "capacity:charging": null,
+        "parking:fee": null,
+        "building:level": null,
+        "building:level:ref": null,
+        "level:ref": null,
+        "goods": null,
+        "psv": null,
+        "vehicle": null,
+        "accessible": null,
+        "parking:orientation": null,
+        "long_name": null,
+        "ramp": null,
+        "bicycle_parking": null
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.7865584,
+              1.2727904
+            ],
+            [
+              103.7768424,
+              1.2786755
+            ],
+            [
+              103.7706511,
+              1.2682249
+            ],
+            [
+              103.750146,
+              1.280484
+            ],
+            [
+              103.753021,
+              1.2853235
+            ],
+            [
+              103.7564385,
+              1.2858114
+            ],
+            [
+              103.7690958,
+              1.2783512
+            ],
+            [
+              103.7722675,
+              1.2836525
+            ],
+            [
+              103.7606878,
+              1.2905786
+            ],
+            [
+              103.7608335,
+              1.2908232
+            ],
+            [
+              103.7601473,
+              1.2912318
+            ],
+            [
+              103.7602464,
+              1.2913981
+            ],
+            [
+              103.7609368,
+              1.2909869
+            ],
+            [
+              103.7610938,
+              1.2912505
+            ],
+            [
+              103.7614434,
+              1.2910441
+            ],
+            [
+              103.7621342,
+              1.2906424
+            ],
+            [
+              103.7623529,
+              1.2906887
+            ],
+            [
+              103.7635546,
+              1.2926592
+            ],
+            [
+              103.7732647,
+              1.2867942
+            ],
+            [
+              103.7737459,
+              1.2864058
+            ],
+            [
+              103.7740984,
+              1.2857549
+            ],
+            [
+              103.774276,
+              1.2855568
+            ],
+            [
+              103.7775869,
+              1.2835458
+            ],
+            [
+              103.7774328,
+              1.2833124
+            ],
+            [
+              103.7771598,
+              1.2833477
+            ],
+            [
+              103.7765627,
+              1.2834418
+            ],
+            [
+              103.7764708,
+              1.2830788
+            ],
+            [
+              103.7779493,
+              1.2822861
+            ],
+            [
+              103.7780403,
+              1.2822984
+            ],
+            [
+              103.7781347,
+              1.2823247
+            ],
+            [
+              103.7782198,
+              1.2823603
+            ],
+            [
+              103.7783857,
+              1.2824212
+            ],
+            [
+              103.7786499,
+              1.2826967
+            ],
+            [
+              103.7788613,
+              1.2827048
+            ],
+            [
+              103.7806292,
+              1.281698
+            ],
+            [
+              103.7813491,
+              1.2809787
+            ],
+            [
+              103.7832759,
+              1.2786933
+            ],
+            [
+              103.7849622,
+              1.2777139
+            ],
+            [
+              103.7858196,
+              1.2773733
+            ],
+            [
+              103.7881655,
+              1.2768268
+            ],
+            [
+              103.7884735,
+              1.2767551
+            ],
+            [
+              103.7892791,
+              1.2763606
+            ],
+            [
+              103.7893289,
+              1.2761957
+            ],
+            [
+              103.7892874,
+              1.2760319
+            ],
+            [
+              103.7889577,
+              1.2754688
+            ],
+            [
+              103.7900085,
+              1.2748753
+            ],
+            [
+              103.7904808,
+              1.2745851
+            ],
+            [
+              103.7907555,
+              1.2750954
+            ],
+            [
+              103.789618,
+              1.2757606
+            ],
+            [
+              103.7897269,
+              1.2759487
+            ],
+            [
+              103.7898507,
+              1.2759987
+            ],
+            [
+              103.7911416,
+              1.2752897
+            ],
+            [
+              103.7925297,
+              1.2744101
+            ],
+            [
+              103.7928081,
+              1.2742336
+            ],
+            [
+              103.7930526,
+              1.2740787
+            ],
+            [
+              103.7932311,
+              1.2739657
+            ],
+            [
+              103.7935723,
+              1.2737494
+            ],
+            [
+              103.7935922,
+              1.2737367
+            ],
+            [
+              103.7940055,
+              1.2734749
+            ],
+            [
+              103.7942919,
+              1.2732935
+            ],
+            [
+              103.7938332,
+              1.2725577
+            ],
+            [
+              103.7938895,
+              1.2725221
+            ],
+            [
+              103.7949898,
+              1.2718262
+            ],
+            [
+              103.7953249,
+              1.2716278
+            ],
+            [
+              103.795236,
+              1.2715192
+            ],
+            [
+              103.7854677,
+              1.2550021
+            ],
+            [
+              103.7785256,
+              1.2591831
+            ],
+            [
+              103.7865584,
+              1.2727904
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "element": "relation",
+        "id": "18007975",
+        "access": null,
+        "alt_name": null,
+        "industrial": "port",
+        "landuse": "industrial",
+        "name": "Tanjong Pagar Port Terminal",
+        "name:ms": null,
+        "name:ta": null,
+        "name:zh": "丹戒巴葛港口",
+        "natural": null,
+        "operator": null,
+        "place": null,
+        "ref:LOCODE": null,
+        "website": null,
+        "wikidata": null,
+        "wikimedia_commons": null,
+        "wikipedia": null,
+        "name:en": null,
+        "shop": null,
+        "name:ko": null,
+        "name:th": null,
+        "tourism": null,
+        "fixme:zh": null,
+        "short_name": null,
+        "addr:city": null,
+        "addr:housenumber": null,
+        "addr:postcode": null,
+        "addr:street": null,
+        "building": null,
+        "building:levels": null,
+        "check_date": null,
+        "opening_hours": null,
+        "start_date": null,
+        "wheelchair": null,
+        "addr:country": null,
+        "height": null,
+        "disused:school": null,
+        "old_name": null,
+        "old_name:zh": null,
+        "cargo": null,
+        "surface": null,
+        "man_made": null,
+        "source": null,
+        "addr:housename": null,
+        "leisure": null,
+        "layer": null,
+        "location": null,
+        "barrier": null,
+        "air_conditioning": null,
+        "toilets:wheelchair": null,
+        "not:name:zh": null,
+        "smoking": null,
+        "amenity": null,
+        "email": null,
+        "phone": null,
+        "residential": null,
+        "description": null,
+        "image": null,
+        "designation": null,
+        "name:zh-Hans": null,
+        "name:zh-Hant": null,
+        "level": null,
+        "year": null,
+        "plant:method": null,
+        "plant:output:electricity": null,
+        "plant:source": null,
+        "plant:type": null,
+        "power": null,
+        "emergency": null,
+        "healthcare": null,
+        "healthcare:speciality": null,
+        "operator:type": null,
+        "addr:suburb": null,
+        "branch": null,
+        "brand": null,
+        "brand:wikidata": null,
+        "brand:wikipedia": null,
+        "addr:place": null,
+        "developer": null,
+        "facebook": null,
+        "is_in:country": null,
+        "note": null,
+        "restricted": null,
+        "old_name:en": null,
+        "ref": null,
+        "plant:output:cold_water": null,
+        "plant:output:steam": null,
+        "full_name": null,
+        "studio": null,
+        "operator:wikidata": null,
+        "operator:wikipedia": null,
+        "office": null,
+        "internet_access": null,
+        "internet_access:fee": null,
+        "stars": null,
+        "year_of_construction": null,
+        "source:name": null,
+        "addr:state": null,
+        "golf": null,
+        "bus": null,
+        "cuisine": null,
+        "diet:halal": null,
+        "diet:vegetarian": null,
+        "outdoor_seating": null,
+        "payment:cash": null,
+        "payment:credit_cards": null,
+        "payment:debit_cards": null,
+        "toilets": null,
+        "commercial": null,
+        "disused:power": null,
+        "addr:province": null,
+        "fax": null,
+        "depot": null,
+        "wholesale": null,
+        "official_name": null,
+        "owner": null,
+        "plant:storage": null,
+        "voltage": null,
+        "addr:subdistrict": null,
+        "fixme": null,
+        "compressed_air": null,
+        "plant:output:hot_water": null,
+        "fenced": null,
+        "operator:en": null,
+        "contact:facebook": null,
+        "contact:instagram": null,
+        "building:colour": null,
+        "building:material": null,
+        "roof:colour": null,
+        "roof:material": null,
+        "name:ja": null,
+        "resort": null,
+        "type": "multipolygon",
+        "end_date": null,
+        "bench": null,
+        "bin": null,
+        "building:part": null,
+        "highway": null,
+        "lit": null,
+        "mapillary": null,
+        "public_transport": null,
+        "route_ref": null,
+        "shelter": null,
+        "tactile_paving": null,
+        "stroller": null,
+        "building:levels:underground": null,
+        "contact:phone": null,
+        "brand:en": null,
+        "brand:zh": null,
+        "brand:zh-Hans": null,
+        "drive_through": null,
+        "takeaway": null,
+        "roof:shape": null,
+        "old_name:1983-1995": null,
+        "old_name:1995-2011": null,
+        "foot": null,
+        "indoor_seating": null,
+        "wheelchair:description": null,
+        "roof:levels": null,
+        "addr:neighbourhood": null,
+        "second_hand": null,
+        "contact:whatsapp": null,
+        "bar": null,
+        "capacity": null,
+        "delivery": null,
+        "diet:healthy": null,
+        "diet:organic": null,
+        "diet:vegan": null,
+        "opening_hours:kitchen": null,
+        "organic": null,
+        "payment:paynow": null,
+        "building:use": null,
+        "roof:orientation": null,
+        "fuel:diesel": null,
+        "fuel:octane_92": null,
+        "fuel:octane_95": null,
+        "fuel:octane_98": null,
+        "self_service": null,
+        "parking": null,
+        "construction": null,
+        "building:min_level": null,
+        "min_height": null,
+        "postal_code": null,
+        "damage:date": null,
+        "damage:type": null,
+        "abandoned:operator": null,
+        "note:operator": null,
+        "int_name": null,
+        "architect": null,
+        "service:bicycle:repair": null,
+        "service:bicycle:retail": null,
+        "service:vehicle:new_car_sales": null,
+        "guest_house": null,
+        "payment:coins": null,
+        "payment:mastercard": null,
+        "payment:visa": null,
+        "payment:visa_debit": null,
+        "rooms": null,
+        "building_1": null,
+        "craft": null,
+        "payment:nets": null,
+        "reservation": null,
+        "diet:local": null,
+        "diet:meat": null,
+        "toilets:level": null,
+        "toilets:panoramax": null,
+        "building:levels:roof": null,
+        "contact:email": null,
+        "source_1": null,
+        "cooling:method": null,
+        "atm": null,
+        "disused:shop": null,
+        "brewery": null,
+        "payment:jcb": null,
+        "pet": null,
+        "survey:date": null,
+        "fruit": null,
+        "was:name": null,
+        "covered": null,
+        "fee": null,
+        "substation": null,
+        "building:height": null,
+        "name:nan": null,
+        "name:nan-Hant": null,
+        "name:nan-Latn-pehoeji": null,
+        "name:nan-Latn-tailo": null,
+        "roof:angle": null,
+        "roof:height": null,
+        "payment:apple_pay": null,
+        "payment:google_pay": null,
+        "religion": null,
+        "source:geometry": null,
+        "baby_feeding": null,
+        "addr:block": null,
+        "frequency": null,
+        "gas_insulated": null,
+        "date": null,
+        "park_ride": null,
+        "supervised": null,
+        "opening_date": null,
+        "colour": null,
+        "indoor": null,
+        "addr:floor": null,
+        "addr:unit": null,
+        "telecom": null,
+        "payment:contactless": null,
+        "aeroway": null,
+        "created_by": null,
+        "maxheight": null,
+        "payment:Cashcard": null,
+        "entrance": null,
+        "maxstay": null,
+        "note:name:zh": null,
+        "capacity:car_sharing": null,
+        "capacity:disabled": null,
+        "parking_space": null,
+        "orientation": null,
+        "hgv": null,
+        "motorcar": null,
+        "charge": null,
+        "amenity_1": null,
+        "name:pl": null,
+        "capacity:motorcar": null,
+        "capacity:motorcycle": null,
+        "fee:conditional": null,
+        "payment:cards": null,
+        "payment:electronic_purses": null,
+        "capacity:hgv": null,
+        "smoothness": null,
+        "check_date:fee": null,
+        "tunnel": null,
+        "area:highway": null,
+        "ele": null,
+        "roof:level": null,
+        "capacity:charging": null,
+        "parking:fee": null,
+        "building:level": null,
+        "building:level:ref": null,
+        "level:ref": null,
+        "goods": null,
+        "psv": null,
+        "vehicle": null,
+        "accessible": null,
+        "parking:orientation": null,
+        "long_name": null,
+        "ramp": null,
+        "bicycle_parking": null
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.8454518,
+              1.2724447
+            ],
+            [
+              103.8456875,
+              1.2724081
+            ],
+            [
+              103.8459424,
+              1.2723537
+            ],
+            [
+              103.8473183,
+              1.2720883
+            ],
+            [
+              103.8478622,
+              1.2721363
+            ],
+            [
+              103.8480774,
+              1.2721553
+            ],
+            [
+              103.8484395,
+              1.2722733
+            ],
+            [
+              103.8496089,
+              1.2728981
+            ],
+            [
+              103.8500113,
+              1.2731099
+            ],
+            [
+              103.8504375,
+              1.2732818
+            ],
+            [
+              103.8508956,
+              1.2734149
+            ],
+            [
+              103.8510299,
+              1.2733608
+            ],
+            [
+              103.8511517,
+              1.2733187
+            ],
+            [
+              103.8512766,
+              1.2732906
+            ],
+            [
+              103.8513812,
+              1.2732781
+            ],
+            [
+              103.8515886,
+              1.2732735
+            ],
+            [
+              103.8515805,
+              1.273044
+            ],
+            [
+              103.8515837,
+              1.2728896
+            ],
+            [
+              103.8515826,
+              1.268933
+            ],
+            [
+              103.8515877,
+              1.2635682
+            ],
+            [
+              103.8512267,
+              1.2635644
+            ],
+            [
+              103.850677,
+              1.2630527
+            ],
+            [
+              103.8520924,
+              1.261483
+            ],
+            [
+              103.8512672,
+              1.2607513
+            ],
+            [
+              103.8512007,
+              1.2607438
+            ],
+            [
+              103.8457078,
+              1.2668381
+            ],
+            [
+              103.8461153,
+              1.2672226
+            ],
+            [
+              103.8425466,
+              1.2708494
+            ],
+            [
+              103.8438368,
+              1.2722599
+            ],
+            [
+              103.8440782,
+              1.2724288
+            ],
+            [
+              103.8442713,
+              1.2724503
+            ],
+            [
+              103.8449634,
+              1.2724825
+            ],
+            [
+              103.8454518,
+              1.2724447
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "element": "way",
+        "id": "75483216",
+        "access": null,
+        "alt_name": null,
+        "industrial": "port",
+        "landuse": "industrial",
+        "name": "Keppel Terminal",
+        "name:ms": "Terminal Keppel",
+        "name:ta": null,
+        "name:zh": "吉宝港口",
+        "natural": null,
+        "operator": null,
+        "place": null,
+        "ref:LOCODE": "SGKEP",
+        "website": null,
+        "wikidata": null,
+        "wikimedia_commons": null,
+        "wikipedia": null,
+        "name:en": null,
+        "shop": null,
+        "name:ko": null,
+        "name:th": null,
+        "tourism": null,
+        "fixme:zh": null,
+        "short_name": null,
+        "addr:city": null,
+        "addr:housenumber": null,
+        "addr:postcode": null,
+        "addr:street": null,
+        "building": null,
+        "building:levels": null,
+        "check_date": null,
+        "opening_hours": null,
+        "start_date": null,
+        "wheelchair": null,
+        "addr:country": null,
+        "height": null,
+        "disused:school": null,
+        "old_name": null,
+        "old_name:zh": null,
+        "cargo": "container",
+        "surface": "concrete",
+        "man_made": null,
+        "source": null,
+        "addr:housename": null,
+        "leisure": null,
+        "layer": null,
+        "location": null,
+        "barrier": null,
+        "air_conditioning": null,
+        "toilets:wheelchair": null,
+        "not:name:zh": null,
+        "smoking": null,
+        "amenity": null,
+        "email": null,
+        "phone": null,
+        "residential": null,
+        "description": null,
+        "image": null,
+        "designation": null,
+        "name:zh-Hans": null,
+        "name:zh-Hant": null,
+        "level": null,
+        "year": null,
+        "plant:method": null,
+        "plant:output:electricity": null,
+        "plant:source": null,
+        "plant:type": null,
+        "power": null,
+        "emergency": null,
+        "healthcare": null,
+        "healthcare:speciality": null,
+        "operator:type": null,
+        "addr:suburb": null,
+        "branch": null,
+        "brand": null,
+        "brand:wikidata": null,
+        "brand:wikipedia": null,
+        "addr:place": null,
+        "developer": null,
+        "facebook": null,
+        "is_in:country": null,
+        "note": null,
+        "restricted": null,
+        "old_name:en": null,
+        "ref": null,
+        "plant:output:cold_water": null,
+        "plant:output:steam": null,
+        "full_name": null,
+        "studio": null,
+        "operator:wikidata": null,
+        "operator:wikipedia": null,
+        "office": null,
+        "internet_access": null,
+        "internet_access:fee": null,
+        "stars": null,
+        "year_of_construction": null,
+        "source:name": null,
+        "addr:state": null,
+        "golf": null,
+        "bus": null,
+        "cuisine": null,
+        "diet:halal": null,
+        "diet:vegetarian": null,
+        "outdoor_seating": null,
+        "payment:cash": null,
+        "payment:credit_cards": null,
+        "payment:debit_cards": null,
+        "toilets": null,
+        "commercial": null,
+        "disused:power": null,
+        "addr:province": null,
+        "fax": null,
+        "depot": null,
+        "wholesale": null,
+        "official_name": null,
+        "owner": null,
+        "plant:storage": null,
+        "voltage": null,
+        "addr:subdistrict": null,
+        "fixme": null,
+        "compressed_air": null,
+        "plant:output:hot_water": null,
+        "fenced": null,
+        "operator:en": null,
+        "contact:facebook": null,
+        "contact:instagram": null,
+        "building:colour": null,
+        "building:material": null,
+        "roof:colour": null,
+        "roof:material": null,
+        "name:ja": null,
+        "resort": null,
+        "type": null,
+        "end_date": null,
+        "bench": null,
+        "bin": null,
+        "building:part": null,
+        "highway": null,
+        "lit": null,
+        "mapillary": null,
+        "public_transport": null,
+        "route_ref": null,
+        "shelter": null,
+        "tactile_paving": null,
+        "stroller": null,
+        "building:levels:underground": null,
+        "contact:phone": null,
+        "brand:en": null,
+        "brand:zh": null,
+        "brand:zh-Hans": null,
+        "drive_through": null,
+        "takeaway": null,
+        "roof:shape": null,
+        "old_name:1983-1995": null,
+        "old_name:1995-2011": null,
+        "foot": null,
+        "indoor_seating": null,
+        "wheelchair:description": null,
+        "roof:levels": null,
+        "addr:neighbourhood": null,
+        "second_hand": null,
+        "contact:whatsapp": null,
+        "bar": null,
+        "capacity": null,
+        "delivery": null,
+        "diet:healthy": null,
+        "diet:organic": null,
+        "diet:vegan": null,
+        "opening_hours:kitchen": null,
+        "organic": null,
+        "payment:paynow": null,
+        "building:use": null,
+        "roof:orientation": null,
+        "fuel:diesel": null,
+        "fuel:octane_92": null,
+        "fuel:octane_95": null,
+        "fuel:octane_98": null,
+        "self_service": null,
+        "parking": null,
+        "construction": null,
+        "building:min_level": null,
+        "min_height": null,
+        "postal_code": null,
+        "damage:date": null,
+        "damage:type": null,
+        "abandoned:operator": null,
+        "note:operator": null,
+        "int_name": null,
+        "architect": null,
+        "service:bicycle:repair": null,
+        "service:bicycle:retail": null,
+        "service:vehicle:new_car_sales": null,
+        "guest_house": null,
+        "payment:coins": null,
+        "payment:mastercard": null,
+        "payment:visa": null,
+        "payment:visa_debit": null,
+        "rooms": null,
+        "building_1": null,
+        "craft": null,
+        "payment:nets": null,
+        "reservation": null,
+        "diet:local": null,
+        "diet:meat": null,
+        "toilets:level": null,
+        "toilets:panoramax": null,
+        "building:levels:roof": null,
+        "contact:email": null,
+        "source_1": null,
+        "cooling:method": null,
+        "atm": null,
+        "disused:shop": null,
+        "brewery": null,
+        "payment:jcb": null,
+        "pet": null,
+        "survey:date": null,
+        "fruit": null,
+        "was:name": null,
+        "covered": null,
+        "fee": null,
+        "substation": null,
+        "building:height": null,
+        "name:nan": null,
+        "name:nan-Hant": null,
+        "name:nan-Latn-pehoeji": null,
+        "name:nan-Latn-tailo": null,
+        "roof:angle": null,
+        "roof:height": null,
+        "payment:apple_pay": null,
+        "payment:google_pay": null,
+        "religion": null,
+        "source:geometry": null,
+        "baby_feeding": null,
+        "addr:block": null,
+        "frequency": null,
+        "gas_insulated": null,
+        "date": null,
+        "park_ride": null,
+        "supervised": null,
+        "opening_date": null,
+        "colour": null,
+        "indoor": null,
+        "addr:floor": null,
+        "addr:unit": null,
+        "telecom": null,
+        "payment:contactless": null,
+        "aeroway": null,
+        "created_by": null,
+        "maxheight": null,
+        "payment:Cashcard": null,
+        "entrance": null,
+        "maxstay": null,
+        "note:name:zh": null,
+        "capacity:car_sharing": null,
+        "capacity:disabled": null,
+        "parking_space": null,
+        "orientation": null,
+        "hgv": null,
+        "motorcar": null,
+        "charge": null,
+        "amenity_1": null,
+        "name:pl": null,
+        "capacity:motorcar": null,
+        "capacity:motorcycle": null,
+        "fee:conditional": null,
+        "payment:cards": null,
+        "payment:electronic_purses": null,
+        "capacity:hgv": null,
+        "smoothness": null,
+        "check_date:fee": null,
+        "tunnel": null,
+        "area:highway": null,
+        "ele": null,
+        "roof:level": null,
+        "capacity:charging": null,
+        "parking:fee": null,
+        "building:level": null,
+        "building:level:ref": null,
+        "level:ref": null,
+        "goods": null,
+        "psv": null,
+        "vehicle": null,
+        "accessible": null,
+        "parking:orientation": null,
+        "long_name": null,
+        "ramp": null,
+        "bicycle_parking": null
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.839443,
+              1.2676396
+            ],
+            [
+              103.8355943,
+              1.2674991
+            ],
+            [
+              103.8321284,
+              1.2674099
+            ],
+            [
+              103.8245183,
+              1.2631104
+            ],
+            [
+              103.8243814,
+              1.2630569
+            ],
+            [
+              103.824123,
+              1.2630553
+            ],
+            [
+              103.823915,
+              1.263055
+            ],
+            [
+              103.8239747,
+              1.2633821
+            ],
+            [
+              103.8240734,
+              1.2636372
+            ],
+            [
+              103.8242813,
+              1.263892
+            ],
+            [
+              103.8245764,
+              1.2640517
+            ],
+            [
+              103.8270948,
+              1.2654771
+            ],
+            [
+              103.8266963,
+              1.2661513
+            ],
+            [
+              103.8267399,
+              1.2662145
+            ],
+            [
+              103.8268935,
+              1.2663391
+            ],
+            [
+              103.8270042,
+              1.2664289
+            ],
+            [
+              103.8272113,
+              1.2666233
+            ],
+            [
+              103.8272328,
+              1.2670094
+            ],
+            [
+              103.8273401,
+              1.2672454
+            ],
+            [
+              103.8277165,
+              1.2677063
+            ],
+            [
+              103.831139,
+              1.2697993
+            ],
+            [
+              103.8314559,
+              1.2699642
+            ],
+            [
+              103.8315452,
+              1.2700504
+            ],
+            [
+              103.8315689,
+              1.2701383
+            ],
+            [
+              103.831536,
+              1.2706333
+            ],
+            [
+              103.8316219,
+              1.2708446
+            ],
+            [
+              103.8321139,
+              1.2713016
+            ],
+            [
+              103.8328562,
+              1.271307
+            ],
+            [
+              103.8328526,
+              1.2714511
+            ],
+            [
+              103.8336959,
+              1.2714941
+            ],
+            [
+              103.8337559,
+              1.2712785
+            ],
+            [
+              103.8372964,
+              1.2714608
+            ],
+            [
+              103.8390734,
+              1.2715412
+            ],
+            [
+              103.8390822,
+              1.2723035
+            ],
+            [
+              103.8398778,
+              1.2723292
+            ],
+            [
+              103.8398873,
+              1.2720111
+            ],
+            [
+              103.8402677,
+              1.2720413
+            ],
+            [
+              103.8404845,
+              1.2721509
+            ],
+            [
+              103.8408119,
+              1.2722701
+            ],
+            [
+              103.8409309,
+              1.272266
+            ],
+            [
+              103.8410513,
+              1.2722233
+            ],
+            [
+              103.8416767,
+              1.2708807
+            ],
+            [
+              103.8417153,
+              1.2707037
+            ],
+            [
+              103.8421077,
+              1.2707092
+            ],
+            [
+              103.8424288,
+              1.2707921
+            ],
+            [
+              103.8423538,
+              1.2709335
+            ],
+            [
+              103.8424588,
+              1.2709116
+            ],
+            [
+              103.8425466,
+              1.2708494
+            ],
+            [
+              103.8461153,
+              1.2672226
+            ],
+            [
+              103.8457374,
+              1.2668448
+            ],
+            [
+              103.8442944,
+              1.2655398
+            ],
+            [
+              103.8467367,
+              1.2624697
+            ],
+            [
+              103.8467406,
+              1.2623558
+            ],
+            [
+              103.8460126,
+              1.2615762
+            ],
+            [
+              103.8459326,
+              1.2615662
+            ],
+            [
+              103.839443,
+              1.2676396
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "element": "way",
+        "id": "428878457",
+        "access": null,
+        "alt_name": null,
+        "industrial": "port",
+        "landuse": "industrial",
+        "name": "Brani Terminal",
+        "name:ms": "Terminal Brani",
+        "name:ta": null,
+        "name:zh": "布拉尼港口",
+        "natural": null,
+        "operator": null,
+        "place": null,
+        "ref:LOCODE": null,
+        "website": null,
+        "wikidata": null,
+        "wikimedia_commons": null,
+        "wikipedia": null,
+        "name:en": null,
+        "shop": null,
+        "name:ko": null,
+        "name:th": null,
+        "tourism": null,
+        "fixme:zh": null,
+        "short_name": null,
+        "addr:city": null,
+        "addr:housenumber": null,
+        "addr:postcode": null,
+        "addr:street": null,
+        "building": null,
+        "building:levels": null,
+        "check_date": null,
+        "opening_hours": null,
+        "start_date": null,
+        "wheelchair": null,
+        "addr:country": null,
+        "height": null,
+        "disused:school": null,
+        "old_name": null,
+        "old_name:zh": null,
+        "cargo": "container",
+        "surface": null,
+        "man_made": null,
+        "source": null,
+        "addr:housename": null,
+        "leisure": null,
+        "layer": null,
+        "location": null,
+        "barrier": null,
+        "air_conditioning": null,
+        "toilets:wheelchair": null,
+        "not:name:zh": null,
+        "smoking": null,
+        "amenity": null,
+        "email": null,
+        "phone": null,
+        "residential": null,
+        "description": null,
+        "image": null,
+        "designation": null,
+        "name:zh-Hans": null,
+        "name:zh-Hant": null,
+        "level": null,
+        "year": null,
+        "plant:method": null,
+        "plant:output:electricity": null,
+        "plant:source": null,
+        "plant:type": null,
+        "power": null,
+        "emergency": null,
+        "healthcare": null,
+        "healthcare:speciality": null,
+        "operator:type": null,
+        "addr:suburb": null,
+        "branch": null,
+        "brand": null,
+        "brand:wikidata": null,
+        "brand:wikipedia": null,
+        "addr:place": null,
+        "developer": null,
+        "facebook": null,
+        "is_in:country": null,
+        "note": null,
+        "restricted": null,
+        "old_name:en": null,
+        "ref": null,
+        "plant:output:cold_water": null,
+        "plant:output:steam": null,
+        "full_name": null,
+        "studio": null,
+        "operator:wikidata": null,
+        "operator:wikipedia": null,
+        "office": null,
+        "internet_access": null,
+        "internet_access:fee": null,
+        "stars": null,
+        "year_of_construction": null,
+        "source:name": null,
+        "addr:state": null,
+        "golf": null,
+        "bus": null,
+        "cuisine": null,
+        "diet:halal": null,
+        "diet:vegetarian": null,
+        "outdoor_seating": null,
+        "payment:cash": null,
+        "payment:credit_cards": null,
+        "payment:debit_cards": null,
+        "toilets": null,
+        "commercial": null,
+        "disused:power": null,
+        "addr:province": null,
+        "fax": null,
+        "depot": null,
+        "wholesale": null,
+        "official_name": null,
+        "owner": null,
+        "plant:storage": null,
+        "voltage": null,
+        "addr:subdistrict": null,
+        "fixme": null,
+        "compressed_air": null,
+        "plant:output:hot_water": null,
+        "fenced": null,
+        "operator:en": null,
+        "contact:facebook": null,
+        "contact:instagram": null,
+        "building:colour": null,
+        "building:material": null,
+        "roof:colour": null,
+        "roof:material": null,
+        "name:ja": null,
+        "resort": null,
+        "type": null,
+        "end_date": null,
+        "bench": null,
+        "bin": null,
+        "building:part": null,
+        "highway": null,
+        "lit": null,
+        "mapillary": null,
+        "public_transport": null,
+        "route_ref": null,
+        "shelter": null,
+        "tactile_paving": null,
+        "stroller": null,
+        "building:levels:underground": null,
+        "contact:phone": null,
+        "brand:en": null,
+        "brand:zh": null,
+        "brand:zh-Hans": null,
+        "drive_through": null,
+        "takeaway": null,
+        "roof:shape": null,
+        "old_name:1983-1995": null,
+        "old_name:1995-2011": null,
+        "foot": null,
+        "indoor_seating": null,
+        "wheelchair:description": null,
+        "roof:levels": null,
+        "addr:neighbourhood": null,
+        "second_hand": null,
+        "contact:whatsapp": null,
+        "bar": null,
+        "capacity": null,
+        "delivery": null,
+        "diet:healthy": null,
+        "diet:organic": null,
+        "diet:vegan": null,
+        "opening_hours:kitchen": null,
+        "organic": null,
+        "payment:paynow": null,
+        "building:use": null,
+        "roof:orientation": null,
+        "fuel:diesel": null,
+        "fuel:octane_92": null,
+        "fuel:octane_95": null,
+        "fuel:octane_98": null,
+        "self_service": null,
+        "parking": null,
+        "construction": null,
+        "building:min_level": null,
+        "min_height": null,
+        "postal_code": null,
+        "damage:date": null,
+        "damage:type": null,
+        "abandoned:operator": null,
+        "note:operator": null,
+        "int_name": null,
+        "architect": null,
+        "service:bicycle:repair": null,
+        "service:bicycle:retail": null,
+        "service:vehicle:new_car_sales": null,
+        "guest_house": null,
+        "payment:coins": null,
+        "payment:mastercard": null,
+        "payment:visa": null,
+        "payment:visa_debit": null,
+        "rooms": null,
+        "building_1": null,
+        "craft": null,
+        "payment:nets": null,
+        "reservation": null,
+        "diet:local": null,
+        "diet:meat": null,
+        "toilets:level": null,
+        "toilets:panoramax": null,
+        "building:levels:roof": null,
+        "contact:email": null,
+        "source_1": null,
+        "cooling:method": null,
+        "atm": null,
+        "disused:shop": null,
+        "brewery": null,
+        "payment:jcb": null,
+        "pet": null,
+        "survey:date": null,
+        "fruit": null,
+        "was:name": null,
+        "covered": null,
+        "fee": null,
+        "substation": null,
+        "building:height": null,
+        "name:nan": null,
+        "name:nan-Hant": null,
+        "name:nan-Latn-pehoeji": null,
+        "name:nan-Latn-tailo": null,
+        "roof:angle": null,
+        "roof:height": null,
+        "payment:apple_pay": null,
+        "payment:google_pay": null,
+        "religion": null,
+        "source:geometry": null,
+        "baby_feeding": null,
+        "addr:block": null,
+        "frequency": null,
+        "gas_insulated": null,
+        "date": null,
+        "park_ride": null,
+        "supervised": null,
+        "opening_date": null,
+        "colour": null,
+        "indoor": null,
+        "addr:floor": null,
+        "addr:unit": null,
+        "telecom": null,
+        "payment:contactless": null,
+        "aeroway": null,
+        "created_by": null,
+        "maxheight": null,
+        "payment:Cashcard": null,
+        "entrance": null,
+        "maxstay": null,
+        "note:name:zh": null,
+        "capacity:car_sharing": null,
+        "capacity:disabled": null,
+        "parking_space": null,
+        "orientation": null,
+        "hgv": null,
+        "motorcar": null,
+        "charge": null,
+        "amenity_1": null,
+        "name:pl": null,
+        "capacity:motorcar": null,
+        "capacity:motorcycle": null,
+        "fee:conditional": null,
+        "payment:cards": null,
+        "payment:electronic_purses": null,
+        "capacity:hgv": null,
+        "smoothness": null,
+        "check_date:fee": null,
+        "tunnel": null,
+        "area:highway": null,
+        "ele": null,
+        "roof:level": null,
+        "capacity:charging": null,
+        "parking:fee": null,
+        "building:level": null,
+        "building:level:ref": null,
+        "level:ref": null,
+        "goods": null,
+        "psv": null,
+        "vehicle": null,
+        "accessible": null,
+        "parking:orientation": null,
+        "long_name": null,
+        "ramp": null,
+        "bicycle_parking": null
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.8241852,
+              1.260097
+            ],
+            [
+              103.8248129,
+              1.260433
+            ],
+            [
+              103.8304659,
+              1.2636365
+            ],
+            [
+              103.8361342,
+              1.2638392
+            ],
+            [
+              103.8424912,
+              1.2578976
+            ],
+            [
+              103.8424306,
+              1.2577463
+            ],
+            [
+              103.8405236,
+              1.2568519
+            ],
+            [
+              103.8402573,
+              1.2569475
+            ],
+            [
+              103.8401516,
+              1.2570356
+            ],
+            [
+              103.8399402,
+              1.2569321
+            ],
+            [
+              103.8399093,
+              1.256986
+            ],
+            [
+              103.8396595,
+              1.2572913
+            ],
+            [
+              103.8369063,
+              1.256086
+            ],
+            [
+              103.8353248,
+              1.2575757
+            ],
+            [
+              103.8357593,
+              1.2580477
+            ],
+            [
+              103.8349761,
+              1.2587449
+            ],
+            [
+              103.8348527,
+              1.2594903
+            ],
+            [
+              103.8347132,
+              1.259603
+            ],
+            [
+              103.8346113,
+              1.2594742
+            ],
+            [
+              103.834504,
+              1.2599408
+            ],
+            [
+              103.8337959,
+              1.2603431
+            ],
+            [
+              103.8338442,
+              1.2605737
+            ],
+            [
+              103.8331683,
+              1.2608687
+            ],
+            [
+              103.8325406,
+              1.262129
+            ],
+            [
+              103.8320042,
+              1.2625098
+            ],
+            [
+              103.8307436,
+              1.2624561
+            ],
+            [
+              103.8300033,
+              1.2619681
+            ],
+            [
+              103.8302554,
+              1.2600213
+            ],
+            [
+              103.8310708,
+              1.2590506
+            ],
+            [
+              103.8310493,
+              1.2585303
+            ],
+            [
+              103.8309373,
+              1.2582138
+            ],
+            [
+              103.83099,
+              1.258195
+            ],
+            [
+              103.8309684,
+              1.2581307
+            ],
+            [
+              103.8309461,
+              1.258139
+            ],
+            [
+              103.8305612,
+              1.2570805
+            ],
+            [
+              103.8304675,
+              1.2571137
+            ],
+            [
+              103.8295594,
+              1.2574274
+            ],
+            [
+              103.8292656,
+              1.2575349
+            ],
+            [
+              103.8289283,
+              1.2576578
+            ],
+            [
+              103.8287405,
+              1.2570858
+            ],
+            [
+              103.8287086,
+              1.2571024
+            ],
+            [
+              103.8286399,
+              1.2571474
+            ],
+            [
+              103.8283045,
+              1.2573527
+            ],
+            [
+              103.8279169,
+              1.2574929
+            ],
+            [
+              103.8272905,
+              1.2575987
+            ],
+            [
+              103.8267051,
+              1.2576967
+            ],
+            [
+              103.8263996,
+              1.2578295
+            ],
+            [
+              103.825941,
+              1.2581049
+            ],
+            [
+              103.8256092,
+              1.2583413
+            ],
+            [
+              103.8252695,
+              1.2585988
+            ],
+            [
+              103.8249495,
+              1.2588835
+            ],
+            [
+              103.8247354,
+              1.2591162
+            ],
+            [
+              103.8245654,
+              1.2593467
+            ],
+            [
+              103.8243801,
+              1.2596516
+            ],
+            [
+              103.8241852,
+              1.260097
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "element": "way",
+        "id": "564173176",
+        "access": null,
+        "alt_name": null,
+        "industrial": "port",
+        "landuse": "industrial",
+        "name": "Jurong Port",
+        "name:ms": "Pelabuhan Jurong",
+        "name:ta": null,
+        "name:zh": "裕廊港",
+        "natural": null,
+        "operator": "JTC Corporation",
+        "place": null,
+        "ref:LOCODE": "SGJUR",
+        "website": null,
+        "wikidata": "Q6315376",
+        "wikimedia_commons": null,
+        "wikipedia": "en:Jurong Port",
+        "name:en": null,
+        "shop": null,
+        "name:ko": null,
+        "name:th": null,
+        "tourism": null,
+        "fixme:zh": null,
+        "short_name": null,
+        "addr:city": null,
+        "addr:housenumber": null,
+        "addr:postcode": null,
+        "addr:street": null,
+        "building": null,
+        "building:levels": null,
+        "check_date": null,
+        "opening_hours": null,
+        "start_date": null,
+        "wheelchair": null,
+        "addr:country": null,
+        "height": null,
+        "disused:school": null,
+        "old_name": null,
+        "old_name:zh": null,
+        "cargo": null,
+        "surface": null,
+        "man_made": null,
+        "source": null,
+        "addr:housename": null,
+        "leisure": null,
+        "layer": null,
+        "location": null,
+        "barrier": null,
+        "air_conditioning": null,
+        "toilets:wheelchair": null,
+        "not:name:zh": null,
+        "smoking": null,
+        "amenity": null,
+        "email": null,
+        "phone": null,
+        "residential": null,
+        "description": null,
+        "image": null,
+        "designation": null,
+        "name:zh-Hans": null,
+        "name:zh-Hant": null,
+        "level": null,
+        "year": null,
+        "plant:method": null,
+        "plant:output:electricity": null,
+        "plant:source": null,
+        "plant:type": null,
+        "power": null,
+        "emergency": null,
+        "healthcare": null,
+        "healthcare:speciality": null,
+        "operator:type": null,
+        "addr:suburb": null,
+        "branch": null,
+        "brand": null,
+        "brand:wikidata": null,
+        "brand:wikipedia": null,
+        "addr:place": null,
+        "developer": null,
+        "facebook": null,
+        "is_in:country": null,
+        "note": null,
+        "restricted": null,
+        "old_name:en": null,
+        "ref": null,
+        "plant:output:cold_water": null,
+        "plant:output:steam": null,
+        "full_name": null,
+        "studio": null,
+        "operator:wikidata": null,
+        "operator:wikipedia": null,
+        "office": null,
+        "internet_access": null,
+        "internet_access:fee": null,
+        "stars": null,
+        "year_of_construction": null,
+        "source:name": null,
+        "addr:state": null,
+        "golf": null,
+        "bus": null,
+        "cuisine": null,
+        "diet:halal": null,
+        "diet:vegetarian": null,
+        "outdoor_seating": null,
+        "payment:cash": null,
+        "payment:credit_cards": null,
+        "payment:debit_cards": null,
+        "toilets": null,
+        "commercial": null,
+        "disused:power": null,
+        "addr:province": null,
+        "fax": null,
+        "depot": null,
+        "wholesale": null,
+        "official_name": null,
+        "owner": null,
+        "plant:storage": null,
+        "voltage": null,
+        "addr:subdistrict": null,
+        "fixme": null,
+        "compressed_air": null,
+        "plant:output:hot_water": null,
+        "fenced": null,
+        "operator:en": null,
+        "contact:facebook": null,
+        "contact:instagram": null,
+        "building:colour": null,
+        "building:material": null,
+        "roof:colour": null,
+        "roof:material": null,
+        "name:ja": null,
+        "resort": null,
+        "type": null,
+        "end_date": null,
+        "bench": null,
+        "bin": null,
+        "building:part": null,
+        "highway": null,
+        "lit": null,
+        "mapillary": null,
+        "public_transport": null,
+        "route_ref": null,
+        "shelter": null,
+        "tactile_paving": null,
+        "stroller": null,
+        "building:levels:underground": null,
+        "contact:phone": null,
+        "brand:en": null,
+        "brand:zh": null,
+        "brand:zh-Hans": null,
+        "drive_through": null,
+        "takeaway": null,
+        "roof:shape": null,
+        "old_name:1983-1995": null,
+        "old_name:1995-2011": null,
+        "foot": null,
+        "indoor_seating": null,
+        "wheelchair:description": null,
+        "roof:levels": null,
+        "addr:neighbourhood": null,
+        "second_hand": null,
+        "contact:whatsapp": null,
+        "bar": null,
+        "capacity": null,
+        "delivery": null,
+        "diet:healthy": null,
+        "diet:organic": null,
+        "diet:vegan": null,
+        "opening_hours:kitchen": null,
+        "organic": null,
+        "payment:paynow": null,
+        "building:use": null,
+        "roof:orientation": null,
+        "fuel:diesel": null,
+        "fuel:octane_92": null,
+        "fuel:octane_95": null,
+        "fuel:octane_98": null,
+        "self_service": null,
+        "parking": null,
+        "construction": null,
+        "building:min_level": null,
+        "min_height": null,
+        "postal_code": null,
+        "damage:date": null,
+        "damage:type": null,
+        "abandoned:operator": null,
+        "note:operator": null,
+        "int_name": null,
+        "architect": null,
+        "service:bicycle:repair": null,
+        "service:bicycle:retail": null,
+        "service:vehicle:new_car_sales": null,
+        "guest_house": null,
+        "payment:coins": null,
+        "payment:mastercard": null,
+        "payment:visa": null,
+        "payment:visa_debit": null,
+        "rooms": null,
+        "building_1": null,
+        "craft": null,
+        "payment:nets": null,
+        "reservation": null,
+        "diet:local": null,
+        "diet:meat": null,
+        "toilets:level": null,
+        "toilets:panoramax": null,
+        "building:levels:roof": null,
+        "contact:email": null,
+        "source_1": null,
+        "cooling:method": null,
+        "atm": null,
+        "disused:shop": null,
+        "brewery": null,
+        "payment:jcb": null,
+        "pet": null,
+        "survey:date": null,
+        "fruit": null,
+        "was:name": null,
+        "covered": null,
+        "fee": null,
+        "substation": null,
+        "building:height": null,
+        "name:nan": null,
+        "name:nan-Hant": null,
+        "name:nan-Latn-pehoeji": null,
+        "name:nan-Latn-tailo": null,
+        "roof:angle": null,
+        "roof:height": null,
+        "payment:apple_pay": null,
+        "payment:google_pay": null,
+        "religion": null,
+        "source:geometry": null,
+        "baby_feeding": null,
+        "addr:block": null,
+        "frequency": null,
+        "gas_insulated": null,
+        "date": null,
+        "park_ride": null,
+        "supervised": null,
+        "opening_date": null,
+        "colour": null,
+        "indoor": null,
+        "addr:floor": null,
+        "addr:unit": null,
+        "telecom": null,
+        "payment:contactless": null,
+        "aeroway": null,
+        "created_by": null,
+        "maxheight": null,
+        "payment:Cashcard": null,
+        "entrance": null,
+        "maxstay": null,
+        "note:name:zh": null,
+        "capacity:car_sharing": null,
+        "capacity:disabled": null,
+        "parking_space": null,
+        "orientation": null,
+        "hgv": null,
+        "motorcar": null,
+        "charge": null,
+        "amenity_1": null,
+        "name:pl": null,
+        "capacity:motorcar": null,
+        "capacity:motorcycle": null,
+        "fee:conditional": null,
+        "payment:cards": null,
+        "payment:electronic_purses": null,
+        "capacity:hgv": null,
+        "smoothness": null,
+        "check_date:fee": null,
+        "tunnel": null,
+        "area:highway": null,
+        "ele": null,
+        "roof:level": null,
+        "capacity:charging": null,
+        "parking:fee": null,
+        "building:level": null,
+        "building:level:ref": null,
+        "level:ref": null,
+        "goods": null,
+        "psv": null,
+        "vehicle": null,
+        "accessible": null,
+        "parking:orientation": null,
+        "long_name": null,
+        "ramp": null,
+        "bicycle_parking": null
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.72196899324194,
+              1.2994770612481545
+            ],
+            [
+              103.72194300382682,
+              1.299731686871553
+            ],
+            [
+              103.72040411982846,
+              1.2997616574181166
+            ],
+            [
+              103.72041411258209,
+              1.2999464757810273
+            ],
+            [
+              103.72087377923123,
+              1.3005458865929143
+            ],
+            [
+              103.72086878285444,
+              1.300750685255764
+            ],
+            [
+              103.72068391691931,
+              1.3008955428355904
+            ],
+            [
+              103.72092873937385,
+              1.3011752677934254
+            ],
+            [
+              103.71462830346138,
+              1.3065250160823183
+            ],
+            [
+              103.71440346651303,
+              1.3062852523434572
+            ],
+            [
+              103.71425357521451,
+              1.3062652720312258
+            ],
+            [
+              103.71372895567038,
+              1.3064650751497169
+            ],
+            [
+              103.71278963686729,
+              1.3064800603824267
+            ],
+            [
+              103.71255480716525,
+              1.3065749668579656
+            ],
+            [
+              103.71226002094505,
+              1.3071993514745373
+            ],
+            [
+              103.71226002094505,
+              1.3077038541312902
+            ],
+            [
+              103.71215509703671,
+              1.3078037556359163
+            ],
+            [
+              103.71215529458522,
+              1.3088122771551127
+            ],
+            [
+              103.71271119696837,
+              1.308867852889719
+            ],
+            [
+              103.7127482571288,
+              1.3084602974729336
+            ],
+            [
+              103.71584278907949,
+              1.308423254810819
+            ],
+            [
+              103.72251361264983,
+              1.3028193648859911
+            ],
+            [
+              103.7279282351742,
+              1.3001047136248474
+            ],
+            [
+              103.72797137838177,
+              1.300517549413101
+            ],
+            [
+              103.72593132110467,
+              1.3065067356131124
+            ],
+            [
+              103.72561082870806,
+              1.306383501348975
+            ],
+            [
+              103.72599295425744,
+              1.3052805544207047
+            ],
+            [
+              103.72408848503022,
+              1.304645898746685
+            ],
+            [
+              103.72320713093842,
+              1.3053606578854442
+            ],
+            [
+              103.72398370866836,
+              1.3071845251121204
+            ],
+            [
+              103.72249219069067,
+              1.3078376734977581
+            ],
+            [
+              103.72238125101467,
+              1.3075788816742886
+            ],
+            [
+              103.72198063551855,
+              1.3077390861400886
+            ],
+            [
+              103.72048911320826,
+              1.3059028958873569
+            ],
+            [
+              103.71974951536873,
+              1.3064451267052846
+            ],
+            [
+              103.72126569108815,
+              1.3082135373107064
+            ],
+            [
+              103.72177724626033,
+              1.3090392061593406
+            ],
+            [
+              103.72178957289145,
+              1.3093904234230678
+            ],
+            [
+              103.72167863321556,
+              1.3097909342783254
+            ],
+            [
+              103.72074797260052,
+              1.3110910536880453
+            ],
+            [
+              103.71877570612457,
+              1.3115778345246838
+            ],
+            [
+              103.71858464334912,
+              1.311060251624184
+            ],
+            [
+              103.71828880421327,
+              1.3109678260948385
+            ],
+            [
+              103.71769096262608,
+              1.3103208472939372
+            ],
+            [
+              103.71676030201257,
+              1.31048721328726
+            ],
+            [
+              103.71667401559745,
+              1.310086702544055
+            ],
+            [
+              103.71645213624555,
+              1.310117511064817
+            ],
+            [
+              103.71686834754871,
+              1.3122482010084866
+            ],
+            [
+              103.71415968861152,
+              1.3122482010084866
+            ],
+            [
+              103.71413643945766,
+              1.310618900603373
+            ],
+            [
+              103.71173768591007,
+              1.3103689196300365
+            ],
+            [
+              103.71171217142842,
+              1.3090935288175558
+            ],
+            [
+              103.71196731624917,
+              1.3090935288175558
+            ],
+            [
+              103.71199283073247,
+              1.306899855102671
+            ],
+            [
+              103.71252863485705,
+              1.3052673524900626
+            ],
+            [
+              103.71245209141063,
+              1.3040174669602465
+            ],
+            [
+              103.71199283073247,
+              1.3028696123556927
+            ],
+            [
+              103.71189077280286,
+              1.2996046008458109
+            ],
+            [
+              103.72196899324194,
+              1.2994770612481545
+            ]
+          ]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "element": "way",
+        "id": "1004233257",
+        "access": null,
+        "alt_name": null,
+        "industrial": "port",
+        "landuse": "industrial",
+        "name": "Tuas Mega Port",
+        "name:ms": null,
+        "name:ta": null,
+        "name:zh": "大士超级港",
+        "natural": null,
+        "operator": null,
+        "place": "suburb",
+        "ref:LOCODE": null,
+        "website": null,
+        "wikidata": null,
+        "wikimedia_commons": null,
+        "wikipedia": null,
+        "name:en": null,
+        "shop": null,
+        "name:ko": null,
+        "name:th": null,
+        "tourism": null,
+        "fixme:zh": null,
+        "short_name": null,
+        "addr:city": null,
+        "addr:housenumber": null,
+        "addr:postcode": null,
+        "addr:street": null,
+        "building": null,
+        "building:levels": null,
+        "check_date": null,
+        "opening_hours": null,
+        "start_date": null,
+        "wheelchair": null,
+        "addr:country": null,
+        "height": null,
+        "disused:school": null,
+        "old_name": null,
+        "old_name:zh": null,
+        "cargo": "container",
+        "surface": null,
+        "man_made": null,
+        "source": null,
+        "addr:housename": null,
+        "leisure": null,
+        "layer": null,
+        "location": null,
+        "barrier": null,
+        "air_conditioning": null,
+        "toilets:wheelchair": null,
+        "not:name:zh": null,
+        "smoking": null,
+        "amenity": null,
+        "email": null,
+        "phone": null,
+        "residential": null,
+        "description": null,
+        "image": null,
+        "designation": null,
+        "name:zh-Hans": null,
+        "name:zh-Hant": null,
+        "level": null,
+        "year": null,
+        "plant:method": null,
+        "plant:output:electricity": null,
+        "plant:source": null,
+        "plant:type": null,
+        "power": null,
+        "emergency": null,
+        "healthcare": null,
+        "healthcare:speciality": null,
+        "operator:type": null,
+        "addr:suburb": null,
+        "branch": null,
+        "brand": null,
+        "brand:wikidata": null,
+        "brand:wikipedia": null,
+        "addr:place": null,
+        "developer": null,
+        "facebook": null,
+        "is_in:country": null,
+        "note": null,
+        "restricted": null,
+        "old_name:en": null,
+        "ref": null,
+        "plant:output:cold_water": null,
+        "plant:output:steam": null,
+        "full_name": null,
+        "studio": null,
+        "operator:wikidata": null,
+        "operator:wikipedia": null,
+        "office": null,
+        "internet_access": null,
+        "internet_access:fee": null,
+        "stars": null,
+        "year_of_construction": null,
+        "source:name": null,
+        "addr:state": null,
+        "golf": null,
+        "bus": null,
+        "cuisine": null,
+        "diet:halal": null,
+        "diet:vegetarian": null,
+        "outdoor_seating": null,
+        "payment:cash": null,
+        "payment:credit_cards": null,
+        "payment:debit_cards": null,
+        "toilets": null,
+        "commercial": null,
+        "disused:power": null,
+        "addr:province": null,
+        "fax": null,
+        "depot": null,
+        "wholesale": null,
+        "official_name": null,
+        "owner": null,
+        "plant:storage": null,
+        "voltage": null,
+        "addr:subdistrict": null,
+        "fixme": null,
+        "compressed_air": null,
+        "plant:output:hot_water": null,
+        "fenced": null,
+        "operator:en": null,
+        "contact:facebook": null,
+        "contact:instagram": null,
+        "building:colour": null,
+        "building:material": null,
+        "roof:colour": null,
+        "roof:material": null,
+        "name:ja": null,
+        "resort": null,
+        "type": null,
+        "end_date": null,
+        "bench": null,
+        "bin": null,
+        "building:part": null,
+        "highway": null,
+        "lit": null,
+        "mapillary": null,
+        "public_transport": null,
+        "route_ref": null,
+        "shelter": null,
+        "tactile_paving": null,
+        "stroller": null,
+        "building:levels:underground": null,
+        "contact:phone": null,
+        "brand:en": null,
+        "brand:zh": null,
+        "brand:zh-Hans": null,
+        "drive_through": null,
+        "takeaway": null,
+        "roof:shape": null,
+        "old_name:1983-1995": null,
+        "old_name:1995-2011": null,
+        "foot": null,
+        "indoor_seating": null,
+        "wheelchair:description": null,
+        "roof:levels": null,
+        "addr:neighbourhood": null,
+        "second_hand": null,
+        "contact:whatsapp": null,
+        "bar": null,
+        "capacity": null,
+        "delivery": null,
+        "diet:healthy": null,
+        "diet:organic": null,
+        "diet:vegan": null,
+        "opening_hours:kitchen": null,
+        "organic": null,
+        "payment:paynow": null,
+        "building:use": null,
+        "roof:orientation": null,
+        "fuel:diesel": null,
+        "fuel:octane_92": null,
+        "fuel:octane_95": null,
+        "fuel:octane_98": null,
+        "self_service": null,
+        "parking": null,
+        "construction": null,
+        "building:min_level": null,
+        "min_height": null,
+        "postal_code": null,
+        "damage:date": null,
+        "damage:type": null,
+        "abandoned:operator": null,
+        "note:operator": null,
+        "int_name": null,
+        "architect": null,
+        "service:bicycle:repair": null,
+        "service:bicycle:retail": null,
+        "service:vehicle:new_car_sales": null,
+        "guest_house": null,
+        "payment:coins": null,
+        "payment:mastercard": null,
+        "payment:visa": null,
+        "payment:visa_debit": null,
+        "rooms": null,
+        "building_1": null,
+        "craft": null,
+        "payment:nets": null,
+        "reservation": null,
+        "diet:local": null,
+        "diet:meat": null,
+        "toilets:level": null,
+        "toilets:panoramax": null,
+        "building:levels:roof": null,
+        "contact:email": null,
+        "source_1": null,
+        "cooling:method": null,
+        "atm": null,
+        "disused:shop": null,
+        "brewery": null,
+        "payment:jcb": null,
+        "pet": null,
+        "survey:date": null,
+        "fruit": null,
+        "was:name": null,
+        "covered": null,
+        "fee": null,
+        "substation": null,
+        "building:height": null,
+        "name:nan": null,
+        "name:nan-Hant": null,
+        "name:nan-Latn-pehoeji": null,
+        "name:nan-Latn-tailo": null,
+        "roof:angle": null,
+        "roof:height": null,
+        "payment:apple_pay": null,
+        "payment:google_pay": null,
+        "religion": null,
+        "source:geometry": null,
+        "baby_feeding": null,
+        "addr:block": null,
+        "frequency": null,
+        "gas_insulated": null,
+        "date": null,
+        "park_ride": null,
+        "supervised": null,
+        "opening_date": null,
+        "colour": null,
+        "indoor": null,
+        "addr:floor": null,
+        "addr:unit": null,
+        "telecom": null,
+        "payment:contactless": null,
+        "aeroway": null,
+        "created_by": null,
+        "maxheight": null,
+        "payment:Cashcard": null,
+        "entrance": null,
+        "maxstay": null,
+        "note:name:zh": null,
+        "capacity:car_sharing": null,
+        "capacity:disabled": null,
+        "parking_space": null,
+        "orientation": null,
+        "hgv": null,
+        "motorcar": null,
+        "charge": null,
+        "amenity_1": null,
+        "name:pl": null,
+        "capacity:motorcar": null,
+        "capacity:motorcycle": null,
+        "fee:conditional": null,
+        "payment:cards": null,
+        "payment:electronic_purses": null,
+        "capacity:hgv": null,
+        "smoothness": null,
+        "check_date:fee": null,
+        "tunnel": null,
+        "area:highway": null,
+        "ele": null,
+        "roof:level": null,
+        "capacity:charging": null,
+        "parking:fee": null,
+        "building:level": null,
+        "building:level:ref": null,
+        "level:ref": null,
+        "goods": null,
+        "psv": null,
+        "vehicle": null,
+        "accessible": null,
+        "parking:orientation": null,
+        "long_name": null,
+        "ramp": null,
+        "bicycle_parking": null
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [
+              103.6160996,
+              1.2698087
+            ],
+            [
+              103.6160356,
+              1.269777
+            ],
+            [
+              103.6159991,
+              1.2697249
+            ],
+            [
+              103.6157554,
+              1.2690098
+            ],
+            [
+              103.6156401,
+              1.2687106
+            ],
+            [
+              103.6150673,
+              1.2672243
+            ],
+            [
+              103.6149117,
+              1.2666988
+            ],
+            [
+              103.6148648,
+              1.2665151
+            ],
+            [
+              103.6147106,
+              1.2657388
+            ],
+            [
+              103.6146194,
+              1.2649209
+            ],
+            [
+              103.6146006,
+              1.2642961
+            ],
+            [
+              103.6145718,
+              1.2530476
+            ],
+            [
+              103.6145905,
+              1.2522914
+            ],
+            [
+              103.614604,
+              1.2521238
+            ],
+            [
+              103.6146388,
+              1.2519066
+            ],
+            [
+              103.614671,
+              1.251686
+            ],
+            [
+              103.6147441,
+              1.2513669
+            ],
+            [
+              103.6149225,
+              1.2506617
+            ],
+            [
+              103.6149761,
+              1.2504351
+            ],
+            [
+              103.6150311,
+              1.2499846
+            ],
+            [
+              103.615011,
+              1.23729
+            ],
+            [
+              103.6150099,
+              1.2361138
+            ],
+            [
+              103.6150115,
+              1.2358762
+            ],
+            [
+              103.6150183,
+              1.23482
+            ],
+            [
+              103.6150163,
+              1.2345729
+            ],
+            [
+              103.6150016,
+              1.2335706
+            ],
+            [
+              103.6149364,
+              1.2294555
+            ],
+            [
+              103.6147567,
+              1.2181033
+            ],
+            [
+              103.6147565,
+              1.2180917
+            ],
+            [
+              103.6147564,
+              1.2180829
+            ],
+            [
+              103.6147425,
+              1.2172069
+            ],
+            [
+              103.6409585,
+              1.2104509
+            ],
+            [
+              103.6422446,
+              1.2101324
+            ],
+            [
+              103.6432969,
+              1.2104177
+            ],
+            [
+              103.6438002,
+              1.2109538
+            ],
+            [
+              103.6442313,
+              1.2117801
+            ],
+            [
+              103.6396582,
+              1.2211168
+            ],
+            [
+              103.638668,
+              1.2211066
+            ],
+            [
+              103.6380457,
+              1.2204416
+            ],
+            [
+              103.6231756,
+              1.2205489
+            ],
+            [
+              103.6229181,
+              1.2184036
+            ],
+            [
+              103.6202607,
+              1.2186628
+            ],
+            [
+              103.6205577,
+              1.2200769
+            ],
+            [
+              103.6188969,
+              1.2209675
+            ],
+            [
+              103.6190563,
+              1.2291768
+            ],
+            [
+              103.6498525,
+              1.2292158
+            ],
+            [
+              103.6498592,
+              1.238064
+            ],
+            [
+              103.6207877,
+              1.238061
+            ],
+            [
+              103.6173766,
+              1.2381028
+            ],
+            [
+              103.6173517,
+              1.2450108
+            ],
+            [
+              103.6377435,
+              1.2450213
+            ],
+            [
+              103.644321,
+              1.2479939
+            ],
+            [
+              103.6443543,
+              1.2539721
+            ],
+            [
+              103.6332176,
+              1.2540125
+            ],
+            [
+              103.6173833,
+              1.2539959
+            ],
+            [
+              103.6173641,
+              1.2608642
+            ],
+            [
+              103.6433615,
+              1.2608616
+            ],
+            [
+              103.6433696,
+              1.2646581
+            ],
+            [
+              103.6422344,
+              1.2646603
+            ],
+            [
+              103.6363399,
+              1.2646715
+            ],
+            [
+              103.6356103,
+              1.2643014
+            ],
+            [
+              103.6302298,
+              1.2643014
+            ],
+            [
+              103.6302245,
+              1.2646688
+            ],
+            [
+              103.629511,
+              1.2646661
+            ],
+            [
+              103.6294225,
+              1.2647519
+            ],
+            [
+              103.6293474,
+              1.2649879
+            ],
+            [
+              103.6289987,
+              1.2650416
+            ],
+            [
+              103.628827,
+              1.2650013
+            ],
+            [
+              103.6230683,
+              1.2649624
+            ],
+            [
+              103.6229635,
+              1.2649631
+            ],
+            [
+              103.6206369,
+              1.2649718
+            ],
+            [
+              103.6202788,
+              1.2650389
+            ],
+            [
+              103.6201099,
+              1.2651448
+            ],
+            [
+              103.6200187,
+              1.2652614
+            ],
+            [
+              103.6199798,
+              1.2654049
+            ],
+            [
+              103.619961,
+              1.2655591
+            ],
+            [
+              103.6199641,
+              1.2656162
+            ],
+            [
+              103.6203418,
+              1.2691759
+            ],
+            [
+              103.6203485,
+              1.2696815
+            ],
+            [
+              103.6203294,
+              1.2697441
+            ],
+            [
+              103.6202797,
+              1.2697923
+            ],
+            [
+              103.6202245,
+              1.2698095
+            ],
+            [
+              103.6160996,
+              1.2698087
+            ]
+          ]
+        ]
+      }
+    }
+  ]
+}
