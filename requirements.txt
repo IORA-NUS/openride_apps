@@ -11,17 +11,19 @@
 # Python 3.11 (the tree is developed and tested on 3.11.2).
 
 # ── Simulation engine ────────────────────────────────────────────────────────
-# Pinned to a COMMIT, not a branch or a version.
+# orsim 1.3.0 — released 2026-08-23 from IORA-NUS/orsim master, tag v1.3.0.
 #
-# The published orsim 1.2.1 on PyPI is NOT this code. This tree needs
-# `orsim.runtime` (AgentSource, ORSimRuntime, FixedStepTermination), which does
-# not exist in the release — `apps/simulation/simulation_runtime.py` and
-# `apps/simulation/batched_agent_source.py` import it. The local fork also
-# declares `version='1.2.1'`, so `pip install orsim==1.2.1` silently installs
-# DIFFERENT code and the simulation then dies at import.
+# This ENDS the fork. Previously this line was `-e file:///home/user/orsim`, a
+# local working tree that existed on one machine, containing two unreleased
+# commits while still declaring `version='1.2.1'` — so `pip install orsim==1.2.1`
+# silently installed DIFFERENT code under an identical version string.
 #
-# Until orsim.runtime is released (see the note in the README), pin the SHA.
-orsim @ git+https://github.com/IORA-NUS/orsim.git@63ac1a069f59fd214c011a906a889bd7daa15a24
+# 1.3.0 is those commits, released honestly: the `orsim.runtime` package
+# (AgentSource, ORSimRuntime, FixedStepTermination) that apps/simulation imports,
+# and an event-driven `confirm_responses` in place of a polling loop.
+#
+# Not on PyPI, so the tag is the distribution point. Tag v1.3.0 == be8b811.
+orsim @ git+https://github.com/IORA-NUS/orsim.git@v1.3.0
 
 # ── Agent runtime: task queue, brokers, transport ────────────────────────────
 celery==5.6.2
