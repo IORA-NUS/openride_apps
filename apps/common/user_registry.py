@@ -23,7 +23,7 @@ class UserRegistry:
         self.token = self.user_login(sim_clock)
         self.update_user_role()
         if self.token is None:
-            raise Exception('Cannot initialize User. Bad Credentials')
+            raise Exception(f'Cannot initialize User. Failed to authenticate with server at {settings["OPENRIDE_SERVER_URL"]} using email: {self.email}. Check server is running and credentials are valid.')
 
     def get_headers(self, etag=None):
         if self.token is None:
@@ -53,6 +53,7 @@ class UserRegistry:
                 if is_success(response.status_code):
                     return self.user_login(sim_clock)
                 else:
+                    print(f"Auth signup failed with status {response.status_code}: {response.text}")
                     return None
         except ConnectionError as e:
             print(f"Unable to connect to OpenRoad Server at {settings['OPENRIDE_SERVER_URL']}. Please ensure the server is running and the URL is correct.")

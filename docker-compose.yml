@@ -59,6 +59,13 @@ services:
   rabbit:
     image: rabbitmq:3-management
     ports: ["5672:5672", "15672:15672"]
+    # Carried over from master (PR #6): a high eventlet concurrency opens many
+    # parallel connections and exhausts the broker container's default descriptor
+    # limit. Distinct from the process-level `ulimit -n` in scripts/run-celery.sh.
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s

@@ -1,0 +1,54 @@
+flowchart LR
+    subgraph P[Simulation Producers]
+        S1[Ride-hail Sim Engine]
+        S2[Driver & Passenger Events]
+        S3[Analytics Manager]
+    end
+
+    subgraph K[Kafka Cluster - 3 Brokers KRaft]
+        direction TB
+
+        subgraph T1[Telemetry]
+            L[telemetry.location<br/>key: run_id.entity_id<br/>P: 16 · RF: 3]
+            R[telemetry.route<br/>key: run_id.trip_id<br/>P: 16 · RF: 3]
+            W[telemetry.waypoint<br/>key: run_id.trip_id<br/>P: 32 · RF: 3]
+        end
+
+        subgraph T2[KPI]
+            KR[kpi.metric<br/>key: run_id.metric_name<br/>P: 8 · RF: 3]
+        end
+    end
+
+    subgraph C[Consumer Groups]
+        A[group.analytics]
+        D[group.dashboard]
+        ST[group.storage]
+    end
+
+    subgraph O[Downstream]
+        UI[Realtime Dashboard]
+        OLAP[Data Lake / OLAP]
+    end
+
+    S1 --> L
+    S1 --> R
+    S2 --> W
+    S3 --> KR
+
+    L & R & W --> A
+    KR --> D
+    L & R & W & KR --> ST
+
+    A --> KR
+    D --> UI
+    ST --> OLAP
+
+    classDef raw fill:#0b2f3a,stroke:#2aa198,color:#eaf7ff
+    classDef kpi fill:#2e2600,stroke:#d4a017,color:#fff7dc
+    classDef group fill:#1f2a1f,stroke:#6aa84f,color:#efffea
+    classDef out fill:#2f1f1f,stroke:#cc6f6f,color:#fff0f0
+
+    class L,R,W raw
+    class KR kpi
+    class A,D,ST group
+    class UI,OLAP out
