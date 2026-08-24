@@ -414,7 +414,7 @@ def _start_celery(_mgr: ServiceManager, spec: ServiceSpec) -> subprocess.Popen:
         for i in range(1, worker_count + 1)
     )
     command = (
-        f"cd {ROOT / 'openride_apps'} && ulimit -n 100000 && "
+        f"cd {REPO_ROOT} && ulimit -n 100000 && "
         "pids=();\n"
         + worker_lines
         + "\n"

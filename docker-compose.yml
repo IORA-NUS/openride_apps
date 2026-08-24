@@ -125,7 +125,11 @@ services:
       context: .
       target: dev
     profiles: [test]
-    command: ["pytest", "tests/", "-q", "--continue-on-collection-errors"]
+    # Whole repo, not `tests/`. The narrow form collected 994 of 1459 tests and
+    # silently skipped all 465 under apps/dataplane/tests/ -- which is exactly where
+    # an untracked source package and a test module that had never once run were
+    # both hiding. There is no pytest.ini/pyproject testpaths pinning this.
+    command: ["pytest", "-q", "--continue-on-collection-errors"]
 
 volumes:
   openride-mongo:

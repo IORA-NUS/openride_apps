@@ -72,4 +72,8 @@ FROM runtime AS dev
 COPY requirements-dev.txt .
 RUN pip install -r requirements-dev.txt
 COPY tests/ ./tests/
-CMD ["pytest", "tests/", "-q", "--continue-on-collection-errors"]
+# Whole repo, not `tests/`. The narrow form collected 994 of 1459 tests and
+# silently skipped all 465 under apps/dataplane/tests/ -- which is exactly where
+# an untracked source package and a test module that had never once run were
+# both hiding. There is no pytest.ini/pyproject testpaths pinning this.
+CMD ["pytest", "-q", "--continue-on-collection-errors"]

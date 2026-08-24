@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenRide trip_geo_stream to MongoDB sink (haul-trip route geometry for replay)
+After=openride-kafka.service
+Wants=openride-kafka.service
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@/openride_server/analytics
+Environment=NVM_DIR=@WORKSPACE@/.nvm
+Environment=KAFKA_BROKER_URL=localhost:9094
+Environment=MONGODB_URI=mongodb://127.0.0.1:27017/OpenRoadDB
+ExecStart=/bin/bash @WORKSPACE@/scripts/run-trip-geo-mongo-sink.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

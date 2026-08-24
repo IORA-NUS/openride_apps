@@ -6,16 +6,22 @@ import json
 import logging
 import os
 import sys
+from pathlib import Path
 import time
 from datetime import datetime, timezone
 from typing import Any, Callable
 
 log = logging.getLogger(__name__)
 
-# Allow importing openride_apps config when agent runs from workspace root.
-_APPS_ROOT = os.path.join(os.path.dirname(__file__), "..", "openride_apps")
+# Allow importing this repo's `apps.*` config when the agent runs from the
+# workspace root. This said `dirname(__file__)/../openride_apps`, which was right
+# while openride_control lived beside openride_apps; now that it lives INSIDE it,
+# that resolved to <repo>/openride_apps -- a directory that does not exist. The
+# same doubled-segment bug as paths.py's ROOT, in the file that did not get the
+# fix. Harmless on this box only because PYTHONPATH already carries the repo.
+_APPS_ROOT = str(Path(__file__).resolve().parents[1])
 if _APPS_ROOT not in sys.path:
-    sys.path.insert(0, os.path.normpath(_APPS_ROOT))
+    sys.path.insert(0, _APPS_ROOT)
 
 
 def _topic_names() -> tuple[str, str, str]:

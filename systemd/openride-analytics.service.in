@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenRide analytics dashboard (Next.js)
+After=network-online.target openride-kafka.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@/openride_server/analytics
+Environment=OPENRIDE_WORKSPACE_ROOT=@WORKSPACE@
+Environment=KAFKA_BROKER_URL=localhost:9094
+Environment=NODE_ENV=development
+Environment=NVM_DIR=@WORKSPACE@/.nvm
+Environment=OPENRIDE_PYTHON=@WORKSPACE@/openride_apps/venv/bin/python
+ExecStart=/bin/bash @WORKSPACE@/scripts/run-analytics-dev.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -2,10 +2,18 @@
 # Celery worker pool (used by openride-celery.service).
 set -euo pipefail
 
-cd /home/user/openride_apps
+# Repo root, derived from this script's own resolved location so a checkout
+# somewhere else (or a differently-named one) works. These used to be literal
+# /home/user/openride_apps paths.
+_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO="$(cd "$(dirname "$_SELF")/.." && pwd)"
+ROOT="${OPENRIDE_WORKSPACE_ROOT:-$(cd "$REPO/.." && pwd)}"
+PYBIN="${OPENRIDE_PYTHON:-$REPO/venv/bin/python}"
+
+cd "$REPO"
 ulimit -n 100000
 
-export PYTHONPATH="/home/user/openride_apps:${PYTHONPATH:-}"
+export PYTHONPATH="$REPO:${PYTHONPATH:-}"
 export CELERY_BROKER_URL="${CELERY_BROKER_URL:-amqp://guest:guest@127.0.0.1:5672//}"
 # eventlet 0.34's green getaddrinfo rejects pymongo 4.x's `type=` keyword
 # (breaks the order-lifecycle agent's Mongo batch writes). All worker traffic is
@@ -22,7 +30,7 @@ export EVENTLET_NO_GREENDNS=yes
 # here): fewer greenlets/process => replies bunch => steps finish far faster.
 CONCURRENCY="${CELERY_CONCURRENCY:-64}"
 WORKER_COUNT="${CELERY_WORKER_COUNT:-32}"
-PY="${OPENRIDE_PYTHON:-/home/user/openride_apps/venv/bin/python}"
+PY="$PYBIN"
 
 pids=()
 for i in $(seq 1 "$WORKER_COUNT"); do

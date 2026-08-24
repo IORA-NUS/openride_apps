@@ -1,0 +1,16 @@
+[Unit]
+Description=OpenRide dataplane (stream ingest + DuckDB store + frontend read API on :8620)
+After=openride-kafka.service
+Wants=openride-kafka.service
+# The dashboard reads only from here, so analytics should not be considered up without it.
+Before=openride-analytics.service
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@/openride_apps
+ExecStart=@WORKSPACE@/scripts/run-dataplane.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

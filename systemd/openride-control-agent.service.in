@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenRide Kafka control agent (optional fallback for Kafka commands)
+After=openride-kafka.service
+Wants=openride-kafka.service
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@
+Environment=PYTHONPATH=@WORKSPACE@:@WORKSPACE@/openride_apps
+ExecStart=@WORKSPACE@/openride_apps/venv/bin/python -m openride_control.agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

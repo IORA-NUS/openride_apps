@@ -9,6 +9,20 @@ echo "Enabling user lingering (services survive logout)…"
 loginctl enable-linger "$USER" 2>/dev/null || echo "Note: loginctl enable-linger may require sudo on some systems."
 
 echo "Reloading systemd user daemon…"
+# Install the unit templates before enabling anything. They live in systemd/*.in
+# with @WORKSPACE@ standing in for the workspace root; without this step a machine
+# that never had them hand-installed dies here under `set -euo pipefail`.
+_SELF="$(readlink -f "${BASH_SOURCE[0]}")"
+REPO="$(cd "$(dirname "$_SELF")/.." && pwd)"
+WORKSPACE="${OPENRIDE_WORKSPACE_ROOT:-$(cd "$REPO/.." && pwd)}"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+mkdir -p "$UNIT_DIR"
+for tpl in "$REPO"/systemd/*.service.in; do
+  unit="$(basename "${tpl%.in}")"
+  sed "s|@WORKSPACE@|$WORKSPACE|g" "$tpl" > "$UNIT_DIR/$unit"
+done
+echo "Installed $(ls "$REPO"/systemd/*.service.in | wc -l) unit files into $UNIT_DIR (workspace=$WORKSPACE)"
+
 systemctl --user daemon-reload
 
 # RETIRED 2026-08-12: openride-kpi-duckdb-sink. `apps/dataplane` is now the single writer.

@@ -1,0 +1,19 @@
+[Unit]
+Description=OpenRide Celery workers (eventlet pool)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@/openride_apps
+Environment=PYTHONPATH=@WORKSPACE@:@WORKSPACE@/openride_apps
+Environment=CELERY_BROKER_URL=amqp://guest:guest@127.0.0.1:5672//
+# Spread agents across more processes with fewer greenlets each (see run-celery.sh):
+# tighter per-step reply bunching. WORKER_COUNT*CONCURRENCY(64) = 2048 > peak agents.
+Environment=CELERY_WORKER_COUNT=32
+ExecStart=@WORKSPACE@/scripts/run-celery.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
