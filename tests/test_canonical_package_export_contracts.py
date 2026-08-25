@@ -1,9 +1,9 @@
 import pytest
 
-import apps.ride_hail.analytics as analytics_pkg
-import apps.ride_hail.assignment as assignment_pkg
-import apps.ride_hail.driver as driver_pkg
-import apps.ride_hail.passenger as passenger_pkg
+import apps.ridehail.analytics as analytics_pkg
+import apps.ridehail.assignment as assignment_pkg
+import apps.ridehail.driver as driver_pkg
+import apps.ridehail.passenger as passenger_pkg
 
 
 def test_driver_package_all_symbols_resolve():

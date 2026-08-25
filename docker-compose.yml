@@ -1,20 +1,144 @@
-version: '3.8'
+# OpenRide — one-stop stack for the container-logistics simulation.
+#
+#   docker compose up -d              # infrastructure + services
+#   docker compose run --rm sim ...   # a one-off simulation run
+#   docker compose --profile test run --rm tests
+#
+# Replaces a compose file that defined RabbitMQ alone; the rest of the stack was
+# started by eight systemd *user* units on one developer machine, which is why
+# this project could not be run anywhere else.
+#
+# PREREQUISITE — the OSRM routing graph is NOT in this repo and NOT in the image
+# (~11 GB). Build it once from an OSM extract, then point OSRM_DATA at it:
+#   docker run -t -v "$PWD/maps:/data" osrm/osrm-backend \
+#     osrm-extract -p /opt/car.lua /data/<region>.osm.pbf
+#   ...osrm-partition / osrm-customize, then set OSRM_DATA=./maps
+#
+# NOT included — separate repositories:
+#   dashboard  IORA-NUS/openroad_viz         (Next.js, :3000)
+#   REST API   openride_server/openroad_platform (Eve, :11654)
+
+
+x-app: &app
+  build:
+    context: .
+    target: runtime
+  environment: &app-env
+    PYTHONPATH: /app
+    MONGODB_HOST: mongo
+    MONGODB_PORT: "27017"
+    MONGODB_URI: mongodb://mongo:27017/OpenRoadDB
+    RABBITMQ_HOST: rabbit
+    KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    OSRM_HOST: http://osrm:5000
+  volumes:
+    - ./scenarios:/app/scenarios
+    - openride-output:/data/output
+    - ${LOCATIONS_DATA:-./data/openroad_locations}:/data/openroad_locations:ro
+  depends_on:
+    mongo: {condition: service_healthy}
+    rabbit: {condition: service_healthy}
+    kafka: {condition: service_started}
+
 services:
+  # ── Infrastructure ─────────────────────────────────────────────────────────
+  mongo:
+    image: mongo:6.0
+    ports: ["27017:27017"]
+    volumes: [openride-mongo:/data/db]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Named `rabbit`, not `rabbitmq`: openride_control/registry.py looks up the
+  # compose service by that exact name, and the container already running on this
+  # box is compose-service `rabbit`. Renaming it made /services report RabbitMQ
+  # as stopped while it was up.
   rabbit:
-    image: "rabbitmq"
-    container_name: rabbit
+    image: rabbitmq:3-management
+    ports: ["5672:5672", "15672:15672"]
+    # Carried over from master (PR #6): a high eventlet concurrency opens many
+    # parallel connections and exhausts the broker container's default descriptor
+    # limit. Distinct from the process-level `ulimit -n` in scripts/run-celery.sh.
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
-    ports:
-    - "5671:5671"
-    - "5672:5672"
-    - "15671:15671"
-    - "15672:15672"
-    - "15675:15675"
-    - "15692:15692"
-    - "1883:1883"
-    - "8883:8883"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    # KRaft mode — no ZooKeeper.
+    image: apache/kafka:3.8.0
+    ports: ["9092:9092"]
+    environment:
+      KAFKA_NODE_ID: "1"
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+    volumes: [openride-kafka:/var/lib/kafka/data]
+
+  osrm:
+    image: osrm/osrm-backend
+    command: osrm-routed --algorithm mld /data/${OSRM_GRAPH:-region}.osrm
+    ports: ["5000:5000"]
     volumes:
-    - "$PWD/rabbit_enabled_plugins:/etc/rabbitmq/enabled_plugins"
+      - ${OSRM_DATA:-./maps}:/data:ro
+    profiles: [routing]   # `--profile routing`; the sim falls back to haversine
+
+  # ── Application services ───────────────────────────────────────────────────
+  celery:
+    <<: *app
+    # ORSim agents run INSIDE these workers, so agent-side code changes need
+    # this service restarted — the containerised equivalent of the celery
+    # restart trap in CLAUDE.md §8.
+    command: >
+      celery -A apps.celery_worker worker
+      --pool eventlet --concurrency ${CELERY_CONCURRENCY:-64}
+      --loglevel WARNING
+
+  dataplane:
+    <<: *app
+    command: python -m apps.dataplane
+    ports: ["8620:8620"]
+    environment:
+      <<: *app-env
+      MONGODB_NAME: OpenRoadDB_dataplane_live
+      DATAPLANE_DUCKDB_PATH: /data/output/dataplane.duckdb
+
+  control-agent:
+    <<: *app
+    command: python -m openride_control.agent
+
+  # ── One-off commands (no long-running process) ─────────────────────────────
+  sim:
+    <<: *app
+    profiles: [manual]
+    command: ["python", "-m", "openride", "--help"]
+
+  tests:
+    build:
+      context: .
+      target: dev
+    profiles: [test]
+    # Whole repo, not `tests/`. The narrow form collected 994 of 1459 tests and
+    # silently skipped all 465 under apps/dataplane/tests/ -- which is exactly where
+    # an untracked source package and a test module that had never once run were
+    # both hiding. There is no pytest.ini/pyproject testpaths pinning this.
+    command: ["pytest", "-q", "--continue-on-collection-errors"]
+
+volumes:
+  openride-mongo:
+  openride-kafka:
+  openride-output:

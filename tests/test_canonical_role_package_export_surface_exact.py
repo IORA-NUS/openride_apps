@@ -1,7 +1,7 @@
-import apps.ride_hail.analytics as analytics_pkg
-import apps.ride_hail.assignment as assignment_pkg
-import apps.ride_hail.driver as driver_pkg
-import apps.ride_hail.passenger as passenger_pkg
+import apps.ridehail.analytics as analytics_pkg
+import apps.ridehail.assignment as assignment_pkg
+import apps.ridehail.driver as driver_pkg
+import apps.ridehail.passenger as passenger_pkg
 
 
 def test_driver_role_package_all_matches_expected_symbols_exactly():

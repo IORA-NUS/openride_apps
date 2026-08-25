@@ -1,0 +1,171 @@
+{
+  "agents": {
+    "facility": {
+      "count": 20,
+      "policy": {
+        "type": "allocate"
+      }
+    },
+    "order": {
+      "count": 1000,
+      "orderCountUnit": "total",
+      "policy": {
+        "type": "matrix"
+      }
+    },
+    "truck": {
+      "count": 100,
+      "policy": {
+        "type": "default"
+      }
+    }
+  },
+  "behaviorRevision": 10,
+  "earlyOrderCount": 64,
+  "frozen": true,
+  "hauliers": [
+    {
+      "fleet_share": 60.0,
+      "id": "patrick_inc",
+      "name": "Patrick Inc",
+      "order_share": 60.0
+    },
+    {
+      "fleet_share": 20.0,
+      "id": "global_inc",
+      "name": "Global Inc",
+      "order_share": 10.0
+    },
+    {
+      "fleet_share": 20.0,
+      "id": "addison_co",
+      "name": "Addison & Co",
+      "order_share": 30.0
+    }
+  ],
+  "name": "Policy Engine Smoke 100t",
+  "orderCountUnit": "total",
+  "orderDemandCurve": {
+    "points": [
+      {
+        "hour": 0,
+        "weight": 0.0
+      },
+      {
+        "hour": 1,
+        "weight": 0.0
+      },
+      {
+        "hour": 2,
+        "weight": 0.0
+      },
+      {
+        "hour": 3,
+        "weight": 0.0
+      },
+      {
+        "hour": 4,
+        "weight": 0.0
+      },
+      {
+        "hour": 5,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 6,
+        "weight": 0.030612244897959183
+      },
+      {
+        "hour": 7,
+        "weight": 0.05102040816326531
+      },
+      {
+        "hour": 8,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 9,
+        "weight": 0.09183673469387756
+      },
+      {
+        "hour": 10,
+        "weight": 0.10204081632653061
+      },
+      {
+        "hour": 11,
+        "weight": 0.10204081632653061
+      },
+      {
+        "hour": 12,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 13,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 14,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 15,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 16,
+        "weight": 0.07142857142857142
+      },
+      {
+        "hour": 17,
+        "weight": 0.05102040816326531
+      },
+      {
+        "hour": 18,
+        "weight": 0.030612244897959183
+      },
+      {
+        "hour": 19,
+        "weight": 0.02040816326530612
+      },
+      {
+        "hour": 20,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 21,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 22,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 23,
+        "weight": 0.0
+      }
+    ],
+    "resolution": "hour"
+  },
+  "overrides": null,
+  "roleSettings": null,
+  "seed": null,
+  "simulationDays": 1,
+  "slug": "policy_engine_smoke_100t",
+  "solver": "GreedyNearest",
+  "solverParams": null,
+  "source": "frontend",
+  "tripMatrix": {
+    "CT": {
+      "CU": 0.2459016393442623,
+      "MT": 0.06557377049180328
+    },
+    "CU": {
+      "CT": 0.18032786885245902,
+      "MT": 0.22950819672131148
+    },
+    "MT": {
+      "CT": 0.04918032786885246,
+      "CU": 0.22950819672131148
+    }
+  }
+}

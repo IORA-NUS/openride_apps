@@ -9,9 +9,25 @@ import haversine as hs
 
 # from one_map_auth import OneMapAuth
 
+# A hung OSRM used to block forever: `requests.get` defaults to NO timeout. That is a
+# whole-run failure, not a slow call — the analytics agent skips a trip_geo publish while a
+# previous one is still in flight (`analytics/agent.py` `_spawn_trip_geo_publish`), so one
+# wedged socket silently disables ALL further route-geometry publishing for the rest of the
+# run. Deliberately generous: local OSRM answers in single-digit ms, so this can only fire
+# on a genuine hang and cannot change assignment/sim outcomes by timing out healthy calls.
+# 5s, deliberately NOT 30s: LONG_RUN_STEP_TIMEOUT is 30s, so a 30s request timeout equals
+# the scheduler's whole patience — the agent would be pruned before the call ever returned
+# (and LONG_RUN_STEP_TIMEOUT_ABORT_CONSECUTIVE=3 could then abort the run). Measured healthy
+# OSRM latency on this box: median 7.3 ms, max 22.7 ms over 5 Singapore OD pairs, so 5s is
+# ~200x the observed tail and can only fire on a genuine hang.
+OSRM_TIMEOUT_SECONDS = float(os.environ.get("OSRM_TIMEOUT_SECONDS", "5"))
+
+
 class OSRMClient:
 
     profile = "driving"
+    last_call_ms: float = 0.0
+    last_call_kind: str = ""
     # def __init__(self):
     #     self.start_loc = None
     #     self.end_loc = None
@@ -38,12 +54,15 @@ class OSRMClient:
             "steps": steps,
             # "hints": "false"
         }
+        call_start = time.perf_counter()
         try:
-            response = requests.get(url, params=params)
-            # print(response.url)
+            response = requests.get(url, params=params, timeout=OSRM_TIMEOUT_SECONDS)
         except Exception as e:
-            # print(e)
+            cls.last_call_ms = (time.perf_counter() - call_start) * 1000
+            cls.last_call_kind = "get_route"
             raise(e)
+        cls.last_call_ms = (time.perf_counter() - call_start) * 1000
+        cls.last_call_kind = "get_route"
 
         route_description = response.json()
         # # print(route_description)
@@ -86,9 +105,10 @@ class OSRMClient:
 
             table_url = f"{base_url}/{all_coords}?sources={';'.join([str(i) for i in source_indices])}&destinations={';'.join([str(i) for i in destination_indices])}&annotations={units}&fallback_speed=40.0"
 
-            # print(table_url)
-            response = requests.get(table_url)
-            # print(response.text)
+            call_start = time.perf_counter()
+            response = requests.get(table_url, timeout=OSRM_TIMEOUT_SECONDS)
+            cls.last_call_ms = (time.perf_counter() - call_start) * 1000
+            cls.last_call_kind = "get_distance_matrix"
 
             try:
                 return response.json()[f"{units}s"] # NOTE Plural durations

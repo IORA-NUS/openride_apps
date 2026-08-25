@@ -1,7 +1,7 @@
-from apps.ride_hail.analytics import AnalyticsAgentIndie, AnalyticsApp
-from apps.ride_hail.assignment import AssignmentAgentIndie, AssignmentApp
-from apps.ride_hail.driver import DriverAgentIndie, DriverApp, DriverManager, DriverTripManager
-from apps.ride_hail.passenger import PassengerAgentIndie, PassengerApp, PassengerManager, PassengerTripManager
+from apps.ridehail.analytics import AnalyticsAgentIndie, AnalyticsApp
+from apps.ridehail.assignment import AssignmentAgentIndie, AssignmentApp
+from apps.ridehail.driver import DriverAgentIndie, DriverApp, DriverManager, DriverTripManager
+from apps.ridehail.passenger import PassengerAgentIndie, PassengerApp, PassengerManager, PassengerTripManager
 
 
 def test_ride_hail_driver_package_exports_existing_classes():

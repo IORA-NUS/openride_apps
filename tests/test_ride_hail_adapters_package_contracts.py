@@ -1,6 +1,6 @@
 import pytest
 
-import apps.ride_hail.adapters as adapters_pkg
+import apps.ridehail.adapters as adapters_pkg
 
 
 def test_ride_hail_adapters_package_all_symbols_resolve():

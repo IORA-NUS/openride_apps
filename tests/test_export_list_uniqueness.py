@@ -1,9 +1,9 @@
-import apps.ride_hail as ride_hail
-import apps.ride_hail.adapters as ride_hail_adapters
-import apps.ride_hail.analytics as canonical_analytics_pkg
-import apps.ride_hail.assignment as canonical_assignment_pkg
-import apps.ride_hail.driver as canonical_driver_pkg
-import apps.ride_hail.passenger as canonical_passenger_pkg
+import apps.ridehail as ridehail
+import apps.ridehail.adapters as ride_hail_adapters
+import apps.ridehail.analytics as canonical_analytics_pkg
+import apps.ridehail.assignment as canonical_assignment_pkg
+import apps.ridehail.driver as canonical_driver_pkg
+import apps.ridehail.passenger as canonical_passenger_pkg
 
 
 def _assert_all_entries_are_unique(module_obj):
@@ -12,7 +12,7 @@ def _assert_all_entries_are_unique(module_obj):
 
 
 def test_root_and_adapter_export_lists_have_unique_symbols():
-    _assert_all_entries_are_unique(ride_hail)
+    _assert_all_entries_are_unique(ridehail)
     _assert_all_entries_are_unique(ride_hail_adapters)
 
 

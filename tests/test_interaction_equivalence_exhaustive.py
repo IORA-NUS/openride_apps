@@ -4,9 +4,9 @@ from types import SimpleNamespace
 import pytest
 from shapely.geometry import Point
 
-from apps.ride_hail.driver import DriverAgentIndie
-from apps.ride_hail.passenger import PassengerAgentIndie
-from apps.ride_hail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
+from apps.ridehail.driver import DriverAgentIndie
+from apps.ridehail.passenger import PassengerAgentIndie
+from apps.ridehail.statemachine import RidehailDriverTripStateMachine, RidehailPassengerTripStateMachine
 
 
 class _Recorder:
@@ -286,7 +286,7 @@ def test_exhaustive_driver_state_interactions_execute_expected_side_effects(stat
     agent.get_transition_probability = lambda *_: accept_prob
 
     # Ensure distance-based handlers trigger deterministically.
-    monkeypatch.setattr("apps.ride_hail.driver.agent.hs.haversine", lambda *args, **kwargs: 0)
+    monkeypatch.setattr("apps.ridehail.driver.agent.hs.haversine", lambda *args, **kwargs: 0)
 
     if state == RidehailDriverTripStateMachine.driver_looking_for_job.name:
         agent.projected_path = Point(1, 1)

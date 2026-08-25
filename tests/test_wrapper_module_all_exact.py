@@ -1,16 +1,16 @@
-# import apps.ride_hail.analytics.agent as canonical_analytics_agent_mod
-# import apps.ride_hail.analytics.app as canonical_analytics_app_mod
-# import apps.ride_hail.assignment.agent as canonical_assignment_agent_mod
-# import apps.ride_hail.assignment.app as canonical_assignment_app_mod
-# import apps.ride_hail.assignment.manager as canonical_assignment_manager_mod
-# import apps.ride_hail.driver.agent as canonical_driver_agent_mod
-# import apps.ride_hail.driver.app as canonical_driver_app_mod
-# import apps.ride_hail.driver.manager as canonical_driver_manager_mod
-# import apps.ride_hail.driver.trip_manager as canonical_driver_trip_manager_mod
-# import apps.ride_hail.passenger.agent as canonical_passenger_agent_mod
-# import apps.ride_hail.passenger.app as canonical_passenger_app_mod
-# import apps.ride_hail.passenger.manager as canonical_passenger_manager_mod
-# import apps.ride_hail.passenger.trip_manager as canonical_passenger_trip_manager_mod
+# import apps.ridehail.analytics.agent as canonical_analytics_agent_mod
+# import apps.ridehail.analytics.app as canonical_analytics_app_mod
+# import apps.ridehail.assignment.agent as canonical_assignment_agent_mod
+# import apps.ridehail.assignment.app as canonical_assignment_app_mod
+# import apps.ridehail.assignment.manager as canonical_assignment_manager_mod
+# import apps.ridehail.driver.agent as canonical_driver_agent_mod
+# import apps.ridehail.driver.app as canonical_driver_app_mod
+# import apps.ridehail.driver.manager as canonical_driver_manager_mod
+# import apps.ridehail.driver.trip_manager as canonical_driver_trip_manager_mod
+# import apps.ridehail.passenger.agent as canonical_passenger_agent_mod
+# import apps.ridehail.passenger.app as canonical_passenger_app_mod
+# import apps.ridehail.passenger.manager as canonical_passenger_manager_mod
+# import apps.ridehail.passenger.trip_manager as canonical_passenger_trip_manager_mod
 
 
 # def test_canonical_wrapper_module_all_values_match_expected_symbols():

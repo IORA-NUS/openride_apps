@@ -2,7 +2,7 @@
 
 import sys, json, os
 from datetime import datetime
-from apps.ride_hail.scenario import ScenarioManager
+from apps.ridehail.scenario import ScenarioManager
 from openride_apps.apps.simulation.simulation_runtime import SimulationRuntime
 # from apps.utils.path_utils import get_run_data_dir
 from apps.config import simulation_domains
@@ -29,33 +29,33 @@ domain_name = domain  # e.g., 'ridehail-sim'
 agent_config = {
     'driver': {
         'scheduler_key': 'agent',
-        'agent_class': 'apps.ride_hail.driver.DriverAgentIndie',
+        'agent_class': 'apps.ridehail.driver.DriverAgentIndie',
         'init_time_step_key': 'shift_start_time',
         'extra_fields': lambda agent_id, behavior, sim: {},
     },
     'passenger': {
         'scheduler_key': 'agent',
-        'agent_class': 'apps.ride_hail.passenger.PassengerAgentIndie',
+        'agent_class': 'apps.ridehail.passenger.PassengerAgentIndie',
         'init_time_step_key': 'trip_request_time',
         'extra_fields': lambda agent_id, behavior, sim: {},
     },
     'assignment': {
         'scheduler_key': 'service',
-        'agent_class': 'apps.ride_hail.assignment.AssignmentAgentIndie',
+        'agent_class': 'apps.ridehail.assignment.AssignmentAgentIndie',
         'init_time_step_key': None,
         'extra_fields': lambda agent_id, behavior, sim: {},
     },
     'analytics': {
         'scheduler_key': 'service',
-        'agent_class': 'apps.ride_hail.analytics.AnalyticsAgentIndie',
+        'agent_class': 'apps.ridehail.analytics.AnalyticsAgentIndie',
         'init_time_step_key': None,
         'extra_fields': lambda agent_id, behavior, sim: {'datahub_dir': sim.datahub_dir},
     },
 }
 
 # def register_state_machines_fn(sim):
-#     from apps.ride_hail.statemachine.ridehail_driver_trip_sm import RidehailDriverTripStateMachine
-#     from apps.ride_hail.statemachine.ridehail_passenger_trip_sm import RidehailPassengerTripStateMachine
+#     from apps.ridehail.statemachine.ridehail_driver_trip_sm import RidehailDriverTripStateMachine
+#     from apps.ridehail.statemachine.ridehail_passenger_trip_sm import RidehailPassengerTripStateMachine
 #     from orsim.utils import WorkflowStateMachine
 #     from apps.common.statemachine_registry import StateMachineRegistry
 #     from apps.config import settings
@@ -69,8 +69,8 @@ agent_config = {
 #         headers=sim.user.get_headers()
 #     )
 
-from apps.ride_hail.statemachine.ridehail_driver_trip_sm import RidehailDriverTripStateMachine
-from apps.ride_hail.statemachine.ridehail_passenger_trip_sm import RidehailPassengerTripStateMachine
+from apps.ridehail.statemachine.ridehail_driver_trip_sm import RidehailDriverTripStateMachine
+from apps.ridehail.statemachine.ridehail_passenger_trip_sm import RidehailPassengerTripStateMachine
 from orsim.utils import WorkflowStateMachine
 
 ridehail_statemachines = {

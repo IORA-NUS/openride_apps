@@ -1,0 +1,292 @@
+{
+  "agents": {
+    "facility": {
+      "count": 50,
+      "policy": {
+        "type": "random"
+      }
+    },
+    "order": {
+      "count": 10000,
+      "orderCountUnit": "per_day",
+      "policy": {
+        "type": "random"
+      }
+    },
+    "truck": {
+      "count": 5000,
+      "policy": {
+        "type": "random"
+      }
+    }
+  },
+  "behaviorRevision": 10,
+  "earlyOrderCount": 64,
+  "frozen": true,
+  "hauliers": [
+    {
+      "fleet_share": 60.0,
+      "id": "patrick_inc",
+      "name": "Patrick Inc",
+      "order_share": 60.0
+    },
+    {
+      "fleet_share": 20.0,
+      "id": "addison_co",
+      "name": "Addison & Co.",
+      "order_share": 20.0
+    },
+    {
+      "fleet_share": 20.0,
+      "id": "global_inc",
+      "name": "Global Inc.",
+      "order_share": 20.0
+    }
+  ],
+  "name": "Test5000",
+  "orderCountUnit": "per_day",
+  "orderDemandCurve": null,
+  "overrides": {
+    "facility": {
+      "facility_type": "Port",
+      "fifo_queue_policy": true,
+      "footprint": {
+        "coordinates": [
+          [
+            [
+              103.8241852,
+              1.260097
+            ],
+            [
+              103.8304659,
+              1.2636365
+            ],
+            [
+              103.8361342,
+              1.2638392
+            ],
+            [
+              103.8424912,
+              1.2578976
+            ],
+            [
+              103.8424306,
+              1.2577463
+            ],
+            [
+              103.8405236,
+              1.2568519
+            ],
+            [
+              103.8402573,
+              1.2569475
+            ],
+            [
+              103.8401516,
+              1.2570356
+            ],
+            [
+              103.8399402,
+              1.2569321
+            ],
+            [
+              103.8396595,
+              1.2572913
+            ],
+            [
+              103.8369063,
+              1.256086
+            ],
+            [
+              103.8353248,
+              1.2575757
+            ],
+            [
+              103.8357593,
+              1.2580477
+            ],
+            [
+              103.8349761,
+              1.2587449
+            ],
+            [
+              103.8348527,
+              1.2594903
+            ],
+            [
+              103.8347132,
+              1.259603
+            ],
+            [
+              103.8346113,
+              1.2594742
+            ],
+            [
+              103.834504,
+              1.2599408
+            ],
+            [
+              103.8337959,
+              1.2603431
+            ],
+            [
+              103.8338442,
+              1.2605737
+            ],
+            [
+              103.8331683,
+              1.2608687
+            ],
+            [
+              103.8325406,
+              1.262129
+            ],
+            [
+              103.8320042,
+              1.2625098
+            ],
+            [
+              103.8307436,
+              1.2624561
+            ],
+            [
+              103.8300033,
+              1.2619681
+            ],
+            [
+              103.8302554,
+              1.2600213
+            ],
+            [
+              103.8310708,
+              1.2590506
+            ],
+            [
+              103.8310493,
+              1.2585303
+            ],
+            [
+              103.8309373,
+              1.2582138
+            ],
+            [
+              103.83099,
+              1.258195
+            ],
+            [
+              103.8305612,
+              1.2570805
+            ],
+            [
+              103.8289283,
+              1.2576578
+            ],
+            [
+              103.8287405,
+              1.2570858
+            ],
+            [
+              103.8283045,
+              1.2573527
+            ],
+            [
+              103.8279169,
+              1.2574929
+            ],
+            [
+              103.8267051,
+              1.2576967
+            ],
+            [
+              103.8263996,
+              1.2578295
+            ],
+            [
+              103.8256092,
+              1.2583413
+            ],
+            [
+              103.8249495,
+              1.2588835
+            ],
+            [
+              103.8245654,
+              1.2593467
+            ],
+            [
+              103.8241852,
+              1.260097
+            ]
+          ]
+        ],
+        "type": "Polygon"
+      },
+      "gate_count": 1,
+      "max_queue_size": null,
+      "operating_days": "7 days a week",
+      "operating_hours": "24/7",
+      "persist_facility_snapshots": false,
+      "publish_facility_stream_kafka": true,
+      "service_time": 1800,
+      "status": "Open"
+    },
+    "order": {
+      "cancel_probability_before_assignment": 0,
+      "container_status": "Empty",
+      "dropoff_location_type": "Warehouse",
+      "haulier_id": "patrick_inc",
+      "haulier_name": "Patrick Inc",
+      "order_size": "1x20",
+      "order_type": "import",
+      "pickup_location_type": "Depo",
+      "require_planned_routes": false,
+      "shipping_line": "Shipping Line",
+      "vessel_number": "Vessel123"
+    },
+    "truck": {
+      "cancel_probability_in_queue": 0,
+      "cancel_probability_when_assigned": 0,
+      "default_shift_end_seconds": null,
+      "default_shift_start_seconds": 0,
+      "haulier_id": "patrick_inc",
+      "haulier_name": "Patrick Inc",
+      "idle_strategy": "stay_if_no_assignment",
+      "max_estimated_time_to_dropoff": 3600,
+      "max_estimated_time_to_pickup": 3600,
+      "min_estimated_time_to_dropoff": 600,
+      "min_estimated_time_to_pickup": 600,
+      "osrm_route_cache_max_entries": 2048,
+      "planned_dropoff_route": null,
+      "planned_reposition_route": null,
+      "restricted_areas": [
+        "West Coast",
+        "MBS"
+      ],
+      "truck_size": "20ft",
+      "use_osrm_at_assignment": false
+    }
+  },
+  "seed": 20260712,
+  "simulationDays": 7,
+  "slug": "test5000",
+  "solver": "GreedyNearest",
+  "solverParams": null,
+  "source": "spec",
+  "tripMatrix": {
+    "CT": {
+      "CT": 0.0,
+      "CU": 0.16666666666666666,
+      "MT": 0.16666666666666666
+    },
+    "CU": {
+      "CT": 0.16666666666666666,
+      "CU": 0.0,
+      "MT": 0.16666666666666666
+    },
+    "MT": {
+      "CT": 0.16666666666666666,
+      "CU": 0.16666666666666666,
+      "MT": 0.0
+    }
+  }
+}

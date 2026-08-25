@@ -1,14 +1,14 @@
 
-import apps.ride_hail as ride_hail
-import apps.ride_hail.adapters as ride_hail_adapters
-import apps.ride_hail.analytics as canonical_analytics_pkg
-import apps.ride_hail.assignment as canonical_assignment_pkg
-import apps.ride_hail.driver as canonical_driver_pkg
-import apps.ride_hail.passenger as canonical_passenger_pkg
+import apps.ridehail as ridehail
+import apps.ridehail.adapters as ride_hail_adapters
+import apps.ridehail.analytics as canonical_analytics_pkg
+import apps.ridehail.assignment as canonical_assignment_pkg
+import apps.ridehail.driver as canonical_driver_pkg
+import apps.ridehail.passenger as canonical_passenger_pkg
 
 
 def test_ride_hail_root_all_order_is_stable():
-    assert ride_hail.__all__ == [
+    assert ridehail.__all__ == [
         "RideHailActions",
         "RideHailEvents",
         "validate_assigned_payload",

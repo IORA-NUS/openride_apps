@@ -1,0 +1,6 @@
+# Development and test dependencies. Install on top of requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+-r requirements.txt
+
+pytest==7.4.4
+bump2version==1.0.1         # orsim release tooling

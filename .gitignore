@@ -1,6 +1,11 @@
 # custom
 
-archive/
+# Anchored to the repo root. Unanchored, `archive/` matches at ANY depth, and it
+# silently swallowed apps/dataplane/archive/ -- a real source package (mongo.py,
+# 54 KB) that apps/dataplane/service.py imports at line 441. `git status` never
+# showed it, so the dataplane could not run from a clone at all. There is no
+# top-level archive/ directory, so anchoring loses nothing.
+/archive/
 results/
 output/
 notebook/
@@ -9,6 +14,15 @@ log/
 nohup*
 datahub/
 run_logs/
+
+# Container-logistics scenarios live in a global folder outside the domain package
+# (openride_apps/scenarios/). Commit the SOURCES (spec.json, scenario_gen.py, inputs/);
+# ignore the derived, regenerable COMPILE ARTIFACTS (rebuild with `compile-scenario`).
+scenarios/_index.json
+scenarios/_registry.json
+scenarios/*/scenario.json
+scenarios/*/index.json
+scenarios/**/*.tmp
 
 
 # user_db.py

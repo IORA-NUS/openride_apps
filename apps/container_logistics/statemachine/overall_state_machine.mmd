@@ -1,0 +1,64 @@
+%% Overall container logistics state machine
+flowchart LR
+    subgraph TRUCK
+        TW0["WorkflowStateMachine (shared)"] --> TW1[online]
+    end
+
+    subgraph ORDER
+        O1[created] -->|publish| O2[unassigned]
+        O2 -->|assign| O3[assigned]
+        O3 -->|pickup_started| O4[pickup_in_progress]
+        O4 -->|pickup_done| O5[in_transit]
+        O5 -->|dropoff_started| O6[dropoff_in_progress]
+        O6 -->|deliver| O7[completed]
+        O1 -. cancel .-> O8[cancelled]
+        O2 -. cancel .-> O8[cancelled]
+        O3 -. cancel .-> O8[cancelled]
+        O4 -. cancel .-> O8[cancelled]
+        O5 -. cancel .-> O8[cancelled]
+        O6 -. cancel .-> O8[cancelled]
+    end
+
+    subgraph HAUL
+        H1[created] -->|assign| H2[assigned]
+        H2 -->|start_empty_reposition| H3[repositioning_to_pickup]
+        H2 -->|arrive_pickup_queue| H4[queued_for_pickup]
+        H3 -->|arrive_pickup_queue| H4[queued_for_pickup]
+        H4 -->|enter_pickup_gate| H5[at_pickup_gate]
+        H5 -->|finish_pickup_service| H6[loaded_in_transit]
+        H6 -->|arrive_dropoff_queue| H7[queued_for_dropoff]
+        H7 -->|enter_dropoff_gate| H8[at_dropoff_gate]
+        H8 -->|finish_dropoff_service| H9[completed]
+        H1 -. cancel .-> H10[cancelled]
+        H2 -. cancel .-> H10[cancelled]
+        H3 -. cancel .-> H10[cancelled]
+        H4 -. cancel .-> H10[cancelled]
+        H5 -. cancel .-> H10[cancelled]
+        H6 -. cancel .-> H10[cancelled]
+        H7 -. cancel .-> H10[cancelled]
+        H8 -. cancel .-> H10[cancelled]
+    end
+
+    subgraph GATE
+        G1[closed] -->|open| G2[available]
+        G2 -->|assign_pickup_truck| G3[busy_pickup]
+        G2 -->|assign_dropoff_truck| G4[busy_dropoff]
+        G3 -->|complete_service| G2[available]
+        G4 -->|complete_service| G2[available]
+        G2 -->|close| G1[closed]
+        G1 -->|breakdown| G5[out_of_service]
+        G2 -->|breakdown| G5[out_of_service]
+        G3 -->|breakdown| G5[out_of_service]
+        G4 -->|breakdown| G5[out_of_service]
+        G5 -->|repair| G1[closed]
+    end
+
+    %% Cross-machine coordination
+    TW1 -->|eligible for assignment| O3[assigned]
+    O3 -->|ORDER_ASSIGNED_TO_TRUCK| H2[assigned]
+    H4 -->|GATE_SLOT_ASSIGNED_FOR_PICKUP| G3[busy_pickup]
+    H5 -->|ORDER_PICKUP_STARTED| O4[pickup_in_progress]
+    H6 -->|ORDER_PICKUP_COMPLETED| O5[in_transit]
+    H7 -->|GATE_SLOT_ASSIGNED_FOR_DROPOFF| G4[busy_dropoff]
+    H8 -->|ORDER_DROPOFF_STARTED| O6[dropoff_in_progress]
+    H9 -->|ORDER_DELIVERED| O7[completed]

@@ -1,11 +1,11 @@
-from apps.ride_hail import (
+from apps.ridehail import (
     DriverWorkflowPayload,
     PassengerWorkflowPayload,
     RequestedTripPayload,
     RideHailActions,
 )
-from openride_apps.apps.ride_hail.statemachine.events import RideHailEvents
-from apps.ride_hail.models import AssignedPayload
+from openride_apps.apps.ridehail.statemachine.events import RideHailEvents
+from apps.ridehail.models import AssignedPayload
 
 
 def test_requested_trip_payload_parse_preserves_fields():

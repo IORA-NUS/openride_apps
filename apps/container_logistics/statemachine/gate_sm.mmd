@@ -1,0 +1,10 @@
+stateDiagram-v2
+    [*] --> closed
+    closed --> available: open
+    available --> busy: assign_truck
+    busy --> available: complete_service
+    available --> closed: close
+    closed --> out_of_service: breakdown
+    available --> out_of_service: breakdown
+    busy --> out_of_service: breakdown
+    out_of_service --> closed: repair

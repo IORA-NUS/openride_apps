@@ -1,6 +1,6 @@
 import pytest
 
-from apps.ride_hail import (
+from apps.ridehail import (
     DriverWorkflowPayload,
     PassengerWorkflowPayload,
     RequestedTripPayload,
@@ -10,8 +10,8 @@ from apps.ride_hail import (
     validate_passenger_workflow_payload,
     validate_requested_trip_payload,
 )
-from openride_apps.apps.ride_hail.statemachine.events import RideHailEvents
-from apps.ride_hail.models import AssignedPayload
+from openride_apps.apps.ridehail.statemachine.events import RideHailEvents
+from apps.ridehail.models import AssignedPayload
 
 
 @pytest.mark.parametrize(

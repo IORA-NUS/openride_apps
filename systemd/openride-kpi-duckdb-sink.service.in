@@ -1,0 +1,20 @@
+[Unit]
+Description=OpenRide KPI stream to DuckDB sink (Mongo export on run end)
+After=openride-kafka.service
+Wants=openride-kafka.service
+
+[Service]
+Type=simple
+WorkingDirectory=@WORKSPACE@
+Environment=PYTHONPATH=@WORKSPACE@:@WORKSPACE@/openride_apps
+Environment=KAFKA_BOOTSTRAP_SERVERS=localhost:9094
+Environment=KPI_DUCKDB_DATA_DIR=@WORKSPACE@/.openride/kpi-duckdb
+Environment=MONGODB_HOST=localhost
+Environment=MONGODB_PORT=27017
+Environment=MONGODB_NAME=OpenRoadDB
+ExecStart=@WORKSPACE@/scripts/run-kpi-duckdb-sink.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

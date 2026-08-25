@@ -1,87 +1,93 @@
-amqp==5.2.0
-appnope==0.1.4
-asttokens==3.0.1
-attrs==23.2.0
-billiard==4.2.4
-bump2version==1.0.1
+# OpenRide — container-logistics simulation: runtime dependencies.
+#
+# Direct dependencies only, grouped by role. This replaces a `pip freeze` dump
+# that carried the full transitive closure plus a Jupyter/IPython stack and
+# `appnope` (a macOS-only package). Transitive pins live in the lockfile if you
+# need byte-reproducible installs; this file is what the project actually
+# imports.
+#
+# Dev/test tooling: requirements-dev.txt
+#
+# Python 3.11 (the tree is developed and tested on 3.11.2).
+
+# ── Simulation engine ────────────────────────────────────────────────────────
+# orsim 1.3.0 — released 2026-08-23 from IORA-NUS/orsim master, tag v1.3.0.
+#
+# This ENDS the fork. Previously this line was `-e file:///home/user/orsim`, a
+# local working tree that existed on one machine, containing two unreleased
+# commits while still declaring `version='1.2.1'` — so `pip install orsim==1.2.1`
+# silently installed DIFFERENT code under an identical version string.
+#
+# 1.3.0 is those commits, released honestly: the `orsim.runtime` package
+# (AgentSource, ORSimRuntime, FixedStepTermination) that apps/simulation imports,
+# and an event-driven `confirm_responses` in place of a polling loop.
+#
+# Not on PyPI, so the tag is the distribution point. Tag v1.3.0 == be8b811.
+orsim @ git+https://github.com/IORA-NUS/orsim.git@v1.3.0
+
+# ── Agent runtime: task queue, brokers, transport ────────────────────────────
 celery==5.6.2
-Cerberus==1.3.5
-certifi==2023.11.17
-charset-normalizer==3.3.2
-click==8.1.7
-click-didyoumean==0.3.0
-click-plugins==1.1.1
-click-repl==0.3.0
-cligj==0.7.2
-comm==0.2.3
-debugpy==1.8.20
-decorator==5.2.1
-dnspython==2.4.2
-eventlet==0.34.2
-exceptiongroup==1.3.1
-executing==2.2.1
-fiona==1.9.5
-geographiclib==2.0
+eventlet==0.34.2            # celery pool — agents are IO-bound on MQTT/HTTP
+pika==1.3.2                 # RabbitMQ
+confluent-kafka==2.14.0     # KPI / run_status / trip_geo / truck_loc topics
+websockets==12.0
+requests==2.31.0
+urllib3==2.1.0
+
+# ── Storage / serialisation ──────────────────────────────────────────────────
+pymongo==4.17.0             # also provides `bson`
+duckdb==1.5.3               # dataplane OLAP store
+orjson==3.11.9
+openpyxl==3.1.5             # scenario inputs may be .xlsx
+
+# ── Domain modelling ─────────────────────────────────────────────────────────
+python-statemachine==3.0.0  # imported as `statemachine`
+Cerberus==1.3.5             # schema validation
+graphviz==0.21              # state-machine rendering (needs the `graphviz`
+                            # system package to render, not just to import)
+
+# ── Geospatial / numerics ────────────────────────────────────────────────────
+numpy==1.26.3
+pandas==2.1.4
+shapely==2.0.2
+pyproj==3.6.1
 geopandas==0.14.1
 geopy==2.4.1
-gmqtt==0.7.0
-graphviz==0.21
-greenlet==3.0.3
 haversine==2.8.0
-idna==3.6
-importlib-metadata==7.0.1
-iniconfig==2.0.0
-ipykernel==6.31.0
-ipython==8.18.1
-jedi==0.19.2
-jupyter_client==8.6.3
-jupyter_core==5.8.1
-kombu==5.6.2
-librt==0.8.1
-matplotlib-inline==0.2.1
-mypy==1.19.1
-mypy_extensions==1.1.0
-nest-asyncio==1.6.0
-numpy==1.26.3
-orsim
-packaging==23.2
-paho-mqtt==1.6.1
-pandas==2.1.4
-parso==0.8.6
-pathspec==1.0.4
-pexpect==4.9.0
-pika==1.3.2
-platformdirs==4.4.0
-pluggy==1.3.0
-ply==3.11
 polyline==2.0.1
-prompt-toolkit==3.0.43
+
+# ── Process / telemetry ──────────────────────────────────────────────────────
 psutil==7.2.2
-ptyprocess==0.7.0
-pure_eval==0.2.3
-pydot==4.0.1
-Pygments==2.19.2
-Pyomo==6.7.0
-pyparsing==3.3.2
-pyproj==3.6.1
-pytest==7.4.4
 python-dateutil==2.8.2
-python-statemachine==3.0.0
-pytz==2023.3.post1
-pyzmq==27.1.0
-requests==2.31.0
-shapely==2.0.2
-six==1.16.0
-stack-data==0.6.3
-tomli==2.0.1
-tornado==6.5.4
-traitlets==5.14.3
-typing_extensions==4.9.0
-tzdata==2025.3
-tzlocal==5.3.1
-urllib3==2.1.0
-vine==5.1.0
-wcwidth==0.2.12
-websockets==12.0
-zipp==3.17.0
-confluent-kafka==2.0.0
+
+# ── Present under protest: a domain should not have dependencies ─────────────
+# Pyomo is a MIP modelling library needed by six ride-hail assignment solvers
+# (pickup_optimal, revenue_optimal, service_optimal and the three compromise_*
+# variants). Nothing in container logistics uses it.
+#
+# It is in this file, rather than an optional extra, because it is not optional
+# TODAY: `apps/ridehail/assignment/solver/__init__.py` eagerly imports all ten
+# solvers, and `app.py` does `from .solver import *` to populate `globals()` for
+# a `globals()[solver_name]` lookup. So importing the ride-hail assignment app
+# pulls in Pyomo whether or not a MIP solver is ever selected -- verified: it
+# lands in sys.modules as a side effect, and five test modules fail to import
+# without it.
+#
+# That is the defect, not the dependency. Container logistics does the same job
+# with an explicit `SOLVER_REGISTRY` dict and a fail-soft `get_solver(name)`, and
+# needs no heavy dependency at all. Once the ride-hail solvers are loaded lazily
+# or behind a registry, Pyomo becomes an extra keyed on the SOLVER that needs it
+# -- never on the domain -- and this block goes away.
+Pyomo==6.7.0
+
+# ── The `openride` CLI ───────────────────────────────────────────────────────
+# The CLI moved into this repo but its dependencies did not: it was launched by
+# scripts/openride.sh under a *separate* interpreter (~/pyjupenv), which is a
+# general-purpose Jupyter environment no requirements file describes. A fresh
+# clone therefore installed a tree whose CLI could not start -- `openride
+# scenario compile` died on `ModuleNotFoundError: rich`, which matters because
+# compiling is the step that produces the scenario bundles the suite needs.
+# Declared here so one environment built from this file runs both the CLI and
+# the simulation, and ~/pyjupenv stops being load-bearing.
+rich==15.0.0
+questionary==2.1.1

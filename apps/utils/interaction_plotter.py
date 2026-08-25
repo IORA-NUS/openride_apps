@@ -150,9 +150,9 @@ def to_mermaid(stm_cls_dict, interactions):
 
 if __name__ == "__main__":
     # Import your statemachine classes here
-    from apps.ride_hail.statemachine import RidehailDriverTripStateMachine
-    from apps.ride_hail.statemachine import RidehailPassengerTripStateMachine
-    from apps.ride_hail.statemachine import driver_passenger_interactions
+    from apps.ridehail.statemachine import RidehailDriverTripStateMachine
+    from apps.ridehail.statemachine import RidehailPassengerTripStateMachine
+    from apps.ridehail.statemachine import driver_passenger_interactions
 
     # --- Cross-statemachine interaction diagram ---
 

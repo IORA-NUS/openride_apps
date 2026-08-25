@@ -1,0 +1,212 @@
+{
+  "agents": {
+    "facility": {
+      "count": 6,
+      "policy": {
+        "type": "allocate"
+      }
+    },
+    "order": {
+      "count": 60,
+      "orderCountUnit": "total",
+      "policy": {
+        "type": "historical"
+      }
+    },
+    "truck": {
+      "count": 18,
+      "policy": {
+        "type": "default"
+      }
+    }
+  },
+  "behaviorRevision": 10,
+  "cooperation": {
+    "active": "chain",
+    "structures": [
+      {
+        "edges": [],
+        "id": "no-coop"
+      },
+      {
+        "edges": [
+          [
+            "acme",
+            "borax"
+          ],
+          [
+            "borax",
+            "cargo"
+          ]
+        ],
+        "id": "chain"
+      }
+    ]
+  },
+  "earlyOrderCount": 36,
+  "frozen": true,
+  "hauliers": [
+    {
+      "fleet_share": 30.0,
+      "id": "acme",
+      "name": "Acme",
+      "order_share": 30.0
+    },
+    {
+      "fleet_share": 30.0,
+      "id": "borax",
+      "name": "Borax",
+      "order_share": 30.0
+    },
+    {
+      "fleet_share": 25.0,
+      "id": "cargo",
+      "name": "Cargo",
+      "order_share": 25.0
+    },
+    {
+      "fleet_share": 15.0,
+      "id": "delta",
+      "name": "Delta",
+      "order_share": 15.0
+    }
+  ],
+  "name": "Collab Chain 18t",
+  "orderCountUnit": "total",
+  "orderDemandCurve": {
+    "points": [
+      {
+        "hour": 0,
+        "weight": 0.0
+      },
+      {
+        "hour": 1,
+        "weight": 0.0
+      },
+      {
+        "hour": 2,
+        "weight": 0.0
+      },
+      {
+        "hour": 3,
+        "weight": 0.0
+      },
+      {
+        "hour": 4,
+        "weight": 0.0
+      },
+      {
+        "hour": 5,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 6,
+        "weight": 0.030612244897959183
+      },
+      {
+        "hour": 7,
+        "weight": 0.05102040816326531
+      },
+      {
+        "hour": 8,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 9,
+        "weight": 0.09183673469387756
+      },
+      {
+        "hour": 10,
+        "weight": 0.10204081632653061
+      },
+      {
+        "hour": 11,
+        "weight": 0.10204081632653061
+      },
+      {
+        "hour": 12,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 13,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 14,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 15,
+        "weight": 0.08163265306122448
+      },
+      {
+        "hour": 16,
+        "weight": 0.07142857142857142
+      },
+      {
+        "hour": 17,
+        "weight": 0.05102040816326531
+      },
+      {
+        "hour": 18,
+        "weight": 0.030612244897959183
+      },
+      {
+        "hour": 19,
+        "weight": 0.02040816326530612
+      },
+      {
+        "hour": 20,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 21,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 22,
+        "weight": 0.01020408163265306
+      },
+      {
+        "hour": 23,
+        "weight": 0.0
+      }
+    ],
+    "resolution": "hour"
+  },
+  "overrides": null,
+  "planner": {
+    "deployment": {
+      "params": {
+        "dual_cycle_bonus_km": 5.0,
+        "dual_cycle_radius_km": 0.5
+      },
+      "type": "GreedyNearest"
+    },
+    "sharing": null,
+    "timing": {
+      "mode": "online"
+    },
+    "topology": "partitioned"
+  },
+  "seed": 777001,
+  "simulationDays": 1,
+  "slug": "collab_chain_18t",
+  "solver": "GreedyNearest",
+  "solverParams": null,
+  "source": "spec",
+  "tripMatrix": {
+    "CT": {
+      "CU": 0.2459016393442623,
+      "MT": 0.06557377049180328
+    },
+    "CU": {
+      "CT": 0.18032786885245902,
+      "MT": 0.22950819672131148
+    },
+    "MT": {
+      "CT": 0.04918032786885246,
+      "CU": 0.22950819672131148
+    }
+  }
+}

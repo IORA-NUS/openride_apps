@@ -1,0 +1,404 @@
+{
+  "agents": {
+    "facility": {
+      "count": 300,
+      "policy": {
+        "type": "allocate"
+      }
+    },
+    "order": {
+      "count": 5000,
+      "orderCountUnit": "total",
+      "policy": {
+        "type": "historical"
+      }
+    },
+    "truck": {
+      "count": 500,
+      "policy": {
+        "type": "default"
+      }
+    }
+  },
+  "behaviorRevision": 10,
+  "earlyOrderCount": 64,
+  "facilityRules": [
+    {
+      "match": {
+        "code": "CT"
+      },
+      "set": {
+        "rebate": {
+          "currency": "credit",
+          "points": [
+            {
+              "amount": 40.0,
+              "hour": 22
+            },
+            {
+              "amount": 40.0,
+              "hour": 23
+            },
+            {
+              "amount": 40.0,
+              "hour": 0
+            },
+            {
+              "amount": 40.0,
+              "hour": 1
+            },
+            {
+              "amount": 40.0,
+              "hour": 2
+            },
+            {
+              "amount": 40.0,
+              "hour": 3
+            },
+            {
+              "amount": 40.0,
+              "hour": 4
+            },
+            {
+              "amount": 40.0,
+              "hour": 5
+            },
+            {
+              "amount": -25.0,
+              "hour": 7
+            },
+            {
+              "amount": -25.0,
+              "hour": 8
+            },
+            {
+              "amount": -25.0,
+              "hour": 9
+            }
+          ],
+          "resolution": "hour"
+        }
+      }
+    },
+    {
+      "match": {
+        "code": "CU"
+      },
+      "set": {
+        "rebate": {
+          "currency": "credit",
+          "points": [
+            {
+              "amount": 5.0,
+              "hour": 0
+            },
+            {
+              "amount": 5.0,
+              "hour": 1
+            },
+            {
+              "amount": 5.0,
+              "hour": 2
+            },
+            {
+              "amount": 5.0,
+              "hour": 3
+            },
+            {
+              "amount": 5.0,
+              "hour": 4
+            },
+            {
+              "amount": 5.0,
+              "hour": 5
+            },
+            {
+              "amount": 5.0,
+              "hour": 6
+            },
+            {
+              "amount": 5.0,
+              "hour": 7
+            },
+            {
+              "amount": 5.0,
+              "hour": 8
+            },
+            {
+              "amount": 5.0,
+              "hour": 9
+            },
+            {
+              "amount": 5.0,
+              "hour": 10
+            },
+            {
+              "amount": 5.0,
+              "hour": 11
+            },
+            {
+              "amount": 5.0,
+              "hour": 12
+            },
+            {
+              "amount": 5.0,
+              "hour": 13
+            },
+            {
+              "amount": 5.0,
+              "hour": 14
+            },
+            {
+              "amount": 5.0,
+              "hour": 15
+            },
+            {
+              "amount": 5.0,
+              "hour": 16
+            },
+            {
+              "amount": 5.0,
+              "hour": 17
+            },
+            {
+              "amount": 5.0,
+              "hour": 18
+            },
+            {
+              "amount": 5.0,
+              "hour": 19
+            },
+            {
+              "amount": 5.0,
+              "hour": 20
+            },
+            {
+              "amount": 5.0,
+              "hour": 21
+            },
+            {
+              "amount": 5.0,
+              "hour": 22
+            },
+            {
+              "amount": 5.0,
+              "hour": 23
+            }
+          ],
+          "resolution": "hour"
+        }
+      }
+    },
+    {
+      "match": {
+        "code": "MT"
+      },
+      "set": {
+        "rebate": null
+      }
+    }
+  ],
+  "facilityRulesWorld": {
+    "_seed_note": "recorded for context only and NOT compared: facility placement does not read the scenario seed, so --reseed cannot move a facility",
+    "code_counts": {
+      "CT": 6,
+      "CU": 234,
+      "MT": 60
+    },
+    "facility_count": 300,
+    "recorded_at": "2026-08-21T00:00:00Z",
+    "seed_at_baseline": 701420930,
+    "site_digest": "blake2b16:86bfd8764d6d9d46"
+  },
+  "frozen": true,
+  "hauliers": [
+    {
+      "fleet_share": 60.0,
+      "id": "patrick_inc",
+      "name": "Patrick Inc",
+      "order_share": 60.0
+    },
+    {
+      "fleet_share": 20.0,
+      "id": "global_inc",
+      "name": "Global Inc",
+      "order_share": 10.0
+    },
+    {
+      "fleet_share": 20.0,
+      "id": "addison_co",
+      "name": "Addison & Co.",
+      "order_share": 30.0
+    }
+  ],
+  "name": "Rebate . Ports pay at night . 500 trucks",
+  "orderCountUnit": "total",
+  "orderDemandCurve": {
+    "points": [
+      {
+        "hour": 0,
+        "weight": 0.01438652717630681
+      },
+      {
+        "hour": 1,
+        "weight": 0.011509221741045456
+      },
+      {
+        "hour": 2,
+        "weight": 0.00959101811753788
+      },
+      {
+        "hour": 3,
+        "weight": 0.00959101811753788
+      },
+      {
+        "hour": 4,
+        "weight": 0.011509221741045456
+      },
+      {
+        "hour": 5,
+        "weight": 0.023977545293844712
+      },
+      {
+        "hour": 6,
+        "weight": 0.05275059964645831
+      },
+      {
+        "hour": 7,
+        "weight": 0.08152365399907188
+      },
+      {
+        "hour": 8,
+        "weight": 0.09591018117537885
+      },
+      {
+        "hour": 9,
+        "weight": 0.09111467211660988
+      },
+      {
+        "hour": 10,
+        "weight": 0.06713712682276507
+      },
+      {
+        "hour": 11,
+        "weight": 0.05275059964645831
+      },
+      {
+        "hour": 12,
+        "weight": 0.04100797127460885
+      },
+      {
+        "hour": 13,
+        "weight": 0.03207177461675008
+      },
+      {
+        "hour": 14,
+        "weight": 0.0397313758334473
+      },
+      {
+        "hour": 15,
+        "weight": 0.056752691236859734
+      },
+      {
+        "hour": 16,
+        "weight": 0.0831357493967155
+      },
+      {
+        "hour": 17,
+        "weight": 0.09591018117537885
+      },
+      {
+        "hour": 18,
+        "weight": 0.06058249184520835
+      },
+      {
+        "hour": 19,
+        "weight": 0.02526323702749388
+      },
+      {
+        "hour": 20,
+        "weight": 0.015050444928473648
+      },
+      {
+        "hour": 21,
+        "weight": 0.008667453437801988
+      },
+      {
+        "hour": 22,
+        "weight": 0.005688716456894398
+      },
+      {
+        "hour": 23,
+        "weight": 0.01438652717630681
+      }
+    ],
+    "resolution": "hour"
+  },
+  "overrides": {
+    "facility": {
+      "facility_type": "Depo",
+      "fifo_queue_policy": true,
+      "gate_count": 1,
+      "max_queue_size": null,
+      "operating_days": "7 days a week",
+      "operating_hours": "24/7",
+      "persist_facility_snapshots": false,
+      "publish_facility_stream_kafka": true,
+      "service_time": 1800,
+      "status": "Open"
+    },
+    "order": {
+      "cancel_probability_before_assignment": 0,
+      "container_status": "Empty",
+      "dropoff_location_type": "Warehouse",
+      "order_size": "1x20",
+      "order_type": "import",
+      "pickup_location_type": "Depo",
+      "require_planned_routes": false,
+      "shipping_line": "Shipping Line",
+      "vessel_number": "Vessel123"
+    },
+    "truck": {
+      "cancel_probability_in_queue": 0,
+      "cancel_probability_when_assigned": 0,
+      "default_shift_end_seconds": null,
+      "default_shift_start_seconds": 0,
+      "haulier_name": "Haulier",
+      "idle_strategy": "stay_if_no_assignment",
+      "max_estimated_time_to_dropoff": 3600,
+      "max_estimated_time_to_pickup": 3600,
+      "min_estimated_time_to_dropoff": 600,
+      "min_estimated_time_to_pickup": 600,
+      "osrm_route_cache_max_entries": 2048,
+      "planned_dropoff_route": null,
+      "planned_reposition_route": null,
+      "restricted_areas": [
+        "West Coast",
+        "MBS"
+      ],
+      "truck_size": "20ft",
+      "use_osrm_at_assignment": false
+    }
+  },
+  "referenceTime": "2020-01-01 00:00:00",
+  "seed": 701420930,
+  "simulationDays": 7,
+  "slug": "rebate_ports_500_trucks",
+  "solver": "GreedyNearest",
+  "solverParams": null,
+  "source": "spec",
+  "tripMatrix": {
+    "CT": {
+      "CU": 0.24590163934426226,
+      "MT": 0.06557377049180328
+    },
+    "CU": {
+      "CT": 0.180327868852459,
+      "MT": 0.2295081967213115
+    },
+    "MT": {
+      "CT": 0.04918032786885246,
+      "CU": 0.2295081967213115
+    }
+  }
+}
