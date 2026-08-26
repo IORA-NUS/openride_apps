@@ -1,0 +1,921 @@
+<title>Installing OpenRide</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
+<style>
+  /* ─── Tokens: complete light palette on bare :root ─────────────────── */
+  :root {
+    --ground:      #F4F6F6;
+    --surface:     #FFFFFF;
+    --surface-alt: #EAEEEF;
+    --ink:         #10212A;
+    --ink-soft:    #2E4550;
+    --muted:       #55707B;
+    --rule:        #D3DBDD;
+    --rule-strong: #B4C1C4;
+    --marine:      #0E5A6B;
+    --marine-soft: #E2EDEF;
+    --signal:      #A8540E;
+    --signal-soft: #F7EBDF;
+    --code-bg:     #0E1A20;
+    --code-ink:    #DCE7EA;
+    --code-dim:    #7E98A1;
+    --shadow:      0 1px 2px rgba(16,33,42,.06), 0 8px 24px -12px rgba(16,33,42,.18);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground:      #0A1216;
+      --surface:     #101E24;
+      --surface-alt: #16272E;
+      --ink:         #E8EFF1;
+      --ink-soft:    #C2D2D7;
+      --muted:       #8FA8B1;
+      --rule:        #22353D;
+      --rule-strong: #334C56;
+      --marine:      #5FBACD;
+      --marine-soft: #12303A;
+      --signal:      #E9963F;
+      --signal-soft: #2A1D10;
+      --code-bg:     #060D11;
+      --code-ink:    #D4E2E6;
+      --code-dim:    #6F8992;
+      --shadow:      0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground:      #0A1216;
+    --surface:     #101E24;
+    --surface-alt: #16272E;
+    --ink:         #E8EFF1;
+    --ink-soft:    #C2D2D7;
+    --muted:       #8FA8B1;
+    --rule:        #22353D;
+    --rule-strong: #334C56;
+    --marine:      #5FBACD;
+    --marine-soft: #12303A;
+    --signal:      #E9963F;
+    --signal-soft: #2A1D10;
+    --code-bg:     #060D11;
+    --code-ink:    #D4E2E6;
+    --code-dim:    #6F8992;
+    --shadow:      0 1px 2px rgba(0,0,0,.4), 0 8px 24px -12px rgba(0,0,0,.6);
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "Source Serif 4", Georgia, "Times New Roman", serif;
+    font-size: 17px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .display, h1, h2, h3, .rail-title, .num, .kicker, th {
+    font-family: Archivo, "Helvetica Neue", Arial, sans-serif;
+  }
+  code, pre, .mono, .port, kbd {
+    font-family: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+
+  /* ─── Shell ────────────────────────────────────────────────────────── */
+  .shell {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 0 28px 120px;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0 52px;
+  }
+  @media (min-width: 1080px) {
+    .shell { grid-template-columns: 196px minmax(0, 1fr); }
+    .masthead { grid-column: 1 / -1; }
+  }
+
+  /* ─── Masthead ─────────────────────────────────────────────────────── */
+  .masthead {
+    padding: 72px 0 40px;
+    border-bottom: 3px solid var(--ink);
+    margin-bottom: 0;
+  }
+  .kicker {
+    font-size: 11.5px;
+    font-weight: 700;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--marine);
+    margin: 0 0 18px;
+  }
+  h1 {
+    font-size: clamp(2.6rem, 6vw, 4.1rem);
+    font-weight: 800;
+    letter-spacing: -.028em;
+    line-height: 1.02;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  .standfirst {
+    font-size: 1.16rem;
+    line-height: 1.6;
+    color: var(--ink-soft);
+    max-width: 78ch;
+    margin: 0 0 34px;
+  }
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0;
+    border-top: 1px solid var(--rule);
+  }
+  .fact {
+    padding: 16px 30px 14px 0;
+    margin-right: 30px;
+    border-right: 1px solid var(--rule);
+  }
+  .fact:last-child { border-right: 0; }
+  .fact dt {
+    font-family: Archivo, sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 5px;
+  }
+  .fact dd {
+    margin: 0;
+    font-family: "JetBrains Mono", monospace;
+    font-size: .95rem;
+    font-weight: 500;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ─── Phase rail ───────────────────────────────────────────────────── */
+  /* The show/hide pair must live together and in this order. A media query adds
+     no specificity, so a bare `.rail { display: none }` sitting later in the
+     sheet silently beats `display: block` inside an earlier query — the rail
+     then never renders, main falls into the rail's grid track, and the whole
+     content column collapses to the track width. */
+  .rail { display: none; }
+  @media (min-width: 1080px) {
+    .rail { display: block; }
+  }
+  .rail-inner {
+    position: sticky;
+    top: 32px;
+    padding-top: 48px;
+  }
+  .rail-title {
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .15em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 14px;
+  }
+  .rail ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    border-left: 1px solid var(--rule);
+  }
+  .rail li { margin: 0; }
+  .rail a {
+    display: flex;
+    gap: 10px;
+    padding: 7px 0 7px 14px;
+    font-family: Archivo, sans-serif;
+    font-size: 13.5px;
+    line-height: 1.35;
+    color: var(--ink-soft);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    margin-left: -1px;
+  }
+  .rail a:hover, .rail a:focus-visible {
+    color: var(--marine);
+    border-left-color: var(--marine);
+  }
+  .rail a .rn {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    padding-top: 1px;
+  }
+
+  /* ─── Main column ──────────────────────────────────────────────────── */
+  /* Every block in the column — prose, code, tables, trees — shares one measure,
+     so the right edge stays flush instead of going ragged between element types. */
+  main { min-width: 0; padding-top: 48px; }
+  .prose { max-width: none; }
+  p { margin: 0 0 18px; }
+  a { color: var(--marine); text-underline-offset: 2px; }
+
+  section.phase { margin: 0 0 68px; scroll-margin-top: 24px; }
+
+  .phase-head {
+    display: flex;
+    align-items: baseline;
+    gap: 18px;
+    border-top: 2px solid var(--rule-strong);
+    padding-top: 16px;
+    margin-bottom: 22px;
+  }
+  .num {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: .1em;
+    color: var(--signal);
+    font-variant-numeric: tabular-nums;
+    flex: none;
+    padding-top: 6px;
+  }
+  h2 {
+    font-size: clamp(1.55rem, 3.2vw, 2.05rem);
+    font-weight: 700;
+    letter-spacing: -.02em;
+    line-height: 1.14;
+    margin: 0;
+    text-wrap: balance;
+  }
+  h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    letter-spacing: -.005em;
+    margin: 32px 0 12px;
+    color: var(--ink);
+  }
+
+  /* ─── Code ─────────────────────────────────────────────────────────── */
+  pre {
+    background: var(--code-bg);
+    color: var(--code-ink);
+    border-radius: 3px;
+    padding: 18px 20px;
+    overflow-x: auto;
+    font-size: 13.5px;
+    line-height: 1.72;
+    margin: 0 0 20px;
+    border-left: 3px solid var(--marine);
+  }
+  pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  .cmt { color: var(--code-dim); }
+  code {
+    background: var(--surface-alt);
+    padding: .1em .38em;
+    border-radius: 2px;
+    font-size: .88em;
+    color: var(--ink);
+  }
+
+  /* ─── Callouts ─────────────────────────────────────────────────────── */
+  .note {
+    border-left: 3px solid var(--marine);
+    background: var(--marine-soft);
+    padding: 15px 20px;
+    margin: 0 0 20px;
+    border-radius: 0 3px 3px 0;
+    font-size: .95rem;
+  }
+  .note.warn { border-left-color: var(--signal); background: var(--signal-soft); }
+  .note p:last-child { margin-bottom: 0; }
+  .note .lbl {
+    font-family: Archivo, sans-serif;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--marine);
+    display: block;
+    margin-bottom: 6px;
+  }
+  .note.warn .lbl { color: var(--signal); }
+
+  /* ─── Tables ───────────────────────────────────────────────────────── */
+  .twrap { overflow-x: auto; margin: 0 0 22px; }
+  table { border-collapse: collapse; width: 100%; font-size: .92rem; }
+  th {
+    text-align: left;
+    font-size: 10.5px;
+    font-weight: 700;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 0 18px 9px 0;
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+  td {
+    padding: 11px 18px 11px 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+  td.mono, td .port { font-family: "JetBrains Mono", monospace; font-size: .87rem; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+
+  /* ─── Tree ─────────────────────────────────────────────────────────── */
+  .tree {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 3px;
+    padding: 18px 22px;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 13px;
+    line-height: 1.85;
+    /* It is a div, not a pre — without this the newlines collapse and the whole
+       tree renders as one wrapped run-on line. */
+    white-space: pre;
+    overflow-x: auto;
+    margin: 0 0 20px;
+    box-shadow: var(--shadow);
+  }
+  .tree .dim { color: var(--muted); }
+
+  /* ─── Checklist ────────────────────────────────────────────────────── */
+  .check { list-style: none; margin: 0 0 20px; padding: 0; }
+  .check li {
+    display: flex;
+    gap: 13px;
+    padding: 12px 0;
+    border-bottom: 1px solid var(--rule);
+    align-items: flex-start;
+  }
+  .check li:last-child { border-bottom: 0; }
+  .check .box {
+    flex: none;
+    width: 15px; height: 15px;
+    border: 1.5px solid var(--rule-strong);
+    border-radius: 2px;
+    margin-top: 5px;
+  }
+  .check .what { font-size: .95rem; }
+  .check .how {
+    display: block;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12.5px;
+    color: var(--muted);
+    margin-top: 3px;
+    word-break: break-all;
+  }
+
+  ul.plain { margin: 0 0 20px; padding-left: 1.15em; }
+  ul.plain li { margin-bottom: 7px; }
+
+  footer {
+    border-top: 2px solid var(--rule-strong);
+    margin-top: 20px;
+    padding-top: 22px;
+    color: var(--muted);
+    font-size: .88rem;
+  }
+
+  :focus-visible { outline: 2px solid var(--marine); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+
+  /* ─── Print / PDF ──────────────────────────────────────────────────── */
+  @page { size: A4; margin: 16mm 14mm; }
+
+  @media print {
+    /* Force the light palette regardless of the reader's theme, and keep the
+       neutrals paper-friendly. */
+    :root {
+      --ground:      #FFFFFF;
+      --surface:     #FFFFFF;
+      --surface-alt: #F0F3F4;
+      --ink:         #101E26;
+      --ink-soft:    #2B4048;
+      --muted:       #4E6A74;
+      --rule:        #CBD5D8;
+      --rule-strong: #9AABAF;
+      --marine:      #0B4F5E;
+      --marine-soft: #EDF4F5;
+      --signal:      #8F460B;
+      --signal-soft: #FAF1E8;
+      /* Code goes light in print: a dark slab costs ink and often drops out. */
+      --code-bg:     #F4F7F7;
+      --code-ink:    #10222A;
+      --code-dim:    #5C7680;
+      --shadow:      none;
+    }
+    body { font-size: 10.5pt; line-height: 1.5; background: #fff; }
+
+    /* The rail is on-screen navigation; the printed page has a contents list
+       of its own in the header and real page numbers. */
+    .rail { display: none !important; }
+    .shell { max-width: none; grid-template-columns: 1fr; padding: 0; gap: 0; }
+    main { padding-top: 0; }
+    .masthead { padding-top: 0; }
+
+    pre {
+      border: 1px solid var(--rule);
+      border-left: 3px solid var(--marine);
+      /* Keep the two tinted surfaces that carry meaning. */
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .note, .tree, th, .num { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+    /* Nothing that reads as a single unit may straddle a page break. */
+    pre, .note, .tree, .check li, tr, figure { break-inside: avoid; }
+    h1, h2, h3 { break-after: avoid; }
+    .phase-head { break-after: avoid; }
+    section.phase { break-before: auto; }
+
+    a { color: var(--ink); text-decoration: none; }
+    footer { break-before: avoid; }
+  }
+</style>
+
+<div class="shell">
+
+  <header class="masthead">
+    <p class="kicker">Container-logistics simulation platform</p>
+    <h1>Installing OpenRide</h1>
+    <p class="standfirst">
+      A complete build of the simulation engine, the platform API, the streaming data plane
+      and the analytics dashboard — from an empty machine to a finished 500-truck run.
+      Work through the phases in order; each one depends on the one before it.
+    </p>
+    <dl class="facts">
+      <div class="fact"><dt>Time to first run</dt><dd>60–90 min</dd></div>
+      <div class="fact"><dt>Disk required</dt><dd>~25 GB</dd></div>
+      <div class="fact"><dt>Repositories</dt><dd>3 + 1 engine</dd></div>
+      <div class="fact"><dt>Platform</dt><dd>Linux / macOS</dd></div>
+    </dl>
+  </header>
+
+  <nav class="rail" aria-label="Setup phases">
+    <div class="rail-inner">
+      <p class="rail-title">Phases</p>
+      <ol>
+        <li><a href="#p0"><span class="rn">00</span><span>Prerequisites</span></a></li>
+        <li><a href="#p1"><span class="rn">01</span><span>Get the code</span></a></li>
+        <li><a href="#p2"><span class="rn">02</span><span>Python environment</span></a></li>
+        <li><a href="#p3"><span class="rn">03</span><span>Message broker</span></a></li>
+        <li><a href="#p4"><span class="rn">04</span><span>Platform services</span></a></li>
+        <li><a href="#p5"><span class="rn">05</span><span>Routing engine</span></a></li>
+        <li><a href="#p6"><span class="rn">06</span><span>Dashboard</span></a></li>
+        <li><a href="#p7"><span class="rn">07</span><span>Background workers</span></a></li>
+        <li><a href="#p8"><span class="rn">08</span><span>Compile scenarios</span></a></li>
+        <li><a href="#p9"><span class="rn">09</span><span>Verify</span></a></li>
+        <li><a href="#p10"><span class="rn">10</span><span>First run</span></a></li>
+        <li><a href="#ref"><span class="rn">—</span><span>Reference</span></a></li>
+      </ol>
+    </div>
+  </nav>
+
+  <main>
+
+    <!-- ── 00 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p0">
+      <div class="phase-head"><span class="num">00</span><h2>Prerequisites</h2></div>
+      <div class="prose">
+        <p>Install these before you begin. The versions listed are what the platform is built and
+        tested against; newer minor releases are generally fine, but Python must be 3.11.</p>
+      </div>
+      <div class="twrap">
+        <table>
+          <thead>
+            <tr><th>Requirement</th><th>Version</th><th>Used for</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="mono">Python</td><td class="mono">3.11</td><td>Simulation, agents, control plane, CLI</td></tr>
+            <tr><td class="mono">Node.js</td><td class="mono">20 or newer</td><td>Analytics dashboard and stream sinks</td></tr>
+            <tr><td class="mono">Docker</td><td class="mono">24 or newer</td><td>Databases, broker, API, routing engine</td></tr>
+            <tr><td class="mono">Docker Compose</td><td class="mono">v2 (built in)</td><td>Service orchestration</td></tr>
+            <tr><td class="mono">Git</td><td class="mono">2.30 or newer</td><td>Submodule support</td></tr>
+            <tr><td class="mono">systemd</td><td class="mono">user session</td><td>Background workers (Linux only)</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="prose">
+        <div class="note">
+          <span class="lbl">Repository access</span>
+          <p>You need an SSH key registered with GitHub that has read access to the
+          <code>IORA-NUS</code> organisation. The dashboard is a private repository pulled in as a
+          submodule, so HTTPS cloning without credentials will not work.</p>
+        </div>
+        <p>On macOS, skip the systemd phase and run the background workers manually — the commands
+        are given in that section.</p>
+      </div>
+    </section>
+
+    <!-- ── 01 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p1">
+      <div class="phase-head"><span class="num">01</span><h2>Get the code</h2></div>
+      <div class="prose">
+        <p>Everything lives under one workspace directory. The platform derives its own paths from
+        this layout, so keep the structure exactly as shown — the folder names matter, the location
+        does not.</p>
+      </div>
+      <div class="tree">
+openride/                     <span class="dim">← your workspace root</span>
+├── openride_apps/            <span class="dim">simulation, agents, CLI, control plane</span>
+├── openride_server/          <span class="dim">platform API, infrastructure</span>
+│   └── analytics/            <span class="dim">dashboard (git submodule)</span>
+└── kafka_broker/             <span class="dim">message broker (created in phase 03)</span>
+      </div>
+      <pre><code><span class="cmt"># Choose a workspace root and remember it — later phases reference it.</span>
+export OPENRIDE_HOME="$HOME/openride"
+mkdir -p "$OPENRIDE_HOME" &amp;&amp; cd "$OPENRIDE_HOME"
+
+<span class="cmt"># Simulation engine and agents</span>
+git clone --branch feature/pluggable-greedy-solver \
+  git@github.com:IORA-NUS/openride_apps.git
+
+<span class="cmt"># Platform API + dashboard submodule — --recurse-submodules is required</span>
+git clone --recurse-submodules --branch feature/pluggable-greedy-solver \
+  git@github.com:IORA-NUS/openride_server.git</code></pre>
+      <div class="prose">
+        <p>Confirm the submodule came down with it — the dashboard directory should contain a
+        <code>package.json</code>, not be empty:</p>
+      </div>
+      <pre><code>ls "$OPENRIDE_HOME/openride_server/analytics/package.json"</code></pre>
+      <div class="prose">
+        <div class="note">
+          <span class="lbl">If the submodule is empty</span>
+          <p>Run <code>git submodule update --init</code> inside <code>openride_server</code>.
+          This happens when a repository is cloned without <code>--recurse-submodules</code>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 02 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p2">
+      <div class="phase-head"><span class="num">02</span><h2>Python environment</h2></div>
+      <div class="prose">
+        <p>One virtual environment serves the simulation, the agents, the control plane and the
+        command-line interface. The simulation engine is installed from a published tag, so no
+        local checkout of it is needed.</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_apps"
+
+python3.11 -m venv venv
+./venv/bin/pip install --upgrade pip setuptools wheel
+./venv/bin/pip install -r requirements.txt
+
+<span class="cmt"># Optional — adds pytest and the test tooling</span>
+./venv/bin/pip install -r requirements-dev.txt</code></pre>
+      <div class="prose">
+        <p>Verify the engine resolved correctly. Both lines must print, and the version must
+        read <code>1.3.0</code> or later:</p>
+      </div>
+      <pre><code>./venv/bin/python -c "import orsim; print(orsim.__version__)"
+./venv/bin/python -c "import orsim.runtime; print('runtime ok')"</code></pre>
+      <div class="prose">
+        <div class="note">
+          <span class="lbl">Build tools</span>
+          <p>Installation pulls the geospatial stack (<code>shapely</code>, <code>pyproj</code>,
+          <code>geopandas</code>) from pre-built wheels, so no compiler is normally required. If a
+          package does try to build from source, install your distribution's
+          <code>python3-dev</code> and <code>build-essential</code> packages and retry.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 03 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p3">
+      <div class="phase-head"><span class="num">03</span><h2>Message broker</h2></div>
+      <div class="prose">
+        <p>Kafka carries telemetry between the simulation and every consumer — metrics, run status,
+        truck positions and route geometry. It runs in its own Compose project and creates the
+        shared Docker network that the platform services attach to, so <strong>bring it up
+        first</strong>.</p>
+        <p>Create the broker directory and its Compose file:</p>
+      </div>
+      <pre><code>mkdir -p "$OPENRIDE_HOME/kafka_broker"
+cat &gt; "$OPENRIDE_HOME/kafka_broker/docker-compose.yml" &lt;&lt;'YAML'
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    restart: unless-stopped
+    ports: ["9092:9092", "9094:9094"]
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "q1Sh-9_ISia_zwGINzRvyQ"
+    volumes: [kafka_data:/var/lib/kafka/data]
+    networks: [kafka-net]
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui
+    container_name: kafka-ui
+    ports: ["8080:8080"]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on: [kafka]
+    networks: [kafka-net]
+
+volumes:
+  kafka_data:
+
+networks:
+  kafka-net:
+    name: kafka-server-bridge
+YAML
+
+cd "$OPENRIDE_HOME/kafka_broker" &amp;&amp; docker compose up -d</code></pre>
+      <div class="prose">
+        <p>Check that the shared network now exists. The platform stack expects it by this exact
+        name and will refuse to start without it:</p>
+      </div>
+      <pre><code>docker network ls | grep kafka-server-bridge</code></pre>
+    </section>
+
+    <!-- ── 04 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p4">
+      <div class="phase-head"><span class="num">04</span><h2>Platform services</h2></div>
+      <div class="prose">
+        <p>This brings up the database, the REST API behind its gateway, the metrics store and the
+        stream sinks. The API image builds from source on first run, which takes a few minutes.</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_server"
+docker compose up -d --build mongodb api nginx victoriametrics perf-vm-sink kpi-vm-sink</code></pre>
+      <div class="prose">
+        <p>The task queue that hosts the simulation agents lives in the other repository:</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_apps"
+docker compose up -d rabbit</code></pre>
+      <div class="prose">
+        <p>Confirm the API is answering. A <strong>401</strong> is the expected, healthy response —
+        it means the resource is registered and asking for credentials:</p>
+      </div>
+      <pre><code>curl -s -o /dev/null -w "%{http_code}\n" http://localhost:11654/</code></pre>
+    </section>
+
+    <!-- ── 05 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p5">
+      <div class="phase-head"><span class="num">05</span><h2>Routing engine</h2></div>
+      <div class="prose">
+        <p>Trucks follow real roads. OSRM serves those routes from a pre-processed extract of the
+        Malaysia–Singapore–Brunei road network, which you build once from an OpenStreetMap
+        download.</p>
+        <div class="note warn">
+          <span class="lbl">Plan for this step</span>
+          <p>The download is roughly 240&nbsp;MB and the processed graph expands to about
+          11&nbsp;GB. Pre-processing takes 10–30 minutes depending on the machine. Nothing else in
+          the setup depends on it, so you can start it and continue with phase 06 in another
+          terminal.</p>
+        </div>
+      </div>
+      <pre><code>mkdir -p "$OPENRIDE_HOME/openride_server/maps"
+cd "$OPENRIDE_HOME/openride_server/maps"
+
+curl -L -o malaysia-singapore-brunei-260305.osm.pbf \
+  https://download.geofabrik.de/asia/malaysia-singapore-brunei-latest.osm.pbf</code></pre>
+      <div class="prose">
+        <p>Keep that filename. The Compose service references it directly, so a differently named
+        file will not be found.</p>
+        <p>Now run the three-stage pre-processing pipeline, then start the router:</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_server"
+
+docker compose --profile osrm-preprocess run --rm osrm-extract
+docker compose --profile osrm-preprocess run --rm osrm-partition
+docker compose --profile osrm-preprocess run --rm osrm-customize
+
+docker compose up -d osrm-routed</code></pre>
+      <div class="prose">
+        <p>Test a route between two points in Singapore. A healthy response contains
+        <code>"code":"Ok"</code>:</p>
+      </div>
+      <pre><code>curl -s "http://localhost:10001/route/v1/driving/103.85,1.29;103.75,1.35" | head -c 120</code></pre>
+    </section>
+
+    <!-- ── 06 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p6">
+      <div class="phase-head"><span class="num">06</span><h2>Dashboard</h2></div>
+      <div class="prose">
+        <p>The analytics dashboard is a Next.js application: the live map, the comparison views and
+        the run controls.</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_server/analytics"
+
+npm ci
+cp .env.example .env.local
+
+npm run build</code></pre>
+      <div class="prose">
+        <p>The defaults in <code>.env.example</code> point at the services you started in phases 03
+        to 05 and need no editing for a single-machine install. Open it if you are running any
+        service on a different host or port.</p>
+        <div class="note">
+          <span class="lbl">Build before type-checking</span>
+          <p>Run <code>npm run build</code> at least once before <code>npx tsc --noEmit</code>.
+          The build generates the type declarations for image imports; running the type-checker
+          first on a fresh clone reports missing-module errors that resolve themselves afterwards.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 07 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p7">
+      <div class="phase-head"><span class="num">07</span><h2>Background workers</h2></div>
+      <div class="prose">
+        <p>Five long-running processes complete the stack: the Celery agent pool, the data plane,
+        the route-geometry sink, the control agent and the dashboard server. On Linux these are
+        installed and enabled as systemd user services by a single script.</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_apps"
+export OPENRIDE_WORKSPACE_ROOT="$OPENRIDE_HOME"
+
+bash scripts/start_openride.sh</code></pre>
+      <div class="prose">
+        <p>The script installs the unit files, points them at your workspace, enables them to start
+        at login and brings them up. Check the result:</p>
+      </div>
+      <pre><code>systemctl --user list-units 'openride-*' --no-pager</code></pre>
+      <div class="prose">
+        <p>To keep the services running when you are not logged in, enable lingering once:</p>
+      </div>
+      <pre><code>loginctl enable-linger "$USER"</code></pre>
+        <h3>Running without systemd</h3>
+      <div class="prose">
+        <p>On macOS, or if you would rather manage the processes yourself, run each in its own
+        terminal from <code>openride_apps</code>:</p>
+      </div>
+      <pre><code>bash scripts/run-celery.sh          <span class="cmt"># simulation agent pool</span>
+bash scripts/run-dataplane.sh      <span class="cmt"># stream ingest + read API</span>
+bash scripts/run-analytics-dev.sh  <span class="cmt"># dashboard on :3000</span></code></pre>
+    </section>
+
+    <!-- ── 08 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p8">
+      <div class="phase-head"><span class="num">08</span><h2>Compile scenarios</h2></div>
+      <div class="prose">
+        <p>A scenario is defined by a <code>spec.json</code> that ships with the repository. The
+        runnable bundle — the fleet, the orders, the facilities and the road network between them —
+        is generated from that specification on your machine.</p>
+        <p>List what is available, then build one:</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_apps"
+
+./venv/bin/python -m openride.cli scenario list
+./venv/bin/python -m openride.cli scenario compile multi_haulier_greedy_solver_500_trucks -y</code></pre>
+      <div class="prose">
+        <p>To build every shipped scenario at once — around 90 seconds in total:</p>
+      </div>
+      <pre><code>for d in scenarios/*/; do
+  s=$(basename "$d")
+  [ -f "$d/spec.json" ] &amp;&amp; ./venv/bin/python -m openride.cli scenario compile "$s" -y
+done</code></pre>
+      <div class="prose">
+        <div class="note">
+          <span class="lbl">Compiled bundles are local</span>
+          <p>Bundles are generated artefacts and are deliberately not stored in the repository —
+          the specification is the source of truth. Re-run the compile step after pulling changes
+          that touch a scenario.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 09 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p9">
+      <div class="phase-head"><span class="num">09</span><h2>Verify the installation</h2></div>
+      <div class="prose">
+        <p>Work through these before your first run. Each one isolates a different layer, so a
+        failure tells you exactly which phase to revisit.</p>
+      </div>
+      <ul class="check">
+        <li><span class="box"></span><span class="what">Every service reports running
+          <span class="how">./venv/bin/python -m openride_control.command status</span></span></li>
+        <li><span class="box"></span><span class="what">Dashboard loads
+          <span class="how">http://127.0.0.1:3000</span></span></li>
+        <li><span class="box"></span><span class="what">Platform API answers with 401
+          <span class="how">curl -s -o /dev/null -w "%{http_code}" http://localhost:11654/</span></span></li>
+        <li><span class="box"></span><span class="what">Data plane read API answers with 200
+          <span class="how">curl -s -o /dev/null -w "%{http_code}" http://localhost:8620/runs/live</span></span></li>
+        <li><span class="box"></span><span class="what">Routing engine returns a route
+          <span class="how">curl -s "http://localhost:10001/route/v1/driving/103.85,1.29;103.75,1.35"</span></span></li>
+        <li><span class="box"></span><span class="what">Kafka broker is reachable
+          <span class="how">http://localhost:8080</span></span></li>
+        <li><span class="box"></span><span class="what">Test suite runs
+          <span class="how">./venv/bin/python -m pytest -q --continue-on-collection-errors</span></span></li>
+      </ul>
+      <div class="prose">
+        <div class="note">
+          <span class="lbl">Reading the test results</span>
+          <p>The container-logistics suite passes in full. A number of failures and collection
+          errors in the legacy ride-hail modules are expected on a clean install and do not affect
+          the simulation.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 10 ─────────────────────────────────────────────────────────── -->
+    <section class="phase" id="p10">
+      <div class="phase-head"><span class="num">10</span><h2>Your first run</h2></div>
+      <div class="prose">
+        <p>Launch a seven-day, 500-truck simulation across three haulage companies. It takes five
+        to six minutes and prints progress as it advances through simulated days.</p>
+      </div>
+      <pre><code>cd "$OPENRIDE_HOME/openride_apps"
+
+bash scripts/openride.sh run multi_haulier_greedy_solver_500_trucks \
+  --solver GreedyNearest --json</code></pre>
+      <div class="prose">
+        <p>On completion you get a JSON summary containing the run identifier, wall-clock duration,
+        completed orders and the headline fleet metrics. Open the dashboard and select that run
+        identifier to explore the map, the per-company breakdown and the comparison views.</p>
+        <p>To watch trucks move on the live map while the run is in progress, add
+        <code>--no-headless</code> — this enables per-step position streaming, at some cost to
+        run time.</p>
+        <h3>Running interactively</h3>
+        <p>With no arguments the command-line interface opens a menu for choosing scenarios,
+        solvers and run options:</p>
+      </div>
+      <pre><code>bash scripts/openride.sh</code></pre>
+    </section>
+
+    <!-- ── Reference ──────────────────────────────────────────────────── -->
+    <section class="phase" id="ref">
+      <div class="phase-head"><span class="num">—</span><h2>Reference</h2></div>
+
+      <h3>Service ports</h3>
+      <div class="twrap">
+        <table>
+          <thead><tr><th>Port</th><th>Service</th><th>Notes</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">3000</td><td>Analytics dashboard</td><td>The main interface</td></tr>
+            <tr><td class="mono">8080</td><td>Kafka UI</td><td>Topic and message inspection</td></tr>
+            <tr><td class="mono">8428</td><td>VictoriaMetrics</td><td>Performance metrics store</td></tr>
+            <tr><td class="mono">8620</td><td>Data plane</td><td>Read API for runs and metrics</td></tr>
+            <tr><td class="mono">9092</td><td>Kafka</td><td>Internal listener</td></tr>
+            <tr><td class="mono">9094</td><td>Kafka</td><td>External listener, used by the dashboard</td></tr>
+            <tr><td class="mono">10001</td><td>OSRM</td><td>Road routing</td></tr>
+            <tr><td class="mono">11654</td><td>Platform API</td><td>Behind the nginx gateway</td></tr>
+            <tr><td class="mono">15672</td><td>RabbitMQ</td><td>Management console</td></tr>
+            <tr><td class="mono">27017</td><td>MongoDB</td><td>Primary database</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Environment variables</h3>
+      <div class="prose"><p>All are optional — the platform derives sensible values from its own
+      location. Set them when your layout differs from the default.</p></div>
+      <div class="twrap">
+        <table>
+          <thead><tr><th>Variable</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">OPENRIDE_WORKSPACE_ROOT</td><td>Directory containing <code>openride_apps</code> and <code>openride_server</code></td></tr>
+            <tr><td class="mono">OPENRIDE_PYTHON</td><td>Interpreter used to run the simulation</td></tr>
+            <tr><td class="mono">OPENRIDE_LOCATIONS_DIR</td><td>Alternative location for the address and region data</td></tr>
+            <tr><td class="mono">MONGODB_URI</td><td>Database connection string</td></tr>
+            <tr><td class="mono">KAFKA_BROKER_URL</td><td>Broker address for the dashboard</td></tr>
+            <tr><td class="mono">OSRM_MAPS_DIR</td><td>Alternative location for the routing graph</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Everyday commands</h3>
+      <div class="twrap">
+        <table>
+          <thead><tr><th>Command</th><th>Does</th></tr></thead>
+          <tbody>
+            <tr><td class="mono">scripts/openride.sh</td><td>Interactive menu</td></tr>
+            <tr><td class="mono">scripts/openride.sh run &lt;scenario&gt;</td><td>Launch a simulation</td></tr>
+            <tr><td class="mono">scripts/openride.sh scenario list</td><td>Show available scenarios</td></tr>
+            <tr><td class="mono">scripts/openride.sh runs list</td><td>Show past runs</td></tr>
+            <tr><td class="mono">scripts/start_openride.sh</td><td>Install and start background services</td></tr>
+            <tr><td class="mono">scripts/stop_openride.sh</td><td>Stop background services</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Restarting after changes</h3>
+      <div class="prose">
+        <ul class="plain">
+          <li>Editing agent code — truck, order, facility, assignment or analytics — requires
+            <code>systemctl --user restart openride-celery</code>. The agents run inside long-lived
+            workers that hold the previously imported code.</li>
+          <li>Editing API models or adding a REST resource requires rebuilding the API container:
+            <code>docker compose up -d --build api</code>.</li>
+          <li>Editing a scenario specification requires re-running the compile step in phase 08.</li>
+        </ul>
+      </div>
+    </section>
+
+    <footer>
+      OpenRide — agent-based simulation and analytics for container haulage.
+      Verified against a clean installation on Python 3.11, Node 24 and Docker 29.
+    </footer>
+
+  </main>
+</div>

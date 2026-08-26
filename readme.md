@@ -1,6 +1,16 @@
+# OpenRide — container-logistics simulation
+
+**Setting up for the first time? Read [docs/INSTALL.md](docs/INSTALL.md).**
+It takes a bare machine to a finished 500-truck run: prerequisites, all three
+repositories, the broker, the routing engine, the dashboard and the background
+workers. A typeset version for printing is at `docs/install-guide.html`.
+
+---
+
 # Instructions
 
-- The following codebase is developed on Python 3.8.5. It should run on python > 3.7, but has not been tested.
+- The codebase targets **Python 3.11** (see docs/INSTALL.md). The note that it was
+  developed on 3.8.5 predates the current dependency set and no longer holds.
 - Create a Vitrual environment and activate it.
 - install requirements.txt
 - The package assumes the following are installed and accessible over the network (or localhost)
