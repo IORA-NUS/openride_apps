@@ -166,3 +166,10 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Machine-local memsearch tooling state: an index-state file rewritten every
+# session plus agent notes carrying absolute paths. Tracking it kept all three
+# repos permanently dirty and, inside the dashboard submodule, kept the parent
+# repo dirty at the gitlink — which is how the submodule pin drifted before.
+# Existing notes remain in git history.
+.memsearch/
