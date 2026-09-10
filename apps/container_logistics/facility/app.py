@@ -14,6 +14,7 @@ from apps.container_logistics.statemachine import (
 )
 
 from apps.utils import str_to_time
+from apps.utils.step_profile import span, tick
 
 from .facility_snapshot_publisher import FacilitySnapshotPublisher
 from .haultrip_interaction_mixin import HaulTripInteractionMixin
@@ -53,6 +54,9 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
         self._gate_service_ends = {}
         self._facility_stream = None
         self._facility_refresh_pending = True
+        # A snapshot publish only marks the REST KPI doc dirty; the blocking PATCH is
+        # coalesced to at most one per step (see _flush_kpi_stats).
+        self._kpi_patch_pending = False
 
     def _service_time_seconds(self) -> int:
         profile = self.behavior.get("profile") or {}
@@ -114,6 +118,10 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
     def _publish_facility_snapshot(self, *, force: bool = False) -> None:
         if self._facility_stream is None or self.current_time_str is None:
             return
+        with span("facility.snapshot_call"):
+            self._publish_facility_snapshot_inner(force=force)
+
+    def _publish_facility_snapshot_inner(self, *, force: bool = False) -> None:
         published = self._facility_stream.maybe_publish(
             self.manager,
             self.behavior,
@@ -121,6 +129,26 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
             force=force,
         )
         if published:
+            # Do NOT patch here. The PATCH is ~91 ms of blocking eventlet-scheduled HTTP and
+            # fired 2.57x per facility tick (~98% of the tick). The two scalars it writes
+            # (avg_queue_wait_seconds, peak_queue_length) are only read by the analytics
+            # manager on a much slower cadence, and kpi_stats() is recomputed at flush time,
+            # so coalescing to one last-write-wins PATCH per step is lossless.
+            self._kpi_patch_pending = True
+
+    def _flush_kpi_stats(self) -> None:
+        """Persist the latest queue KPI scalars to the facility REST document, once.
+
+        No-op unless a snapshot was published since the last flush. Clearing the flag
+        before the call keeps the bound at one PATCH attempt per flush; a later publish
+        re-arms it, and kpi_stats() is always read fresh so the newest value wins.
+        """
+        if not self._kpi_patch_pending:
+            return
+        self._kpi_patch_pending = False
+        if self._facility_stream is None:
+            return
+        with span("facility.patch_kpi"):
             self.manager.patch_kpi_stats(self._facility_stream.kpi_stats())
 
     def enqueue_arrival(self, truck_id, *, visit_type: FacilityVisitType | str):
@@ -165,6 +193,7 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
         )
 
     def _publish_gate_assignment(self, truck_id, gate_index, visit_type: FacilityVisitType):
+      with span("facility.mqtt_publish"):
         event = self._gate_event_for_visit(visit_type, assigned=True)
         service_time = self._service_time_seconds()
         self.messenger.client.publish(
@@ -184,6 +213,7 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
         )
 
     def _publish_gate_service_completed(self, truck_id, gate_index, visit_type: FacilityVisitType):
+      with span("facility.mqtt_publish"):
         event = self._gate_event_for_visit(visit_type, assigned=False)
         service_time = self._service_time_seconds()
         self.messenger.client.publish(
@@ -276,13 +306,24 @@ class FacilityApp(ORSimApp, HaulTripInteractionMixin):
     def close(self, sim_clock):
         self.update_current(sim_clock)
         self._publish_facility_snapshot(force=True)
+        # Last chance to persist the final queue KPIs to the REST document.
+        self._flush_kpi_stats()
         super().close(sim_clock)
 
     def execute_step_actions(self, current_time, add_step_log_fn=None):
-        self.current_time = current_time
-        self.current_time_str = current_time.strftime("%a, %d %b %Y %H:%M:%S GMT")
-        self.refresh()
-        self.consume_messages()
-        self.perform_workflow_actions()
-        # Drain messages published by peers in the same scheduler tick (e.g. facility → truck).
-        self.consume_messages()
+        with span("facility.tick"):
+            self.current_time = current_time
+            self.current_time_str = current_time.strftime("%a, %d %b %Y %H:%M:%S GMT")
+            with span("facility.refresh"):
+                self.refresh()
+            with span("facility.consume_1"):
+                self.consume_messages()
+            with span("facility.workflow"):
+                self.perform_workflow_actions()
+            # Drain messages published by peers in the same scheduler tick (e.g. facility → truck).
+            with span("facility.consume_2"):
+                self.consume_messages()
+            # One coalesced REST PATCH per step, covering every publish since the last
+            # flush - including any triggered between ticks by an inbound MQTT message.
+            self._flush_kpi_stats()
+        tick("facility.tick")
