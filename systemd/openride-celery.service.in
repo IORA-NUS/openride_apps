@@ -8,9 +8,26 @@ Type=simple
 WorkingDirectory=@WORKSPACE@/openride_apps
 Environment=PYTHONPATH=@WORKSPACE@:@WORKSPACE@/openride_apps
 Environment=CELERY_BROKER_URL=amqp://guest:guest@127.0.0.1:5672//
-# Spread agents across more processes with fewer greenlets each (see run-celery.sh):
-# tighter per-step reply bunching. WORKER_COUNT*CONCURRENCY(64) = 2048 > peak agents.
-Environment=CELERY_WORKER_COUNT=32
+# Spread agents across more PROCESSES with fewer eventlet greenlets each. Greenlets are
+# cooperative, so agents sharing a process serialise their per-step MQTT replies and the
+# tail trips STEP_SETTLE_SECONDS (a flat 2 s per affected step). See CLAUDE.md 17b/6.24.
+#
+# MEASURED on consortium_collab_7d (~1063 agents, 2611 steps):
+#   32 workers x 64 concurrency (the old default) : 23m52s, 374 stalls
+#   32 workers x 40 concurrency                   : 10m51s,   1 stall
+#   64 workers x 20 concurrency                   : ~6m9s,  with GUNICORN_WORKERS=64
+#
+# 64x20 was WORSE than 32x40 while the API pool was the binding constraint, and better
+# once it was not -- a settled tuning result is only valid while the constraint is
+# unchanged. Do not sweep the split again: 96x14 and 128x10 are a plateau.
+#
+# Capacity WORKER_COUNT*CONCURRENCY = 1280 must stay above peak agents (~1063). If a
+# scenario ever exceeds that, RAISE WORKER_COUNT rather than CONCURRENCY.
+#
+# ZERO comparability risk: this changes which OS process runs an agent, not agent logic,
+# message content or ordering.
+Environment=CELERY_WORKER_COUNT=64
+Environment=CELERY_CONCURRENCY=20
 ExecStart=@WORKSPACE@/scripts/run-celery.sh
 Restart=always
 RestartSec=10
