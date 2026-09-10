@@ -41,8 +41,16 @@ from apps.container_logistics.haul_trip_duration import (
 
 DOMAIN = "container-logistics-sim-test"
 MIDNIGHT = "2020-01-01 00:00:00"
-_DEFAULT_SERVICE = 1800
-_RULED_SERVICE = 600
+# Read the REAL default rather than restating it. This test discriminates "a rule rewrote
+# this order" from "this order kept the scenario default", so the two values must differ —
+# and a hardcoded copy silently collapses that distinction the moment the default moves.
+# It did: the default became 600 s on 2026-08-27, which was exactly the literal `_RULED_SERVICE`
+# used here, so the test asserted 600 == 1800 on the unmatched branch.
+from apps.container_logistics.datagen.defaults import FACILITY_SERVICE_TIME as _DEFAULT_SERVICE
+
+#: Deliberately half the default, whatever the default is — never equal to it.
+_RULED_SERVICE = _DEFAULT_SERVICE // 2
+assert _RULED_SERVICE != _DEFAULT_SERVICE, "ruled and default service times must differ"
 
 
 def _base(**kw):
@@ -162,8 +170,9 @@ def test_service_time_rule_effect_on_haul_duration_is_measured_not_assumed():
     (`MIN_LEG_PICKUP_SECONDS` 900 s + `MIN_LEG_DROPOFF_SECONDS` 960 s = 1860 s) and
     only then tops up to the 2100 s haul floor. So the floor has just **240 s** of
     headroom to absorb anything, and it binds only once TOTAL gate service falls below
-    that — i.e. below ~120 s per gate. At the scenario default of 1800 s, gate service
-    alone is 3600 s and the floor is nowhere near binding.
+    that — i.e. below ~120 s per gate. At the scenario default (1800 s when this was
+    written; 600 s since 2026-08-27), gate service alone is 1200-3600 s and the floor is
+    nowhere near binding either way.
 
     **Consequence for the feature, and it is the opposite of the hypothesis:** in the
     realistic range a `service_time` rule passes through to haul duration at FULL

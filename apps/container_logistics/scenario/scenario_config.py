@@ -297,7 +297,10 @@ order_settings = {
     },
 }
 
-_FACILITY_SERVICE_TIME = 1800
+# Keep in step with `datagen/defaults.py::FACILITY_SERVICE_TIME` — this is the LEGACY
+# path, and it is the one that runs when a scenario's behaviours are regenerated at
+# launch, so a divergence here silently ships a different world than a fresh compile.
+_FACILITY_SERVICE_TIME = 600
 
 _LOCATION_CATALOG = None
 
@@ -371,7 +374,7 @@ facility_settings = {
         "persist_facility_snapshots": False,
         "fifo_queue_policy": True,
         "gate_count": FACILITY_GATE_COUNT,
-        "service_time": 1800,
+        "service_time": _FACILITY_SERVICE_TIME,
         "max_queue_size": None,
         "facility_type": "Depo",
         "status": "Open",

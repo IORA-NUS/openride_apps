@@ -28,7 +28,15 @@ NUM_TRUCKS = 500
 ORDERS_PER_TRUCK_PER_DAY = 10
 NUM_FACILITIES = 15
 FACILITY_GATE_COUNT = 1
-FACILITY_SERVICE_TIME = 1800
+# Gate service time per truck visit, seconds. 600 s (10 min) since 2026-08-27.
+# At the previous 1800 s a single-gate facility could serve only 604800/1800 = 336
+# visits over a 7-day run, while `consortium_collab_7d`'s busiest port needed 446 —
+# 33% oversubscribed, so its queue never reached steady state (peak 203 trucks,
+# 61 h average wait). 600 s lifts one gate to 1008 visits, clear of that demand.
+# NOTE: this is WORLD PHYSICS — runs before and after are NOT comparable (CLAUDE.md
+# §6.16), and it also shortens haul durations on the order side, not just gate
+# occupancy (see tests/test_order_service_time_path.py).
+FACILITY_SERVICE_TIME = 600
 BEHAVIOR_REVISION = 10
 EARLY_ORDER_COUNT = 64
 

@@ -7,8 +7,8 @@
       }
     },
     "order": {
-      "count": 30000,
-      "orderCountUnit": "total",
+      "count": 5000,
+      "orderCountUnit": "per_day",
       "policy": {
         "type": "historical"
       }
@@ -31,6 +31,8 @@
     ]
   },
   "earlyOrderCount": 64,
+  "facilityRules": null,
+  "facilityRulesWorld": null,
   "frozen": true,
   "hauliers": [
     {
@@ -64,8 +66,16 @@
       "order_share": 20.0
     }
   ],
+  "hour_axis": {
+    "axes_aligned": false,
+    "demand_to_wall_offset_hours": 8,
+    "orderDemandCurve": "hours since REFERENCE_TIME (sampling.py never reads the epoch, so authored hour H is realised at wall hour (H + reference_hour) % 24)",
+    "rebate": "sim wall clock; epoch = REFERENCE_TIME (price_at parses the recorded RFC-1123 arrival stamp)",
+    "reference_hour": 8,
+    "reference_time": "2020-01-01 08:00:00"
+  },
   "name": "Consortium Baseline 7d",
-  "orderCountUnit": "total",
+  "orderCountUnit": "per_day",
   "orderDemandCurve": {
     "points": [
       {
@@ -167,7 +177,226 @@
     ],
     "resolution": "hour"
   },
-  "overrides": null,
+  "overrides": {
+    "facility": {
+      "facility_type": "Port",
+      "fifo_queue_policy": true,
+      "footprint": {
+        "coordinates": [
+          [
+            [
+              103.8241852,
+              1.260097
+            ],
+            [
+              103.8304659,
+              1.2636365
+            ],
+            [
+              103.8361342,
+              1.2638392
+            ],
+            [
+              103.8424912,
+              1.2578976
+            ],
+            [
+              103.8424306,
+              1.2577463
+            ],
+            [
+              103.8405236,
+              1.2568519
+            ],
+            [
+              103.8402573,
+              1.2569475
+            ],
+            [
+              103.8401516,
+              1.2570356
+            ],
+            [
+              103.8399402,
+              1.2569321
+            ],
+            [
+              103.8396595,
+              1.2572913
+            ],
+            [
+              103.8369063,
+              1.256086
+            ],
+            [
+              103.8353248,
+              1.2575757
+            ],
+            [
+              103.8357593,
+              1.2580477
+            ],
+            [
+              103.8349761,
+              1.2587449
+            ],
+            [
+              103.8348527,
+              1.2594903
+            ],
+            [
+              103.8347132,
+              1.259603
+            ],
+            [
+              103.8346113,
+              1.2594742
+            ],
+            [
+              103.834504,
+              1.2599408
+            ],
+            [
+              103.8337959,
+              1.2603431
+            ],
+            [
+              103.8338442,
+              1.2605737
+            ],
+            [
+              103.8331683,
+              1.2608687
+            ],
+            [
+              103.8325406,
+              1.262129
+            ],
+            [
+              103.8320042,
+              1.2625098
+            ],
+            [
+              103.8307436,
+              1.2624561
+            ],
+            [
+              103.8300033,
+              1.2619681
+            ],
+            [
+              103.8302554,
+              1.2600213
+            ],
+            [
+              103.8310708,
+              1.2590506
+            ],
+            [
+              103.8310493,
+              1.2585303
+            ],
+            [
+              103.8309373,
+              1.2582138
+            ],
+            [
+              103.83099,
+              1.258195
+            ],
+            [
+              103.8305612,
+              1.2570805
+            ],
+            [
+              103.8289283,
+              1.2576578
+            ],
+            [
+              103.8287405,
+              1.2570858
+            ],
+            [
+              103.8283045,
+              1.2573527
+            ],
+            [
+              103.8279169,
+              1.2574929
+            ],
+            [
+              103.8267051,
+              1.2576967
+            ],
+            [
+              103.8263996,
+              1.2578295
+            ],
+            [
+              103.8256092,
+              1.2583413
+            ],
+            [
+              103.8249495,
+              1.2588835
+            ],
+            [
+              103.8245654,
+              1.2593467
+            ],
+            [
+              103.8241852,
+              1.260097
+            ]
+          ]
+        ],
+        "type": "Polygon"
+      },
+      "gate_count": 1,
+      "max_queue_size": null,
+      "operating_days": "7 days a week",
+      "operating_hours": "24/7",
+      "persist_facility_snapshots": false,
+      "publish_facility_stream_kafka": true,
+      "service_time": 600,
+      "status": "Open"
+    },
+    "order": {
+      "cancel_probability_before_assignment": 0,
+      "container_status": "Empty",
+      "dropoff_location_type": "Warehouse",
+      "haulier_id": "patrick_inc",
+      "haulier_name": "Patrick Inc.",
+      "order_size": "1x20",
+      "order_type": "import",
+      "pickup_location_type": "Depo",
+      "require_planned_routes": false,
+      "shipping_line": "Shipping Line",
+      "vessel_number": "Vessel123"
+    },
+    "truck": {
+      "cancel_probability_in_queue": 0,
+      "cancel_probability_when_assigned": 0,
+      "default_shift_end_seconds": null,
+      "default_shift_start_seconds": 0,
+      "haulier_id": "patrick_inc",
+      "haulier_name": "Patrick Inc.",
+      "idle_strategy": "stay_if_no_assignment",
+      "max_estimated_time_to_dropoff": 3600,
+      "max_estimated_time_to_pickup": 3600,
+      "min_estimated_time_to_dropoff": 600,
+      "min_estimated_time_to_pickup": 600,
+      "osrm_route_cache_max_entries": 2048,
+      "planned_dropoff_route": null,
+      "planned_reposition_route": null,
+      "restricted_areas": [
+        "West Coast",
+        "MBS"
+      ],
+      "truck_size": "20ft",
+      "use_osrm_at_assignment": false
+    }
+  },
   "planner": {
     "deployment": {
       "params": {
@@ -176,12 +405,29 @@
       },
       "type": "GreedyNearest"
     },
+    "market": {
+      "arbitration": {
+        "params": {},
+        "type": "LowestCost"
+      },
+      "claim": {
+        "params": {},
+        "type": "ClaimAllPlanned"
+      },
+      "max_rounds": 20,
+      "offer": {
+        "params": {},
+        "type": "OfferAll"
+      }
+    },
+    "rebate_aware": false,
     "sharing": null,
     "timing": {
       "mode": "online"
     },
     "topology": "partitioned"
   },
+  "referenceTime": "2020-01-01 08:00:00",
   "seed": 20260722,
   "simulationDays": 7,
   "slug": "consortium_baseline_7d",
