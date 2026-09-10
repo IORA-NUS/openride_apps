@@ -24,6 +24,7 @@ from apps.container_logistics.analytics.facility_snapshot_persist import (
     persist_facility_snapshot,
 )
 from apps.utils.kafka_utils import flush_facility_stream_producer, push_facility_to_topic
+from apps.utils.step_profile import span
 
 
 def _sim_epoch_seconds(sim_clock_gmt: str) -> float:
@@ -231,12 +232,14 @@ class FacilitySnapshotPublisher:
         *,
         force: bool = False,
     ) -> bool:
-        payload = self.build_snapshot(manager, behavior, sim_clock_gmt)
+        with span("snap.build"):
+            payload = self.build_snapshot(manager, behavior, sim_clock_gmt)
         if payload is None:
             return False
 
         sim_s = _sim_epoch_seconds(sim_clock_gmt)
-        fp = self._fingerprint(payload)
+        with span("snap.fingerprint"):
+            fp = self._fingerprint(payload)
         heartbeat_due = (
             self._last_publish_sim_s is not None
             and sim_s - self._last_publish_sim_s >= self.heartbeat_sim_s
@@ -255,7 +258,8 @@ class FacilitySnapshotPublisher:
         ):
             return False
 
-        push_facility_to_topic(self.run_id, payload)
+        with span("snap.kafka_produce"):
+            push_facility_to_topic(self.run_id, payload)
         if self.user and self.persist_snapshots:
             try:
                 persist_facility_snapshot(self.user, self.run_id, payload)
@@ -267,5 +271,6 @@ class FacilitySnapshotPublisher:
                 )
         self._last_fingerprint = fp
         self._last_publish_sim_s = sim_s
-        flush_facility_stream_producer(timeout=0.5)
+        with span("snap.kafka_flush"):
+            flush_facility_stream_producer(timeout=0.5)
         return True
