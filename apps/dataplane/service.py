@@ -105,6 +105,21 @@ from apps.dataplane.supervisor import Supervisor
 
 logger = logging.getLogger(__name__)
 
+# Facility snapshots are published from several call sites per facility tick
+# (`facility/app.py` forces one on enqueue, on gate-service completion and on close), so the
+# same facility emits ~2.7 snapshots for the SAME `sim_clock`. The dashboard's
+# `facilityStreamSlice` is a last-writer-wins upsert keyed on `facility_id`, so every one but
+# the last is overwritten on arrival — measured 7,327 events for 60 facilities across 45
+# distinct ticks in a 32 s capture, of which 68% were same-facility-same-tick repeats, and the
+# `queue` array they each carry is 82% of facility bytes / ~58% of ALL live SSE traffic.
+#
+# Coalescing is keyed on `sim_clock`, NOT on a wall-clock window: a tick spans ~700 ms of wall
+# time, so a short periodic flush would coalesce nothing, and a flush long enough to span a
+# tick would add that latency to every facility. Holding the latest snapshot per facility and
+# releasing it when that facility's `sim_clock` advances emits exactly the snapshot the
+# reducer settles on, one tick later.
+DEFAULT_FACILITY_COALESCE_MAX_HOLD_S = 2.0
+
 DEFAULT_RECONCILE_INTERVAL_S = 300.0
 DEFAULT_FRAME_INTERVAL_S = 1.0
 # Breakdown scopes the store holds. ``planner`` — one row per cooperation component, the
@@ -196,6 +211,77 @@ class _LiveBus:
             return {"runs": len(self._runs), "events": sum(len(b) for b in self._runs.values())}
 
 
+class _FacilitySnapshotCoalescer:
+    """Collapse the repeat facility snapshots emitted within one simulation tick.
+
+    Holds the most recent snapshot per ``(run_id, facility_id)`` and releases it when that
+    facility's ``sim_clock`` advances — so exactly one snapshot per facility per tick reaches
+    the live bus, and it is the LAST one, which is the state the dashboard's last-writer-wins
+    reducer already settles on today.
+
+    Fails OPEN: a payload with no ``facility_id`` or no ``sim_clock`` is passed straight
+    through uncoalesced, as is every payload when ``max_hold_s`` is 0 (the kill switch).
+
+    ``max_hold_s`` bounds how long a held snapshot can wait, so a facility that goes quiet
+    mid-run (or a run whose last tick never advances) still delivers its final state. The
+    sweep runs inline on each ``offer``; with ~60 facilities per run that is cheaper than
+    owning a thread, and facility traffic is dense enough (~220/s) to drive it.
+    """
+
+    __slots__ = ("_pending", "_lock", "_max_hold_s", "_coalesced")
+
+    def __init__(self, max_hold_s: float = DEFAULT_FACILITY_COALESCE_MAX_HOLD_S) -> None:
+        self._pending: Dict[tuple, tuple] = {}
+        self._lock = threading.Lock()
+        self._max_hold_s = float(max_hold_s)
+        self._coalesced = 0
+
+    @property
+    def enabled(self) -> bool:
+        return self._max_hold_s > 0
+
+    def offer(self, run_id: str, payload: dict, now: Optional[float] = None) -> list:
+        """Return the (run_id, payload) pairs to publish for this arrival."""
+        if not self.enabled:
+            return [(run_id, payload)]
+        facility_id = payload.get("facility_id")
+        sim_clock = payload.get("sim_clock")
+        if not facility_id or not sim_clock:
+            return [(run_id, payload)]
+
+        now = time.monotonic() if now is None else now
+        key = (run_id, facility_id)
+        out = []
+        with self._lock:
+            held = self._pending.get(key)
+            if held is not None:
+                held_payload, _held_at, held_clock = held
+                if held_clock == sim_clock:
+                    # Same tick: this arrival supersedes the held one, which is dropped.
+                    self._coalesced += 1
+                else:
+                    out.append((run_id, held_payload))
+            self._pending[key] = (payload, now, sim_clock)
+            out.extend(self._sweep_locked(now))
+        return out
+
+    def _sweep_locked(self, now: float) -> list:
+        """Release snapshots held longer than ``max_hold_s``. Caller holds the lock."""
+        deadline = now - self._max_hold_s
+        stale = [k for k, (_p, at, _c) in self._pending.items() if at <= deadline]
+        return [(k[0], self._pending.pop(k)[0]) for k in stale]
+
+    def flush_run(self, run_id: str) -> list:
+        """Release everything held for one run — used when the run goes terminal."""
+        with self._lock:
+            keys = [k for k in self._pending if k[0] == run_id]
+            return [(run_id, self._pending.pop(k)[0]) for k in keys]
+
+    def stats(self) -> Dict[str, int]:
+        with self._lock:
+            return {"pending": len(self._pending), "coalesced": self._coalesced}
+
+
 class DataplaneService:
     def __init__(
         self,
@@ -213,6 +299,7 @@ class DataplaneService:
         enable_http: bool = True,
         reconcile_interval_s: float = DEFAULT_RECONCILE_INTERVAL_S,
         frame_interval_s: float = DEFAULT_FRAME_INTERVAL_S,
+        facility_coalesce_max_hold_s: Optional[float] = None,
         archive_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         # Guards ONLY the construction/publication of _hot, _duck, _consumer, _http_server.
@@ -248,6 +335,18 @@ class DataplaneService:
 
         self.reconcile_interval_s = float(reconcile_interval_s)
         self.frame_interval_s = float(frame_interval_s)
+
+        # Kill switch: DATAPLANE_FACILITY_COALESCE_MAX_HOLD_S=0 restores verbatim forwarding.
+        self._facility_coalescer = _FacilitySnapshotCoalescer(
+            float(
+                facility_coalesce_max_hold_s
+                if facility_coalesce_max_hold_s is not None
+                else os.environ.get(
+                    "DATAPLANE_FACILITY_COALESCE_MAX_HOLD_S",
+                    DEFAULT_FACILITY_COALESCE_MAX_HOLD_S,
+                )
+            )
+        )
 
         self._stop = threading.Event()
         self.supervisor = Supervisor()
@@ -289,6 +388,7 @@ class DataplaneService:
             "trip_end": 0,
             "trip_geo_other": 0,
             "facility_stream": 0,
+            "facility_published": 0,
             "perf": 0,
             "run_status": 0,
             "run_terminal": 0,
@@ -706,8 +806,11 @@ class DataplaneService:
         self._count("truck_loc")
 
     def on_facility(self, topic: str, run_id: str, payload: dict) -> None:
-        self.live_bus.publish(run_id, "facility", payload)
         self._count("facility_stream")  # stored nowhere; live-only, by design
+        # One snapshot per facility per tick reaches the bus; see _FacilitySnapshotCoalescer.
+        for rid, out in self._facility_coalescer.offer(run_id, payload):
+            self.live_bus.publish(rid, "facility", out)
+            self._count("facility_published")
 
     def on_perf(self, topic: str, run_id: str, payload: dict) -> None:
         self._count("perf")  # round 1: counted, not stored
@@ -742,6 +845,11 @@ class DataplaneService:
         if reason is None:
             return
         self._count("run_terminal")
+        # A held snapshot must not die with the run: release the last tick before the
+        # terminal event, so the final facility state still reaches an attached viewer.
+        for rid, out in self._facility_coalescer.flush_run(run_id):
+            self.live_bus.publish(rid, "facility", out)
+            self._count("facility_published")
         self.live_bus.publish(run_id, "simulation_terminal", {"outcome": reason, "run_id": run_id})
         if reason == "completed":
             self.live_bus.publish(run_id, "simulation_complete", {"run_id": run_id})

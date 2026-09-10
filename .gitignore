@@ -166,3 +166,9 @@ dmypy.json
 
 # Cython debug symbols
 cython_debug/
+
+# Machine-local memsearch tooling state: an index-state file rewritten every
+# session plus agent notes carrying absolute paths. The other two repos stopped
+# tracking this on 2026-08-26; openride_apps was missed, so it stayed permanently
+# dirty. Existing notes remain in git history.
+.memsearch/

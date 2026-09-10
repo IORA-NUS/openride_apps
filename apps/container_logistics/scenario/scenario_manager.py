@@ -800,9 +800,21 @@ class ScenarioManager(BaseScenarioManager):
             truck = agents.get("truck") if isinstance(agents.get("truck"), dict) else {}
             order = agents.get("order") if isinstance(agents.get("order"), dict) else {}
             facility = agents.get("facility") if isinstance(agents.get("facility"), dict) else {}
+            # Orders are stored PER DAY when the spec says so, but the compiled bundle holds
+            # the TOTAL over the run — the same boundary `frontend_scenario_spec` multiplies
+            # at. Comparing the stored per-day count against the compiled total made this
+            # check fail on EVERY load of a `per_day` scenario (`consortium_collab_7d`: 5,000
+            # vs 35,000), so the run silently regenerated its behaviours through the legacy
+            # path — which reads the module-global `scenario_config.HAULIERS` and therefore
+            # replaced all five declared companies with the single default `haulier`. The
+            # scenario looked correct everywhere (spec, index.json, a fresh `scenario compile`)
+            # and still ran with one company.
+            order_count = int(order.get("count", 0))
+            if spec.get("orderCountUnit") == "per_day":
+                order_count *= int(spec.get("simulationDays") or 1)
             return {
                 "trucks": int(truck.get("count", 0)),
-                "orders": int(order.get("count", 0)),
+                "orders": order_count,
                 "facilities": int(facility.get("count", 0)),
             }
         facilities = GenerateBehavior._get_facilities()

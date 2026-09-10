@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+import os
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -13,12 +16,42 @@ logger = logging.getLogger(__name__)
 _APPS_ROOT = Path(__file__).resolve().parents[1]
 _VENV_PYTHON = _APPS_ROOT / "venv" / "bin" / "python"
 
+# Deliberately short: a HEALTHY local OSRM answers in single-digit ms, so this only
+# has to outlast a scheduling blip, not a slow route.
+_OSRM_PROBE_TIMEOUT = float(os.environ.get("OPENRIDE_OSRM_PREFLIGHT_TIMEOUT", "5"))
+
 
 def _tcp_open(host: str, port: int, timeout: float = 3.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True
     except OSError:
+        return False
+
+
+def _osrm_serving(base_url: str, timeout: float = _OSRM_PROBE_TIMEOUT) -> bool:
+    """True when OSRM actually ANSWERS a route request.
+
+    A TCP check is not enough, and that is the whole point of this probe. On
+    2026-09-07 OSRM stopped serving 58 s into a 572 s run while the container still
+    reported ``Up`` and the port still accepted connections: every route request then
+    hung until ``OSRM_TIMEOUT_SECONDS`` (5 s), and an assignment plans TWO legs, so each
+    one cost a flat 10 s. That produced 88 barrier stalls, 5,945 agent prunes, and left
+    90.1% of the run's trips with ``geometry_source: unavailable`` — i.e. haversine
+    distance instead of road distance (~50% low, CLAUDE.md §6.3) — while the run still
+    reported ``status: completed, ok: true``.
+
+    ANY HTTP status counts as alive: a 400 means OSRM parsed the request, which is all
+    we are testing. Only a hang, a refused connection, or a malformed reply means wedged,
+    so the probe never depends on which region graph is loaded.
+    """
+    url = f"{base_url.rstrip('/')}/route/v1/driving/0,0;0,0?overview=false"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
         return False
 
 
@@ -102,6 +135,22 @@ def assert_simulation_dependencies() -> None:
         missing.append("RabbitMQ AMQP (127.0.0.1:5672) is not reachable")
     if not _tcp_open("127.0.0.1", 11654):
         missing.append("OpenRide API gateway (127.0.0.1:11654) is not reachable")
+
+    # Routing is a HARD dependency whenever routes are planned at assignment: without it
+    # every leg silently falls back to haversine and the run's distance KPIs are ~50% low
+    # while still reporting success. See ``_osrm_serving``.
+    try:
+        from apps.config import settings as _app_settings
+
+        routing_server = _app_settings.get("ROUTING_SERVER", "http://localhost:10001")
+    except Exception:
+        routing_server = "http://localhost:10001"
+    if not _osrm_serving(routing_server):
+        missing.append(
+            f"OSRM routing ({routing_server}) is not answering route requests "
+            f"within {_OSRM_PROBE_TIMEOUT:g}s (the port may be open but the engine wedged; "
+            f"restart it, then re-check)"
+        )
 
     if missing:
         raise RuntimeError(

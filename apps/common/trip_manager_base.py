@@ -85,13 +85,75 @@ class TripManagerBase(ABC):
                 json.dumps(msg)
             )
 
+    def _adopt_trip_from_transition_response(self, response):
+        """
+        Try to use a transition PATCH's own response body as the new trip document.
+
+        Why: the GET in `apply_trip_transition_and_notify` re-reads the exact document the
+        PATCH just wrote. A haul trip makes ~8 transitions, so a 1000-truck run pays ~115k
+        redundant blocking round-trips *inside* agent ticks, where every blocking call is
+        barrier time. When the server echoes the full updated document, that read is free.
+
+        Why `state` is the test (and `_status` is NOT): Eve's DEFAULT thin response carries
+        `_id`/`_etag`/`_updated`/`_created`/`_status`/`_links` — it has `_etag` and it has
+        `_status`, but it has no `state`. Keying off either of those would adopt the stub and
+        blank every field callers read straight off `self.trip` (`truck`/`order`/`sim_clock`
+        in `message_template`, plus `meta`/`routes`/`stats` elsewhere), silently corrupting
+        the run instead of failing loudly. `state` is the one key that only a full document has.
+
+        Why the caller's `refresh()` fallback is mandatory rather than belt-and-braces:
+        ride-hail's endpoints are NOT being changed and will keep returning the thin body
+        forever, so the fallback is the *normal* path for a whole ecosystem — correctness must
+        never depend on this optimisation firing.
+
+        Returns True only when `self.trip` now holds a usable full document.
+        """
+        try:
+            body = response.json()
+        except Exception:
+            # Non-JSON / truncated / malformed body is not an error here — it just means
+            # there is no shortcut to take. Never let it escape into the transition path.
+            return False
+
+        if not isinstance(body, dict):
+            return False
+
+        # `_etag` is required (not merged in afterwards) because the NEXT PATCH sends it as
+        # `If-Match`. This endpoint folds that etag into the Mongo lookup, so a stale one does
+        # not 412 -- it simply matches no document and 404s, which `is_success` then treats as
+        # a failed transition. A body with no `_etag` at all is worse still: `_patch_trip`
+        # would KeyError on `self.trip['_etag']`.
+        #
+        # `statemachine` is required ALONGSIDE `state` because `state` alone does not prove a
+        # full document: Eve honours `?projection=` on this route, so a projected body can
+        # carry `state` and the auto-fields and nothing else. Adopting that would blank
+        # `truck`/`order`/`sim_clock`/`meta`/`routes`/`stats` and corrupt the run silently --
+        # the §6.7 shape. `statemachine` is schema-`required`, so a genuine full document
+        # always has it, and any partial projection that omits it falls back to the GET.
+        if not body.get('state') or not body.get('statemachine') or not body.get('_etag'):
+            return False
+
+        if not body.get('_id'):
+            # Eve always echoes `_id`, but every subsequent URL is built from it
+            # (`_trip_item_url`), so never let a body that omits it drop the id we already hold.
+            prev_id = (self.trip or {}).get('_id')
+            if not prev_id:
+                return False
+            body['_id'] = prev_id
+
+        self.trip = body
+        return True
+
     def apply_trip_transition_and_notify(self, transition, data, context=None):
         # Save previous state before transition
         # prev_state = self.trip['state'] if self.trip else None
         response = self._patch_trip_transition(transition, data)
         # After transition, get new state
         if is_success(response.status_code):
-            self.refresh()
+            # Adopt the PATCH's own response body when it is a full trip document; only pay
+            # for the extra GET when it is not. See `_adopt_trip_from_transition_response`.
+            if not self._adopt_trip_from_transition_response(response):
+                self.refresh()
             new_state = self.trip['state']
             self.post_transition_hook(transition, new_state, context=context)
         return response

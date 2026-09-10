@@ -21,6 +21,7 @@ from apps.container_logistics.statemachine import (
 from shapely.geometry import LineString, Point, mapping
 
 from apps.loc_service.osrm_client import OSRMClient
+from apps.utils.step_profile import span, tick
 from apps.container_logistics.haul_trip_duration import (
     apply_haul_trip_duration_floors,
     patch_route_duration,
@@ -565,11 +566,19 @@ class TruckApp(ORSimApp, OrderInteractionMixin, FacilityInteractionMixin):
             pass
 
     def execute_step_actions(self, current_time, add_step_log_fn=None):
-        self.current_time = current_time
-        self.current_time_str = current_time.strftime("%a, %d %b %Y %H:%M:%S GMT")
-        self.refresh()
-        self.update_location_by_planned_route()
-        self._emit_truck_location()
-        self.consume_messages()
-        self.perform_workflow_actions()
-        self.consume_messages()
+        with span("truck.tick"):
+            self.current_time = current_time
+            self.current_time_str = current_time.strftime("%a, %d %b %Y %H:%M:%S GMT")
+            with span("truck.refresh"):
+                self.refresh()
+            with span("truck.update_location"):
+                self.update_location_by_planned_route()
+            with span("truck.emit_location"):
+                self._emit_truck_location()
+            with span("truck.consume_1"):
+                self.consume_messages()
+            with span("truck.workflow"):
+                self.perform_workflow_actions()
+            with span("truck.consume_2"):
+                self.consume_messages()
+        tick("truck.tick")

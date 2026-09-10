@@ -274,8 +274,38 @@ class TruckTripManager(TripManagerBase):
         }
         response = self._post_trip(data)
         if is_success(response.status_code):
-            self.trip = {"_id": response.json()["_id"]}
-            self.refresh()
+            # ADOPT THE POST LOCALLY (perf). This used to be
+            # `self.trip = {"_id": ...}; self.refresh()` -- a GET that re-read the
+            # document we had just written, once per haul trip (~15k per 1000-truck
+            # run) inside `truck.consume_1`, the hottest span in the profile. It is
+            # the same redundancy the transition PATCH path already removed.
+            #
+            # A POST is safe to reconstruct where a PATCH is NOT: Eve stores exactly
+            # the payload we sent plus its own meta, so `data` IS the persisted
+            # document. (A PATCH cannot be reconstructed this way -- dotted-path
+            # payloads and server-side transition hooks make the result differ from
+            # what was sent, which is why the transition path adopts the server's
+            # echoed body instead of guessing.)
+            #
+            # `feasible_transitions` is `readonly` with `default: []` in the Eve
+            # schema, so the stored value for a fresh document is `[]`.
+            body = {}
+            try:
+                body = response.json() or {}
+            except Exception:
+                body = {}
+            # `_etag` is REQUIRED, not optional: the very next call is `assign()`,
+            # whose PATCH sends `self.trip['_etag']` as If-Match. Without it we would
+            # KeyError, so fall back to the old GET rather than guess.
+            if isinstance(body, dict) and body.get("_id") and body.get("_etag"):
+                self.trip = {
+                    **data,
+                    "feasible_transitions": [],
+                    **{k: v for k, v in body.items() if k.startswith("_")},
+                }
+            else:
+                self.trip = {"_id": (body or {}).get("_id")}
+                self.refresh()
             return self.trip
         raise WriteFailedException(f"Unable to create haul trip: {response.url}, {response.text}")
 

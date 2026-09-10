@@ -9,6 +9,7 @@ from apps.container_logistics.statemachine import (
     GateStateMachine,
     QueueEntry,
 )
+from apps.utils.step_profile import span
 from orsim.lifecycle import ORSimManager
 
 
@@ -53,7 +54,8 @@ class FacilityManager(ResourceClientMixin, ORSimManager):
         return self.resource.get("_id")
 
     def refresh(self):
-        self.resource = self.resource_get(resource_id=self.resource.get("_id"))
+        with span("fac.http_get"):
+            self.resource = self.resource_get(resource_id=self.resource.get("_id"))
         return self.resource
 
     def open_facility(self):
@@ -78,11 +80,12 @@ class FacilityManager(ResourceClientMixin, ORSimManager):
         try:
             profile = dict(self.resource.get("profile") or {})
             profile.update(stats)
-            patched = self.resource_patch(
-                resource_id=rid,
-                data={"profile": profile},
-                etag=etag,
-            )
+            with span("fac.http_patch"):
+                patched = self.resource_patch(
+                    resource_id=rid,
+                    data={"profile": profile},
+                    etag=etag,
+                )
             # Eve PATCH responses are meta-only under BANDWIDTH_SAVER (the default) — no
             # state/profile — so assigning the response straight to self.resource would wipe
             # `state` to None (same defect fixed in TruckManager.set_last_dropoff). Update in
