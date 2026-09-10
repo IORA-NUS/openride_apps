@@ -238,6 +238,27 @@ def main():
             # stamp cannot drift from what executes.
             _stamp = effective_cooperation_stamp(_profile, _active)
             scenario_manager.orsim_settings["COOPERATION"] = _stamp
+
+            # Name the ARM in the run name, on EVERY run that has one — not just on the
+            # override path.
+            #
+            # Compare compares RUNS: "this scenario with structure A" and "this scenario with
+            # structure B" are two runs, and the run name is what tells them apart in the
+            # picker and in `lib/runNameMeta.ts::parseRunNameTags`. Only
+            # `apply_cooperation_override` appended a `· <structure>` segment, so a launch on
+            # the scenario's DEFAULT arm produced an unlabelled run — indistinguishable in the
+            # picker from the other arm of the same scenario.
+            #
+            # Taken from the stamp, so it is the EFFECTIVE structure (post-override) and can
+            # never disagree with what actually ran. Idempotent by SEGMENT (not substring, so
+            # `chain` never matches `chain2`), which is what keeps the override path — which
+            # already appended it above — from producing `… · chain · chain`.
+            _sid = _stamp.get("structure_id")
+            if _sid:
+                _segments = [seg.strip() for seg in (run_name or "").split("·")]
+                if _sid not in _segments:
+                    run_name = f"{run_name} · {_sid}" if run_name else str(_sid)
+
             _mkt = _stamp["market"]
             print(
                 f"Cooperation effective: topology={_stamp['topology']} "
