@@ -253,7 +253,50 @@ def _result_doc(
         "report_dir": str(runner.report_dir),
         "log_path": str(runner.log_path),
         "report_final": bool((summary or {}).get("final")),
+        # ORSim transport verdict (Kafka transport only; absent on the paho
+        # default). `transport_degraded: true` means at least one celery worker
+        # LOST transport traffic, so the agents behind it went unresponsive and
+        # were pruned or heartbeat-killed: the run finished short and its KPIs
+        # are not comparable, even though `status`/`ok` above say completed.
+        # `null` means UNKNOWN (no worker published its counters), which is not
+        # the same as clean -- see apps/transport/health_stream.py.
+        **_transport_fields(runner.run_id),
     }
+
+
+def _transport_fields(run_id: str) -> dict[str, Any]:
+    """`{}` on the paho default; the transport verdict on a Kafka run.
+
+    Reads the per-process counters back off `transport_health_stream`, which is
+    the ONLY path from a transport loss to the run's own outcome: the agents
+    live in ~64 celery workers and this process hosts no buses, so without this
+    a run in which several workers dropped hundreds of agent replies writes
+    `ok: true` with the evidence sitting in a journal nobody greps (CLAUDE.md
+    §8 / §6.23, and §6.21 on that journal specifically).
+    """
+    try:
+        from apps.config import messenger_backend
+
+        if messenger_backend.get("AGENT_TRANSPORT", "paho") == "paho":
+            return {}
+        from apps.transport.health_stream import collect_transport_health
+
+        health = collect_transport_health(
+            run_id, messenger_backend.get("KAFKA_BOOTSTRAP_SERVERS"))
+    except Exception as exc:  # noqa: BLE001 - never fail a finished run's summary
+        _log(f"warning: could not read transport health: {exc}")
+        return {"transport_degraded": None, "transport": {"available": False}}
+
+    if health.get("degraded"):
+        _log(
+            "WARNING: ORSIM TRANSPORT DEGRADED — "
+            f"{len(health.get('degraded_pids') or [])} of {health.get('processes')} "
+            "worker process(es) lost transport traffic. This run finished SHORT; "
+            "its KPIs are NOT comparable."
+        )
+    elif not health.get("available"):
+        _log("warning: no worker published transport counters — transport health UNKNOWN.")
+    return {"transport_degraded": health.get("degraded"), "transport": health}
 
 
 def _exit_code_for(status: str) -> int:

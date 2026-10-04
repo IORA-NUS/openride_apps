@@ -5,10 +5,15 @@ from dateutil.relativedelta import relativedelta
 
 from orsim.lifecycle import ORSimAgent
 
+from apps.agent_transport import TransportSelectingAgent
+
 from .app import AnalyticsApp
 
 
-class AnalyticsAgentIndie(ORSimAgent):
+# TransportSelectingAgent (a no-op while OPENRIDE_AGENT_TRANSPORT is unset) keeps this
+# agent on the SAME broker as the scheduler; it subclasses ORSimAgent directly rather
+# than through OpenRideAgent.
+class AnalyticsAgentIndie(TransportSelectingAgent, ORSimAgent):
     """Service-style agent: periodically aggregates haul/order KPIs for a run."""
 
     def _create_app(self):

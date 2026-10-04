@@ -196,6 +196,10 @@ class SimulationRuntime(ORSimRuntime):
         self.run_record = None
         self.execution_start_time = 0.0
         self._terminal_status_publisher = None
+        # The aggregated ORSim transport verdict for this run, filled in at
+        # finalize by _collect_transport_health. None = not collected (paho, or
+        # the collection itself failed); {'available': False} = UNKNOWN.
+        self.transport_health: Optional[dict] = None
         self._init_status_write_counters()
 
     def _init_status_write_counters(self) -> None:
@@ -305,7 +309,132 @@ class SimulationRuntime(ORSimRuntime):
         # can carry its outcome. That ordering is what makes a failed terminal write
         # detectable from the perf stream instead of only by reading Mongo.
         self._write_terminal_status(elapsed)
+        # Before the perf summary, so the transport verdict can ride it.
+        self._collect_transport_health()
         self._publish_perf_summary(elapsed)
+        self._reap_transport_lane_topics()
+
+    def _collect_transport_health(self) -> None:
+        """Read every worker's ORSim transport counters back and judge the run.
+
+        NO-OP with OPENRIDE_AGENT_TRANSPORT unset, which is the default.
+
+        This is the step that stops a lossy Kafka run from being quotable as
+        clean. The agents live in ~64 celery worker processes; their transport
+        counters (``dropped_publishes``, ``delivery_failures``,
+        ``inbox_overflow``, ``consume_errors``, ``record_errors``,
+        ``unflushed_messages``, ``handler_errors``, ``dispatcher_deaths``,
+        ``bus_rebinds``) existed only inside those processes and reached nothing
+        but ``journalctl --user -u openride-celery`` — the channel CLAUDE.md
+        §6.21 records being missed twice in one session. A run in which several
+        workers each dropped a few hundred agent replies finished with fewer
+        orders and reported ``status: completed, ok: true, error: null``: the
+        shape of the 3,247-lost-events run in §8 and the 8,032-vs-14,300-orders
+        run in §6.23.
+
+        Each bus now publishes its counters to ``transport_health_stream``
+        periodically and at teardown; this reads them back, keyed by run id, and
+        stores the verdict for the perf summary. ``available: False`` is
+        reported as UNKNOWN rather than clean, because "no snapshots" and "no
+        losses" are the same bytes — the distinction is the whole point.
+
+        Best effort by contract: a finished run must never be reported as failed
+        because a diagnostic read did not land.
+        """
+        self.transport_health = None
+        try:
+            from apps.config import messenger_backend
+
+            if messenger_backend.get("AGENT_TRANSPORT", "paho") == "paho":
+                return
+            from apps.transport.health_stream import collect_transport_health
+
+            health = collect_transport_health(
+                self.run_id,
+                messenger_backend.get("KAFKA_BOOTSTRAP_SERVERS"),
+                timeout=float(os.getenv("OPENRIDE_TRANSPORT_HEALTH_TIMEOUT", "5")),
+            )
+            self.transport_health = health
+            if not health.get("available"):
+                logging.error(
+                    "run_id=%s: TRANSPORT HEALTH UNKNOWN — no worker published its ORSim "
+                    "transport counters. This run cannot be quoted as clean on transport "
+                    "grounds; check `journalctl --user -u openride-celery | grep 'ORSIM "
+                    "TRANSPORT DEGRADED'`.",
+                    self.run_id)
+            elif health.get("degraded"):
+                logging.error(
+                    "ORSIM TRANSPORT DEGRADED run_id=%s: %d of %d worker process(es) lost "
+                    "transport traffic. Agents behind them went unresponsive, were pruned or "
+                    "heartbeat-killed, and this run finished SHORT — its KPIs are not "
+                    "comparable. totals=%s degraded_pids=%s",
+                    self.run_id, len(health.get("degraded_pids") or []),
+                    health.get("processes"), health.get("totals"),
+                    health.get("degraded_pids"))
+            else:
+                logging.info(
+                    "run_id=%s: transport clean across %d worker process(es): %s",
+                    self.run_id, health.get("processes"), health.get("totals"))
+        except Exception:  # noqa: BLE001 - a diagnostic must not fail a finished run
+            logger.warning(
+                "run_id=%s: transport-health collection failed; treat the run's transport "
+                "as UNVERIFIED and grep the celery journal for 'ORSIM TRANSPORT DEGRADED'.",
+                self.run_id, exc_info=True)
+
+    def _reap_transport_lane_topics(self):
+        """Collect OLD ORSim lane topics (Kafka transport only).
+
+        NO-OP with OPENRIDE_AGENT_TRANSPORT unset, which is the default.
+
+        **THIS RUN'S OWN TOPICS ARE DELIBERATELY NOT DELETED HERE.** Finalize is
+        not a quiet moment: CLAUDE.md §6.22's pruned stragglers are still
+        replying, and every worker's bus lingers for ``BUS_LINGER_S`` (30 s)
+        with its consumer still assigned. Deleting a lane topic that anything is
+        still publishing to opens a gap in which this broker
+        (``auto.create.topics.enable=true``, ``num.partitions=1``) RESURRECTS it
+        with one partition — after which buses built before and after the gap
+        compute different partitions from the same key and records vanish with
+        no error on either side. Reproduced end to end: a live subscriber
+        holding ``app=64`` received 0 of 20 records that an ``app=1`` publisher
+        reported as delivered successfully.
+
+        So the leak is bounded three other ways instead: ``retention.ms`` (6 h,
+        stamped at creation), ``retention.bytes`` (2 GiB), and the AGED sweep
+        run here, which only touches runs that started long enough ago to be
+        certainly dead (``MIN_SWEEP_AGE_HOURS``).
+
+        Lane topics accumulate at 3 per run, so leaving this run's behind for a
+        few hours is a slow leak rather than a fault; that is why this runs LAST
+        and swallows everything. A run that completed successfully must never be
+        reported as failed because a cleanup delete did not land.
+
+        Every delete is hard-filtered inside ``lane_admin`` to names matching
+        ``^orsim_(bcast|reply|app)_run_``, so it can never reach run_status,
+        facility_stream, kpi_stream, perf_stream or trip_geo_stream.
+        """
+        try:
+            from apps.config import messenger_backend
+
+            if messenger_backend.get("AGENT_TRANSPORT", "paho") == "paho":
+                return
+            from apps.transport.lane_admin import (
+                DEFAULT_RETENTION_HOURS,
+                reap_lane_topics_older_than,
+            )
+
+            reaped = reap_lane_topics_older_than(
+                DEFAULT_RETENTION_HOURS,
+                messenger_backend.get("KAFKA_BOOTSTRAP_SERVERS"))
+            logging.info(
+                "run_id=%s: swept ORSim lane topics older than %sh: %s "
+                "(this run's own topics are left to retention on purpose)",
+                self.run_id, DEFAULT_RETENTION_HOURS, reaped)
+        except Exception:  # noqa: BLE001 - cleanup must never fail a finished run
+            logger.warning(
+                "run_id=%s: ORSim lane-topic sweep failed; the topics stay until "
+                "retention.ms expires them or a later sweep collects them.",
+                self.run_id, exc_info=True,
+            )
 
     def _write_terminal_status(self, elapsed: float) -> StatusWrite:
         """Write the terminal ``success`` status, retrying with backoff, and be LOUD if it fails.
@@ -672,6 +801,15 @@ class SimulationRuntime(ORSimRuntime):
                     self.terminal_status_write.value if self.terminal_status_write else None
                 ),
             }
+            # The ORSim transport verdict, so a run that lost agent replies is
+            # non-quotable from the perf stream rather than only from a journal
+            # nobody greps. Absent entirely on the paho default.
+            health = getattr(self, "transport_health", None)
+            if health is not None:
+                summary["transport_available"] = bool(health.get("available"))
+                summary["transport_degraded"] = health.get("degraded")
+                summary["transport_processes"] = health.get("processes")
+                summary["transport_totals"] = health.get("totals")
             if wall_times:
                 sorted_w = sorted(wall_times)
                 summary["p50_step_ms"] = sorted_w[len(sorted_w) // 2]

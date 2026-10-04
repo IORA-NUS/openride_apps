@@ -20,6 +20,11 @@ _VENV_PYTHON = _APPS_ROOT / "venv" / "bin" / "python"
 # has to outlast a scheduling blip, not a slow route.
 _OSRM_PROBE_TIMEOUT = float(os.environ.get("OPENRIDE_OSRM_PREFLIGHT_TIMEOUT", "5"))
 
+# A healthy local broker answers a metadata request in single-digit ms; this only has
+# to outlast a scheduling blip. Kept separate from the OSRM budget so either can be
+# tuned without moving the other.
+_KAFKA_PROBE_TIMEOUT = float(os.environ.get("OPENRIDE_KAFKA_PREFLIGHT_TIMEOUT", "5"))
+
 
 def _tcp_open(host: str, port: int, timeout: float = 3.0) -> bool:
     try:
@@ -127,12 +132,137 @@ def celery_process_running() -> bool:
         return _celery_worker_process_exists()
 
 
-def assert_simulation_dependencies() -> None:
-    """Fail fast with a clear message if agent workers cannot run."""
+def _celery_broker_url() -> str:
+    """The broker URL the celery workers are actually configured with.
+
+    Read from the environment exactly as ``apps/celery_worker.py`` reads it, so
+    the preflight gate and the workers can never disagree about which broker
+    this run needs.
+    """
+    return os.environ.get("CELERY_BROKER_URL", "amqp://guest:guest@127.0.0.1:5672//")
+
+
+def _agent_transport_name() -> str:
+    """``paho`` (today's default) or the name of the transport that replaced it."""
+    try:
+        from apps.config import messenger_backend
+
+        return str(messenger_backend.get("AGENT_TRANSPORT", "paho") or "paho").lower()
+    except Exception:
+        return "paho"
+
+
+def _kafka_serving(bootstrap: str, run_id: str | None, timeout: float) -> str | None:
+    """None when Kafka really answers; otherwise the reason it does not.
+
+    A REAL REQUEST, not a TCP check — the same lesson §6.21 paid for with OSRM,
+    whose port stayed open for the whole outage. ``list_topics`` is a metadata
+    round trip the broker has to serve, and when a run id is known the lane
+    topics it already carries are checked for a SHRUNKEN partition count: a lane
+    topic resurrected by ``auto.create.topics.enable=true`` at
+    ``num.partitions=1`` makes publisher and subscriber compute different
+    partitions from the same key, after which records vanish with no error
+    anywhere (``lane_admin._reject_shrunken_lanes`` refuses that at boot; this
+    says so before the run starts instead).
+    """
+    try:
+        from confluent_kafka.admin import AdminClient
+    except Exception as exc:  # pragma: no cover - confluent_kafka is in requirements
+        return f"confluent_kafka is not importable ({exc})"
+    try:
+        metadata = AdminClient({"bootstrap.servers": bootstrap}).list_topics(timeout=timeout)
+    except Exception as exc:
+        return f"metadata request failed ({exc})"
+    if not metadata or not metadata.brokers:
+        return "the broker answered with no brokers in its metadata"
+
+    if not run_id:
+        return None
+    try:
+        from apps.transport.lane_admin import (
+            DEFAULT_APP_PARTITIONS,
+            DEFAULT_BCAST_PARTITIONS,
+            DEFAULT_REPLY_PARTITIONS,
+            lane_topic_names,
+        )
+
+        wanted = {
+            "bcast": DEFAULT_BCAST_PARTITIONS,
+            "reply": int(os.environ.get("KAFKA_REPLY_PARTITIONS", DEFAULT_REPLY_PARTITIONS)),
+            "app": int(os.environ.get("KAFKA_APP_PARTITIONS", DEFAULT_APP_PARTITIONS)),
+        }
+        for lane, name in lane_topic_names(run_id).items():
+            existing = metadata.topics.get(name)
+            if existing is None or existing.error is not None:
+                continue        # not created yet: the bus creates it at boot
+            have = len(existing.partitions)
+            if have < wanted.get(lane, 1):
+                return (
+                    f"lane topic {name!r} already exists with {have} partition(s) but this "
+                    f"run needs {wanted.get(lane, 1)}; a run on a shrunken lane topic loses "
+                    "records silently (delete the topic while nothing is publishing)"
+                )
+    except Exception:
+        logger.debug("lane-topic partition preflight skipped", exc_info=True)
+    return None
+
+
+def assert_simulation_dependencies(run_id: str | None = None) -> None:
+    """Fail fast with a clear message if agent workers cannot run.
+
+    TRANSPORT-AWARE, and that is not cosmetic. The RabbitMQ check below used to
+    be unconditional and there was no Kafka check of any kind, so the dependency
+    gating was exactly inverted for the cutover: the substrate being deleted was
+    a hard gate, while the new critical-path substrate had none —
+    ``kafka_utils.bootstrap_kafka_for_run`` explicitly warns-and-continues when
+    the broker is unreachable. The first run after RabbitMQ was removed would
+    have aborted here pointing the operator at a service they had deliberately
+    deleted, and a run whose Kafka was wrong would have started regardless.
+
+    So: Rabbit is gated on the celery broker URL actually being an ``amqp://``
+    one (it still is, so the check still runs — the two halves of the cutover
+    sequence independently), and a non-paho agent transport adds a REAL Kafka
+    probe. Note what this cannot catch, for the same reason the OSRM probe
+    cannot (§6.21): a broker that is healthy at launch and wedges 30 s in. The
+    transport's own counters are the detector for that.
+    """
     missing: list[str] = []
 
-    if not _tcp_open("127.0.0.1", 5672):
-        missing.append("RabbitMQ AMQP (127.0.0.1:5672) is not reachable")
+    broker_url = _celery_broker_url()
+    if broker_url.startswith("amqp"):
+        if not _tcp_open("127.0.0.1", 5672):
+            missing.append(
+                "RabbitMQ AMQP (127.0.0.1:5672) is not reachable, and CELERY_BROKER_URL "
+                f"is {broker_url.split('@')[-1]!r} — every agent is LAUNCHED over that "
+                "broker, so no agent can start"
+            )
+    else:
+        logger.info(
+            "Preflight: celery broker is %r, not AMQP — skipping the RabbitMQ check.",
+            broker_url.split("://")[0],
+        )
+
+    transport = _agent_transport_name()
+    if transport != "paho":
+        try:
+            from apps.config import messenger_backend
+
+            bootstrap = messenger_backend.get("KAFKA_BOOTSTRAP_SERVERS")
+        except Exception:
+            bootstrap = os.environ.get("KAFKA_BOOTSTRAP_SERVERS")
+        if not bootstrap:
+            missing.append(
+                f"AGENT_TRANSPORT is {transport!r} but no KAFKA_BOOTSTRAP_SERVERS is "
+                "configured, so no agent can reach the step barrier"
+            )
+        else:
+            reason = _kafka_serving(bootstrap, run_id, _KAFKA_PROBE_TIMEOUT)
+            if reason:
+                missing.append(
+                    f"Kafka ({bootstrap}) is not usable for AGENT_TRANSPORT={transport}: "
+                    f"{reason}. Every agent reply and every step broadcast rides it"
+                )
+
     if not _tcp_open("127.0.0.1", 11654):
         missing.append("OpenRide API gateway (127.0.0.1:11654) is not reachable")
 
@@ -156,7 +286,8 @@ def assert_simulation_dependencies() -> None:
         raise RuntimeError(
             "Simulation dependencies not ready:\n- "
             + "\n- ".join(missing)
-            + "\nStart backend services (rabbit, nginx, celery) before running the simulation."
+            + "\nStart backend services (celery's broker, nginx, celery) before running "
+            "the simulation."
         )
 
     # A single liveness ping (fast in-process happy path; slow subprocess only when
@@ -174,4 +305,8 @@ def assert_simulation_dependencies() -> None:
             "Start Celery before launching the simulation."
         )
 
-    logger.info("Preflight OK: RabbitMQ, API gateway, and Celery worker are reachable.")
+    logger.info(
+        "Preflight OK: celery broker (%s), API gateway, OSRM and a live Celery worker are "
+        "reachable; agent transport is %s.",
+        _celery_broker_url().split("://")[0], _agent_transport_name(),
+    )

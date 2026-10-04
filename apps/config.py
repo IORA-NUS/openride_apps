@@ -95,6 +95,13 @@ kafka_config = {
         "service_control": "service_control",
         "service_status": "service_status",
         "service_events": "service_events",
+        # Phase-2 transport: the cross-process channel that carries each celery
+        # worker's ORSim transport counters to the process that writes the run's
+        # outcome. Without it those counters exist only in
+        # `journalctl --user -u openride-celery`, in ~64 separate processes, and
+        # a run that lost agent replies reports `ok: true` -- the CLAUDE.md §8 /
+        # §6.23 shape. See apps/transport/health_stream.py.
+        "transport_health": "transport_health_stream",
     },
     "producer": {
         "linger_ms": 5,
@@ -148,5 +155,66 @@ kafka_config = {
             "replication_factor": 1,
             "config": {"retention.ms": "604800000"},
         },
+        # 24 h is plenty: it is read at the end of the run that wrote it.
+        "transport_health": {
+            "partitions": 1,
+            "replication_factor": 1,
+            "config": {"retention.ms": "86400000"},
+        },
     },
 }
+
+# ---------------------------------------------------------------------------
+# Agent transport selection (RabbitMQ -> Kafka migration, phase 2).
+#
+# `paho` is today's behaviour and the default: `build_agent_transport` returns
+# None for it, so `Messenger` builds a `PahoTransport` on exactly today's code
+# path.  Nothing below is read at all until someone sets the flag to `kafka`.
+#
+# THE FLAG IS STAMPED ONTO `messenger_backend` ON PURPOSE.  `messenger_backend`
+# is what `ORSimEnv.set_backend()` receives inside the celery worker, and it is
+# the ONLY channel that crosses the JSON-serialised celery task boundary.
+# Workers here are long-lived across runs, so a worker that re-read
+# OPENRIDE_AGENT_TRANSPORT from its own environment could serve run A on paho
+# and run B on kafka, or half-migrate a single run if the variable changed
+# mid-flight.  Stamping it here means the LAUNCHING process decides once and the
+# choice rides the task payload.  See apps/transport/factory.py.
+#
+# KAFKA_APP_PARTITIONS is the knob for the one number this design does not yet
+# have a measurement for: app-lane fan-out amplification.  A process assigns only
+# the partitions its ~17 resident agents hash into (~15 of 64), so lowering it
+# raises the redundant-decode count linearly.  Do NOT set it to 1 "for
+# simplicity" -- that is a 64x amplification of ~200k records per run.
+# ---------------------------------------------------------------------------
+# The trailing `or "paho"` matters: an env var exported as EMPTY
+# (`OPENRIDE_AGENT_TRANSPORT=` in a systemd unit or a shell) would otherwise
+# stamp the empty string, and a downstream reader that treats "" as "unknown"
+# instead of "unset" would refuse to start the run.
+agent_transport = os.getenv("OPENRIDE_AGENT_TRANSPORT", "paho").strip().lower() or "paho"
+
+messenger_backend["AGENT_TRANSPORT"] = agent_transport
+messenger_backend["KAFKA_BOOTSTRAP_SERVERS"] = kafka_config["bootstrap_servers"]
+messenger_backend["KAFKA_APP_PARTITIONS"] = int(os.getenv("KAFKA_APP_PARTITIONS", "64"))
+messenger_backend["KAFKA_REPLY_PARTITIONS"] = int(os.getenv("KAFKA_REPLY_PARTITIONS", "8"))
+# KAFKA_LINGER_MS defaults to 0 because the barrier's critical path is two
+# single-record publishes (the scheduler's broadcast, the agent's reply) with
+# nothing to batch against: measured n=3 per arm, linger=5 cost ~10 ms per step
+# -- ~25 s on a 2592-step run -- and bought nothing. Ordering rests on
+# max.in.flight=1, not on linger. See _producer_config in kafka_bus.py.
+messenger_backend["KAFKA_LINGER_MS"] = int(os.getenv("KAFKA_LINGER_MS", "0"))
+# The producer's delivery budget. librdkafka's own default is 300_000 ms, which
+# leaves the ONLY error channel this design has blind for five minutes -- longer
+# than STEP_TIMEOUT, longer than ORSim's 30 s heartbeat threshold, and longer
+# than BUS_LINGER_S, so a total publish outage moved no counter and wrote no log
+# line until long after the affected agents had been pruned.
+messenger_backend["KAFKA_MESSAGE_TIMEOUT_MS"] = int(
+    os.getenv("KAFKA_MESSAGE_TIMEOUT_MS", "10000")
+)
+# 0 on purpose: retries>0 without idempotence permits broker-side DUPLICATES,
+# and nothing in ORSim dedupes on time_step -- a duplicated step broadcast makes
+# every agent step twice for one time step, which shifts KPIs with no counter
+# moving. A LOST record is counted in delivery_failures and makes the run
+# non-quotable; visible beats silent.
+messenger_backend["KAFKA_PRODUCER_RETRIES"] = int(
+    os.getenv("KAFKA_PRODUCER_RETRIES", "0")
+)

@@ -52,6 +52,8 @@ from orsim import ORSimScheduler
 from orsim.core import ORSimEnv
 from orsim.tasks import start_agent
 
+from apps.agent_transport import require_seam, select_scheduler_transport
+
 
 def _parse_reply(raw: bytes):
     if _fastjson is not None:
@@ -61,8 +63,55 @@ def _parse_reply(raw: bytes):
 
 class OpenRideScheduler(ORSimScheduler):
 
-    def __init__(self, run_id, scheduler_id, orsim_settings, init_failure_handler='soft'):
-        super().__init__(run_id, scheduler_id, orsim_settings, init_failure_handler=init_failure_handler)
+    def __init__(self, run_id, scheduler_id, orsim_settings, init_failure_handler='soft', transport=None):
+        """
+        Args:
+            transport: optional ``orsim.messenger.transport.MessengerTransport``
+                for this scheduler's own messenger. Phase-1 review flagged that
+                this subclass swallowed the parameter orsim had just grown, so
+                the seam was unreachable from the app; it is forwarded now.
+
+                Left as ``None`` (the default) the transport is chosen by
+                ``apps.transport.build_agent_transport`` from
+                ``messenger_settings['AGENT_TRANSPORT']`` -- which defaults to
+                ``paho``, in which case it returns ``None`` and
+                ``super().__init__`` is called WITHOUT the keyword. That
+                omission is load-bearing: the INSTALLED orsim is v1.3.0 and has
+                no ``transport`` parameter at all, so passing it unconditionally
+                would break every run the moment this file shipped.
+        """
+        built_here = False
+        if transport is None:
+            transport = select_scheduler_transport(run_id, scheduler_id)
+            built_here = transport is not None
+
+        if transport is None:
+            # Byte-identical to the pre-phase-2 call: no seam is touched.
+            super().__init__(run_id, scheduler_id, orsim_settings, init_failure_handler=init_failure_handler)
+        else:
+            # The seam check must not strand the transport it was checking for:
+            # a KafkaTransport RETAINS a process-level bus (one Consumer, one
+            # native poll thread, lane-partition assignments) in its
+            # constructor, and a raise between the build and this scheduler's
+            # teardown leaves that bus pinned for the life of the process. See
+            # apps/agent_transport.py::select_agent_transport for the measured
+            # agent-side version of the same leak.
+            try:
+                require_seam('OpenRideScheduler', ORSimScheduler)
+            except Exception:
+                if built_here:
+                    try:
+                        transport.disconnect()
+                    except Exception:
+                        logging.warning(
+                            'OpenRideScheduler: could not tear down the transport built '
+                            'for a run whose orsim has no transport seam', exc_info=True)
+                raise
+            super().__init__(
+                run_id, scheduler_id, orsim_settings,
+                init_failure_handler=init_failure_handler,
+                transport=transport,
+            )
 
         # Number of consecutive steps whose unresponsive-agent fraction exceeded
         # STEP_TIMEOUT_TOLERANCE. A single bad step no longer aborts the run; we
@@ -87,6 +136,10 @@ class OpenRideScheduler(ORSimScheduler):
         self._error_replied: set = set()
         self._booting_count_this_step: int = 0
         self._sleeping_count_this_step: int = 0
+        # Agents that never completed their async celery boot (see
+        # BOOT_DEADLINE_STEPS). Non-zero means the run acted with fewer agents
+        # than it was configured for, which no other number reports.
+        self._boot_timed_out: int = 0
 
         # ── Sleep protocol state ─────────────────────────────────────────────
         # agent_id -> wake step (float('inf') = indefinite, event-driven nap).
@@ -109,6 +162,23 @@ class OpenRideScheduler(ORSimScheduler):
 
     _PRUNED_STASH_MAX = 4096
 
+    #: How many steps an agent may stay ``pending_boot`` before the scheduler
+    #: says so.  ``pending_boot`` exists because celery boot is async and a
+    #: freshly added agent cannot be expected to answer the barrier yet -- but
+    #: it had NO deadline anywhere, so an agent whose boot raised (a transport
+    #: ``subscribe`` that failed, say) was excluded from ``expected`` silently
+    #: and for ever: it never participated, the run finished with fewer orders,
+    #: and ``summary.json`` still said ``ok: true``.  Boot is normally one or
+    #: two steps; this is deliberately generous so a slow worker queue is never
+    #: accused, and the guard only LOGS and COUNTS -- removing the agent would
+    #: not bring it back and would hide the evidence.
+    BOOT_DEADLINE_STEPS = 20
+
+    #: Class-level default as well as an instance field, because the barrier
+    #: tests build a scheduler with ``__new__`` and set only the fields they
+    #: exercise -- a counter that exists only in ``__init__`` breaks them.
+    _boot_timed_out = 0
+
     @property
     def sleeping_agent_count(self) -> int:
         """Registered agents currently in an announced nap (see sleep protocol)."""
@@ -126,6 +196,10 @@ class OpenRideScheduler(ORSimScheduler):
             'spec': spec,
             # Celery boot is async; exclude from confirm_responses until first MQTT reply.
             'pending_boot': True,
+            # The step this agent was added on, so a boot that never completes
+            # becomes visible instead of being excluded from the barrier for
+            # ever. See BOOT_DEADLINE_STEPS.
+            'boot_step': self.time,
             'step_response': {
                 self.time: {
                     'reaction': 'waiting',
@@ -286,6 +360,7 @@ class OpenRideScheduler(ORSimScheduler):
         for aid, item in self.agent_collection.items():
             if item.get('pending_boot'):
                 booting += 1
+                self._check_boot_deadline(aid, item)
             elif aid not in sleeping_now:
                 expected.add(aid)
 
@@ -298,6 +373,39 @@ class OpenRideScheduler(ORSimScheduler):
         self._error_replied = set()
         self._expected_this_step = expected
         self._outstanding = len(expected)
+
+    def _check_boot_deadline(self, agent_id, item) -> None:
+        """Complain ONCE about an agent that has been ``pending_boot`` too long.
+
+        The silent-loss shape this closes: ``add_agent`` marks an agent
+        ``pending_boot`` and ``_begin_step_barrier`` excludes those from
+        ``expected``.  Nothing ever timed that out, so an agent whose boot
+        raised -- most reachably a transport ``subscribe`` that failed, which
+        ``KafkaTransport`` raises on by design -- was excluded for the whole
+        run.  It never replied, it was never pruned (pruning only touches
+        agents that WERE expected), the run completed with fewer orders, and
+        the only trace was ``agent_stat.booting`` staying non-zero in
+        ``sim.log``, which nobody reads per-step.  Counted in
+        ``boot_timed_out`` so the number rides ``agent_stat`` into the perf
+        summary.
+        """
+        boot_step = item.get('boot_step')
+        if boot_step is None:
+            item['boot_step'] = self.time
+            return
+        if item.get('boot_timeout_logged'):
+            return
+        if (self.time - boot_step) < self.BOOT_DEADLINE_STEPS:
+            return
+        item['boot_timeout_logged'] = True
+        self._boot_timed_out += 1
+        logging.error(
+            "AGENT BOOT NEVER COMPLETED: %s has been pending_boot for %d steps "
+            "(added at step %s, now %s). It is excluded from every step barrier, so "
+            "it will never act and the run will finish short with status 'completed'. "
+            "%d agent(s) in this run are in that state. Check "
+            "`journalctl --user -u openride-celery` for a start_listening failure.",
+            agent_id, self.time - boot_step, boot_step, self.time, self._boot_timed_out)
 
     def _update_agent_stat(self) -> int:
         """
@@ -316,6 +424,9 @@ class OpenRideScheduler(ORSimScheduler):
             'sleeping': self._sleeping_count_this_step,
             'stepping_agents': self._did_step_count,
             'total_agents': len(self.agent_collection),
+            # Rides agent_stat so a short run cannot report clean: an agent
+            # stuck in pending_boot is excluded from every barrier for ever.
+            'boot_timed_out': self._boot_timed_out,
         }
         return waiting
 

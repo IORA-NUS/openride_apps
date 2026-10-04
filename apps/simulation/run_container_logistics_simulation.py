@@ -112,6 +112,32 @@ def _resolve_run_id() -> str:
     return os.environ.get("ORSIM_RUN_ID", "").strip() or new_run_id()
 
 
+def _ensure_transport_lane_topics(run_id: str) -> None:
+    """Create the ORSim lane topics for this run, if the Kafka transport is selected.
+
+    Best effort by design: a failure here must not stop a run from launching.
+    The bus creates the topics itself if it has to, so the only cost of a
+    failure is that the first agent in each worker pays for the creation --
+    which is the path this call exists to avoid, not a correctness requirement.
+    """
+    from apps.config import messenger_backend
+
+    if messenger_backend.get("AGENT_TRANSPORT", "paho") == "paho":
+        return
+    try:
+        from apps.transport.lane_admin import ensure_run_lane_topics
+
+        counts = ensure_run_lane_topics(
+            run_id,
+            messenger_backend.get("KAFKA_BOOTSTRAP_SERVERS"),
+            reply_partitions=int(messenger_backend.get("KAFKA_REPLY_PARTITIONS", 8)),
+            app_partitions=int(messenger_backend.get("KAFKA_APP_PARTITIONS", 64)),
+        )
+        print(f"ORSim lane topics ready for {run_id}: {counts}")
+    except Exception as exc:  # noqa: BLE001 - never block a launch on this
+        logging.warning("could not pre-create ORSim lane topics for %s: %s", run_id, exc)
+
+
 def main():
     logging.basicConfig(
         level=logging.INFO,
@@ -132,7 +158,23 @@ def main():
 
     run_status_topic = kafka_utils.bootstrap_kafka_for_run(run_id)
 
-    assert_simulation_dependencies()
+    # RabbitMQ -> Kafka migration, phase 2: create this run's three ORSim lane
+    # topics next to the standard ones.  NO-OP with OPENRIDE_AGENT_TRANSPORT
+    # unset (the default) -- ensure_run_lane_topics is not even called.
+    #
+    # Doing it HERE, in the launcher, is what keeps the celery workers off the
+    # admin API entirely: a worker's bus then finds the topics already present
+    # and answers from one list_topics call.  That matters because
+    # AdminClient.create_topics() returns concurrent.futures whose completion
+    # comes from librdkafka's native thread, which DEADLOCKS a monkey-patched
+    # eventlet worker (see apps/transport/lane_admin.py).  The workers have a
+    # future-free fallback, but not needing it is better.
+    _ensure_transport_lane_topics(run_id)
+
+    # run_id is passed so the Kafka half of the preflight can also confirm this
+    # run's lane topics carry the partition counts the buses will compute from
+    # (see preflight._kafka_serving). It is ignored on the paho default.
+    assert_simulation_dependencies(run_id)
 
     scenario_manager = ScenarioManager(datahub_dir, scenario_name, domain=domain)
 

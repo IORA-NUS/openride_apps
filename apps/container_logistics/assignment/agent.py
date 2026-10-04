@@ -2,10 +2,16 @@ from random import random
 
 from orsim.lifecycle import ORSimAgent
 
+from apps.agent_transport import TransportSelectingAgent
+
 from .app import AssignmentApp
 
 
-class AssignmentAgent(ORSimAgent):
+# TransportSelectingAgent (a no-op while OPENRIDE_AGENT_TRANSPORT is unset) is what
+# keeps this agent on the SAME broker as the scheduler. It subclasses ORSimAgent
+# directly rather than through OpenRideAgent, so it would otherwise stay on MQTT
+# during a Kafka run and hang the step barrier as a permanently silent agent.
+class AssignmentAgent(TransportSelectingAgent, ORSimAgent):
     def _create_app(self):
         return AssignmentApp(
             run_id=self.run_id,

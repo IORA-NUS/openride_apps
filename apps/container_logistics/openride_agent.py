@@ -69,11 +69,21 @@ import traceback
 
 from orsim.lifecycle import ORSimAgent
 
+from apps.agent_transport import select_agent_transport
+
 
 class OpenRideAgent(ORSimAgent):
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+        # ── Transport selection (RabbitMQ -> Kafka migration, phase 2) ───────
+        # select_agent_transport reads OPENRIDE_AGENT_TRANSPORT and builds the
+        # transport here, inside the celery worker process — a transport
+        # INSTANCE cannot cross orsim's AgentClass(**kwargs) celery boundary.
+        # With the flag unset (the default) it returns kwargs unchanged and
+        # WITHOUT a transport key, so this call is byte-identical to the
+        # pre-phase-2 one and the installed orsim v1.3.0, which has no such
+        # parameter, keeps working untouched.
+        super().__init__(*args, **select_agent_transport(args, kwargs, 'OpenRideAgent'))
         # Last time a message was received from the scheduler on this agent's run
         # topic. Used as a liveness signal: if it goes stale the run has ended or
         # this agent was pruned, and we tear down to release the MQTT connection.
@@ -305,7 +315,35 @@ class OpenRideAgent(ORSimAgent):
                 self._shutdown = True
 
     def start_listening(self):
-        super().start_listening()
+        # A RAISE IN HERE MUST NOT ESCAPE, and before this guard it did.
+        # ``ORSimAgent.start_listening`` calls ``self.messenger.client.subscribe(...)``
+        # unguarded and spawns the teardown heartbeat greenlet only AFTER it.
+        # ``KafkaTransport.subscribe`` is documented to RAISE on an
+        # ``incremental_assign`` failure (deliberately — paho returns an error
+        # code instead, which is a lie the caller cannot detect), and
+        # ``_ensure_assigned``'s own docstring calls ``_CONFLICT`` a real and
+        # reachable error on this broker: ~1060 agents x 2 topics is ~2120
+        # assign attempts per run. Letting that escape cost three silent things
+        # at once: the scheduler had marked this agent ``pending_boot`` and
+        # ``_begin_step_barrier`` excludes those from ``expected`` with NO
+        # deadline, so the agent simply never participated and the run finished
+        # with fewer orders reporting ``ok: true``; the failed-init teardown
+        # below was skipped, as was the heartbeat greenlet that would otherwise
+        # have called it; and the transport kept its claim on the process-level
+        # Kafka bus forever, pinning one Consumer and one native poll thread in
+        # a long-lived celery worker. Falling through to the existing teardown
+        # is the fix: it is exactly what a failed agent is already supposed to
+        # do, and ``KafkaTransport.disconnect`` releases the bus.
+        try:
+            super().start_listening()
+        except Exception:
+            self.agent_failed = True
+            logging.exception(
+                f"Agent {getattr(self, 'unique_id', '?')}: start_listening FAILED; "
+                "treating the agent as failed so its messenger/transport is released "
+                "instead of leaking. This agent will never answer the step barrier — "
+                "the scheduler's boot-deadline guard is what makes that visible."
+            )
 
         # An agent that failed to initialise never spawned the heartbeat greenlet that
         # would otherwise disconnect it, so release its broker connection explicitly.
