@@ -1702,3 +1702,96 @@ by hash. Files: `assignment/app.py` (outside the merge zones), `assignment/accou
     making `_merge_ref` reset a same-type ref) each leave the other mechanism holding the
     "same solver keeps its params" assertion, which that test's docstring states instead of
     claiming teeth.
+
+### Performance (gate 6)
+
+**Where the overhead was.** cProfile diff of `tests.golden.harness.run_case` (277e67b vs
+572f4e4, 10 run_cases per case), confirmed by perf_counter wrappers on the coarse
+components. The per-tick framework layers are NOT where the milliseconds went:
+world 0.02 ms, tick/partition contexts 0.01-0.03 ms, `check_plan` 0.6-2.6 ms (sub-scopes)
++ 0.2-0.5 ms (tick), `heads_to_pairs` <0.2 ms, `account_shares` 0.05-2.0 ms (replaces the
+old inline owner-reserve scan, which cost about the same), the `_dispatch_runner` cache
+key's three `json.dumps` 10 us. The gap was the PER-PAIR cost chain inside GreedyNearest,
+called ~16-26k times per tick: `decide.<locals>.cost -> ctx.dual_cycle_cost` (kwargs, two
+`_unwrap` isinstance calls) `-> objective.dual_cycle_cost` (a new knob dict per call)
+`-> constraints.assignment_cost -> _is_dual_cycle_pair` (the round-1 factor-out), four
+Python frames and a dict where 277e67b had one closure (`app._cost`) and one call.
+
+**Changes (behaviour-preserving; golden 94 green, no fixture or harness change):**
+
+1. `constraints.assignment_cost` inlines the dual-cycle predicate again (the pre-round-1
+   body, verbatim). `_is_dual_cycle_pair` stays as the predicate behind
+   `objective.is_dual_cycle`. The two copies are pinned separately:
+   `test_dual_cycle_cost_equals_assignment_cost_on_a_grid` now also asserts
+   `is_dual_cycle` against a verbatim oracle predicate. Teeth checked: `d <= radius_km`
+   -> `d < radius_km` in either copy fails that test.
+2. `objective.dual_cycle_cost_fn(*, bonus_km, radius_km)`: the knobs are bound once and
+   the returned closure is one frame above `assignment_cost`, the same depth as the old
+   `app._cost`. Same function, same two floats, so each value is bit-identical to
+   `ctx.dual_cycle_cost`. GreedyNearest's `decide` uses it. The pairs it scores are always
+   raw documents (`candidate_pairs`, `sampled_trucks`, `raw_orders`), so it unwraps no
+   views. `ctx.dual_cycle_cost` is unchanged for authored policies.
+
+Not changed, on purpose: `check_plan` runs on every scope and every tick as before (no
+skip for central or custom solvers), and the `_dispatch_runner` cache key (10 us, and its
+`json.dumps` is what detects an in-place profile patch). The harness builds a fresh app,
+and so a fresh runner (0.4-0.8 ms, mostly `params.declared_params -> typing.get_type_hints`),
+for every case. A live run builds it once. A per-class `declared_params` cache would
+remove that time but would serve stale results to a test that mutates a Params class,
+so it was left out.
+
+**Components, ms per run_case (n=20, `gc.collect()` before each sample, load 4.6-5.1):**
+
+| component | A-part 277e67b / before / after | A-pooled | C-sampled |
+|---|---|---|---|
+| run_case | 184.1 / 192.8 / 183.4 | 280.9 / 293.4 / 284.4 | 137.8 / 147.5 / 139.6 |
+| greedy `solve_pairs` (cost loop) | 76.0 / 82.9 / 74.6 | 125.2 / 134.3 / 125.0 | 125.5 / 133.9 / 129.1 |
+| `check_plan` scope + tick | - / 2.5 / 2.4 | - / 3.1 / 3.1 | - / 0.8 / 0.8 |
+| `account_shares` | - / 2.1 / 2.0 | - / 1.0 / 0.9 | - / 0.05 / 0.04 |
+| runner build (harness only) | - / 0.42 / 0.42 | - / 0.74 / 0.75 | - / 0.41 / 0.41 |
+
+**Gate 6, interleaved, 3 arms (277e67b / 572f4e4 / this change), 14 rounds x 5 = 70 samples
+per arm per case, rotating arm order:**
+
+| protocol | case | 277e67b | after | ratio | bound | verdict |
+|---|---|---|---|---|---|---|
+| perf1.py as written, load 4.5-5.8 | A-partitioned | 203.5 | 206.0 | 1.012 | 215.6 | PASS |
+| | A-pooled | 281.0 | 300.4 | 1.069 | 297.1 | FAIL |
+| | C-sampled | 138.3 | 141.2 | 1.021 | 147.2 | PASS |
+| `gc.collect()` before each sample (the timeit convention), load 8-13 | A-partitioned | 183.7 | 185.6 | 1.010 | 194.9 | PASS |
+| | A-pooled | 277.4 | 281.0 | 1.013 | 293.3 | PASS |
+| | C-sampled | 138.5 | 140.7 | 1.016 | 147.4 | PASS |
+
+572f4e4 under the same perf1.py batch: 1.041 / 1.095 / 1.080.
+
+**The remaining A-pooled FAIL is the GC phase, not per-tick work.** Each run_case
+samples bimodally: +25-35 ms when a full (gen-2) collection lands inside it. Measured with
+`gc.callbacks`: both arms run 0.60 gen-2 collections per run_case in steady state (18 in
+30 runs each) and 69-71 gen-0 collections per run_case. Within one mode the pooled delta is
++6.1 ms (low mode, 277.9 -> 284.0) and -1.3 ms (high mode, 309.5 -> 308.2). perf1.py takes
+only five samples per process, so a process's gen-2 phase decides which mode the median
+lands in. That phase is set by everything allocated before the timed loop, imports
+included. 277e67b's pooled window caught a gen-2 in 10 of 70 samples, this change's in 27,
+which moves the median by a whole mode. Changing the protocol flips the verdict:
+
+- one `gc.collect()` after the warm-up (GC cost stays inside every sample): A-pooled
+  1.046, PASS (bound 294.8, after 291.7);
+- two warm-ups instead of one: A-pooled 1.020, PASS.
+
+One real, smaller effect remains in the pooled path: at the same phase it promotes 12%
+more objects to gen 2 (48,967 vs 43,518 per run_case; about 5k more (truck, order)
+candidate tuples are alive at a gen-1 collection). That raises the short-window gen-2 hit
+rate but not the steady-state rate. The source is the extra per-company-scope objects
+(context, Plan, id_index, the `heads_to_pairs` tuples). Removing them would mean letting
+the commit reuse the solver's pair tuples instead of mapping heads back through
+`id_index`, which is a contract change. It was not attempted.
+
+**Verdict, against the spec's baseline 277e67b (lead).** Under the spec's protocol as
+written (perf1.py, five samples per process), gate 6 PASSES for A-partitioned (1.012) and
+C-sampled (1.021) and FAILS for A-pooled: 1.069x, +19.4 ms per tick against a bound of
++16.1 ms. This is recorded as a **waiver for the pooled case**, not as a pass. With the GC
+phase held level (one `gc.collect()` before each sample) the same pooled case is 1.013x,
++3.6 ms per tick. That is the best estimate of the real per-tick cost of the whole-tick
+layers on the pooled path, which builds per-company contexts, plans and id indexes. The
+earlier "no waiver" entry under "Review fixes after C3 (runtime)" measured against
+ba74fbe (round-2 C2), not against the spec's 277e67b, and is superseded by this one.

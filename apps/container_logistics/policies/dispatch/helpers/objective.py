@@ -12,13 +12,13 @@ Policy helper. Not a leaf module: imports ``assignment.constraints`` at top (pla
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from apps.container_logistics.assignment import constraints as assign_constraints
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["deadhead_km", "is_dual_cycle", "dual_cycle_cost"]
+__all__ = ["deadhead_km", "is_dual_cycle", "dual_cycle_cost", "dual_cycle_cost_fn"]
 
 
 def deadhead_km(truck: dict[str, Any], order: dict[str, Any]) -> float:
@@ -48,3 +48,22 @@ def dual_cycle_cost(
     return assign_constraints.assignment_cost(
         truck, order, {"dual_cycle_bonus_km": bonus_km, "dual_cycle_radius_km": radius_km}
     )
+
+
+def dual_cycle_cost_fn(*, bonus_km: float, radius_km: float) -> Callable[[dict[str, Any], dict[str, Any]], float]:
+    """:func:`dual_cycle_cost` with the knobs bound once: ``cost(truck, order) -> float``.
+
+    The hot-loop form, for a solver that scores every candidate pair (gate 6,
+    round-2 performance): the knob dict is built ONCE instead of per pair, and the
+    call is one Python frame above ``assignment_cost`` (the pre-policy-slots depth of
+    ``AssignmentApp``'s ``_cost``). Same function, same two floats, so the value is
+    bit-identical to :func:`dual_cycle_cost`. Raw documents only (no view unwrapping):
+    ``ctx.candidate_pairs`` / ``ctx.sampled_trucks`` / ``ctx.raw_orders`` are raw.
+    """
+    params = {"dual_cycle_bonus_km": bonus_km, "dual_cycle_radius_km": radius_km}
+    assignment_cost = assign_constraints.assignment_cost  # read now: a test may patch the module
+
+    def cost(truck: dict[str, Any], order: dict[str, Any]) -> float:
+        return assignment_cost(truck, order, params)
+
+    return cost

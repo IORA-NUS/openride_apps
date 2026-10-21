@@ -172,7 +172,22 @@ def assignment_cost(
     bonus_km = float(params.get("dual_cycle_bonus_km", _DEFAULT_DUAL_CYCLE_BONUS_KM))
     radius_km = float(params.get("dual_cycle_radius_km", _DEFAULT_DUAL_CYCLE_RADIUS_KM))
 
-    is_dual_cycle = _is_dual_cycle_pair(truck, order, pickup, radius_km)
+    # The dual-cycle predicate, INLINED on purpose (gate 6, round-2 performance):
+    # this function runs once per candidate pair (~20k per tick on the golden
+    # chain), and the extra call into ``_is_dual_cycle_pair`` was measurable there.
+    # ``_is_dual_cycle_pair`` below is the same predicate for ``objective.is_dual_cycle``;
+    # tests/test_dispatch_context_helpers.py pins both against the pre-refactor oracle.
+    is_dual_cycle = False
+    last_fac = _truck_last_dropoff_facility(truck)
+    order_pickup_fac = (order.get("profile") or {}).get("pickup_facility_name")
+    if last_fac is not None and order_pickup_fac is not None and last_fac == str(order_pickup_fac):
+        is_dual_cycle = True
+    else:
+        last_loc = _truck_last_dropoff_loc(truck)
+        if last_loc is not None:
+            d = _haversine_km(last_loc, pickup)
+            if d is not None and d <= radius_km:
+                is_dual_cycle = True
 
     cost = base_km - (bonus_km if is_dual_cycle else 0.0)
     return max(0.0, cost)
@@ -184,7 +199,7 @@ def _is_dual_cycle_pair(
     pickup: Optional[Dict[str, Any]],
     radius_km: float,
 ) -> bool:
-    """The dual-cycle predicate of :func:`assignment_cost`, factored out unchanged.
+    """The dual-cycle predicate of :func:`assignment_cost` (which inlines a copy for speed).
 
     True when the order's pickup facility is the truck's last drop-off facility
     (name match), else when the last drop-off point lies within ``radius_km`` of

@@ -162,6 +162,22 @@ def _oracle_assignment_cost(truck, order, params=None):
     return max(0.0, cost)
 
 
+def _oracle_is_dual_cycle(truck, order, radius_km):
+    """The dual-cycle branch of the oracle above, as a predicate (pins ``objective.is_dual_cycle``)."""
+    c = assign_constraints
+    pickup = c.order_pickup_loc(order)
+    last_fac = c._truck_last_dropoff_facility(truck)
+    order_pickup_fac = (order.get("profile") or {}).get("pickup_facility_name")
+    if last_fac is not None and order_pickup_fac is not None and last_fac == str(order_pickup_fac):
+        return True
+    last_loc = c._truck_last_dropoff_loc(truck)
+    if last_loc is not None:
+        d = c._haversine_km(last_loc, pickup)
+        if d is not None and d <= radius_km:
+            return True
+    return False
+
+
 # --- generated grids -----------------------------------------------------------
 
 
@@ -318,7 +334,9 @@ def test_dual_cycle_cost_equals_assignment_cost_on_a_grid():
     """Bit-identical floats: the helper, today's assignment_cost, and the pre-refactor oracle.
 
     Verified to have teeth: changing ``d <= radius_km`` to ``d < radius_km`` in
-    ``constraints._is_dual_cycle_pair`` failed this test (oracle mismatch).
+    ``constraints._is_dual_cycle_pair`` failed this test (oracle mismatch). Since
+    gate 6 ``assignment_cost`` inlines its own copy, so each copy is compared with
+    the oracle on its own (the cost assert and the ``is_dual_cycle`` assert).
     """
     trucks, orders = _grid_trucks(), _grid_orders()
     # Put a last drop-off exactly on a pickup and one exactly at the radius boundary.
@@ -332,7 +350,11 @@ def test_dual_cycle_cost_equals_assignment_cost_on_a_grid():
             want = _oracle_assignment_cost(t, o, params)
             now = assign_constraints.assignment_cost(t, o, params)
             assert repr(got) == repr(want) == repr(now), (t["_id"], o["_id"], bonus, radius)
-            dual += OBJ.is_dual_cycle(t, o, radius_km=radius)
+            is_dual = OBJ.is_dual_cycle(t, o, radius_km=radius)
+            # assignment_cost inlines its own copy of the predicate (gate 6), so the
+            # helper's copy is pinned separately against the oracle.
+            assert is_dual == _oracle_is_dual_cycle(t, o, radius), (t["_id"], o["_id"], radius)
+            dual += is_dual
             checked += 1
         assert repr(assign_constraints.assignment_cost(t, o, {})) == repr(_oracle_assignment_cost(t, o, {}))
         dk = OBJ.deadhead_km(t, o)

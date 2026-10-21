@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Iterable, List, Tuple
 
+from apps.container_logistics.policies.dispatch.helpers import objective
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
@@ -86,11 +87,13 @@ class GreedyNearestSolver(BaseAssignmentSolver):
         Runs under ``decision_rng``: the shuffle / tiebreak are the scope's.
         """
         p = ctx.params
-
-        def cost(t: Truck, o: Order) -> float:
-            return ctx.dual_cycle_cost(
-                t, o, bonus_km=p.dual_cycle_bonus_km, radius_km=p.dual_cycle_radius_km
-            )
+        # ``ctx.dual_cycle_cost`` with the knobs bound once (same function, same floats):
+        # this is called once per candidate pair, and the per-call view unwrapping and
+        # knob-dict build of the ctx method cost ~3-7 ms per golden tick (gate 6). The
+        # pairs scored here are raw documents (candidate_pairs / sampled_trucks / raw_orders).
+        cost = objective.dual_cycle_cost_fn(
+            bonus_km=p.dual_cycle_bonus_km, radius_km=p.dual_cycle_radius_km
+        )
 
         with self.decision_rng(ctx):
             if p.candidates == "spatial":
