@@ -306,7 +306,7 @@ def test_sampled_trucks_cap_and_rng_source():
     ctx = partition_context(
         policy=_Policy, params=None, candidate_kind="sampled", trucks=trucks, orders=orders,
         partition_key=("haulier", "acme"), rule=rule, settings=settings,
-        accounting_cost=assign_constraints.assignment_cost, clock=_CLOCK,
+        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
     )
     assert random.getstate() == seeded, "building a context must not draw"
     first = ctx.sampled_trucks()
@@ -407,7 +407,7 @@ def test_views_expose_typed_fields_and_raw():
         policy=_Policy, params=None, candidate_kind="spatial", trucks=[t, bare_t], orders=[o, bare_o],
         partition_key=("haulier", "acme"), rule=rule,
         settings=C.CandidateSettings.from_profile({}),
-        accounting_cost=assign_constraints.assignment_cost, clock=_CLOCK,
+        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
     )
     tv, btv = ctx.trucks
     ov, bov = ctx.orders
@@ -478,7 +478,7 @@ def test_candidate_pairs_are_cached_per_kind_and_full_is_the_allowed_cross_produ
     ctx = partition_context(
         policy=_Policy, params=None, candidate_kind="spatial", trucks=trucks, orders=orders,
         partition_key=("component", 3), rule=rule, settings=C.CandidateSettings.from_profile({}),
-        accounting_cost=assign_constraints.assignment_cost, clock=_CLOCK,
+        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
     )
     real = ctx._spatial_source
     ctx._spatial_source = lambda: calls.append(1) or real()

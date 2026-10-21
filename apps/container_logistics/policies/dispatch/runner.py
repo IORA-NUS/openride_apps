@@ -176,8 +176,9 @@ class DispatchRunner:
         try:
             if self._composite:
                 # A decomposition owns its sub-scopes' offloading (Partitioned: one
-                # ctx.execute per group; PooledMarket: none, pre-v2). Wrapping it too
-                # would run the groups' execute inside a worker thread.
+                # ctx.execute per group; PooledMarket: one per company solve, via
+                # compose.ScopeDecider.run). Wrapping it too would run the scopes'
+                # execute inside a worker thread.
                 return self.policy.decide(ctx), []
             # Any other top-level solver is ONE decision: offload it like a group
             # (solve_in_thread; review C3 #5). direct_execute when the flag is off.

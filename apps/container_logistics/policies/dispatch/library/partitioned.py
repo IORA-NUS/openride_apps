@@ -24,6 +24,7 @@ world rule, commits it and does the accounting.
 from __future__ import annotations
 
 import logging
+import random
 from dataclasses import dataclass
 
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
@@ -101,5 +102,10 @@ class Partitioned(CompositePolicy):
             settings=ctx.candidate_settings,
             accounting_cost=ctx.accounting_cost,
             clock=ctx.clock,
+            # The random MODULE on purpose, not ctx.rng: the pre-v2 inline fallback called
+            # random.sample, and the dispatch golden locks module-RNG consumption (plan
+            # docs/plans/policy_slots_p0_p3.md §4 P1.5, §7 risk 1). This is the draw the
+            # module_rng declaration above covers; another composite passes ctx.rng here.
+            sample_rng=random,
             parent=ctx,
         )

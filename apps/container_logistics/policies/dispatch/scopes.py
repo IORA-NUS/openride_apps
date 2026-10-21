@@ -6,7 +6,9 @@
   ``random.Random(tick_seed)``, ``tiebreak_seed = tick_seed``.
 - :func:`partition_context` -- one cooperation group (``Partitioned``, via
   ``compose``): spatial candidates from ``spatial_pairs_for_partition``; sampling draws
-  from the ``random`` MODULE.
+  from the caller's ``sample_rng`` (a required keyword: ``Partitioned`` passes the
+  ``random`` MODULE for byte identity, any other composite its decision RNG, e.g.
+  ``ctx.rng``).
 - :func:`company_context` -- one pooled-market company in one round (``PooledMarket``,
   via ``compose.ScopeDecider``): spatial candidates are the round's prebuilt slice;
   sampling draws from the tick ``Random``.
@@ -24,7 +26,6 @@ Framework side of the boundary. Not a leaf module (plan §2.7).
 from __future__ import annotations
 
 import logging
-import random
 from typing import Any, Callable, Iterable
 
 from .allowed import CompanyRule, PartitionRule
@@ -149,6 +150,7 @@ def partition_context(
     settings: CandidateSettings,
     accounting_cost: Callable[[Doc, Doc], float],
     clock: DispatchClock,
+    sample_rng: Any,
     parent: DispatchContext | None = None,
 ) -> DispatchContext:
     """Context for one cooperation group (a haulier or a cooperation component).
@@ -156,6 +158,16 @@ def partition_context(
     ``policy`` is the solver that decides the group: its ``rng``, ``tiebreak_seed``
     and ``rebate_book`` become the context's (on the partitioned default the
     ``random`` module, ``None``, ``None``).
+
+    ``sample_rng`` is what ``ctx.sampled_trucks()`` draws its cap sample from. It is
+    REQUIRED, with no default, so the choice is visible at every call site (final
+    review MAJOR-4): ``Partitioned`` passes the ``random`` MODULE (the pre-v2 inline
+    fallback called ``random.sample``, and the dispatch golden locks module-RNG
+    consumption); a composite that wants to pass the battery's
+    ``determinism.no_module_rng`` without declaring ``module_rng`` passes its decision
+    RNG (``ctx.rng``, the tick ``Random``) and injects the same into its inner
+    (``inner.set_rng(ctx.rng)``). ``None`` means "draw from this context's ``rng``"
+    (``policy.rng``), as on the tick scope.
     """
     bucket_trucks = list(trucks)
     bucket_orders = list(orders)
@@ -179,9 +191,7 @@ def partition_context(
         allowed_raw=rule.allowed,
         accounting_cost=accounting_cost,
         spatial_source=_spatial,
-        # The random MODULE on purpose: the inline fallback called random.sample, and
-        # the golden test locks module-RNG consumption (plan §4 P1.5, §7 risk 1).
-        sample_rng=random,
+        sample_rng=sample_rng,
         rule=rule,
         **_inherited(parent),
     ))

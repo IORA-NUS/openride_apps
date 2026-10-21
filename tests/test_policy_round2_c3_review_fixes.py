@@ -210,7 +210,7 @@ def wide_scope_composite():
                     candidate_kind=self.inner_node.candidate_kind, trucks=list(ctx.raw_trucks),
                     orders=list(ctx.raw_orders), partition_key=("all", 0), rule=OwnRuleScope.rule,
                     settings=ctx.candidate_settings, accounting_cost=ctx.accounting_cost,
-                    clock=ctx.clock, parent=ctx)
+                    sample_rng=random, clock=ctx.clock, parent=ctx)
                 plan = compose.decide_in_scope(self.inner, self.inner_node, sub)
                 return plan if plan is not None else Plan(chains={})
 
@@ -382,15 +382,17 @@ class _CountingTpool:
         return fn(*args)
 
 
-@pytest.mark.parametrize("selection,calls", [(_CENTRAL, 1), (_PARTITIONED, 2), (_POOLED, 0)],
+@pytest.mark.parametrize("selection,calls", [(_CENTRAL, 1), (_PARTITIONED, 2), (_POOLED, 11)],
                          ids=["central", "Partitioned", "PooledMarket"])
 def test_solve_in_thread_reaches_every_top_level_solver_once_per_decision(selection, calls, monkeypatch):
     """A central leaf: one call; Partitioned: one per group (2 on the chain tick), never
-    wrapped again; PooledMarket: none (pre-v2). The pairs do not change.
+    wrapped again; PooledMarket: one per company solve (11 on the chain tick; final
+    review MAJOR-5, was 0 before), never wrapped again. The pairs do not change.
 
     Verified to have teeth: calling ``self.policy.decide(ctx)`` directly for a leaf in
     ``DispatchRunner._decide`` failed the central case (0 calls); routing composites
-    through ``ctx.execute`` too failed the Partitioned (3) and PooledMarket (1) cases.
+    through ``ctx.execute`` too failed the Partitioned (3) and PooledMarket (12) cases;
+    the pre-MAJOR-5 direct company solve failed the PooledMarket case (0).
     """
     def run(threaded):
         _CountingTpool.calls = 0

@@ -149,7 +149,7 @@ def test_tick_scope_samples_per_haulier_from_ctx_rng_and_partition_scope_is_unch
     group = scopes.partition_context(
         policy=runner.policy, params=runner.resolved.params, candidate_kind="sampled", trucks=trucks,
         orders=orders, partition_key=("component", 0), rule=world.rule, settings=settings,
-        accounting_cost=world.accounting_cost, clock=clock, parent=ctx)
+        accounting_cost=world.accounting_cost, sample_rng=random, clock=clock, parent=ctx)
     random.seed(1)
     assert len(group.sampled_trucks()) == 2, "a group scope still caps its whole slice"
     assert random.getstate() != before, "a group scope still samples from the module (pre-v2)"

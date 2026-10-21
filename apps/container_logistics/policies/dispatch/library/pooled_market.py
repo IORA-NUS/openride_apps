@@ -8,9 +8,11 @@ are not used), the companies' fleets and order books, and the ``PoolMarket`` of 
 active structure, and runs the market engine (``assignment.pooled_planner
 .run_pooled_market``). Each company's deployment is decided by ``inner`` through
 ``compose.ScopeDecider`` (message 19 drops that company for that round; a crash is
-message 20 and skips it, as before). Company solves are called directly, never
-through ``ctx.execute``: the pre-v2 pooled path never used the worker thread, and
-byte identity keeps it that way.
+message 20 and skips it, as before). Every company solve goes through
+``ctx.execute`` (``ScopeDecider.run``), so ``solve_in_thread`` offloads it once, as
+``Partitioned`` offloads each group (final review MAJOR-5, correcting C3 deviation 8).
+Byte identity holds: with the flag off ``execute`` is a plain call, and with it on
+``tpool.execute`` is synchronous, so solve order and RNG draws are unchanged.
 
 Returns ``Plan(chains in award order, notes={"market": round provenance,
 "pair_notes": {(truck_id, order_id): {pool_id, market_round}}})``. The framework

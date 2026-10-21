@@ -62,7 +62,7 @@ def _ctx(runner, trucks, orders):
         trucks=trucks, orders=orders, partition_key=("haulier", "acme"),
         rule=PartitionRule(max_travel_time_pickup=None, adjacency={}),
         settings=CandidateSettings.from_profile(_SPATIAL_PROFILE),
-        accounting_cost=assign_constraints.assignment_cost, clock=_CLOCK,
+        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
     )
 
 

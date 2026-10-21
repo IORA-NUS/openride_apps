@@ -199,8 +199,15 @@ class ScopeDecider:
         )
 
     def run(self, company_ctx: DispatchContext) -> list[Pair]:
-        """The pairs the inner solver commits for ``company_ctx`` (``[]`` when its plan is discarded)."""
-        plan = decide_in_scope(self.policy, self.node, company_ctx)
+        """The pairs the inner solver commits for ``company_ctx`` (``[]`` when its plan is discarded).
+
+        The solve goes through ``company_ctx.execute`` (inherited from the market's
+        context), so ``solve_in_thread`` offloads every company solve once, exactly as
+        ``Partitioned`` offloads every group (final review MAJOR-5 / FIX-12). With the
+        flag off that is ``direct_execute``, a plain call; with it on ``tpool.execute``
+        is synchronous, so the order of company solves and of every RNG draw is unchanged.
+        """
+        plan = company_ctx.execute(decide_in_scope, self.policy, self.node, company_ctx)
         return [] if plan is None else heads_to_pairs(plan, company_ctx)
 
     def report_crash(self, *, haulier_id: str, round: int) -> None:
