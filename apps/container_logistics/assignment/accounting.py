@@ -133,10 +133,18 @@ def _awarded_cost_km(cost: Callable[[Truck, Order], float], truck: Truck, order:
         return float("inf")
 
 
-def _trucks_by_haulier(candidates: Iterable[Truck]) -> dict[str, list[Truck]]:
-    """The candidates grouped by haulier, in input order; haulier-less trucks dropped."""
+def _free_trucks_by_haulier(candidates: Iterable[Truck], committed: Set[str]) -> dict[str, list[Truck]]:
+    """The candidates NOT in ``committed``, grouped by haulier, in input order; haulier-less trucks dropped.
+
+    Filtering once here, instead of per cross pair inside :func:`owner_reserve_km`,
+    is what keeps the reserve scan proportional to the owners' FREE fleets (review C3
+    #2: on the golden pooled tick every owner truck is committed, and the per-pair
+    re-filter of ~100 trucks x 165 shares was most of the accounting time).
+    """
     out: dict[str, list[Truck]] = {}
     for truck in candidates:
+        if str(truck.get("_id")) in committed:
+            continue
         hid = assign_constraints.haulier_of(truck)
         if hid:
             out.setdefault(hid, []).append(truck)
@@ -155,8 +163,11 @@ def account_shares(
     A pair is cross-company when both hauliers are known and differ (a self-serve is
     not a share). The owner reserve scans the owner's trucks in ``candidates`` that are
     not committed by ANY pair of the tick and pass ``own_allowed``, priced by ``cost``
-    (:func:`owner_reserve_km`). The owner index is built only when the first cross
-    pair appears, so a tick without shares costs one pass over ``pairs``.
+    (:func:`owner_reserve_km`). The owner index (free trucks only) is built only when
+    the first cross pair appears, so a tick without shares costs one pass over
+    ``pairs``. Each ``(truck, order)`` is priced at most once per call: a reserve scan
+    prices the owner's trucks for the share's order, the award prices the carrier's
+    truck, and no two shares carry the same order.
     """
     committed = {str(truck.get("_id")) for truck, _order in pairs}
     owner_index: dict[str, list[Truck]] | None = None
@@ -167,7 +178,7 @@ def account_shares(
         if not (carrier and owner and carrier != owner):
             continue
         if owner_index is None:
-            owner_index = _trucks_by_haulier(candidates)
+            owner_index = _free_trucks_by_haulier(candidates, committed)
         reserve = owner_reserve_km(order, owner_index.get(owner, ()), committed,
                                    pair_allowed=own_allowed, cost=cost)
         accounts.append(ShareAccount(

@@ -1444,3 +1444,114 @@ mutation-checked: 20 mutations, all caught, files restored by hash.
    mutation-checked in a scratch mirror (17 mutations plus a golden-entry drop, all
    caught, files restored and compared by hash).
 10. The golden gate is 94 now (93 + the one `3d7e84e` added).
+
+### Review fixes after C3 (runtime)
+
+These fix the C3 review's findings 2 (performance), 3 (docstring), 4, 5 and 6. Tests:
+`tests/test_policy_round2_c3_review_fixes.py` (18 cases) and the restored F16 test in
+`tests/test_pool_housekeeping.py`. 13 mutations, all caught, files restored and compared
+by hash. Files: `assignment/app.py` (outside the merge zones), `assignment/accounting.py`,
+`policies/dispatch/{world,context,scopes,compose,runner,profile}.py`.
+
+1. **#2. The tick check no longer repeats physical work a sub-scope already proved.**
+   - `DispatchWorld.allowed(t, o)` is exactly `structure_allows(t, o) and physical(t, o)`.
+     `structure_allows` is "own haulier, or a structure edge"; physical is
+     `pair_allowed_ignoring_haulier` with the world's pickup limit. A test pins the
+     identity over real tick documents.
+   - `compose.decide_in_scope` records a passing sub-scope plan's heads in the tick's
+     `verified_heads` set. The set is created by `scopes.tick_context` and inherited
+     like `stats`.
+   - A head is recorded only when two things hold. First, the check really was
+     `rule.allowed`. Second, `world.proves_physical(rule)` holds: the rule is an exact
+     `PartitionRule` or `CompanyRule` with the world's `max_travel_time_pickup` (same
+     type and value). Both rules end in the physical predicate on every branch.
+   - The tick scope's feasibility is `world.tick_allowed(verified_heads)`. For a hit it
+     re-checks only `structure_allows`; everything else gets the full `world.allowed`.
+   - Keys are `(id(truck doc), id(order doc))`, not ids. A duplicate id with other
+     content is therefore never a hit.
+   - **Still authoritative.** A central or custom solver's heads are never recorded,
+     so they get the full rule (tested: one physical call per head). A sub-scope with a
+     WIDER structure than the world's cannot widen the tick, because the structure half
+     is always re-checked (tested with cargo serving acme). A sub-scope with another
+     pickup limit vouches for nothing (tested).
+   - **Accounting.** `account_shares` builds the owner index once, over FREE trucks
+     only (`_free_trucks_by_haulier`). Before, every share re-filtered the owner's whole
+     fleet against the commits: on the pooled golden tick that was 165 shares x ~100
+     committed trucks.
+   - **No cost memo.** Within one call each `(truck, order)` is priced at most once:
+     the reserve prices owner trucks for the share's order, the award prices the
+     carrier's truck, and no two shares carry one order. A memo would have added
+     overhead and saved nothing.
+   - **Component timings** (median of 15 ticks, ms, at `2a1ccf2` -> fixed):
+
+     | case | tick `check_plan` | `account_shares` |
+     |---|---|---|
+     | pooled chain | 2.40 -> 0.57 | 2.12 -> 1.10 |
+     | partitioned chain | 2.04 -> 0.53 | 3.35 -> 2.04 |
+     | nocoop sampled | 0.65 -> 0.18 | 0.05 -> 0.05 |
+
+   - **Gate 6.** Timing script over `tests.golden.harness.run_case`. Each process does
+     3 repeats per case after a warm-up; 12 rounds interleaved old/head/fixed, so n=36
+     per arm. Old is a scratch worktree at `ba74fbe` (removed afterwards). Load average
+     (1 min) over the batch: min 5.3, median 6.1, max 12.8.
+
+     | case | `ba74fbe` | `2a1ccf2` | fixed | ratio fixed/old | limit |
+     |---|---|---|---|---|---|
+     | A-greedy-partitioned-chain-spatial-cap500 | 222.3 | 219.4 | 217.0 | 0.976 | 235.4 PASS |
+     | A-greedy-pooled-chain-spatial-cap500 | 315.0 | 316.6 | 316.2 | 1.004 | 332.8 PASS |
+     | C-greedy-partitioned-nocoop-only-sampled-cap40 | 151.6 | 152.0 | 150.9 | 0.996 | 161.1 PASS |
+
+     An earlier fixed-vs-`ba74fbe` batch (n=36, load 5.6-9.5) gave 0.978 / 1.007 /
+     0.987. **No waiver is needed.**
+   - The review's +5.7% pooled offset did not reproduce for `2a1ccf2` on this box today
+     (1.005). The direct component saving is ~2.9 ms per pooled tick and ~2.8 ms per
+     partitioned chain tick. That is below the run-to-run spread of a ~300 ms
+     `run_case`, which includes the harness's deepcopy of the tick. So the medians
+     cannot resolve it (CLAUDE.md §6.24: measure the component).
+2. **#3. The `context.py` sampling docstring is corrected.**
+   - The tick-scope cap covers `cap` trucks per company. That equals `PooledMarket`.
+   - It equals `Partitioned` only when every group is one company.
+   - On the golden chain tick at cap 40, central samples 160 and `Partitioned` 80. A
+     test pins exactly these numbers.
+   - The stamp field (`candidate_settings.tick_sample_scope`) and the feature-doc note
+     stay C4/C7.
+3. **#4. A stale reused top is REBUILT, not raised.**
+   - `_bound_reused_tree` returns `(bound, current)`. `current` is False when a reused
+     composite's `params` differ from the bound node's, or its `inner_node` differs from
+     the bound inner (dataclass equality).
+   - `bind_instance` then rebuilds every composite from the bound tree, around the SAME
+     innermost leaf instance (`_rebuilt_around_leaf`). It carries the old top's injected
+     rng, tiebreak and rebate book.
+   - `AssignmentApp._dispatch_runner` makes the rebuilt top `_solver` (re-keying the
+     cache), so `_inject_rebate_book` reaches the tree that runs.
+   - **Why rebuild rather than raise.** Pre-v2 market components followed a profile
+     patch (the original F16 test asserted exactly that), and §8 risk 3 is about a
+     CLASS mismatch, which still raises.
+   - **Why leaves are reused, not compared.** The runner hands a leaf the bound params
+     as `ctx.params`. Every library leaf decides from those, so a leaf's constructor dict
+     never runs stale. Many tests inject `get_solver(X, None)` (params `{}`) and assert
+     the innermost identity. A third-party leaf that reads `self.params` instead of
+     `ctx.params` is outside the contract.
+   - The F16 test now builds `_solver` as the full tree. It asserts the instance's
+     `params["max_rounds"]` and its instantiated offer component, besides
+     `resolved.params`. The new tests assert behaviour: `round_stats()["max_rounds_backstop"]`,
+     no shares under OfferNone, and a patched Partitioned inner deciding exactly like a
+     fresh app.
+4. **#5. `solve_in_thread` reaches every top-level solver.**
+   - `DispatchRunner._decide` calls `ctx.execute(policy.decide, ctx)` unless the top is
+     a `CompositePolicy`. A decomposition owns its sub-scopes' offloading, so nothing is
+     wrapped twice: `Partitioned` makes one call per group, `PooledMarket` none (pre-v2).
+   - Tested with a counting stub: central 1, Partitioned 2 (the chain tick's groups),
+     PooledMarket 0, pairs identical with the flag off.
+   - Golden-neutral: `direct_execute` is a plain call.
+5. **#6. The haulier-scoping ERROR skips a contract-event tick.**
+   - `_dispatch_tick` records `_tick_contract_events`, this tick's growth of
+     `stats["violations"] + stats["crashes"]`.
+   - `assign` skips the "haulier scoping blocked everything" ERROR when it is non-zero,
+     so the one-shot `_warned_haulier_block` stays armed.
+   - Tested: a rule-blind central tick logs message 18 only, and a real block on the
+     next tick still fires.
+   - The alternative ("warn only when ids are missing") was rejected because it would
+     silence a real block by mismatched but present ids.
+6. **Test edits:** `tests/test_pool_housekeeping.py::test_market_components_pick_up_a_behavior_patched_after_construction`
+   (restored, see 3). No other existing test changed.

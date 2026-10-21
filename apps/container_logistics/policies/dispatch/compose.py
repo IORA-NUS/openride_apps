@@ -9,7 +9,9 @@ context to a per-scope solver (plan ``docs/plans/policy_slots_round2_whole_tick.
   component, else one haulier), a verbatim move of the pre-v2 partitioned bucketing
   of ``AssignmentApp.assign`` (round-2 S2).
 - :func:`decide_in_scope` -- decide one sub-scope with a leaf and check the plan
-  against that scope; a violation is logged (message 19), counted and dropped.
+  against that scope; a violation is logged (message 19), counted and dropped; a
+  passing plan's heads are noted in the tick's ``verified_heads`` (when its rule proves
+  physical feasibility), so the tick check does not repeat that work.
 - :func:`heads_to_pairs` -- a plan's heads as the scope's raw ``(truck, order)``
   documents (first document per id).
 - :class:`ScopeDecider` -- the adapter ``assignment.pooled_planner`` calls to decide
@@ -141,7 +143,29 @@ def decide_in_scope(policy: Any, node: Any, sub_ctx: DispatchContext) -> Plan | 
     if problems:
         report_scope_violation(node.name, node.version, sub_ctx, problems, stats=sub_ctx.stats)
         return None
+    _record_verified_heads(plan, sub_ctx)
     return plan
+
+
+def _record_verified_heads(plan: Plan, sub_ctx: DispatchContext) -> None:
+    """Note ``plan``'s heads as physically feasible for the tick check (``DispatchWorld.tick_allowed``).
+
+    Only when ``sub_ctx``'s check really was its rule's ``allowed`` and that rule
+    proves the world's physical half (``world.proves_physical``: an exact
+    ``PartitionRule``/``CompanyRule`` with the world's ``max_travel_time_pickup``).
+    The tick check still re-checks who may serve whom for every head, so a sub-scope
+    with a wider structure than the world's cannot widen what is committed.
+    """
+    verified = sub_ctx.verified_heads
+    world = sub_ctx.world
+    rule = sub_ctx.rule
+    if verified is None or world is None or rule is None:
+        return
+    if sub_ctx.allowed_raw != getattr(rule, "allowed", None) or not world.proves_physical(rule):
+        return
+    trucks, orders = sub_ctx.id_index
+    for tid, oid in plan.heads():
+        verified.add((id(trucks[tid]), id(orders[oid])))
 
 
 class ScopeDecider:

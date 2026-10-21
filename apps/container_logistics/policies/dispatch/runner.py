@@ -5,9 +5,11 @@ pairs (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §2):
 
 1. :meth:`DispatchRunner.tick_context` builds the whole-tick context
    (``scopes.tick_context``).
-2. :meth:`DispatchRunner.run` calls ``plan = policy.decide(ctx)``. A
-   ``DispatchContractViolation`` raised inside is a violation; any other exception
-   propagates unchanged (a crashing top-level solver aborts the tick, as the
+2. :meth:`DispatchRunner.run` calls ``plan = policy.decide(ctx)``, through
+   ``ctx.execute`` unless the policy is a ``CompositePolicy`` (a decomposition offloads
+   its own sub-scopes; ``solve_in_thread`` thus reaches every solver exactly once per
+   decision). A ``DispatchContractViolation`` raised inside is a violation; any other
+   exception propagates unchanged (a crashing top-level solver aborts the tick, as the
    partitioned path always did).
 3. ``invariants.check_plan`` against the context. On the tick scope its feasibility is
    ``world.allowed``, so a cross-company head the structure does not permit is
@@ -53,6 +55,7 @@ from apps.container_logistics.policies.framework.slots import SLOTS
 
 from . import compose, scopes
 from .base import DispatchPolicy
+from .composite import CompositePolicy
 from .context import DispatchClock, DispatchContext, direct_execute
 from .helpers.candidates import CANDIDATE_KINDS, CandidateSettings
 from .invariants import check_plan
@@ -116,6 +119,7 @@ class DispatchRunner:
                 f"one of {list(CANDIDATE_KINDS)}."
             )
         self.policy = policy
+        self._composite = isinstance(policy, CompositePolicy)
         self.resolved = resolved
         self.candidate_kind = resolved.candidate_kind
         self.share_tag_format = resolved.share_tag_format
@@ -170,7 +174,14 @@ class DispatchRunner:
     def _decide(self, ctx: DispatchContext) -> tuple[Any, list[str]]:
         start = time.perf_counter()
         try:
-            return self.policy.decide(ctx), []
+            if self._composite:
+                # A decomposition owns its sub-scopes' offloading (Partitioned: one
+                # ctx.execute per group; PooledMarket: none, pre-v2). Wrapping it too
+                # would run the groups' execute inside a worker thread.
+                return self.policy.decide(ctx), []
+            # Any other top-level solver is ONE decision: offload it like a group
+            # (solve_in_thread; review C3 #5). direct_execute when the flag is off.
+            return ctx.execute(self.policy.decide, ctx), []
         except DispatchContractViolation as exc:
             return None, [str(exc)]
         finally:

@@ -29,11 +29,18 @@ from apps.container_logistics.assignment import constraints as assign_constraint
 from apps.container_logistics.assignment import pools as assign_pools
 from apps.container_logistics.policies.framework.errors import PolicyError
 
-from .allowed import PartitionRule
+from .allowed import CompanyRule, PartitionRule
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["DispatchWorld", "tick_seed", "validate_cooperation_world"]
+
+# The rule types whose ``allowed`` is ``physical AND <who may serve whom>``, so a pass
+# under one proves ``pair_allowed_ignoring_haulier`` with its ``max_travel_time_pickup``
+# (allowed.py: both branches of both rules end in it; ``pair_allowed`` is
+# ``haulier_matches AND pair_allowed_ignoring_haulier``). Exact types: a subclass may
+# redefine ``allowed``.
+_PHYSICAL_PROVING_RULES = (PartitionRule, CompanyRule)
 
 
 def tick_seed(run_id: str, time_step: int) -> int:
@@ -98,6 +105,51 @@ class DispatchWorld:
     def allowed(self, t: dict[str, Any], o: dict[str, Any]) -> bool:
         """Pair feasibility: own-haulier strict, cross pairs only along a structure edge."""
         return self.rule.allowed(t, o)
+
+    def structure_allows(self, t: dict[str, Any], o: dict[str, Any]) -> bool:
+        """The who-may-serve-whom half of :meth:`allowed`: own haulier, or a structure edge.
+
+        ``allowed(t, o) == structure_allows(t, o) and physical(t, o)`` exactly, where
+        physical is ``constraints.pair_allowed_ignoring_haulier`` (``PartitionRule.allowed``
+        rewritten; a test pins the identity). Fail-closed on a missing haulier.
+        """
+        if assign_constraints.haulier_matches(t, o):
+            return True
+        adjacency = self.rule.adjacency
+        return bool(adjacency) and assign_constraints.share_eligible(t, o, adjacency)
+
+    def proves_physical(self, rule: Any) -> bool:
+        """Whether a pass under sub-scope ``rule`` proves this world's physical half for a pair.
+
+        True only for an exact ``PartitionRule``/``CompanyRule`` with this world's
+        ``max_travel_time_pickup`` (same type and value).
+        """
+        if type(rule) not in _PHYSICAL_PROVING_RULES:
+            return False
+        mine, theirs = self.max_travel_time_pickup, rule.max_travel_time_pickup
+        return type(mine) is type(theirs) and mine == theirs
+
+    def tick_allowed(self, verified: set[tuple[int, int]]) -> Any:
+        """The tick scope's feasibility: :meth:`allowed`, minus physical work already proved.
+
+        ``verified`` holds ``(id(truck), id(order))`` of heads a sub-scope check passed
+        under a rule that :meth:`proves_physical` (``compose.decide_in_scope`` records
+        them; identity keys, so a duplicate id with other content is never a hit). For
+        such a pair only :meth:`structure_allows` is re-checked; every other pair gets
+        the full :meth:`allowed`. The framework's tick check therefore stays
+        authoritative for every solver (a central or custom solver's heads are never
+        in ``verified``) while a decomposition's heads skip the duplicate physical
+        check (review C3 #2). Pure: the verdict equals :meth:`allowed` for every pair.
+        """
+        world_allowed = self.allowed
+        structure_allows = self.structure_allows
+
+        def allowed(t: dict[str, Any], o: dict[str, Any]) -> bool:
+            if verified and (id(t), id(o)) in verified:
+                return structure_allows(t, o)
+            return world_allowed(t, o)
+
+        return allowed
 
     def own_allowed(self, t: dict[str, Any], o: dict[str, Any]) -> bool:
         """The strict own-haulier rule (``constraints.pair_allowed``): the owner reserve's."""

@@ -1,7 +1,7 @@
 """The only three places a ``DispatchContext`` is built: the tick, a group, a company.
 
 - :func:`tick_context` -- the WHOLE tick (``DispatchRunner.tick_context``): every
-  candidate truck and order, ``world.allowed`` as feasibility, spatial candidates from
+  candidate truck and order, ``world.allowed`` as feasibility (``world.tick_allowed``), spatial candidates from
   ``spatial_pairs_for_partition`` over the whole tick, ``ctx.rng`` the lazily-built
   ``random.Random(tick_seed)``, ``tiebreak_seed = tick_seed``.
 - :func:`partition_context` -- one cooperation group (``Partitioned``, via
@@ -12,7 +12,7 @@
   sampling draws from the tick ``Random``.
 
 A sub-scope takes a ``parent`` context and inherits its ``world``, ``tick_seed``,
-``execute``, ``stats``, ``scope_log`` and ``capture`` (round-2 §2.3); its RNG,
+``execute``, ``stats``, ``scope_log``, ``capture`` and ``verified_heads`` (round-2 §2.3); its RNG,
 tiebreak and rebate book are the values its builder passes (the inner policy's). The
 partition and company RNG choices reproduce exactly what the pre-v2 inline code drew
 from, which the dispatch golden test locks (plan ``docs/plans/policy_slots_p0_p3.md``
@@ -60,9 +60,10 @@ def _inherited(parent: DispatchContext | None) -> dict[str, Any]:
     """What a sub-scope takes from its parent (defaults for an offline, parent-less scope)."""
     if parent is None:
         return {"world": None, "tick_seed": None, "execute": direct_execute,
-                "stats": None, "scope_log": None, "capture": None}
+                "stats": None, "scope_log": None, "capture": None, "verified_heads": None}
     return {"world": parent.world, "tick_seed": parent.tick_seed, "execute": parent.execute,
-            "stats": parent.stats, "scope_log": parent.scope_log, "capture": parent.capture}
+            "stats": parent.stats, "scope_log": parent.scope_log, "capture": parent.capture,
+            "verified_heads": parent.verified_heads}
 
 
 def _log_scope(ctx: DispatchContext) -> DispatchContext:
@@ -99,10 +100,13 @@ def tick_context(
     ``world`` is the tick's ``DispatchWorld``. ``ctx.rng`` is NOT built here (it is
     ``Random(tick_seed)`` on first read), so building the tick draws and constructs
     nothing. ``rebates`` is ``policy.rebate_book`` (a composite forwards it to its
-    inner).
+    inner). Feasibility is ``world.tick_allowed`` over a fresh ``verified_heads`` set
+    (equal to ``world.allowed``; heads a sub-scope already proved physically feasible
+    only re-check the structure half).
     """
     all_trucks = list(trucks)
     all_orders = list(orders)
+    verified_heads: set[tuple[int, int]] = set()
 
     def _spatial() -> list[tuple[Doc, Doc]]:
         return _candidates.spatial_pairs_for_partition(all_trucks, all_orders, rule=world.rule, settings=settings)
@@ -118,7 +122,7 @@ def tick_context(
         default_candidate_kind=candidate_kind,
         raw_trucks=tuple(all_trucks),
         raw_orders=tuple(all_orders),
-        allowed_raw=world.allowed,
+        allowed_raw=world.tick_allowed(verified_heads),
         accounting_cost=world.accounting_cost,
         spatial_source=_spatial,
         sample_rng=None,
@@ -129,6 +133,7 @@ def tick_context(
         stats=stats,
         scope_log=scope_log,
         capture=capture,
+        verified_heads=verified_heads,
     )
 
 

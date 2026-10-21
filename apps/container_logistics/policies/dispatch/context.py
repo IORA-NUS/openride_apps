@@ -27,9 +27,15 @@ Laziness is load-bearing, not an optimisation:
 Tick-scope sampling cap (round-2 C3 deviation): on the tick scope the
 ``max_trucks_per_scope`` cap applies PER HAULIER (:data:`TICK_SAMPLE_SCOPE`): each
 haulier's trucks are capped independently, concatenated in first-seen haulier order,
-drawing from ``ctx.rng``. A central leaf therefore gets the same per-company
-candidate coverage as the same leaf per group under ``Partitioned``; partition and
-company scopes sample their whole slice as before.
+drawing from ``ctx.rng``. A partition or company scope samples its WHOLE slice once,
+from its own RNG, as before. So the candidate coverage of a sampled central leaf is
+``cap`` trucks per company, which equals ``PooledMarket`` (one scope per company) and
+equals ``Partitioned`` only when every group is one company (no cooperation). Under
+cooperation ``Partitioned`` caps a multi-company component as ONE scope: on the golden
+chain tick at cap 40 a central leaf samples 4 x 40 = 160 trucks, ``Partitioned`` 40 +
+40 = 80 (one singleton company, one three-company component). Central-vs-Partitioned
+comparisons on ``candidates=sampled`` under a cooperation structure therefore differ in
+candidate coverage as well as in decomposition (review C3 #3).
 
 Not yet here (P4): ``ctx.travel`` (a run-scoped travel-time table),
 ``ctx.facilities``, ``ctx.state`` and ``held`` plan tails.
@@ -128,6 +134,7 @@ class DispatchContext:
         stats: dict[str, Any] | None = None,
         scope_log: list[dict[str, Any]] | None = None,
         capture: Any = None,
+        verified_heads: set[tuple[int, int]] | None = None,
     ) -> None:
         """``spatial_source`` and ``sample_rng`` are supplied by ``scopes.py`` only.
 
@@ -137,7 +144,10 @@ class DispatchContext:
         feasibility rule behind ``allowed_raw`` (kept for capture). ``stats`` is the
         runner's dict (shared by every scope of the tick); ``scope_log`` is ``None``
         unless an audit records the scopes built; ``capture`` is the runner's capture
-        hook (``None``: off).
+        hook (``None``: off). ``verified_heads`` is the tick's set of heads whose
+        physical feasibility a sub-scope check proved (``DispatchWorld.tick_allowed``;
+        shared by every scope of the tick, ``None`` offline); only
+        ``compose.decide_in_scope`` adds to it.
         """
         self.scope = scope
         self.params = params
@@ -158,6 +168,7 @@ class DispatchContext:
         self.stats = stats if stats is not None else {}
         self.scope_log = scope_log
         self.capture = capture
+        self.verified_heads = verified_heads
         self._spatial_source = spatial_source
         self._sample_rng = sample_rng
         self._pairs_cache: dict[str, list[Pair]] = {}

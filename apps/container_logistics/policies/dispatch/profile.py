@@ -50,7 +50,7 @@ from apps.container_logistics.policies.framework.resolve import (
 )
 
 from .base import DispatchPolicy
-from .composite import CompositePolicy
+from .composite import CompositePolicy, innermost_policy
 from .legacy import (
     LEGACY_LEAF_DEFAULT,
     MARKET_ROLES,
@@ -377,27 +377,56 @@ def _with_innermost(node: ResolvedDispatch, leaf: ResolvedDispatch) -> ResolvedD
     return dataclasses.replace(node, inner=_with_innermost(node.inner, leaf), label="", leaf="")
 
 
-def _bound_reused_tree(node: ResolvedDispatch, instance: Any, use_spatial_matching: bool) -> ResolvedDispatch:
-    """Check a REUSED top instance's inner chain against ``node``; return the bound node.
+def _bound_reused_tree(
+    node: ResolvedDispatch, instance: Any, use_spatial_matching: bool
+) -> tuple[ResolvedDispatch, bool]:
+    """Check a REUSED top instance's inner chain against ``node``: ``(bound node, current)``.
 
     Each inner instance must be the registered class ``node`` names, recursively; an
     unregistered innermost instance takes the legacy candidate rule. Raises on any
-    other difference (naming both trees).
+    other difference (naming both trees). ``current`` is False when any reused
+    COMPOSITE would run something other than the bound tree: its ``params`` differ
+    from the bound node's, or its ``inner_node`` from the bound inner (a composite
+    decides from both, e.g. ``PooledMarket``'s ``max_rounds`` and components, the
+    groups' params and candidate kind). A leaf is never stale: the runner hands it
+    the bound params as ``ctx.params`` (review C3 #4).
     """
     if node.inner is None:
-        return node
+        return node, True
     inner = getattr(instance, "inner", None)
     spec = spec_for_class(type(inner)) if inner is not None else None
     if spec is not None and spec.name == node.inner.name:
-        bound_inner = _bound_reused_tree(node.inner, inner, use_spatial_matching)
-        return node if bound_inner is node.inner else dataclasses.replace(
+        bound_inner, current = _bound_reused_tree(node.inner, inner, use_spatial_matching)
+        bound = node if bound_inner is node.inner else dataclasses.replace(
             node, inner=bound_inner, label="", leaf="")
-    if inner is not None and spec is None and node.inner.inner is None \
+    elif inner is not None and spec is None and node.inner.inner is None \
             and not isinstance(inner, CompositePolicy):
         _refuse_unregistered_subclass(type(inner))
         leaf = _unregistered_node(inner, timing=node.timing, use_spatial_matching=use_spatial_matching)
-        return dataclasses.replace(node, inner=leaf, label="", leaf="")
-    raise _mismatch(instance, node)
+        bound, current = dataclasses.replace(node, inner=leaf, label="", leaf=""), True
+    else:
+        raise _mismatch(instance, node)
+    current = current and instance.params == bound.params.to_dict() \
+        and getattr(instance, "inner_node", None) == bound.inner
+    return bound, current
+
+
+def _rebuilt_around_leaf(stale: DispatchPolicy, bound: ResolvedDispatch) -> DispatchPolicy:
+    """A fresh tree for ``bound`` around ``stale``'s innermost leaf, keeping its injections.
+
+    The leaf instance is reused (it is what was injected); every composite is rebuilt
+    from ``bound``. The old top's injected values (``set_rng``, ``set_tiebreak``,
+    ``set_rebate_book``) are re-injected into the new top when they were set, so a
+    rebuild changes nothing but the stale params.
+    """
+    fresh = build_policy_tree(bound, reuse=innermost_policy(stale))
+    if stale._rng is not None:
+        fresh.set_rng(stale._rng)
+    if stale.tiebreak_seed is not None:
+        fresh.set_tiebreak(stale.tiebreak_seed)
+    if stale.rebate_book is not None:
+        fresh.set_rebate_book(stale.rebate_book)
+    return fresh
 
 
 def bind_instance(
@@ -407,7 +436,10 @@ def bind_instance(
 
     - A registered class named like the TOP is reused as is; its ``inner`` chain must
       match ``node``'s names recursively (an unregistered innermost instance is
-      accepted under the legacy candidate rule).
+      accepted under the legacy candidate rule). When a reused composite's params or
+      ``inner_node`` differ from the bound tree (a profile patched after construction),
+      the composites are REBUILT from the bound tree around the same innermost leaf
+      (injections carried), so what runs is what ``bound`` reports (review C3 #4).
     - A registered class named like the INNERMOST leaf becomes that leaf, and the
       wrappers are built around it (:func:`build_policy_tree` with ``reuse``).
     - An unregistered class (a hand-injected test solver) becomes the innermost leaf
@@ -419,7 +451,8 @@ def bind_instance(
     """
     spec = spec_for_class(type(instance))
     if spec is not None and spec.name == node.name:
-        return instance, _bound_reused_tree(node, instance, use_spatial_matching)
+        bound, current = _bound_reused_tree(node, instance, use_spatial_matching)
+        return (instance if current else _rebuilt_around_leaf(instance, bound)), bound
     if spec is not None:
         if spec.name == node.innermost.name:
             return build_policy_tree(node, reuse=instance), node

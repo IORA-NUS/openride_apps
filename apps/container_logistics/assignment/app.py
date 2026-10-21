@@ -140,22 +140,32 @@ class AssignmentApp(ORSimApp):
         ``planner``) is patched after construction (the tests that build the app via
         ``__new__`` rely on it). ``_solver`` is fitted into the selection
         (``bind_instance``: reused as the top, or wrapped as the innermost leaf).
-        Raises ``PolicyError`` on a mismatch.
+        When a reused top's composites were stale (a patched profile) and
+        ``bind_instance`` rebuilt them around the same leaf, the rebuilt top becomes
+        ``_solver``, so later injections (``_inject_rebate_book``) reach the tree that
+        runs (review C3 #4). Raises ``PolicyError`` on a mismatch.
         """
+        from apps.container_logistics.policies.dispatch.composite import innermost_policy  # local: cycle rule
         from apps.container_logistics.policies.dispatch.runner import build_runner_for_app  # local: cycle rule
 
-        key = (
-            id(self._solver),
-            json.dumps(prof.get("policies"), sort_keys=True, default=str),
-            prof.get("strategy"),
-            json.dumps(prof.get("solver_params"), sort_keys=True, default=str),
-            prof.get("use_spatial_matching", True),
-            json.dumps(prof.get("planner"), sort_keys=True, default=str),
-        )
+        def _key():
+            return (
+                id(self._solver),
+                json.dumps(prof.get("policies"), sort_keys=True, default=str),
+                prof.get("strategy"),
+                json.dumps(prof.get("solver_params"), sort_keys=True, default=str),
+                prof.get("use_spatial_matching", True),
+                json.dumps(prof.get("planner"), sort_keys=True, default=str),
+            )
+
+        key = _key()
         cached_key, cached = getattr(self, "_dispatch_runner_cache", (None, None))
         if cached is not None and cached_key == key:
             return cached
         runner = build_runner_for_app(self._solver, prof)
+        if runner.policy is not self._solver and innermost_policy(runner.policy) is not self._solver:
+            self._solver = runner.policy  # the stale top was rebuilt (bind_instance)
+            key = _key()
         self._dispatch_runner_cache = (key, runner)
         return runner
 
@@ -476,7 +486,11 @@ class AssignmentApp(ORSimApp):
         # Haulier scoping is enforced (no fallback). If there were assignable trucks AND
         # unassigned orders but nothing matched, the data is almost certainly missing or
         # mismatched haulier_id — surface it loudly instead of silently running dead.
-        if candidates and orders and not assignment and not self._warned_haulier_block:
+        # Not on a tick whose plan (or a scope's) the framework discarded or whose market
+        # company crashed: that was already logged (message 18/19/20), the haulier text
+        # would misdiagnose it, and the one-shot warning must stay armed (review C3 #6).
+        if candidates and orders and not assignment and not self._warned_haulier_block \
+                and not getattr(self, "_tick_contract_events", 0):
             missing_truck = sum(1 for t in candidates if assign_constraints.haulier_of(t) is None)
             missing_order = sum(1 for o in orders if assign_constraints.haulier_of(o) is None)
             logging.error(
@@ -523,7 +537,11 @@ class AssignmentApp(ORSimApp):
             tick_seed=self._tick_seed(str(getattr(self, "run_id", "")), int(time_step or 0)),
             execute=_eventlet_tpool.execute if use_tpool else _direct_call,
         )
+        events_before = runner.stats.get("violations", 0) + runner.stats.get("crashes", 0)
+        self._tick_contract_events = 0
         outcome = runner.run(ctx)
+        self._tick_contract_events = (
+            runner.stats.get("violations", 0) + runner.stats.get("crashes", 0) - events_before)
         self._share_tags = accounting.render_share_tags(
             accounting.account_shares(outcome.pairs, candidates=candidates,
                                       cost=world.accounting_cost, own_allowed=world.own_allowed),
