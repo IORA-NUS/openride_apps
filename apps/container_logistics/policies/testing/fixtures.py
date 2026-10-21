@@ -101,11 +101,11 @@ def _truck(tid: str, haulier: str, loc: dict[str, Any] | None, *,
 
 
 def _order(oid: str, haulier: str, pickup: dict[str, Any] | None, dropoff: dict[str, Any] | None, *,
-           pickup_facility: str = "fac_p", dropoff_facility: str = "fac_d") -> dict[str, Any]:
+           pickup_facility_name: str = "fac_p", dropoff_facility_name: str = "fac_d") -> dict[str, Any]:
     prof: dict[str, Any] = {
         "haulier_id": haulier,
-        "pickup_facility_name": pickup_facility,
-        "dropoff_facility_name": dropoff_facility,
+        "pickup_facility_name": pickup_facility_name,
+        "dropoff_facility_name": dropoff_facility_name,
         "order_size": "1x20",
     }
     doc: dict[str, Any] = {"_id": oid, "state": "unassigned", "haulier_id": haulier,
@@ -212,7 +212,7 @@ def scale(n_trucks: int = 1000, n_orders: int = 500, hauliers: int = 1, seed: in
     orders = []
     for i in range(n_orders):
         (pf, pp), (df, dp) = rng.sample(facilities, 2)
-        orders.append(_order(f"o{i:04d}", hids[i % hauliers], pp, dp, pickup_facility=pf, dropoff_facility=df))
+        orders.append(_order(f"o{i:04d}", hids[i % hauliers], pp, dp, pickup_facility_name=pf, dropoff_facility_name=df))
     trucks = []
     for i in range(n_trucks):
         hid = hids[i % hauliers]

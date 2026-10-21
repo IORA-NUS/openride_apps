@@ -858,8 +858,17 @@ def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
     )
     trip_matrix = parse_trip_matrix(maybe_parse_spec_file(raw.get("tripMatrix"), "matrix"))
     hauliers = scenario_config.normalize_hauliers(raw.get("hauliers"))
-    solver = normalize_solver(raw.get("solver"))
-    solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
+    # policies.dispatch is the dial when present; this legacy path only knows the
+    # strategy/solver_params spelling, so it is translated here, in one place.
+    policies = raw.get("policies") if isinstance(raw.get("policies"), dict) else None
+    dispatch = (policies or {}).get("dispatch")
+    if isinstance(dispatch, dict):
+        solver = normalize_solver(dispatch.get("type"))
+        params = dispatch.get("params")
+        solver_params = params if isinstance(params, dict) and params else None
+    else:
+        solver = normalize_solver(raw.get("solver"))
+        solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
     role_settings = raw.get("roleSettings")
     if not isinstance(role_settings, dict):
         role_settings = raw.get("roleProfiles")
@@ -905,6 +914,7 @@ def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
         "hauliers": hauliers,
         "solver": solver,
         "solverParams": deepcopy(solver_params) if solver_params else None,
+        "policies": deepcopy(policies),
         "roleSettings": deepcopy(role_settings) if role_settings else None,
         "overrides": deepcopy(overrides) if overrides else None,
         # Carried so the LEGACY path can REFUSE a rules-carrying scenario (R2-2).
