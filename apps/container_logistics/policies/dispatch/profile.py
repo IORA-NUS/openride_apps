@@ -54,6 +54,7 @@ from .composite import CompositePolicy, innermost_policy
 from .legacy import (
     LEGACY_LEAF_DEFAULT,
     MARKET_ROLES,
+    check_policies_format,
     PARTITIONED,
     POOLED_MARKET,
     legacy_market_params,
@@ -101,7 +102,9 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
     """Raise ``PolicyError`` unless every assignment agent's dispatch resolves and runs.
 
     ``collection`` is the assignment behavior collection, ``{agent_id: behavior}``.
-    Each profile goes through :func:`resolve_dispatch_for_profile` (the shared
+    Each profile's ``policies_format`` marker is checked first
+    (``legacy.check_policies_format``: a round-1 flat block is refused), then it goes
+    through :func:`resolve_dispatch_for_profile` (the shared
     framework resolver also refuses a non-executable timing), then
     :func:`check_mirrors` (message 13) and ``world.validate_cooperation_world``
     (message 14). The raised error is the
@@ -118,6 +121,7 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
             )
         profile = behavior.get("profile") or {}
         try:
+            check_policies_format(profile)
             node = resolve_dispatch_for_profile(profile)
             check_mirrors(profile, node)
             validate_cooperation_world(profile)

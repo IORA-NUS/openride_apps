@@ -68,7 +68,9 @@ _LEGACY_DC = {"dual_cycle_bonus_km": 2.5, "dual_cycle_radius_km": 1.0}
 
 
 def _policies(type_, params=None, timing="online"):
-    return {"policies": {"dispatch": {"type": type_, "timing": timing, "params": params or {}}}}
+    # policies_format 2: the compile-time marker every round-2 bundle carries (C4).
+    return {"policies": {"dispatch": {"type": type_, "timing": timing, "params": params or {}}},
+            "policies_format": 2}
 
 
 class _FirstFree(PairSolver):
@@ -570,3 +572,15 @@ def test_mirrors_written_and_checked():
         with pytest.raises(PolicyError, match=r"^assignment agent 'a0': profile planner.topology='partitioned' "
                                               r"disagrees with its compiled policies.dispatch \(GreedyNearest\)"):
             assert_assignment_profiles_resolvable({"a0": {"profile": flat}})
+
+
+def test_run_start_check_refuses_a_policies_block_without_the_format_marker():
+    """``assert_assignment_profiles_resolvable`` itself refuses a round-1 flat bundle.
+
+    Verified to have teeth: removing the ``check_policies_format`` call from it let the
+    unmarked block resolve as a central GreedyNearest.
+    """
+    unmarked = {"policies": {"dispatch": {"type": "GreedyNearest", "timing": "online", "params": {}}}}
+    with pytest.raises(PolicyError, match=r"assignment agent 'a0': profile.policies has policies_format=None"):
+        assert_assignment_profiles_resolvable({"a0": {"profile": unmarked}})
+    assert_assignment_profiles_resolvable({"a0": {"profile": {**unmarked, "policies_format": 2}}})

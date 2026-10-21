@@ -42,7 +42,8 @@ def _compiled_block(**entry):
     base = {"type": "GreedyNearest", "version": "1", "kind": "operator", "timing": "online",
             "params": {"dual_cycle_bonus_km": 5.0}}
     base.update(entry)
-    return {"strategy": "GreedyNearest", "policies": {"dispatch": base}}
+    # policies_format 2: the compile-time marker every round-2 bundle carries (C4).
+    return {"strategy": "GreedyNearest", "policies": {"dispatch": base}, "policies_format": 2}
 
 
 # --- F4 -----------------------------------------------------------------------------
