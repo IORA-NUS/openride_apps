@@ -63,10 +63,20 @@ class NearestFirst(DispatchPolicy):
 `.raw`); `ctx.raw_trucks` / `ctx.raw_orders` (the documents; never mutate them);
 `ctx.allowed(t, o)` (framework feasibility: haulier/partnership, size,
 `max_travel_time_pickup`); `ctx.candidate_pairs("spatial" | "sampled" | "full")`
-(cached per kind); `ctx.sampled_trucks()`; `ctx.deadhead_km(t, o)` (haversine, `inf`
+(cached per kind; see below); `ctx.sampled_trucks()`; `ctx.deadhead_km(t, o)` (haversine, `inf`
 without geometry); `ctx.dual_cycle_cost(t, o, bonus_km=, radius_km=)`; `ctx.params`;
 `ctx.rng`; `ctx.tiebreak_seed`; `ctx.scope` (`kind` partition|company, `key`,
 `round`); `ctx.clock` (`sim_clock`, `time_step`, `horizon_steps`); `ctx.rebates`.
+
+**Spatial pairs on the pooled topology.** A company scope (`ctx.scope.kind ==
+"company"`) has spatial pairs only when the resolved candidate kind is `spatial`: they
+are prebuilt once per bidding round, and only then. `ctx.candidate_pairs("spatial")` on
+a company scope of any other kind raises `DispatchContractViolation` (logged as a
+CONTRACT VIOLATION, plan discarded) instead of quietly returning `[]`. The fix is to
+declare a `candidates` param with `"spatial"` among its choices and select it, or ask
+for `ctx.candidate_pairs()` (the scope's own kind). A spatial-kind company scope with
+no nearby pairs still returns `[]`. Partition scopes build spatial pairs on demand,
+whatever the kind.
 
 **P1 limits:** there is no `ctx.travel` (road travel times), no `ctx.facilities`, no
 `ctx.state` and no `held` plan tails until P4. The scope (one call per partition or per
@@ -84,8 +94,19 @@ twice, only in-scope ids, non-empty chains, every head `ctx.allowed`. A violatin
 is **discarded for that scope and tick** (nothing committed) and logged as
 `DISPATCH POLICY CONTRACT VIOLATION: ...` at ERROR. That line is agent-side: it is in
 `journalctl --user -u openride-celery`, **not** `sim.log`. Violations are not yet
-stamped into the run's `run_config`. An exception other than a contract violation
-propagates out of the tick, so handle empty inputs and missing geometry yourself.
+stamped into the run's `run_config`.
+
+An exception other than a contract violation behaves differently per topology, and
+neither is a violation:
+
+- **partitioned**: it propagates out of `AssignmentApp.assign()`, i.e. out of the tick.
+- **pooled**: `pooled_planner` logs it (`Deployment solve failed for haulier '<id>' —
+  skipping.`, with the traceback, agent-side) and skips that company for that bidding
+  round; the tick and the other companies continue. A policy that crashes on every
+  call therefore silently assigns nothing for that company while the run still
+  finishes `ok: true`, so grep the celery journal for that line.
+
+Handle empty inputs and missing geometry yourself.
 
 ## 4. Determinism
 
@@ -95,6 +116,21 @@ missing draw shifts every later draw in the worker, including trucks' response r
 On the pooled path `ctx.tiebreak_seed` is set; break ties with it
 (`assignment/tiebreak.pair_tiebreak`) so the plan does not depend on input order, or
 declare `order_sensitive="why"`.
+
+What the battery's determinism checks do and do not promise:
+
+- `determinism.no_module_rng` injects a private `random.Random` (`set_rng`) and fails if
+  `random.getstate()` changed during the decision. It is checked only on fixtures whose
+  trucks fit `max_trucks_per_scope` (500): when that cap binds, the partition scope's
+  `ctx.sampled_trucks()` draws from the random MODULE **by framework design** (byte
+  identity of the partitioned path), so a module-state change there is not yours. On
+  the pooled path the sample draws from the tick `Random` instead.
+- `determinism.order_independent` holds **only while the spatial per-order candidate
+  cap (`spatial_candidates_per_order`, default 40) does not bind**.
+  `spatial.iter_candidate_pairs` truncates each order's candidates in input order, so
+  on dense real ticks the framework's candidate set itself depends on input order, and
+  no policy is order-independent there. The battery's fixtures keep fewer trucks than
+  the cap on purpose; a PASS certifies the policy, not the candidate generation.
 
 ## 5. Validate, bench, capture
 
@@ -109,6 +145,13 @@ openride policy bench dispatch --policies GreedyNearest,NearestFirst --fixtures 
 
 The battery (structure, robustness per fixture, determinism, performance, params) is
 also `tests/test_policy_contract_battery.py`, parametrized over every registered policy.
+Every decision goes through `DispatchRunner.run`, the path the sim executes, and the
+structure verdicts are `invariants.check_plan`'s own messages. Besides the defaults,
+**every non-default `choices` value of every `str` param is an arm**: the structure,
+robustness and determinism checks run again per arm, with the arm in the id
+(`structure.no_order_twice[candidates=sampled]`). `performance.scale` gates the default
+arm only, because `perf_budget_ms` is measured there; each arm's `robustness.scale` line
+reports its decide time.
 The bench reports **haversine deadhead, a decision-time proxy, NOT the road-distance
 KPI**; single-tick scores screen policies, only runs certify them (n>=3, interleaved).
 `--synthetic` takes `scale`, any battery fixture name, a comma list, or `all`. Capture is

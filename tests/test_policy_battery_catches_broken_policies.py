@@ -1,9 +1,12 @@
 """The contract battery fails a broken policy on exactly the check that names its bug.
 
-What is locked: five deliberately broken dispatch policies, each registered under
+What is locked: deliberately broken dispatch policies, each registered under
 ``isolated_registry()``, fail precisely the expected battery checks and nothing
-else (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3 tests), and a policy whose
-``Params`` defaults break their own bounds cannot be registered at all.
+else (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3 tests) -- including a policy
+broken ONLY under a non-default ``choices`` value, which fails that arm's check while
+its default arm passes, and a policy that draws from the ``random`` module behind an
+injected RNG -- and a policy whose ``Params`` defaults break their own bounds cannot
+be registered at all.
 
 Why: a battery that passes everything proves nothing. Each broken policy is a
 correct baseline (orders and trucks taken in id order, each order to the first free
@@ -11,14 +14,20 @@ allowed truck: deterministic and order-independent) with ONE defect added, so a
 check failing elsewhere would mean the battery mis-attributes a bug.
 
 Verified to have teeth (each mutation in ``policies/testing/battery.py``, restored
-after): making ``_structure_problems`` return ``[]`` for ``no_order_twice`` failed
-``test_twice_assigner_fails_only_no_order_twice``; for ``only_allowed_pairs``,
-``test_disallowed_pair_policy_fails_only_only_allowed_pairs``; comparing
+after): mapping the ``no_order_twice`` message kind to ``only_in_scope`` in
+``_PLAN_MESSAGE_KINDS`` failed ``test_twice_assigner_fails_only_no_order_twice``;
+mapping ``only_allowed_pairs`` to ``returns_plan`` failed
+``test_disallowed_pair_policy_fails_only_only_allowed_pairs``; mapping the raised
+"appears twice in pairs" kind to ``returns_plan`` failed
+``test_double_truck_from_pairs_fails_only_no_truck_twice``; comparing
 ``best <= spec.perf_budget_ms * 10`` failed ``test_slow_policy_fails_only_performance_scale``;
-catching every exception in ``_robustness_check`` as ok failed
-``test_crash_on_empty_policy_fails_only_the_empty_robustness_checks``; and comparing
+treating every ``error`` as ok in ``_robustness_check`` failed
+``test_crash_on_empty_policy_fails_only_the_empty_robustness_checks``; comparing
 only plan lengths in ``_reproducible`` failed
-``test_clock_seeded_policy_fails_determinism_reproducible``.
+``test_clock_seeded_policy_fails_determinism_reproducible``; returning ``[{}]`` from
+``policy_arms`` failed ``test_policy_broken_only_under_a_non_default_choice_fails_that_arm``;
+and ``touched = False`` in ``_decide_via_runner`` failed
+``test_module_rng_policy_fails_only_no_module_rng``.
 """
 
 from __future__ import annotations
@@ -34,7 +43,7 @@ from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 from apps.container_logistics.policies.framework.errors import PolicyRegistrationError
 from apps.container_logistics.policies.framework.registry import isolated_registry
-from apps.container_logistics.policies.testing.battery import DISPATCH_CHECKS, run_battery
+from apps.container_logistics.policies.testing.battery import DISPATCH_CHECKS, battery_check_ids, run_battery
 
 
 def _first_feasible(ctx, trucks=None):
@@ -52,7 +61,7 @@ def _first_feasible(ctx, trucks=None):
 
 def _failing(name):
     results = run_battery("dispatch", name)
-    assert [r.id for r in results] == list(DISPATCH_CHECKS)
+    assert [r.id for r in results] == battery_check_ids("dispatch", name)
     return {r.id for r in results if not r.ok}
 
 
@@ -151,6 +160,63 @@ def test_clock_seeded_policy_fails_determinism_reproducible():
         failing = _failing("ClockSeededPolicy")
         assert "determinism.reproducible" in failing
         assert failing == {"determinism.reproducible"}, f"only determinism should fail, got {sorted(failing)}"
+
+
+def test_double_truck_from_pairs_fails_only_no_truck_twice():
+    with isolated_registry():
+        @policy(slot="dispatch", name="DoubleTruckPolicy", version="1", description="gives one truck two orders")
+        class DoubleTruckPolicy(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                pass
+
+            def decide(self, ctx):
+                trucks = sorted(ctx.raw_trucks, key=lambda t: str(t["_id"]))
+                orders = sorted(ctx.raw_orders, key=lambda o: str(o["_id"]))
+                pairs = [(t, o) for t in trucks for o in orders if ctx.allowed_raw(t, o)][:2]
+                if len(pairs) == 2 and pairs[0][0] is pairs[1][0]:
+                    return Plan.from_pairs(pairs)  # raises: the first truck appears twice
+                return Plan(chains=_first_feasible(ctx))
+
+        assert _failing("DoubleTruckPolicy") == {"structure.no_truck_twice"}
+
+
+def test_policy_broken_only_under_a_non_default_choice_fails_that_arm():
+    """The reviewer's ``battery_defaults_only.py`` case (review F3): only ``candidates=sampled`` is broken."""
+    with isolated_registry():
+        @policy(slot="dispatch", name="BrokenWhenSampled", version="1", description="double-assigns when sampled")
+        class BrokenWhenSampled(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                candidates: str = param("spatial", choices=("spatial", "sampled"), help="candidate kind")
+
+            def decide(self, ctx):
+                chains = _first_feasible(ctx)
+                orders = sorted(ctx.raw_orders, key=lambda o: str(o["_id"]))
+                if ctx.params.candidates == "sampled" and orders:  # the bug lives only in this arm
+                    first = orders[0]
+                    chains = {str(t["_id"]): (str(first["_id"]),) for t in ctx.raw_trucks
+                              if ctx.allowed_raw(t, first)}
+                return Plan(chains=chains)
+
+        assert _failing("BrokenWhenSampled") == {"structure.no_order_twice[candidates=sampled]"}, (
+            "the defect must fail exactly the sampled arm's check; the default arm must pass"
+        )
+
+
+def test_module_rng_policy_fails_only_no_module_rng():
+    with isolated_registry():
+        @policy(slot="dispatch", name="ModuleRngPolicy", version="1", description="draws from the random module")
+        class ModuleRngPolicy(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                pass
+
+            def decide(self, ctx):
+                random.random()  # the bug: never ctx.rng
+                return Plan(chains=_first_feasible(ctx))
+
+        assert _failing("ModuleRngPolicy") == {"determinism.no_module_rng"}
 
 
 def test_registering_bad_param_defaults_raises():

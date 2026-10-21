@@ -176,7 +176,11 @@ def context_to_fixture(
     """
     if ctx.rule is None:
         raise PolicyError(f"scope {ctx.scope.key} has no rule; a context without one cannot be captured")
-    spatial = _ids(ctx.candidate_pairs("spatial")) if ctx.scope.kind == "company" else None
+    spatial = None
+    if ctx.scope.kind == "company":
+        # Only a spatial-kind company scope has a prebuilt slice (any other kind's is
+        # empty, and asking it for spatial pairs is a contract violation).
+        spatial = _ids(ctx.candidate_pairs("spatial")) if ctx.default_candidate_kind == "spatial" else []
     return {
         "format": FIXTURE_FORMAT,
         "run_id": run_id,

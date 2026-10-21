@@ -25,6 +25,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
+from apps.container_logistics.policies.framework.errors import DispatchContractViolation
+
 from .helpers import candidates as _candidates
 from .helpers import objective as _objective
 from .helpers.candidates import CandidateSettings
@@ -148,7 +150,10 @@ class DispatchContext:
 
         ``spatial``: the scope's spatial source; ``sampled``: every allowed pair over
         :meth:`sampled_trucks`; ``full``: every allowed pair. Cached per kind.
-        Raises ``ValueError`` for an unknown kind.
+        Raises ``ValueError`` for an unknown kind, and ``DispatchContractViolation``
+        for ``spatial`` on a company scope whose resolved kind is not ``spatial``
+        (no pairs were prebuilt; the runner logs it and discards the plan). A
+        spatial-kind company scope with an empty prebuilt slice returns ``[]``.
         """
         kind = self.default_candidate_kind if kind is None else kind
         if kind not in self._pairs_cache:
@@ -157,6 +162,16 @@ class DispatchContext:
 
     def _build_pairs(self, kind: str) -> list[Pair]:
         if kind == "spatial":
+            if self.scope.kind == "company" and self.default_candidate_kind != "spatial":
+                # A company scope has only the round's prebuilt slice, built only for
+                # the spatial kind; [] here would silently starve the policy.
+                raise DispatchContractViolation(
+                    f"candidate_pairs('spatial') on company scope {self.scope.key} needs the resolved "
+                    f"candidate kind 'spatial' (pairs are prebuilt once per round only then; this scope's "
+                    f"kind is {self.default_candidate_kind!r}). Declare a 'candidates' param with "
+                    "'spatial' among its choices and select it, or ask for "
+                    f"candidate_pairs({self.default_candidate_kind!r})."
+                )
             return list(self._spatial_source())
         if kind == "sampled":
             return _candidates.full_pairs(self.sampled_trucks(), self.raw_orders, allowed=self.allowed_raw)
