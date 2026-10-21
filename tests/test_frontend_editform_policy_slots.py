@@ -63,6 +63,9 @@ def test_editform_of_a_compiled_scenario_carries_policy_slots(tmp_path, monkeypa
     spec = json.loads(SMOKE_SPEC.read_text())
     spec["policies"] = {"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 1.25}}}
     spec["solver"] = None
+    # A body speaking policies must not also carry the legacy planner.deployment it
+    # supersedes: a contradicting one is a compile error (review F1).
+    spec["planner"].pop("deployment", None)
     datahub = str(tmp_path / "datahub")
     F.generate_scenario(datahub, DOMAIN, spec)
     detail = F.get_scenario_detail(datahub, DOMAIN, spec["slug"])

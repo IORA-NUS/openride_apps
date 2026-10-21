@@ -112,12 +112,14 @@ def test_orsim_solver_still_works(monkeypatch):
     assert (name, overridden) == ("GreedyNearest", True)
     assert coll["assignment_0"]["profile"]["strategy"] == "GreedyNearest"
     assert apply_solver_override(_collection({}), "RandomAssignment") == "RandomAssignment"
-    # A params-only override is NOT a type override: no run-name label.
+    # A params-only override labels the policy with exactly the overridden params
+    # (review F7; format in ``dispatch_override_label``).
     monkeypatch.delenv("ORSIM_SOLVER")
     monkeypatch.setenv("ORSIM_POLICY_OVERRIDES",
                        json.dumps({"dispatch": {"params": {"dual_cycle_bonus_km": 0}}}))
     coll = _collection({"strategy": "GreedyNearest"})
-    assert launcher._apply_policy_overrides_or_exit(coll) == (None, True)
+    assert launcher._apply_policy_overrides_or_exit(coll) == (
+        "GreedyNearest(dual_cycle_bonus_km=0.0)", True)
     monkeypatch.delenv("ORSIM_POLICY_OVERRIDES")
     assert launcher._apply_policy_overrides_or_exit(_collection({})) == (None, False)
 
@@ -142,7 +144,8 @@ def test_orsim_solver_conflicting_with_policy_override_raises(monkeypatch, capsy
 def test_override_patches_profile_policies_and_strategy_mirror():
     """Verified to have teeth: dropping the ``profile.pop("use_spatial_matching")`` in
     ``apply_policy_overrides`` left the legacy key next to the new ``policies`` block,
-    which the runtime resolver refuses."""
+    which the runtime resolver refuses. The ``solver_params`` mirror (review F1) is
+    locked with teeth in ``test_policy_override_equals_compiled_edit.py``."""
     legacy = {"strategy": "GreedyNearest", "use_spatial_matching": False,
               "solver_params": {"dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 0.5}}
     coll = _collection(legacy)
@@ -152,7 +155,8 @@ def test_override_patches_profile_policies_and_strategy_mirror():
     assert prof["policies"]["dispatch"] == resolved["dispatch"].to_profile()
     assert prof["policies"]["dispatch"]["params"] == {
         "candidates": "sampled", "dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 1.0}
-    assert prof["solver_params"] == legacy["solver_params"], "solver_params must not be touched"
+    assert prof["solver_params"] == {"dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 1.0}, (
+        "the overridden param must be re-mirrored into the accounting solver_params (F1)")
     assert "use_spatial_matching" not in prof
     assert resolve_dispatch_for_profile(prof).candidate_kind == "sampled"
     # Validation happens before mutation.
@@ -166,13 +170,15 @@ def test_stamp_shape():
     from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
 
     stamp = policies_stamp(_greedy(), source="bundle",
-                           candidate_settings=CandidateSettings.from_profile({}).to_dict())
+                           candidate_settings=CandidateSettings.from_profile({}).to_dict(),
+                           accounting_params={"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5})
     assert stamp == {"dispatch": {
         "name": "GreedyNearest", "version": "1", "kind": "operator", "timing": "online",
         "params": {"candidates": "spatial", "dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5},
         "source": "bundle",
         "candidate_settings": {"cell_deg": 0.02, "per_order": 40, "max_rings": 8,
-                               "max_trucks_per_scope": 500}}}
+                               "max_trucks_per_scope": 500},
+        "accounting_params": {"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5}}}
     json.dumps(stamp)
 
 
@@ -200,16 +206,34 @@ def test_run_config_meta_mirrors_policies(capsys):
     assert mgr.get_run_config_meta()["policies"] == stamp
 
 
-def test_run_simulation_command_rejects_bad_policy_without_spawning(monkeypatch, capsys):
+def _compiled_smoke_scenario(tmp_path, monkeypatch) -> str:
+    """Compile ``collab_smoke_12t`` (GreedyNearest) into a tmp scenarios root; return its slug."""
+    from pathlib import Path
+
+    from apps.container_logistics.scenario.spec_compile import compile_spec_to_bundle
+
+    root = tmp_path / "root"
+    monkeypatch.setenv("ORSIM_SCENARIOS_DIR", str(root))
+    spec = json.loads((Path(__file__).resolve().parents[1] / "scenarios" / "collab_smoke_12t"
+                       / "spec.json").read_text())
+    folder = root / spec["slug"]
+    folder.mkdir(parents=True)
+    compile_spec_to_bundle(spec, domain="container-logistics-sim", scenario_dir=str(folder),
+                           slug=spec["slug"])
+    return spec["slug"]
+
+
+def test_run_simulation_command_rejects_bad_policy_without_spawning(tmp_path, monkeypatch, capsys):
     """Verified to have teeth: removing the validation in command.py reached the
     (patched) spawn and the ``spawned`` assertion failed."""
     from openride_control import command
     from openride_control.manager import ServiceManager
 
+    slug = _compiled_smoke_scenario(tmp_path, monkeypatch)
     spawned = []
     monkeypatch.setattr(ServiceManager, "run_simulation_background",
                         lambda self, **kw: spawned.append(kw))
-    rc = command._run(["run-simulation", "--scenario", "no_such_scenario_xyz",
+    rc = command._run(["run-simulation", "--scenario", slug,
                        "--policy", "dispatch=GreedyNearest",
                        "--policy-param", "dispatch.dual_cycle_bonus_km=-1"])
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
@@ -221,7 +245,7 @@ def test_run_simulation_command_rejects_bad_policy_without_spawning(monkeypatch,
     assert "conflicts" in json.loads(capsys.readouterr().out.strip().splitlines()[-1])["message"]
 
 
-def test_run_simulation_command_ships_validated_overrides(monkeypatch, capsys):
+def test_run_simulation_command_ships_validated_overrides(tmp_path, monkeypatch, capsys):
     from openride_control import command
     from openride_control.manager import ServiceManager
     from openride_control.models import ActionResult, ServiceState
@@ -233,7 +257,8 @@ def test_run_simulation_command_ships_validated_overrides(monkeypatch, capsys):
         return ActionResult(key="simulation", ok=True, state=ServiceState.RUNNING, message="ok")
 
     monkeypatch.setattr(ServiceManager, "run_simulation_background", _fake)
-    rc = command._run(["run-simulation", "--scenario", "no_such_scenario_xyz",
+    slug = _compiled_smoke_scenario(tmp_path, monkeypatch)
+    rc = command._run(["run-simulation", "--scenario", slug,
                        "--policy-param", "dispatch.candidates=sampled", "--solver", "GreedyNearest"])
     assert rc == 0, capsys.readouterr().out
     assert seen["policy_overrides"] == {"dispatch": {"type": "GreedyNearest",

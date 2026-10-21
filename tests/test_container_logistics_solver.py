@@ -55,7 +55,7 @@ def test_get_solver_by_name():
     assert isinstance(get_solver("RandomAssignment", None), RandomAssignmentSolver)
 
 
-def test_get__solver_unknown_name_raises_listing_known():
+def test_get_solver_unknown_name_raises_listing_known():
     """No silent fallback: an unknown name raises and names what is registered."""
     with pytest.raises(UnknownPolicyError) as excinfo:
         get_solver("DoesNotExist", None)

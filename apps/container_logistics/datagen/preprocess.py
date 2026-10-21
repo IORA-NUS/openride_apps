@@ -95,6 +95,10 @@ class Compiled:
     #: slot -> "legacy" (translated from solver/solverParams/planner.deployment) or
     #: "authored" (written in the spec's ``policies`` block). See ``_normalize_policies``.
     policies_provenance: dict = field(default_factory=dict)
+    #: ``planner.deployment`` exactly as the spec authored it, captured BEFORE the
+    #: one-dial mirror overwrites it. ``spec_compile`` checks it against an authored
+    #: ``policies.dispatch`` (it needs the registry, which datagen cannot import).
+    authored_deployment: dict = field(default_factory=dict)
 
 
 def _slugify(name: str) -> str:
@@ -232,6 +236,28 @@ class Preprocessor:
                 raw_planner.get("rebate_aware", False), "planner.rebate_aware"
             ),
         }
+
+    @staticmethod
+    def _recipe_planner(planner_cfg: dict, authored_deployment: dict, provenance: dict) -> dict:
+        """The ``planner`` block the recipe echoes (``spec.json`` is written from it).
+
+        Under a LEGACY dispatch translation the compiled ``deployment`` mirror is
+        echoed, as before. Under an AUTHORED ``policies.dispatch`` the deployment is
+        echoed exactly as authored (absent stays absent), never as the mirror:
+        ``policies`` is the round-trip source, and a mirror written back into
+        ``spec.json`` would contradict the next hand edit of ``policies`` and be
+        refused by the compile every time (``spec_compile`` refuses a contradicting
+        ``planner.deployment``). An authored deployment's accounting-only keys
+        therefore survive a recompile.
+        """
+        planner = deepcopy(planner_cfg)
+        if provenance.get("dispatch") != "authored":
+            return planner
+        if authored_deployment:
+            planner["deployment"] = deepcopy(authored_deployment)
+        else:
+            planner.pop("deployment", None)
+        return planner
 
     @staticmethod
     def _strict_bool(value, where: str) -> bool:
@@ -676,6 +702,7 @@ class Preprocessor:
         dispatch_entry = policies_authored["dispatch"]
         strategy = dispatch_entry["type"]
         settings["assignment"]["profile"]["strategy"] = strategy
+        authored_deployment = deepcopy(planner_cfg.get("deployment") or {})
         base = dict(settings["assignment"]["profile"].get("solver_params") or {})
         dp = (planner_cfg.get("deployment") or {}).get("params")
         if isinstance(dp, dict):
@@ -757,7 +784,7 @@ class Preprocessor:
                     for s in cooperation["structures"]
                 ],
             },
-            "planner": deepcopy(planner_cfg),
+            "planner": cls._recipe_planner(planner_cfg, authored_deployment, policies_provenance),
             # The authored block (legacy translations included) is the round-trip
             # source; ``solver`` is a read-only mirror of policies.dispatch.type and
             # ``solverParams`` is retired (its values now live in policies.dispatch.params).
@@ -807,7 +834,8 @@ class Preprocessor:
             role_policies=role_policies,
         )
         return Compiled(spec=spec, orsim_settings=orsim, recipe=recipe,
-                        policies_provenance=policies_provenance)
+                        policies_provenance=policies_provenance,
+                        authored_deployment=authored_deployment)
 
     # ---- pieces -----------------------------------------------------------
 

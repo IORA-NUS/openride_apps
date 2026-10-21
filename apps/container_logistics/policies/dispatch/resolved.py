@@ -15,9 +15,18 @@ from typing import Literal
 
 from apps.container_logistics.policies.framework.params import PolicyParams
 
-__all__ = ["ResolvedDispatch", "ResolvedSource"]
+__all__ = ["KIND_WITHOUT_CANDIDATES_PARAM", "ResolvedDispatch", "ResolvedSource", "candidate_kind_for"]
 
 ResolvedSource = Literal["policies", "legacy-profile", "unregistered"]
+
+#: The candidate kind of a policy that declares no ``candidates`` param: it gets no
+#: prebuilt spatial pairs. The ONE copy of this rule (review F14).
+KIND_WITHOUT_CANDIDATES_PARAM = "sampled"
+
+
+def candidate_kind_for(params: PolicyParams) -> str:
+    """``params.candidates`` when the policy declares it, else ``KIND_WITHOUT_CANDIDATES_PARAM``."""
+    return getattr(params, "candidates", KIND_WITHOUT_CANDIDATES_PARAM)
 
 
 @dataclass(frozen=True)

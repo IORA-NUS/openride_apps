@@ -145,15 +145,16 @@ def test_legacy_profile_translates_strategy_params_and_use_spatial():
 
 def test_random_drops_undeclared_legacy_dual_cycle_keys(caplog):
     """Verified to have teeth: passing ``solver_params`` through unfiltered made
-    RandomAssignment's strict params refuse the dual-cycle keys and failed this test."""
+    RandomAssignment's strict params refuse the dual-cycle keys and failed this test.
+    The drop goes through the framework's ONE rule (review F4), logged at WARNING."""
     prof = {"strategy": "RandomAssignment", "solver_params": dict(_LEGACY_DC)}
-    with caplog.at_level(logging.DEBUG, logger="apps.container_logistics.policies.dispatch.profile"):
+    with caplog.at_level(logging.WARNING, logger="apps.container_logistics.policies.framework.resolve"):
         entry = legacy_dispatch_from_profile(prof)
     assert entry["params"] == {}, (
         f"RandomAssignment declares no dual-cycle params, so they must be dropped; got {entry['params']}"
     )
-    assert any("dual_cycle_bonus_km" in r.getMessage() and r.levelno == logging.DEBUG
-               for r in caplog.records), "dropping legacy keys must be logged at DEBUG"
+    assert any("dual_cycle_bonus_km" in r.getMessage() and r.levelno == logging.WARNING
+               for r in caplog.records), "dropping legacy keys must be logged at WARNING"
 
     resolved = resolve_dispatch_for_profile(prof)
     assert resolved.params.to_dict() == {"candidates": "sampled"}
@@ -291,8 +292,9 @@ def test_policies_block_params_are_validated():
 
 
 def test_run_start_check_refuses_plan_timing():
-    """Verified to have teeth: removing the executable-timing check in
-    ``assert_assignment_profiles_resolvable`` failed this test."""
+    """Verified to have teeth: removing the not-executable branch of
+    ``framework.resolve._resolve_timing`` (the one resolver the run-start check now
+    shares, review F4) failed this test."""
     collection = {
         "assignment_ok": {"profile": {"strategy": "GreedyNearest"}},
         "assignment_planner": {"profile": _policies("GreedyNearest", timing="plan")},

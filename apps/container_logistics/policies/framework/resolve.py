@@ -26,6 +26,7 @@ from typing import Any, Collection, Mapping, Sequence
 from .errors import (
     PolicyDependencyError,
     PolicyError,
+    PolicyParamsError,
     PolicyTimingError,
     SlotNotImplementedError,
     UnknownSlotError,
@@ -38,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "ENTRY_KEYS",
+    "drop_undeclared_legacy_params",
     "ResolvedPolicy",
     "resolve_policies_block",
     "authored_after_resolution",
@@ -119,7 +121,7 @@ def _check_entry_shape(entry: Any, label: str, *, require_type: bool) -> None:
         raise PolicyError(f"{label}.type must name a registered policy (got {name!r}).")
     params = entry.get("params")
     if params is not None and not isinstance(params, Mapping):
-        raise PolicyError(f"{label}.params must be an object (got {params!r}).")
+        raise PolicyParamsError(f"{label}.params must be an object (got {params!r}).")
 
 
 def _resolve_timing(slot: str, timing: Any, label: str) -> str | None:
@@ -145,8 +147,14 @@ def _resolve_timing(slot: str, timing: Any, label: str) -> str | None:
     return timing
 
 
-def _legacy_params(spec, params: Mapping[str, Any], label: str) -> dict[str, Any]:
-    """Drop the params ``spec`` does not declare (legacy keys were never validated)."""
+def drop_undeclared_legacy_params(spec, params: Mapping[str, Any], label: str) -> dict[str, Any]:
+    """The params of ``params`` that ``spec`` declares; the rest are dropped at WARNING.
+
+    The ONE implementation of the legacy drop rule (review F4): used by the legacy
+    profile translation (``dispatch/profile.py``) and by legacy-provenance slots in
+    :func:`resolve_policies_block`. Legacy keys were never validated, and dropped
+    keys still feed the framework's accounting via ``solver_params``.
+    """
     declared = {info.name for info in declared_params(spec.params_cls)}
     dropped = sorted(k for k in params if k not in declared)
     if dropped:
@@ -171,7 +179,7 @@ def _resolve_entry(slot: str, entry: Mapping[str, Any], *, where: str, legacy: b
     timing = _resolve_timing(slot, entry.get("timing"), label)
     raw_params = dict(entry.get("params") or {})
     if legacy:
-        raw_params = _legacy_params(spec, raw_params, label)
+        raw_params = drop_undeclared_legacy_params(spec, raw_params, label)
     params = spec.params_cls.from_mapping(raw_params, where=f"{label}.params for {spec.name}")
     return ResolvedPolicy(slot=slot, name=spec.name, version=spec.version, kind=spec.kind(),
                           timing=timing, params=params.to_dict())
@@ -316,13 +324,18 @@ def policies_stamp(
     resolved: Mapping[str, ResolvedPolicy],
     *,
     candidate_settings: Mapping[str, Any],
+    accounting_params: Mapping[str, Any],
     source: str,
 ) -> dict[str, Any]:
     """The run-provenance stamp ``run_config.meta.policies``.
 
     ``{slot: {name, version, kind, timing, params, source}}``; the dispatch entry also
-    carries ``candidate_settings`` (the spatial knobs, plan §5). ``source`` is
-    ``bundle``, ``legacy-profile`` or ``override``.
+    carries ``candidate_settings`` (the spatial knobs, plan §5) and
+    ``accounting_params``: the effective ``profile.solver_params`` the framework's
+    accounting (``benefit_km``, owner reserve, claims, arbitration) costs with
+    (review F1). It equals the shared keys of ``params`` whenever the policy
+    declares them; a cost-blind policy (Random) shows the dials it does not read.
+    ``source`` is ``bundle``, ``legacy-profile`` or ``override``.
     """
     stamp: dict[str, Any] = {}
     for slot, r in resolved.items():
@@ -330,5 +343,6 @@ def policies_stamp(
                  "params": dict(r.params), "source": source}
         if slot == "dispatch":
             entry["candidate_settings"] = dict(candidate_settings)
+            entry["accounting_params"] = dict(accounting_params)
         stamp[slot] = entry
     return stamp

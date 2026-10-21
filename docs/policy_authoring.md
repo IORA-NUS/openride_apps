@@ -176,9 +176,14 @@ also `run-simulation --capture-dispatch` on the control plane and
   regenerate its golden entry: `venv/bin/python tests/golden/capture_policy_golden.py --policy NearestFirst`.
   A new policy needs an entry too (`tests/test_policy_golden_versions.py`).
 - **Accounting is not your objective.** `benefit_km` and pooled-market arbitration use
-  the framework's `constraints.assignment_cost` with `solver_params`, which mirrors only
-  the dual-cycle dials. A policy optimising something else still gets scored by that
-  (plan §7 risk 8).
+  the framework's `constraints.assignment_cost` with `solver_params`. Compile and per-run
+  overrides both mirror a policy's declared params into the keys `solver_params`
+  already carries (only the dual-cycle dials today), so accounting matches what a
+  dual-cycle policy ranks with; the effective values are stamped as
+  `run_config.meta.policies.dispatch.accounting_params`. A policy optimising something
+  else still gets scored by that (plan §7 risk 8). A `planner.deployment` block that
+  contradicts an authored `policies.dispatch` is a compile error, not a silent second
+  dial.
 - Every slot at its default is byte-identical to before policy slots. A different
   policy, or `RandomAssignment` with `candidates=spatial`, is a **new arm**, not
   comparable with the default; read the arm from `run_config.meta.policies`.

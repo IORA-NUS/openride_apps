@@ -1002,7 +1002,166 @@ implemented as written.
   500-truck n=3 runs, the browser check, a `--capture-dispatch` run.
 - Out-of-repo docs: doc 26 (draft at `docs/plans/26-policy-slots.draft.md`), the
   CLAUDE.md §5 pointer, the doc 11 update, the `/restart-for` table entry.
-- **The live dashboard's Scenario tab cannot save until the backend serving it exposes
-  `known-policies.slots`** (the main tree does not yet); this is the intended
-  no-fallback behaviour, but it is user-visible now because `next dev` serves this
-  branch.
+- **Deploy order: backend first.** A dashboard serving this frontend cannot save
+  scenarios until the backend it shells out to exposes `known-policies.slots` (intended
+  no-fallback behaviour). Correction (review F10): the live analytics checkout is not on
+  this branch any more (it serves `feat/replay-timeline-clock-and-routes-lag`), so this
+  bites only when the frontend is merged or served before the backend.
+
+### Fix round (review F1-F15)
+Backend fixes for the independent review of 2026-10-21 (F1, F2 backend half, F4, F7
+backend half, F11-F15). Tests: `tests/test_policy_override_equals_compiled_edit.py`,
+`tests/test_policy_review_fixes.py`.
+
+31. **One mirror helper (F1).** `dispatch/profile.py::mirror_dispatch_params(profile,
+    params)` is the only copy of deviation 19's re-mirror. It sets every key ALREADY
+    PRESENT in `profile.solver_params` and `profile.planner.deployment.params` to the
+    resolved dispatch value when the policy declares that key; it never adds a key, and
+    undeclared keys keep their value. Compile (`spec_compile._resolve_compiled_policies`)
+    and the per-run path (`scenario_overrides.apply_policy_overrides`) both call it, so a
+    per-run override equals the same edit compiled into `spec.json` (pairs, share tags /
+    `benefit_km`, published strings, pooled round stats; partitioned and pooled).
+32. **`--solver X` (any dispatch TYPE change) semantics.** The policy params reset to X's
+    defaults plus any override params (unchanged); the mirror then rewrites the shared
+    keys in `solver_params` to those values whenever X declares them, so the accounting
+    always equals what the policy ranks with. When X does not declare them
+    (RandomAssignment: no dual-cycle params), `solver_params` keep the bundle's values,
+    i.e. the accounting is unchanged from the bundle. This replaces the old
+    `ORSIM_SOLVER` behaviour where the bundle's `solver_params` drove the new solver's
+    cost even for a policy that declares those dials.
+33. **The run stamp records the accounting.** `policies_stamp` takes a required
+    `accounting_params` keyword; `run_config.meta.policies.dispatch.accounting_params` is
+    the effective `profile.solver_params` (what `AssignmentApp._solver_params` reads), and
+    the `Policies effective:` line prints it.
+34. **`planner.deployment` next to an authored `policies.dispatch` is checked at compile**
+    (`spec_compile._refuse_deployment_contradicting_policies`, which needs the registry,
+    so `Compiled.authored_deployment` captures the raw block before preprocess overwrites
+    it with the mirror). A loud `SpecValidationError` naming the fix when `type` does not
+    resolve to the same registered policy, or when a param the policy DECLARES differs
+    from its resolved value (authored or default; a bool never equals a number). A param
+    the policy does NOT declare is tolerated: it is an accounting-only dial the policy
+    never reads (it is the only way to set Random's accounting), so there is nothing for
+    it to disagree with. Symmetric with deviation 17. Legacy provenance is unchanged.
+35. **The recipe no longer echoes the deployment MIRROR next to an authored block**
+    (`Preprocessor._recipe_planner`): it echoes the authored `planner.deployment`
+    verbatim (absent stays absent). `spec.json` is written from the recipe, so an echoed
+    mirror would contradict the next hand edit of `policies` and be refused by item 34 on
+    every edit. Legacy-provenance recipes still echo the mirror; recompiling such a recipe
+    (now authored) passes item 34 because the mirror agrees, and echoes that deployment
+    verbatim as authored. So every shipped `spec.json` keeps its `planner.deployment`
+    until someone removes it: a hand edit of `policies.dispatch.params` next to it is
+    refused ONCE with the fix ("remove planner.deployment"), after which it stays absent;
+    the dashboard/CLI save path never hits this (item 36). The bundle's assignment
+    profile still carries the mirror. Compile's
+    third re-mirror target (the recipe's deployment params, deviation 19) is removed as
+    moot. Verified: all 16 shipped specs compile, and compile → recipe → recompile →
+    recompile gives identical truck/order/facility/assignment agents for all 16.
+36. **The save path drops the carried `planner.deployment` next to a `policies` body**
+    (`frontend_scenario_spec.drop_dispatch_dials_superseded_by`, also used by
+    `edit_scenario`): same rule as `solver`/`solverParams`, the rest of the carried
+    `planner` stays. Without it every dashboard save over a shipped `spec.json` (whose
+    planner carries `{GreedyNearest, 5.0, 0.5}`) would hit item 34. A body that itself
+    sends a contradicting deployment gets item 34's error.
+37. **Tests whose contract changed with items 31-36:** `test_policy_run_overrides.py`
+    (`solver_params` is now mirrored; params-only label; the two `run-simulation` command
+    tests compile a tmp scenario because of item 42; stamp shape),
+    `test_policies_spec_block.py::test_stale_deployment_mirror_never_outlives_an_authored_param`
+    (rewritten: hand edit compiles, legacy mirror is refused, editor path compiles),
+    `test_frontend_editform_policy_slots.py` (its body drops `planner.deployment`),
+    `test_dispatch_profile_resolution.py` (the legacy drop now logs WARNING via the
+    framework logger; the plan-timing teeth note points at the shared resolver).
+38. **One profile resolver (F4).** `dispatch/profile.py::resolve_profile_policies(prof)
+    -> ({slot: ResolvedPolicy}, source)` is used by the agent (`resolve_dispatch_for_profile`),
+    the run-start check and the stamp / override base
+    (`scenario_overrides.current_policies_for_profile` is now a one-line delegate). A
+    compiled entry may carry exactly `COMPILED_ENTRY_KEYS` (`type, version, kind, timing,
+    params`); any other key (`parms`) and any unknown slot (`dispach`) raise. `version`
+    and `kind` are explicitly IGNORED, not checked: they are a compile-time echo and the
+    stamp re-derives both from the registry, so the record is always what ran. Two
+    knock-on strictness changes: a non-executable timing (`plan`) is now refused at
+    resolution by the framework resolver (the duplicate check in
+    `assert_assignment_profiles_resolvable` is gone; `DispatchRunner` still checks), and a
+    non-mapping `params` raises `PolicyParamsError` (was plain `PolicyError` on one path).
+39. **One legacy drop rule (F4):** `framework.resolve.drop_undeclared_legacy_params`, at
+    WARNING, used by `legacy_dispatch_from_profile` and by legacy-provenance slots in
+    `resolve_policies_block`. WARNING (not DEBUG) because it is the one tolerated lossy
+    step and the message says where the dropped keys still go (accounting).
+40. **Single sources (F13, F14):** `runner.EXECUTABLE_TIMINGS` is
+    `SLOTS["dispatch"].executable_timings` (same object; the runner's error now names
+    `EXECUTABLE_TIMINGS[0]` instead of a literal); the no-`candidates` kind is
+    `dispatch/resolved.py::candidate_kind_for` / `KIND_WITHOUT_CANDIDATES_PARAM`, used by
+    the profile resolver and `build_runner_for_policy`.
+41. **Stale-worker hint (F11)** is appended only to `UnknownPolicyError` in
+    `AssignmentApp.__init__`; `app.py` imports `UnknownPolicyError` instead of
+    `PolicyError`. The import-cycle comment now names all four local-import sites.
+42. **Run-flag validation against a missing scenario (F12).** With any policy flag,
+    `validate_run_policy_args` returns "scenario 'X' not found (no folder …)" or
+    "scenario 'X' has no compiled bundle (scenario.json) in …; compile it (openride
+    scenario compile X)" instead of validating against slot defaults.
+    `load_assignment_collection` returns `None` (was `{}`) when there is no bundle. With
+    no flags it returns `{}` without reading the scenario (unchanged).
+43. **Run-name label (F7 backend).** `run_container_logistics_simulation.dispatch_override_label`:
+    type-only → `<Name>` (unchanged); any params override (with or without a type) →
+    `<Name>(k=v,…)` with ONLY the overridden params, keys sorted, each value the VALIDATED
+    value as compact JSON (`GreedyNearest(dual_cycle_bonus_km=0.0)`,
+    `GreedyNearest(candidates="sampled")`); timing-only → no label. The console line is now
+    `Assignment dispatch override: <label>`.
+44. **Control contract for the dashboard (F2 backend).** `run-simulation
+    --policy-overrides JSON` and a synchronous `validate-run-policies --scenario S
+    [--solver] [--policy …] [--policy-param …] [--policy-overrides JSON]` printing
+    `{"ok": true, "action": "validate_run_policies", "overrides": {…}, "commandId"}` or
+    `{"ok": false, "action": "validate_run_policies", "message", "commandId"}` (exit 1).
+    Merge order: the JSON object's entries are copied whole (unknown entry keys reach the
+    validating merge and are refused there), then `--policy`, `--policy-param`, `--solver`.
+    The same field (a slot's `type`, or one param key) set to DIFFERENT values by two
+    sources raises `PolicyError` naming both; equal values are accepted (a bool never
+    equals a number). The JSON must be an object of objects.
+45. **EditForm fallback logs (F15):** `policy_slots_from_spec` logs
+    `POLICY SLOTS EDITFORM FALLBACK: scenario '<slug>' …(<ErrorClass>: <message>)` at
+    WARNING; the displayed form is unchanged.
+
+### Fix round, battery and context (review F3, F5, F6, F8, G-a, G-b)
+46. **Arms (F3).** Every non-default `choices` value of every `str` param is an arm; the
+    structure, robustness and determinism checks run again per arm with ids such as
+    `structure.no_order_twice[candidates=sampled]` (22 default-arm checks + 16 per arm;
+    38 for each built-in). Performance is gated on the default arm only. **Finding:**
+    GreedyNearest `candidates=sampled` takes ~1.6 s on the 1000x500 `scale` fixture,
+    about 3x the 500 ms budget measured on its default arm; per-arm budgets are left to
+    a later decision and each arm's `robustness.scale` detail reports its time.
+47. **Runner path (F5).** The battery decides through `DispatchRunner.run` and classifies
+    `check_plan`'s messages into structure checks (a test fails if `check_plan` gains a
+    message kind the classifier does not map). Robustness now fails only on non-contract
+    exceptions, so one bug fails one check. The runner's CONTRACT VIOLATION log line is
+    filtered while the battery runs; the battery reports it as a FAIL instead.
+48. **`determinism.no_module_rng` (G-a)** injects a private `Random` and asserts
+    `random.getstate()` is unchanged across `run`. It is scoped to fixtures whose trucks
+    fit `max_trucks_per_scope`, because a partition scope's `sampled_trucks` draws from
+    the module by design (byte identity); both built-ins pass on every arm.
+49. **Company-scope spatial pairs (G-b).** `ctx.candidate_pairs('spatial')` on a company
+    scope whose resolved kind is not `spatial` raises `DispatchContractViolation` naming
+    the fix; a spatial-kind scope with an empty prebuilt slice still returns `[]`.
+    `capture.context_to_fixture` reads spatial pairs only for spatial-kind scopes
+    (captured files unchanged).
+50. **Docs (F6, F8).** `order_independent` holds only while
+    `spatial_candidates_per_order` does not bind; a non-contract policy exception
+    propagates on partitioned but is logged and skips that company for the round on
+    pooled. Both behaviours are unchanged; only the check detail and
+    `docs/policy_authoring.md` say so now.
+
+### Merge hazard with the main-tree transport work (review F9, user decision)
+The main tree's uncommitted Kafka-transport edits add `sim_clock`/`time_step` to every
+`AssignedHaulTripPayload` in `publish()`. After a merge every golden case's
+`published` comparison would fail by construction, while the fixture must never be
+regenerated. Options, not implemented here:
+- **(a) Compare modulo the new fields.** Strip exactly `sim_clock` and `time_step` from
+  each published payload before comparing, keeping pairs, share tags, round stats and
+  the RNG probe exact. Cheapest; the stripped fields are tested elsewhere by the
+  transport work. Risk: a future field silently added to the payload is still caught,
+  but a policy-slot change to those two fields would not be.
+- **(b) A v2 fixture captured on the merged pre-policy-slots base.** Merge the transport
+  work onto `ec085f5` first, capture `dispatch_golden_v2.json.gz` there with the same
+  script, then rebase the policy-slot commits on top and gate on v2. Keeps full byte
+  identity; costs a rebase and a second "captured on" sha.
+- **(c) Both:** keep v1 under (a) as history and add v2 as the gate.
+The existing v1 fixture stays untouched either way.
+

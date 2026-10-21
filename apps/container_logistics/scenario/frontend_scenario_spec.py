@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,6 +25,9 @@ from .order_demand import (
     parse_order_demand_curve,
     recommended_early_order_count,
 )
+
+logger = logging.getLogger(__name__)
+
 
 def normalize_solver(raw: Any) -> str:
     """Coerce a requested solver name to a registered dispatch policy, else the default.
@@ -671,20 +675,27 @@ def _key_supplied(raw: dict[str, Any], key: str) -> bool:
 def drop_dispatch_dials_superseded_by(
     incoming: dict[str, Any], carried: dict[str, Any] | None
 ) -> dict[str, Any] | None:
-    """``carried`` without ``solver``/``solverParams`` when ``incoming`` supplies ``policies``.
+    """``carried`` without its legacy dispatch dials when ``incoming`` supplies ``policies``.
 
     A body that speaks ``policies`` (non-null) is authoritative about dispatch, so the
     legacy spellings it superseded must not be inherited back next to it (the compile
-    would refuse the pair). Asymmetric on purpose: a stale legacy client that sends
+    refuses a contradicting pair): ``solver``, ``solverParams`` and the carried
+    ``planner.deployment`` (the compiled mirror a saved spec echoes; the rest of the
+    carried ``planner`` stays). Asymmetric on purpose: a stale legacy client that sends
     only ``solver`` over a carried ``policies`` is NOT reconciled here and gets the
     compile's loud "solver disagrees with policies.dispatch" error instead of being
-    silently ignored. Returns ``carried`` unchanged (same object) otherwise.
+    silently ignored. Returns ``carried`` unchanged (same object) otherwise; never
+    mutates it.
     """
     if not isinstance(carried, dict) or not isinstance(incoming, dict):
         return carried
     if incoming.get("policies") is None:
         return carried
-    return {k: v for k, v in carried.items() if k not in ("solver", "solverParams")}
+    out = {k: v for k, v in carried.items() if k not in ("solver", "solverParams")}
+    planner = out.get("planner")
+    if isinstance(planner, dict) and "deployment" in planner:
+        out["planner"] = {k: v for k, v in planner.items() if k != "deployment"}
+    return out
 
 
 def assemble_spec(
@@ -1514,6 +1525,8 @@ def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
     ``deployment.params`` and ``solverParams``), minus params the policy does not
     declare. A spec the compiler would refuse still yields a form: its authored block,
     or ``{"dispatch": {"type": <raw solver>}}``, so the editor can show the error.
+    That fallback is logged at WARNING (``POLICY SLOTS EDITFORM FALLBACK``, naming
+    the slug and the error) so a display-only recovery is never invisible.
     """
     from apps.container_logistics.datagen.preprocess import Preprocessor
     from apps.container_logistics.policies.framework import (
@@ -1529,7 +1542,12 @@ def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
         legacy = [s for s, p in provenance.items() if p == "legacy"]
         resolved = resolve_policies_block(authored, legacy_slots=legacy)
         return authored_after_resolution(authored, resolved, legacy)
-    except (PolicyError, ValueError):
+    except (PolicyError, ValueError) as exc:
+        logger.warning(
+            "POLICY SLOTS EDITFORM FALLBACK: scenario %r does not compile its policies "
+            "(%s: %s); the editor shows the raw authored selection so the error can be fixed.",
+            gs.get("slug"), type(exc).__name__, exc,
+        )
         if isinstance(gs.get("policies"), dict) and gs["policies"]:
             return deepcopy(gs["policies"])
         raw_solver = gs.get("solver")

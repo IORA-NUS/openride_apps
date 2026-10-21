@@ -12,7 +12,8 @@ from typing import Any, Dict, List, Tuple
 # event is pushed immediately, so `ticks_truncated_by_backstop` is never stale.
 _ROUND_STATS_PATCH_EVERY = 5
 
-# Appended to a policy lookup failure raised agent-side (celery journal, not sim.log).
+# Appended to an UnknownPolicyError raised agent-side (celery journal, not sim.log):
+# a name the worker does not know is the one failure a stale worker explains.
 _STALE_WORKER_HINT = (
     " If you just added this policy, restart the celery workers "
     "(systemctl --user restart openride-celery): agents import policy code once at worker start."
@@ -22,7 +23,7 @@ from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from apps.container_logistics.rebate import RebateBook
 from apps.container_logistics.statemachine import ContainerLogisticsActions
-from apps.container_logistics.policies.framework import PolicyError
+from apps.container_logistics.policies.framework import UnknownPolicyError
 from orsim.lifecycle import ORSimApp
 
 from . import constraints as assign_constraints
@@ -57,12 +58,12 @@ class AssignmentApp(ORSimApp):
         )
         # Plug-and-play dispatch selection: the compiled ``policies.dispatch`` block,
         # or the legacy ``strategy``/``solver_params`` keys, names a registered
-        # dispatch policy. An unknown name raises (no fallback); the suffix covers
-        # the stale-worker case.
+        # dispatch policy. An unknown name raises (no fallback); only that error gets
+        # the stale-worker suffix -- a param or timing error is not explained by it.
         prof = self.behavior.get("profile") or {}
         try:
             self._solver = self._build_dispatch_policy(prof)
-        except PolicyError as exc:
+        except UnknownPolicyError as exc:
             raise type(exc)(f"{exc}{_STALE_WORKER_HINT}") from exc
         self._solver_params = prof.get("solver_params") or {}
         # Logged once if haulier scoping blocks all matches (likely missing haulier_id).
@@ -111,9 +112,11 @@ class AssignmentApp(ORSimApp):
     # --- the dispatch slot (docs/plans/policy_slots_p0_p3.md §4 P1.10) --------
     #
     # Import-cycle rule (plan §2.7): ``policies.dispatch`` modules are imported ONLY
-    # locally in these two methods. ``policies.dispatch`` reaches back into this
-    # package (constraints, spatial), so a module-top import here would cycle
-    # through ``assignment/__init__``.
+    # locally, at four sites: ``_build_dispatch_policy`` and ``_dispatch_runner``
+    # below, the partitioned section of ``assign()`` and ``_assign_pooled`` (plan
+    # deviation 11). ``policies.dispatch`` reaches back into this package
+    # (constraints, spatial), so a module-top import here would cycle through
+    # ``assignment/__init__``. (The leaf ``policies.framework`` is safe at module top.)
 
     @staticmethod
     def _build_dispatch_policy(prof: Dict[str, Any]):

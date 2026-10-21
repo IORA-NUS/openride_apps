@@ -31,6 +31,7 @@ from apps.container_logistics.policies.framework.errors import (
     PolicyError,
     PolicyTimingError,
 )
+from apps.container_logistics.policies.framework.slots import SLOTS
 
 from . import scopes
 from .allowed import CompanyRule
@@ -39,7 +40,7 @@ from .context import DispatchContext
 from .helpers.candidates import CANDIDATE_KINDS, CandidateSettings
 from .invariants import check_plan
 from .plan import Plan
-from .resolved import ResolvedDispatch
+from .resolved import ResolvedDispatch, candidate_kind_for
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,9 @@ __all__ = [
     "EXECUTABLE_TIMINGS",
 ]
 
-EXECUTABLE_TIMINGS: tuple[str, ...] = ("online",)
+# Derived, never restated: when P4 makes 'plan' executable in the slot table, the
+# catalog and this runner change together (review F13).
+EXECUTABLE_TIMINGS: tuple[str, ...] = SLOTS["dispatch"].executable_timings
 
 Pair = tuple[dict[str, Any], dict[str, Any]]
 
@@ -77,7 +80,7 @@ class DispatchRunner:
         if resolved.timing not in EXECUTABLE_TIMINGS:
             raise PolicyTimingError(
                 f"dispatch timing {resolved.timing!r} for {resolved.name} is not executable; "
-                f"executable timings: {list(EXECUTABLE_TIMINGS)}. Use timing 'online'."
+                f"executable timings: {list(EXECUTABLE_TIMINGS)}. Use timing {EXECUTABLE_TIMINGS[0]!r}."
             )
         if resolved.candidate_kind not in CANDIDATE_KINDS:
             raise PolicyError(
@@ -202,8 +205,8 @@ def build_runner_for_policy(
     """A fresh instance of registered dispatch policy ``name`` wrapped in a runner.
 
     ``params`` are validated by the policy's ``Params`` (``None``: all defaults). The
-    candidate kind is ``params.candidates`` when the policy declares it, else
-    ``sampled`` (the same rule as ``profile.resolve_dispatch_for_profile``). Raises
+    candidate kind is ``resolved.candidate_kind_for(validated)``, the one rule
+    ``profile.resolve_dispatch_for_profile`` also uses. Raises
     ``UnknownPolicyError`` / ``PolicyParamsError``.
     """
     from apps.container_logistics.policies.framework.registry import get_policy_spec
@@ -215,7 +218,7 @@ def build_runner_for_policy(
         version=spec.version,
         timing="online",
         params=validated,
-        candidate_kind=getattr(validated, "candidates", "sampled"),
+        candidate_kind=candidate_kind_for(validated),
         source="policies",
     )
     return DispatchRunner(policy=spec.cls(params=validated.to_dict()), resolved=resolved, capture=capture)

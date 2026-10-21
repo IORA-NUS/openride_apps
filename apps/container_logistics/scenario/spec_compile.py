@@ -17,10 +17,12 @@ from apps.container_logistics.datagen.overrides import (
     override_sha256,
 )
 from apps.container_logistics.datagen.preprocess import Preprocessor, SpecValidationError
+from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_params
 from apps.container_logistics.policies.framework import (
     PolicyError,
     ResolvedPolicy,
     authored_after_resolution,
+    get_policy_spec,
     resolve_policies_block,
 )
 
@@ -73,11 +75,14 @@ def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
     """Resolve the recipe's ``policies`` block against the registry (fail loud).
 
     Replaces ``recipe["policies"]`` with :func:`authored_after_resolution` (legacy
-    translations lose the params their policy does not declare) and, for authored
-    dispatch params, re-mirrors the resolved values into ``solver_params`` and
-    ``planner.deployment.params`` wherever those already carry the key, so the
-    framework's accounting (F6) reads exactly what the policy runs with. Raises
-    ``SpecValidationError`` (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P2.3).
+    translations lose the params their policy does not declare). For an AUTHORED
+    dispatch, refuses a ``planner.deployment`` that contradicts it
+    (:func:`_refuse_deployment_contradicting_policies`), then re-mirrors the
+    resolved params into the profile's ``solver_params`` and ``planner.deployment.params``
+    via ``dispatch/profile.py::mirror_dispatch_params`` -- the same helper
+    the per-run override path uses -- so the framework's accounting (F6) reads
+    exactly what the policy runs with. Raises ``SpecValidationError`` (plan
+    ``docs/plans/policy_slots_p0_p3.md`` §4 P2.3).
     """
     legacy = [s for s, p in compiled.policies_provenance.items() if p == "legacy"]
     block = compiled.recipe.get("policies")
@@ -87,15 +92,61 @@ def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
         raise SpecValidationError(str(exc)) from exc
     compiled.recipe["policies"] = authored_after_resolution(block, resolved, legacy)
     if compiled.policies_provenance.get("dispatch") == "authored":
-        prof = compiled.spec.assignment_settings["profile"]
-        for params in (
-            prof.get("solver_params"),
-            ((prof.get("planner") or {}).get("deployment") or {}).get("params"),
-            ((compiled.recipe.get("planner") or {}).get("deployment") or {}).get("params"),
-        ):
-            if isinstance(params, dict):
-                params.update({k: v for k, v in resolved["dispatch"].params.items() if k in params})
+        dispatch = resolved["dispatch"]
+        _refuse_deployment_contradicting_policies(compiled.authored_deployment, dispatch)
+        # The recipe echoes an authored deployment verbatim (preprocess
+        # ``_recipe_planner``), which the check above proved agrees: nothing to mirror.
+        mirror_dispatch_params(compiled.spec.assignment_settings["profile"], dispatch.params)
     return resolved
+
+
+def _same_value(a, b) -> bool:
+    """Equal, and a bool never equals a number (``True == 1`` in Python; plan §2.6)."""
+    return isinstance(a, bool) == isinstance(b, bool) and a == b
+
+
+def _refuse_deployment_contradicting_policies(deployment: dict, dispatch: ResolvedPolicy) -> None:
+    """Raise ``SpecValidationError`` if ``planner.deployment`` contradicts ``policies.dispatch``.
+
+    ``planner.deployment`` is the legacy spelling (and the compiled mirror) of
+    ``policies.dispatch``. Next to an authored block it is tolerated only where it
+    AGREES, symmetric with the ``solver``/``solverParams`` rule (deviation 17), so a
+    recompiled recipe -- whose deployment mirror carries the policy's resolved
+    params -- still compiles:
+
+    - ``type`` must name the same registered policy;
+    - a param the policy DECLARES must equal its resolved value (authored or
+      default); otherwise the mirror would silently be overwritten;
+    - a param the policy does NOT declare (Random has no dual-cycle params) is an
+      accounting-only dial: the policy never reads it, so there is nothing for it
+      to disagree with, and it reaches ``solver_params`` exactly as before.
+    """
+    if not deployment:
+        return
+    dtype = deployment.get("type")
+    if dtype not in (None, ""):
+        try:
+            canonical = get_policy_spec("dispatch", str(dtype).strip()).name
+        except PolicyError:
+            canonical = None
+        if canonical != dispatch.name:
+            raise SpecValidationError(
+                f"spec sets planner.deployment.type={dtype!r} but policies.dispatch.type="
+                f"{dispatch.name!r}. planner.deployment is the legacy spelling of "
+                "policies.dispatch; remove planner.deployment (or make its type agree)."
+            )
+    params = deployment.get("params") if isinstance(deployment.get("params"), dict) else {}
+    conflicts = sorted(k for k, v in params.items() if k in dispatch.params and not _same_value(v, dispatch.params[k]))
+    if conflicts:
+        detail = ", ".join(
+            f"{k}={params[k]!r} vs policies.dispatch.params.{k}={dispatch.params[k]!r}" for k in conflicts
+        )
+        raise SpecValidationError(
+            f"spec sets planner.deployment.params that disagree with policies.dispatch "
+            f"({detail}). planner.deployment.params is the legacy spelling of "
+            "policies.dispatch.params and would otherwise be silently overwritten: move the "
+            "values into policies.dispatch.params and remove planner.deployment."
+        )
 
 
 def _profile_policies(prof: dict, resolved: dict[str, ResolvedPolicy], provenance: str) -> dict:

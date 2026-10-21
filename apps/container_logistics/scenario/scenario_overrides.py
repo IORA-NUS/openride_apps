@@ -16,51 +16,45 @@ def known_solvers():
 
 
 def current_policies_for_profile(profile):
-    """The resolved policies of one assignment ``profile``: ``{slot: ResolvedPolicy}``.
+    """The resolved policies of one assignment ``profile``: ``({slot: ResolvedPolicy}, source)``.
 
-    Reads the compiled ``profile.policies`` block (its ``version``/``kind`` are
-    re-derived from the registry), or, for a bundle compiled before policy slots, the
-    legacy translation of ``strategy``/``solver_params``/``use_spatial_matching``
-    (``dispatch/profile.py::legacy_dispatch_from_profile``). Raises ``PolicyError``.
-    Returns ``(resolved, source)`` with ``source`` ``"bundle"`` or ``"legacy-profile"``.
+    The SAME function the assignment agent resolves with
+    (``dispatch/profile.py::resolve_profile_policies``), so the run stamp, the
+    per-run override base and the agent can never disagree; nothing is stripped
+    silently (an unknown entry key or slot raises). ``source`` is ``"bundle"`` or
+    ``"legacy-profile"``. Raises ``PolicyError``.
     """
-    from apps.container_logistics.policies.dispatch.profile import legacy_dispatch_from_profile
-    from apps.container_logistics.policies.framework import PolicyError, resolve_policies_block
+    from apps.container_logistics.policies.dispatch.profile import resolve_profile_policies
 
-    block = profile.get("policies")
-    if block is None:
-        entry = legacy_dispatch_from_profile(profile)
-        return resolve_policies_block({"dispatch": entry}, where="profile.policies",
-                                      legacy_slots=("dispatch",)), "legacy-profile"
-    if not isinstance(block, dict):
-        raise PolicyError(f"assignment profile 'policies' must be an object (got {block!r}). Recompile the scenario.")
-    if profile.get("use_spatial_matching", True) is not True:
-        raise PolicyError(
-            "assignment profile sets use_spatial_matching="
-            f"{profile['use_spatial_matching']!r} next to a 'policies' block; it is superseded "
-            "by policies.dispatch.params.candidates. Remove use_spatial_matching."
-        )
-    authored = {
-        slot: {k: v for k, v in entry.items() if k in ("type", "timing", "params")}
-        if isinstance(entry, dict) else entry
-        for slot, entry in block.items()
-    }
-    return resolve_policies_block(authored, where="profile.policies"), "bundle"
+    return resolve_profile_policies(profile)
 
 
 def apply_policy_overrides(assignment_collection, overrides):
     """Apply per-run policy ``overrides`` to every assignment behavior, in memory.
 
     ``overrides`` is ``{slot: {type?, timing?, params?}}`` (see
-    ``framework.resolve.merge_policy_overrides``: a changed type resets params to the
-    new policy's defaults). Each profile gets ``profile["policies"]`` (resolved,
-    ``to_profile`` form) and the ``profile["strategy"]`` mirror; ``solver_params`` is
-    NOT touched (it is the framework's accounting dial). A legacy profile's
+    ``framework.resolve.merge_policy_overrides``). Each profile gets
+    ``profile["policies"]`` (resolved, ``to_profile`` form), the
+    ``profile["strategy"]`` mirror, and -- exactly as compile does -- the resolved
+    dispatch params re-mirrored into the keys ``solver_params`` and
+    ``planner.deployment.params`` already carry
+    (``dispatch/profile.py::mirror_dispatch_params``). So a per-run arm equals the
+    same edit compiled into ``spec.json``: the framework's accounting
+    (``benefit_km``, owner reserve, claims, arbitration) ranks with what the policy
+    ranks with (review F1).
+
+    A changed dispatch TYPE (``--solver X``, ``--policy dispatch=X``) resets the
+    policy params to X's defaults plus any override params; the mirror then rewrites
+    the shared keys in ``solver_params`` to those values whenever X declares them
+    (GreedyNearest: the dual-cycle dials). When X does not declare them
+    (RandomAssignment), ``solver_params`` keep the bundle's values, i.e. the
+    accounting is unchanged from the bundle. A legacy profile's
     ``use_spatial_matching`` is removed once folded into the block, because the
     runtime resolver refuses it next to ``policies``. Every behavior is validated
-    before any is mutated. Returns the first behavior's resolved policies, or ``None``
-    for empty ``overrides``. Raises ``PolicyError``.
+    before any is mutated. Returns the first behavior's resolved policies, or
+    ``None`` for empty ``overrides``. Raises ``PolicyError``.
     """
+    from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_params
     from apps.container_logistics.policies.framework import merge_policy_overrides
 
     if not overrides:
@@ -76,6 +70,7 @@ def apply_policy_overrides(assignment_collection, overrides):
         profile["policies"] = {slot: r.to_profile() for slot, r in merged.items()}
         profile["strategy"] = merged["dispatch"].name
         profile.pop("use_spatial_matching", None)
+        mirror_dispatch_params(profile, merged["dispatch"].params)
     if planned:
         return planned[0][1]
     from apps.container_logistics.policies.framework import resolve_policies_block

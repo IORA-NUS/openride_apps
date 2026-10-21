@@ -94,7 +94,11 @@ def test_planner_deployment_translates_when_no_solver():
 
 def test_policies_block_wins_and_is_mirrored_into_strategy_and_deployment():
     """Verified to have teeth: mirroring the legacy ``deployment.type`` instead of
-    ``policies.dispatch.type`` into ``strategy`` failed the first assertion."""
+    ``policies.dispatch.type`` into ``strategy`` failed the first assertion.
+
+    Preprocessor level only (shape, no registry): the full compile REFUSES this
+    contradicting ``planner.deployment`` (review F1;
+    ``test_policy_override_equals_compiled_edit.py``)."""
     compiled = _compile(_spec(
         planner={"deployment": {"type": "RandomAssignment", "params": {"dual_cycle_bonus_km": 9.0}}},
         policies={"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 1.5}}},
@@ -215,19 +219,42 @@ def test_bundle_profile_carries_resolved_policies_with_version_and_defaults(tmp_
 
 
 def test_stale_deployment_mirror_never_outlives_an_authored_param(tmp_path, monkeypatch):
-    """A removed authored param falls back to the POLICY default in solver_params too.
+    """A removed authored param never leaves an old mirrored value driving accounting.
 
-    The recipe's ``planner.deployment.params`` mirror carries the previous compile's
-    values; without the re-mirror, accounting kept bonus 0 while the policy ran 5.0.
-    Verified to have teeth: removing the re-mirror loop in
-    ``spec_compile._resolve_compiled_policies`` left solver_params at 0.0.
+    Under an authored block the recipe (= ``spec.json``) echoes no deployment mirror,
+    so hand-editing only ``policies`` recompiles with the policy default in
+    ``solver_params``. A spec that still carries a contradicting legacy
+    ``planner.deployment`` (a first compile from a legacy ``spec.json``) is a LOUD
+    compile error naming the fix (review F1); the editor/CLI save path drops the
+    carried mirror next to a ``policies`` body (``drop_dispatch_dials_superseded_by``).
+    Verified to have teeth: echoing the mirror (``deepcopy(planner_cfg)``) in
+    ``Preprocessor._recipe_planner`` made the hand-edit recompile raise; disabling the
+    params check in ``spec_compile._refuse_deployment_contradicting_policies`` let the
+    legacy-mirror spec compile; removing the ``planner.deployment`` drop in
+    ``drop_dispatch_dials_superseded_by`` made the editor-path compile raise.
     """
+    from apps.container_logistics.scenario import frontend_scenario_spec as F
+
     first = _bundle(tmp_path, monkeypatch, _spec(
         policies={"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}), "a")
-    recipe = deepcopy(first["recipe"])
-    recipe["policies"] = {"dispatch": {"type": "GreedyNearest"}}
-    second = _bundle(tmp_path, monkeypatch, recipe, "b")
-    prof = _assignment_profile(second)
+    hand_edited = deepcopy(first["recipe"])
+    hand_edited["policies"] = {"dispatch": {"type": "GreedyNearest"}}
+    prof = _assignment_profile(_bundle(tmp_path, monkeypatch, hand_edited, "b"))
+    assert prof["policies"]["dispatch"]["params"]["dual_cycle_bonus_km"] == 5.0
+    assert prof["solver_params"]["dual_cycle_bonus_km"] == 5.0
+
+    legacy_first = _bundle(tmp_path, monkeypatch, _spec(
+        solver="GreedyNearest", solverParams={"dual_cycle_bonus_km": 0}), "c")
+    assert legacy_first["recipe"]["planner"]["deployment"]["params"]["dual_cycle_bonus_km"] == 0
+    stale = deepcopy(legacy_first["recipe"])
+    stale["policies"] = {"dispatch": {"type": "GreedyNearest"}}
+    with pytest.raises(SpecValidationError, match="planner.deployment.params that disagree"):
+        _bundle(tmp_path, monkeypatch, stale, "d")
+
+    saved = F.assemble_spec({"name": "Policies Test", "slug": "policies_test",
+                             "policies": {"dispatch": {"type": "GreedyNearest"}}},
+                            DOMAIN, previous=deepcopy(legacy_first["recipe"]))
+    prof = _assignment_profile(_bundle(tmp_path, monkeypatch, saved, "e"))
     assert prof["policies"]["dispatch"]["params"]["dual_cycle_bonus_km"] == 5.0
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 5.0
 

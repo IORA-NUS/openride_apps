@@ -3,9 +3,12 @@
 Single responsibility: map an assignment agent's behavior ``profile`` onto the
 dispatch slot (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7 and P1.6):
 
-- :func:`resolve_dispatch_for_profile` reads the compiled ``policies.dispatch`` block
-  when present, else translates the legacy keys (``strategy``, ``solver_params``,
+- :func:`resolve_profile_policies` is THE profile resolver (agent, run-start check,
+  run stamp and per-run overrides all use it): the compiled ``policies`` block when
+  present, else the legacy keys (``strategy``, ``solver_params``,
   ``use_spatial_matching``) via :func:`legacy_dispatch_from_profile`.
+- :func:`resolve_dispatch_for_profile` is its dispatch entry as a ``ResolvedDispatch``.
+- :func:`mirror_dispatch_params` is the one-dial mirror into ``solver_params``.
 - :func:`build_dispatch_policy` instantiates the resolved policy.
 - :func:`resolve_for_instance` resolves for an already-built policy object (the
   ``AssignmentApp._solver`` the tests inject) and refuses a mismatch.
@@ -28,25 +31,33 @@ from apps.container_logistics.policies.framework import (
     SLOTS,
     PolicyError,
     PolicySpec,
-    PolicyTimingError,
+    ResolvedPolicy,
     get_policy_spec,
+    resolve_policies_block,
     spec_for_class,
 )
+from apps.container_logistics.policies.framework.resolve import (
+    ENTRY_KEYS,
+    drop_undeclared_legacy_params,
+)
 
-from .resolved import ResolvedDispatch
+from .resolved import ResolvedDispatch, candidate_kind_for
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "COMPILED_ENTRY_KEYS",
     "assert_assignment_profiles_resolvable",
     "build_dispatch_policy",
     "legacy_dispatch_from_profile",
+    "mirror_dispatch_params",
     "resolve_dispatch_for_profile",
     "resolve_for_instance",
+    "resolve_profile_policies",
 ]
 
-# A policy without a ``candidates`` param gets no prebuilt spatial pairs.
-_KIND_WITHOUT_CANDIDATES_PARAM = "sampled"
+#: The keys of a compiled ``profile.policies.<slot>`` entry (``ResolvedPolicy.to_profile``).
+COMPILED_ENTRY_KEYS = ("type", "version", "kind", "timing", "params")
 
 
 def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None:
@@ -54,12 +65,11 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
 
     ``collection`` is the assignment behavior collection, ``{agent_id: behavior}``.
     Each profile goes through :func:`resolve_dispatch_for_profile` (a missing
-    ``strategy`` means the slot default, as ``get_solver`` reads it), and its timing
-    must be executable. The raised error is the original class (e.g.
-    ``UnknownPolicyError``) with the agent id prefixed; a behavior that is not a
-    mapping raises plain ``PolicyError``.
+    ``strategy`` means the slot default, as ``get_solver`` reads it); the shared
+    framework resolver also refuses a timing that is not executable. The raised
+    error is the original class (e.g. ``UnknownPolicyError``) with the agent id
+    prefixed; a behavior that is not a mapping raises plain ``PolicyError``.
     """
-    executable = SLOTS["dispatch"].executable_timings
     for agent_id, behavior in (collection or {}).items():
         if not isinstance(behavior, Mapping):
             raise PolicyError(
@@ -67,12 +77,7 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
                 f"'profile' (got {type(behavior).__name__})."
             )
         try:
-            resolved = resolve_dispatch_for_profile(behavior.get("profile") or {})
-            if resolved.timing not in executable:
-                raise PolicyTimingError(
-                    f"dispatch timing {resolved.timing!r} is not executable yet; "
-                    f"executable timings: {list(executable)}."
-                )
+            resolve_dispatch_for_profile(behavior.get("profile") or {})
         except PolicyError as exc:
             raise type(exc)(f"assignment agent {agent_id!r}: {exc}") from exc
 
@@ -100,39 +105,45 @@ def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
     """Translate the legacy dispatch keys into a ``{"type", "timing", "params"}`` entry.
 
     ``type`` is ``strategy`` or the slot default. ``params`` keeps only the
-    ``solver_params`` keys the policy's ``Params`` declares: legacy keys were never
-    validated, and ``solver_params`` also feeds the framework's accounting, so a
-    cost-blind policy legitimately ignores the dual-cycle keys (dropped at DEBUG).
-    ``use_spatial_matching: false`` becomes ``candidates="sampled"`` where declared.
-    Raises ``UnknownPolicyError`` for an unregistered ``strategy``.
+    ``solver_params`` keys the policy's ``Params`` declares, via the framework's one
+    drop rule (``framework.resolve.drop_undeclared_legacy_params``, logged at
+    WARNING): legacy keys were never validated, and ``solver_params`` also feeds the
+    framework's accounting, so a cost-blind policy legitimately ignores the
+    dual-cycle keys. ``use_spatial_matching: false`` becomes ``candidates="sampled"``
+    where declared. Raises ``UnknownPolicyError`` for an unregistered ``strategy``.
     """
     name = prof.get("strategy") or SLOTS["dispatch"].default
     spec = get_policy_spec("dispatch", name)
-    raw = prof.get("solver_params") or {}
-    params = {k: v for k, v in raw.items() if _declares(spec, k)}
-    dropped = sorted(k for k in raw if not _declares(spec, k))
-    if dropped:
-        logger.debug("legacy solver_params keys %s are not %s params; not passed to it", dropped, name)
+    params = drop_undeclared_legacy_params(
+        spec, prof.get("solver_params") or {}, "profile.strategy/solver_params"
+    )
     if not _use_spatial_matching(prof) and _declares(spec, "candidates"):
         params["candidates"] = "sampled"
     return {"type": name, "timing": "online", "params": params}
 
 
-def resolve_dispatch_for_profile(prof: Mapping[str, Any]) -> ResolvedDispatch:
-    """Resolve the dispatch slot of an assignment profile (validated, never coerced).
+def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, ResolvedPolicy], str]:
+    """THE resolver of an assignment profile's policies: ``({slot: ResolvedPolicy}, source)``.
 
-    A compiled ``policies.dispatch`` block wins; with it, a ``use_spatial_matching:
-    false`` key is refused because ``policies.dispatch.params.candidates`` superseded
-    it. Without the block the legacy keys are translated. Raises ``PolicyError``.
+    Shared by the agent (:func:`resolve_dispatch_for_profile`), the run-start check
+    and the run stamp / per-run override path
+    (``scenario_overrides.current_policies_for_profile``), so they cannot disagree
+    (review F4). A compiled ``profile.policies`` block is resolved with the same
+    strictness as compile: an unknown slot or an entry key outside
+    :data:`COMPILED_ENTRY_KEYS` raises (nothing is silently stripped). Its ``version``
+    and ``kind`` are explicitly IGNORED: they are a compile-time echo, the run
+    stamp re-derives both from the registry, so the record is always what ran. Next
+    to a block, ``use_spatial_matching`` other than ``true`` is refused (superseded
+    by ``policies.dispatch.params.candidates``). Without a block the legacy keys
+    are translated (:func:`legacy_dispatch_from_profile`). ``source`` is
+    ``"bundle"`` or ``"legacy-profile"``. Raises ``PolicyError`` subclasses.
     """
     block = prof.get("policies")
-    if block is not None:
-        return _resolve_policies_block(prof, block)
-    entry = legacy_dispatch_from_profile(prof)
-    return _resolve_entry(entry, source="legacy-profile", where="profile.strategy/solver_params")
-
-
-def _resolve_policies_block(prof: Mapping[str, Any], block: Any) -> ResolvedDispatch:
+    if block is None:
+        entry = legacy_dispatch_from_profile(prof)
+        resolved = resolve_policies_block({"dispatch": entry}, where="profile.policies",
+                                          legacy_slots=("dispatch",))
+        return resolved, "legacy-profile"
     if not isinstance(block, Mapping) or not isinstance(block.get("dispatch"), Mapping):
         raise PolicyError(
             f"assignment profile 'policies' must be an object with a 'dispatch' entry "
@@ -144,34 +155,68 @@ def _resolve_policies_block(prof: Mapping[str, Any], block: Any) -> ResolvedDisp
             f"{prof['use_spatial_matching']!r} next to a 'policies' block; it is superseded "
             "by policies.dispatch.params.candidates. Remove use_spatial_matching."
         )
-    return _resolve_entry(block["dispatch"], source="policies", where="profile.policies.dispatch")
+    authored = {slot: _authored_from_compiled(slot, entry) for slot, entry in block.items()}
+    return resolve_policies_block(authored, where="profile.policies"), "bundle"
 
 
-def _resolve_entry(entry: Mapping[str, Any], *, source: str, where: str) -> ResolvedDispatch:
-    name = entry.get("type")
-    if not isinstance(name, str) or not name:
-        raise PolicyError(f"{where}: 'type' must name a dispatch policy (got {name!r}).")
-    spec = get_policy_spec("dispatch", name)
-    params = spec.params_cls.from_mapping(entry.get("params"), where=f"{where}.params for {name}")
-    candidate_kind = getattr(params, "candidates", _KIND_WITHOUT_CANDIDATES_PARAM)
+def _authored_from_compiled(slot: Any, entry: Any) -> Any:
+    """``entry`` minus the ignored ``version``/``kind`` echo; refuses any other unknown key.
+
+    A non-mapping entry is passed through for ``resolve_policies_block`` to refuse
+    with its standard message (after its slot check, so an unknown slot names itself).
+    """
+    if not isinstance(entry, Mapping):
+        return entry
+    unknown = sorted(str(k) for k in entry if k not in COMPILED_ENTRY_KEYS)
+    if unknown:
+        raise PolicyError(
+            f"profile.policies.{slot}: unknown key(s) {', '.join(repr(k) for k in unknown)}. "
+            f"A compiled entry carries exactly {', '.join(COMPILED_ENTRY_KEYS)}. "
+            "Fix the bundle or recompile the scenario."
+        )
+    return {k: v for k, v in entry.items() if k in ENTRY_KEYS}
+
+
+def resolve_dispatch_for_profile(prof: Mapping[str, Any]) -> ResolvedDispatch:
+    """Resolve the dispatch slot of an assignment profile (validated, never coerced).
+
+    :func:`resolve_profile_policies`' dispatch entry as a :class:`ResolvedDispatch`
+    (``source`` ``"policies"`` for a compiled block, ``"legacy-profile"`` otherwise).
+    A non-executable timing is refused by the framework resolver. Raises
+    ``PolicyError``.
+    """
+    resolved, source = resolve_profile_policies(prof)
+    dispatch = resolved["dispatch"]
+    spec = get_policy_spec("dispatch", dispatch.name)
+    # Re-validating the already-validated dict is idempotent; it yields the typed
+    # ``Params`` object the runner and policies read.
+    params = spec.params_cls.from_mapping(dispatch.params, where=f"profile.policies.dispatch.params for {spec.name}")
     return ResolvedDispatch(
         name=spec.name,
         version=spec.version,
-        timing=_checked_timing(entry.get("timing", "online"), where),
+        timing=dispatch.timing,
         params=params,
-        candidate_kind=candidate_kind,
-        source=source,
+        candidate_kind=candidate_kind_for(params),
+        source="policies" if source == "bundle" else "legacy-profile",
     )
 
 
-def _checked_timing(timing: Any, where: str) -> str:
-    """A declared dispatch timing; executability is checked where it runs (P4 adds 'plan')."""
-    allowed = SLOTS["dispatch"].timings
-    if not isinstance(timing, str) or timing not in allowed:
-        raise PolicyTimingError(
-            f"{where}.timing={timing!r} is not a dispatch timing. Allowed: {', '.join(allowed)}."
-        )
-    return timing
+def mirror_dispatch_params(profile: Mapping[str, Any], dispatch_params: Mapping[str, Any]) -> None:
+    """Re-mirror resolved dispatch params into a profile's accounting copies (in place).
+
+    The ONE copy of the one-dial mirror (plan deviation 19, review F1), used by
+    compile and by the per-run override path: every key ALREADY PRESENT in
+    ``profile["solver_params"]`` and ``profile["planner"]["deployment"]["params"]``
+    is set to ``dispatch_params[key]`` when the policy declares it. Keys the policy
+    does not declare (Random has no dual-cycle params) keep their value, so a
+    cost-blind policy leaves the accounting dials alone. No key is added: the
+    accounting reads only what the profile already carries.
+    """
+    planner = profile.get("planner") if isinstance(profile.get("planner"), Mapping) else {}
+    deployment = planner.get("deployment") if isinstance(planner.get("deployment"), Mapping) else {}
+    for target in (profile.get("solver_params"), deployment.get("params")):
+        if isinstance(target, dict):
+            target.update({k: v for k, v in dispatch_params.items() if k in target})
 
 
 def build_dispatch_policy(resolved: ResolvedDispatch) -> Any:

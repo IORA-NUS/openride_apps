@@ -102,6 +102,14 @@ def _run(argv: list[str] | None = None) -> int:
         "dispatch.dual_cycle_bonus_km=0); VALUE is JSON when it parses, else a string.",
     )
     run_p.add_argument(
+        "--policy-overrides",
+        default=None,
+        metavar="JSON",
+        help="Full per-run policy overrides object {slot: {type?, timing?, params?}}; merged "
+        "with --solver/--policy/--policy-param (the same field set twice to different "
+        "values is refused). Validated before spawning.",
+    )
+    run_p.add_argument(
         "--capture-dispatch",
         default=None,
         metavar="every=N,max=M",
@@ -196,6 +204,17 @@ def _run(argv: list[str] | None = None) -> int:
     pbench_p.add_argument("--policy-param", action="append", default=[], metavar="POLICY.KEY=VALUE",
                           help="Param override for one benched policy, repeatable; VALUE is JSON when it parses.")
 
+    vrp_p = sub.add_parser(
+        "validate-run-policies",
+        help="Dry-run a run's policy flags against a scenario's bundle (what run-simulation "
+        "checks before spawning); synchronous, writes nothing",
+    )
+    vrp_p.add_argument("--scenario", default=None)
+    vrp_p.add_argument("--solver", default=None)
+    vrp_p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME")
+    vrp_p.add_argument("--policy-param", action="append", default=[], metavar="SLOT.KEY=VALUE")
+    vrp_p.add_argument("--policy-overrides", default=None, metavar="JSON")
+
     exists_sc_p = sub.add_parser("scenario-exists", help="Check whether a scenario slug is runnable")
     exists_sc_p.add_argument("--slug", required=True)
     exists_sc_p.add_argument("--domain", default=None)
@@ -268,7 +287,7 @@ def _run(argv: list[str] | None = None) -> int:
         # Validate BEFORE spawning: the dashboard spawns this command detached, so an
         # error raised by the sim itself would only reach its log.
         policy_overrides = validate_run_policy_args(
-            args.scenario, args.solver, args.policy, args.policy_param
+            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides
         )
         if isinstance(policy_overrides, str):
             _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
@@ -424,6 +443,16 @@ def _run(argv: list[str] | None = None) -> int:
         payload = cmd_policy_bench(
             args.slot, args.policies, fixtures_dir=args.fixtures,
             synthetic=args.synthetic, params=args.policy_param,
+        )
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "validate-run-policies":
+        from openride_control.policies import cmd_validate_run_policies
+
+        payload = cmd_validate_run_policies(
+            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides
         )
         payload["commandId"] = command_id
         _emit(payload)

@@ -99,7 +99,8 @@ def _resolve_policy_overrides() -> dict:
 def _apply_policy_overrides_or_exit(assignment_collection) -> tuple[str | None, bool]:
     """Apply the per-run policy overrides; exit 2 on any ``PolicyError``.
 
-    Returns ``(dispatch name if its TYPE was overridden else None, any override applied)``.
+    Returns ``(run-name label or None, any override applied)``; the label is
+    :func:`dispatch_override_label`'s.
     """
     try:
         overrides = _resolve_policy_overrides()
@@ -108,8 +109,37 @@ def _apply_policy_overrides_or_exit(assignment_collection) -> tuple[str | None, 
         _refuse_invalid_policy_config(exc)
     if not resolved:
         return None, False
-    typed = isinstance(overrides.get("dispatch"), dict) and overrides["dispatch"].get("type")
-    return (resolved["dispatch"].name if typed else None), True
+    return dispatch_override_label(overrides, resolved), True
+
+
+def dispatch_override_label(overrides: dict, resolved: dict) -> str | None:
+    """The ``· <label>`` segment a dispatch override appends to the run name, or ``None``.
+
+    Format (the frontend's run-name parser recognises ``^Name\\(...\\)$`` segments):
+
+    - a TYPE-only override: ``<DispatchName>`` (unchanged from the old ``--solver``);
+    - an override that sets params (with or without a type):
+      ``<DispatchName>(k=v,k=v)`` with ONLY the overridden params, keys sorted, each
+      value the validated value as compact JSON (``json.dumps``, separators
+      ``,``/``:``), e.g. ``GreedyNearest(dual_cycle_bonus_km=0.0)``;
+    - no dispatch type or params override (e.g. timing only): ``None``.
+
+    ``overrides`` is the raw ``{slot: entry}`` request; ``resolved`` the merged
+    ``{slot: ResolvedPolicy}`` it produced.
+    """
+    import json
+
+    entry = overrides.get("dispatch") if isinstance(overrides, dict) else None
+    if not isinstance(entry, dict):
+        return None
+    dispatch = resolved["dispatch"]
+    keys = sorted((entry.get("params") or {}).keys())
+    if keys:
+        args = ",".join(
+            f"{k}={json.dumps(dispatch.params[k], separators=(',', ':'), sort_keys=True)}" for k in keys
+        )
+        return f"{dispatch.name}({args})"
+    return dispatch.name if entry.get("type") else None
 
 
 def _apply_capture_env_or_exit(assignment_collection, datahub_dir: str, run_id: str) -> str | None:
@@ -162,13 +192,16 @@ def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
     stamp = policies_stamp(
         resolved,
         candidate_settings=CandidateSettings.from_profile(profile).to_dict(),
+        # What AssignmentApp._solver_params will cost with (same ``or {}`` read).
+        accounting_params=profile.get("solver_params") or {},
         source="override" if overridden else source,
     )
     scenario_manager.orsim_settings["POLICIES"] = stamp
     d = stamp["dispatch"]
     print(
         f"Policies effective: dispatch={d['name']} v{d['version']} timing={d['timing']} "
-        f"params={json.dumps(d['params'], sort_keys=True)}"
+        f"params={json.dumps(d['params'], sort_keys=True)} "
+        f"accounting_params={json.dumps(d['accounting_params'], sort_keys=True)}"
     )
 
 
@@ -323,13 +356,14 @@ def main():
     # sugar): patch the loaded assignment behaviors in place so this run uses the
     # requested policy/params on the identical (unchanged) scenario data — enabling
     # apples-to-apples comparisons on one scenario dir.
-    applied_solver, policies_overridden = _apply_policy_overrides_or_exit(
+    dispatch_label, policies_overridden = _apply_policy_overrides_or_exit(
         scenario_manager.get_agent_collection("assignment")
     )
-    if applied_solver:
-        print(f"Assignment solver override: {applied_solver}")
-        # Surface the chosen solver in run lists with zero kafka/schema changes.
-        run_name = f"{run_name} · {applied_solver}" if run_name else applied_solver
+    if dispatch_label:
+        print(f"Assignment dispatch override: {dispatch_label}")
+        # Surface the chosen policy (and overridden params) in run lists with zero
+        # kafka/schema changes; format in dispatch_override_label.
+        run_name = f"{run_name} · {dispatch_label}" if run_name else dispatch_label
     capture_dir = _apply_capture_env_or_exit(
         scenario_manager.get_agent_collection("assignment"), datahub_dir, run_id
     )

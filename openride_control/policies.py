@@ -2,7 +2,8 @@
 
 Single responsibility: the control plane's policy surface.
 
-- Turn ``run-simulation``'s ``--solver`` / ``--policy`` / ``--policy-param`` flags into
+- Turn ``run-simulation``'s ``--solver`` / ``--policy`` / ``--policy-param`` /
+  ``--policy-overrides`` flags into
   the ``ORSIM_POLICY_OVERRIDES`` object and dry-run it against the scenario's compiled
   assignment profile, so a typo or an out-of-range param is refused synchronously
   instead of in the background sim's log (plan ``docs/plans/policy_slots_p0_p3.md``
@@ -27,8 +28,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "build_run_policy_overrides",
+    "parse_policy_overrides_json",
     "load_assignment_collection",
     "validate_run_policy_args",
+    "cmd_validate_run_policies",
     "validate_capture_arg",
     "parse_bench_params",
     "cmd_policy_validate",
@@ -36,43 +39,97 @@ __all__ = [
 ]
 
 
-def build_run_policy_overrides(
-    solver: str | None, policies: Sequence[str] = (), params: Sequence[str] = ()
-) -> dict[str, Any]:
-    """The overrides object for ``ORSIM_POLICY_OVERRIDES``; ``--solver X`` = ``--policy dispatch=X``.
+def parse_policy_overrides_json(text: str | None) -> dict[str, Any]:
+    """``--policy-overrides JSON``: a full ``{slot: {type?, timing?, params?}}`` object.
 
-    Raises ``PolicyError`` for a malformed flag, or when ``--solver`` and
-    ``--policy dispatch=`` name different types.
+    ``{}`` when unset/blank. Shape only (an object of objects); slot names, entry keys,
+    policy names and params are validated by the merge, so an unknown entry key is
+    refused there, never stripped here. Raises ``PolicyError``.
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+
+    if text is None or not str(text).strip():
+        return {}
+    try:
+        value = json.loads(text)
+    except ValueError as exc:
+        raise PolicyError(f"--policy-overrides is not valid JSON ({exc}): {text!r}") from exc
+    if not isinstance(value, dict):
+        raise PolicyError(
+            f"--policy-overrides must be a JSON object of slot -> {{type?, timing?, params?}} (got {text!r})."
+        )
+    for slot, entry in value.items():
+        if not isinstance(entry, dict):
+            raise PolicyError(
+                f"--policy-overrides.{slot} must be an object {{type?, timing?, params?}} (got {entry!r})."
+            )
+    return value
+
+
+def _set_once(target: dict[str, Any], key: str, value: Any, field: str, origin: str) -> None:
+    """``target[key] = value``; raise ``PolicyError`` if ``--policy-overrides`` set it differently."""
+    from apps.container_logistics.policies.framework import PolicyError
+
+    # A bool never equals a number here (``True == 1`` in Python; plan §2.6).
+    if key in target and (target[key] != value or isinstance(target[key], bool) != isinstance(value, bool)):
+        raise PolicyError(
+            f"{origin} sets {field}={value!r} but --policy-overrides sets it to "
+            f"{target[key]!r}; pass each field once."
+        )
+    target[key] = value
+
+
+def build_run_policy_overrides(
+    solver: str | None,
+    policies: Sequence[str] = (),
+    params: Sequence[str] = (),
+    overrides_json: str | None = None,
+) -> dict[str, Any]:
+    """The overrides object for ``ORSIM_POLICY_OVERRIDES``.
+
+    Starts from ``--policy-overrides`` (:func:`parse_policy_overrides_json`, entries
+    copied whole so unknown keys reach the validating merge), then adds
+    ``--policy``/``--policy-param`` and ``--solver X`` (= ``--policy dispatch=X``).
+    The same field (a slot's ``type``, ``timing`` or one param key) set to two
+    different values by two sources raises ``PolicyError``; equal values are fine.
     """
     from apps.container_logistics.policies.framework import PolicyError, parse_policy_cli_args
 
-    overrides = parse_policy_cli_args(list(policies or ()), list(params or ()))
+    out = {slot: copy.deepcopy(entry) for slot, entry in parse_policy_overrides_json(overrides_json).items()}
+    cli = parse_policy_cli_args(list(policies or ()), list(params or ()))
+    for slot, entry in cli.items():
+        target = out.setdefault(slot, {})
+        if "type" in entry:
+            _set_once(target, "type", entry["type"], f"{slot}.type", "--policy")
+        if entry.get("params"):
+            bucket = target.setdefault("params", {})
+            if not isinstance(bucket, dict):
+                raise PolicyError(f"--policy-overrides.{slot}.params must be an object (got {bucket!r}).")
+            for key, value in entry["params"].items():
+                _set_once(bucket, key, value, f"{slot}.params.{key}", "--policy-param")
     solver = (solver or "").strip()
     if solver:
-        dispatch = overrides.setdefault("dispatch", {})
-        if dispatch.get("type") not in (None, solver):
+        current = (out.get("dispatch") or {}).get("type")
+        if current not in (None, solver):
             raise PolicyError(
-                f"--solver {solver!r} conflicts with --policy dispatch={dispatch['type']!r}; "
-                "--solver is shorthand for --policy dispatch=NAME, pass one of them."
+                f"--solver {solver!r} conflicts with dispatch type {current!r} from "
+                "--policy/--policy-overrides; --solver is shorthand for --policy dispatch=NAME, "
+                "pass one of them."
             )
-        dispatch["type"] = solver
-    return overrides
+        out.setdefault("dispatch", {})["type"] = solver
+    return out
 
 
-def load_assignment_collection(scenario: str | None) -> dict[str, Any]:
-    """The scenario's compiled assignment behaviors, read-only (``{}`` when not found).
+def load_assignment_collection(scenario: str | None) -> dict[str, Any] | None:
+    """The scenario's compiled assignment behaviors, read-only; ``None`` when there is no bundle.
 
     Reads ``scenario.json`` (or a legacy ``assignment_behavior.json``) from the same
     folder ``ScenarioManager`` loads at run start; never generates anything.
     """
-    from apps.container_logistics.scenario.frontend_scenario_spec import (
-        container_logistics_scenarios_root,
-    )
+    folder = _scenario_folder(scenario)
     from apps.container_logistics.scenario.scenario_bundle import read_bundle
-    from apps.container_logistics.scenario.scenario_config import default_scenario_name
 
-    folder = os.path.join(container_logistics_scenarios_root(), scenario or default_scenario_name())
-    bundle = read_bundle(folder)
+    bundle = read_bundle(folder) if os.path.isdir(folder) else None
     agents = (bundle or {}).get("agents")
     if isinstance(agents, dict) and isinstance(agents.get("assignment"), dict):
         return agents["assignment"]
@@ -81,7 +138,27 @@ def load_assignment_collection(scenario: str | None) -> dict[str, Any]:
         with open(legacy, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, dict) else {}
-    return {}
+    return None
+
+
+def _scenario_folder(scenario: str | None) -> str:
+    from apps.container_logistics.scenario.frontend_scenario_spec import (
+        container_logistics_scenarios_root,
+    )
+    from apps.container_logistics.scenario.scenario_config import default_scenario_name
+
+    return os.path.join(container_logistics_scenarios_root(), scenario or default_scenario_name())
+
+
+def _missing_bundle_message(scenario: str | None) -> str:
+    folder = _scenario_folder(scenario)
+    name = os.path.basename(folder)
+    if not os.path.isdir(folder):
+        return f"scenario {name!r} not found (no folder {folder}); cannot validate run policies."
+    return (
+        f"scenario {name!r} has no compiled bundle (scenario.json) in {folder}; compile it "
+        f"(openride scenario compile {name}) before validating run policies."
+    )
 
 
 def validate_run_policy_args(
@@ -89,14 +166,16 @@ def validate_run_policy_args(
     solver: str | None,
     policies: Sequence[str] = (),
     params: Sequence[str] = (),
+    overrides_json: str | None = None,
 ) -> dict[str, Any] | str:
     """Dry-run a run's policy flags against the scenario's assignment profile.
 
-    Returns the overrides object to ship (``{}`` when no flag was given), or the error
-    message (``str``) when the flags, the merge, or the patched profile fail to
-    resolve. A bundle compiled before policy slots goes through the legacy
-    translation, exactly as at run start. A scenario with no readable bundle is
-    validated against the slot defaults (its own load fails later, loudly).
+    Returns the overrides object to ship (``{}`` when no flag was given; the scenario
+    is then not read), or the error message (``str``) when the flags, the merge, or
+    the patched profile fail to resolve, or when the scenario has no readable bundle
+    (never validated against slot defaults: that would name the wrong policy). A
+    bundle compiled before policy slots goes through the legacy translation, exactly
+    as at run start.
     """
     from apps.container_logistics.policies.dispatch.profile import (
         assert_assignment_profiles_resolvable,
@@ -105,15 +184,38 @@ def validate_run_policy_args(
     from apps.container_logistics.scenario.scenario_overrides import apply_policy_overrides
 
     try:
-        overrides = build_run_policy_overrides(solver, policies, params)
+        overrides = build_run_policy_overrides(solver, policies, params, overrides_json)
         if not overrides:
             return {}
-        collection = copy.deepcopy(load_assignment_collection(scenario))
+        collection = load_assignment_collection(scenario)
+        if collection is None:
+            return _missing_bundle_message(scenario)
+        collection = copy.deepcopy(collection)
         apply_policy_overrides(collection, overrides)
         assert_assignment_profiles_resolvable(collection)
     except PolicyError as exc:
         return str(exc)
     return overrides
+
+
+def cmd_validate_run_policies(
+    scenario: str | None,
+    solver: str | None,
+    policies: Sequence[str] = (),
+    params: Sequence[str] = (),
+    overrides_json: str | None = None,
+) -> dict[str, Any]:
+    """``validate-run-policies`` payload: ``{ok, action, overrides}`` or ``{ok:false, action, message}``.
+
+    The synchronous dry run the dashboard's run route calls before it spawns
+    ``run-simulation`` in the background (review F2): the same
+    :func:`validate_run_policy_args` ``run-simulation`` runs.
+    """
+    action = "validate_run_policies"
+    result = validate_run_policy_args(scenario, solver, policies, params, overrides_json)
+    if isinstance(result, str):
+        return {"ok": False, "action": action, "message": result}
+    return {"ok": True, "action": action, "overrides": result}
 
 
 def validate_capture_arg(text: str | None) -> str | None:
