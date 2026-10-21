@@ -140,7 +140,7 @@ def _resolve_error(tmp_path, monkeypatch, policies):
 
 def test_unknown_slot_rejected(tmp_path, monkeypatch):
     msg = _resolve_error(tmp_path, monkeypatch, {"dispach": {"type": "GreedyNearest"}})
-    assert msg.startswith("Unknown policy slot 'dispach' in 'policies'. Known slots: dispatch, market.offer")
+    assert msg.startswith("Unknown policy slot 'dispach' in 'policies'. Known slots: dispatch, idle")
 
 
 def test_planned_slot_rejected_with_phase(tmp_path, monkeypatch):
@@ -149,10 +149,10 @@ def test_planned_slot_rejected_with_phase(tmp_path, monkeypatch):
                    "Remove 'policies.idle'.")
 
 
-def test_legacy_market_slot_points_to_planner_market(tmp_path, monkeypatch):
+def test_market_component_is_not_a_slot(tmp_path, monkeypatch):
+    """Round 2: offer/claim are PooledMarket components, no longer (legacy) slots."""
     msg = _resolve_error(tmp_path, monkeypatch, {"market.offer": {"type": "OfferAll"}})
-    assert msg == ("'policies.market.offer' is not selectable here yet; configure it via "
-                   "planner.market.offer (lands in P5).")
+    assert msg.startswith("Unknown policy slot 'market.offer' in 'policies'. Known slots: dispatch, idle")
 
 
 def test_unknown_entry_key_rejected():

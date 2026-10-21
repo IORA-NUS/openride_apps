@@ -11,7 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Type
 
-from apps.container_logistics.policies.framework import SLOTS, get_policy_spec
+from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
+from apps.container_logistics.policies.framework import get_policy_spec
 
 from .base import BaseAssignmentSolver
 from .greedy_nearest import GreedyNearestSolver
@@ -26,14 +27,19 @@ SOLVER_REGISTRY: Dict[str, Type[BaseAssignmentSolver]] = {
 Kept for old importers only. New policies do NOT appear here.
 """
 
-DEFAULT_SOLVER: str = SLOTS["dispatch"].default
+DEFAULT_SOLVER: str = LEGACY_LEAF_DEFAULT
+"""The default per-scope (leaf) solver: a legacy selection with no solver runs it.
+
+Not the dispatch SLOT default (``Partitioned``, a decomposition whose ``inner``
+defaults to this leaf); ``get_solver`` instantiates leaves only.
+"""
 
 
 def get_solver(
     name: Optional[str],
     params: Optional[Dict[str, Any]] = None,
 ) -> BaseAssignmentSolver:
-    """Instantiate the registered dispatch policy ``name`` (``None``/empty -> slot default).
+    """Instantiate the registered dispatch policy ``name`` (``None``/empty -> :data:`DEFAULT_SOLVER`).
 
     ``params`` is passed to the class as a plain dict copy. Raises
     ``UnknownPolicyError`` for an unregistered name; there is no fallback.

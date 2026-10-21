@@ -1,7 +1,9 @@
 """The policy registry: ``@policy`` registration, lookup, and built-in discovery.
 
 A policy is a class decorated with ``@policy(slot=..., name=..., version=...,
-description=...)`` that carries a nested frozen ``Params`` dataclass. Registration
+description=...)`` that carries a nested frozen ``Params`` dataclass. A dispatch policy
+also declares its ``information_model`` (round 2,
+``docs/plans/policy_slots_round2_whole_tick.md`` §2.4). Registration
 validates the declaration at import time and fails loud
 (``PolicyRegistrationError``). Lookups (:func:`get_policy_spec`,
 :func:`list_policies`, :func:`default_policy_name`, :func:`spec_for_class`) run
@@ -26,7 +28,8 @@ import pkgutil
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable, Iterator, Sequence
+from types import MappingProxyType
+from typing import Callable, Iterator, Mapping, Sequence
 
 from .errors import (
     PolicyError,
@@ -34,13 +37,15 @@ from .errors import (
     SlotNotImplementedError,
     UnknownPolicyError,
 )
-from .params import PolicyParams, declared_params
+from .params import PolicyParams, check_defaults, declared_params
 from .slots import SLOTS, slot_spec
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "PolicySpec",
+    "INFORMATION_MODELS",
+    "SHARE_TAG_FORMATS",
     "policy",
     "get_policy_spec",
     "spec_for_class",
@@ -62,6 +67,13 @@ _SLOT_BASES: dict[str, str] = {
     "dispatch": "apps.container_logistics.policies.dispatch.base:DispatchPolicy",
 }
 
+#: Whose private data a dispatch policy's decision may use (round-2 §2.4).
+INFORMATION_MODELS = ("central", "per_group", "per_company")
+#: Share-tag wire formats (round-2 §2.5). ``v1`` is the pre-v2 format, reserved to
+#: the ``Partitioned`` built-in so pre-v2 partitioned runs stay byte-identical.
+SHARE_TAG_FORMATS = ("v1", "audited")
+_V1_OWNER = "Partitioned"
+
 _REGISTRY: dict[tuple[str, str], "PolicySpec"] = {}
 _DISCOVERY = {"done": False, "running": False}
 _LOCK = threading.RLock()
@@ -72,7 +84,12 @@ class PolicySpec:
     """A registered policy: identity, metadata, implementing class and its ``Params``.
 
     ``order_sensitive`` is the stated reason the policy's decision may depend on input
-    order, or ``None``. ``perf_budget_ms`` is used by the P3 battery only.
+    order, or ``None``; ``module_rng`` the stated reason it draws from the ``random``
+    module, or ``None``. ``perf_budget_ms`` (the default arm) and ``arm_budgets_ms``
+    (``"param=value"`` -> ms for other arms) are used by the battery only.
+    ``information_model`` (``INFORMATION_MODELS``; required for dispatch) and
+    ``share_tag_format`` (``SHARE_TAG_FORMATS``) are stamped with the run.
+    ``refs`` lists the ``PolicyRef`` params as ``(param, kind, leaf_only)``.
     """
 
     slot: str
@@ -84,6 +101,16 @@ class PolicySpec:
     params_cls: type[PolicyParams]
     order_sensitive: str | None
     perf_budget_ms: int
+    information_model: str | None
+    share_tag_format: str
+    module_rng: str | None
+    arm_budgets_ms: Mapping[str, int]
+    refs: tuple[tuple[str, str, bool], ...]
+
+    @property
+    def is_composite(self) -> bool:
+        """True when the policy references a dispatch policy of its own (an ``inner``)."""
+        return any(kind == "dispatch" for _name, kind, _leaf in self.refs)
 
     def missing_requirements(self) -> list[str]:
         """Return the ``requires`` modules that cannot be found, in declared order.
@@ -114,18 +141,25 @@ def policy(
     requires: Sequence[str] = (),
     order_sensitive: str | None = None,
     perf_budget_ms: int = 2000,
+    information_model: str | None = None,
+    share_tag_format: str = "audited",
+    module_rng: str | None = None,
+    arm_budgets_ms: Mapping[str, int] | None = None,
 ) -> Callable[[type], type]:
     """Class decorator registering a policy into ``slot`` under ``name``.
 
     Returns the class unchanged. Raises ``PolicyRegistrationError`` (at import) for an
     unknown or non-implemented slot, malformed metadata, a missing/non-frozen/
     non-``PolicyParams`` nested ``Params``, defaults failing their own validation, a
-    wrong slot base class, or ``(slot, name)`` already bound to a different class.
+    wrong slot base class, a dispatch policy without an ``information_model``,
+    ``share_tag_format="v1"`` outside ``Partitioned``, an ``arm_budgets_ms`` key naming
+    no str-choice arm, or ``(slot, name)`` already bound to a different class.
     Re-registering the same class with identical metadata is a no-op.
     """
     def decorate(cls: type) -> type:
-        spec = _build_spec(cls, slot, name, version, description, requires,
-                           order_sensitive, perf_budget_ms)
+        spec = _build_spec(cls, slot, name, version, description, requires, order_sensitive,
+                           perf_budget_ms, information_model, share_tag_format, module_rng,
+                           arm_budgets_ms)
         with _LOCK:
             _store(spec)
         return cls
@@ -133,16 +167,26 @@ def policy(
     return decorate
 
 
-def _build_spec(cls, slot, name, version, description, requires,
-                order_sensitive, perf_budget_ms) -> PolicySpec:
+def _build_spec(cls, slot, name, version, description, requires, order_sensitive,
+                perf_budget_ms, information_model, share_tag_format, module_rng,
+                arm_budgets_ms) -> PolicySpec:
     where = f"@policy(slot={slot!r}, name={name!r}) on {getattr(cls, '__qualname__', cls)!r}"
+    short = f"@policy(slot={slot!r}, name={name!r})"
     _check_slot_registrable(slot, where)
     _check_metadata(where, name, version, description, requires, order_sensitive, perf_budget_ms)
+    _check_reason(where, "module_rng", module_rng)
+    _check_information_model(short, slot, information_model)
+    _check_share_tag_format(short, name, share_tag_format)
     _check_slot_base(cls, slot, where)
     params_cls = _checked_params(cls, where)
+    infos = declared_params(params_cls)
+    budgets = _checked_arm_budgets(short, infos, arm_budgets_ms)
     return PolicySpec(slot=slot, name=name, version=version, description=description,
                       requires=tuple(requires), cls=cls, params_cls=params_cls,
-                      order_sensitive=order_sensitive, perf_budget_ms=perf_budget_ms)
+                      order_sensitive=order_sensitive, perf_budget_ms=perf_budget_ms,
+                      information_model=information_model, share_tag_format=share_tag_format,
+                      module_rng=module_rng, arm_budgets_ms=budgets,
+                      refs=tuple((i.name, i.meta.kind, i.meta.leaf_only) for i in infos if i.is_ref))
 
 
 def _check_slot_registrable(slot: str, where: str) -> None:
@@ -154,11 +198,6 @@ def _check_slot_registrable(slot: str, where: str) -> None:
         raise PolicyRegistrationError(
             f"{where}: slot {slot!r} is declared but not implemented yet (lands in {spec.lands_in})"
         )
-    if spec.status != "implemented":
-        raise PolicyRegistrationError(
-            f"{where}: slot {slot!r} is a {spec.status} slot configured via "
-            f"{spec.configured_via}; it does not take registered policies yet"
-        )
 
 
 def _check_metadata(where, name, version, description, requires, order_sensitive, perf_budget_ms) -> None:
@@ -169,14 +208,69 @@ def _check_metadata(where, name, version, description, requires, order_sensitive
         raise PolicyRegistrationError(
             f"{where}: requires must be a sequence of module names, e.g. ('ortools',) (got {requires!r})."
         )
-    if order_sensitive is not None and (not isinstance(order_sensitive, str) or not order_sensitive.strip()):
-        raise PolicyRegistrationError(
-            f"{where}: order_sensitive must be None or the stated reason (got {order_sensitive!r})."
-        )
+    _check_reason(where, "order_sensitive", order_sensitive)
     if isinstance(perf_budget_ms, bool) or not isinstance(perf_budget_ms, int) or perf_budget_ms <= 0:
         raise PolicyRegistrationError(
             f"{where}: perf_budget_ms must be a positive integer (got {perf_budget_ms!r})."
         )
+
+
+def _check_reason(where: str, label: str, value) -> None:
+    if value is not None and (not isinstance(value, str) or not value.strip()):
+        raise PolicyRegistrationError(f"{where}: {label} must be None or the stated reason (got {value!r}).")
+
+
+def _check_information_model(short: str, slot: str, model) -> None:
+    if model is None and slot != "dispatch":
+        return
+    if model not in INFORMATION_MODELS:
+        got = "" if model is None else f" (got {model!r})"
+        raise PolicyRegistrationError(
+            f"{short}: declare information_model= one of {', '.join(INFORMATION_MODELS)} "
+            f"(whose private data this policy's decision may use){got}."
+        )
+
+
+def _check_share_tag_format(short: str, name: str, fmt) -> None:
+    if fmt not in SHARE_TAG_FORMATS:
+        raise PolicyRegistrationError(
+            f"{short}: share_tag_format must be one of {', '.join(SHARE_TAG_FORMATS)} (got {fmt!r})."
+        )
+    if fmt == "v1" and name != _V1_OWNER:
+        raise PolicyRegistrationError(
+            f"{short}: share_tag_format='v1' is reserved for the {_V1_OWNER} built-in (the pre-v2 "
+            "wire format, kept only for byte identity); new policies use the default 'audited'."
+        )
+
+
+def _str_arms(infos) -> list[str]:
+    """The battery's non-default str-choice arms, ``"param=value"`` in declared order."""
+    return [f"{i.name}={c}" for i in infos if i.type is str and i.meta.choices is not None
+            for c in i.meta.choices if c != i.default]
+
+
+def _checked_arm_budgets(short: str, infos, budgets) -> Mapping[str, int]:
+    """Validate ``arm_budgets_ms``; keys of a ref param are left to the battery test."""
+    if budgets is None:
+        return MappingProxyType({})
+    if not isinstance(budgets, Mapping):
+        raise PolicyRegistrationError(f"{short}: arm_budgets_ms must be a mapping 'param=value' -> ms.")
+    refs = {i.name for i in infos if i.is_ref}
+    arms = _str_arms(infos)
+    for key, ms in budgets.items():
+        if isinstance(ms, bool) or not isinstance(ms, int) or ms <= 0:
+            raise PolicyRegistrationError(
+                f"{short}: arm_budgets_ms[{key!r}] must be a positive integer (got {ms!r})."
+            )
+        param_name = key.partition("=")[0] if isinstance(key, str) else None
+        if param_name in refs:
+            continue
+        if key not in arms:
+            raise PolicyRegistrationError(
+                f"{short}: arm_budgets_ms key {key!r} is not an arm of this policy. "
+                f"Arms: {', '.join(arms) or '(none)'}."
+            )
+    return MappingProxyType(dict(budgets))
 
 
 def _check_slot_base(cls: type, slot: str, where: str) -> None:
@@ -199,8 +293,7 @@ def _checked_params(cls: type, where: str) -> type[PolicyParams]:
             "Params(PolicyParams): ...` inside the class (empty is fine)."
         )
     try:
-        declared_params(params_cls)
-        params_cls.from_mapping(None, where=f"{where}: defaults")
+        check_defaults(params_cls, where=f"{where}: defaults")
     except PolicyRegistrationError as exc:
         raise PolicyRegistrationError(f"{where}: {exc}") from exc
     except PolicyError as exc:
@@ -280,7 +373,7 @@ def get_policy_spec(slot: str, name: str) -> PolicySpec:
     """Return the registered policy ``name`` in ``slot``.
 
     Raises ``UnknownSlotError`` for an unknown slot, ``SlotNotImplementedError`` for a
-    legacy/planned slot, and ``UnknownPolicyError`` (listing the registered names and
+    planned slot, and ``UnknownPolicyError`` (listing the registered names and
     the CLI command that lists them) for an unknown name. Never falls back.
     """
     _require_implemented(slot)
@@ -300,11 +393,6 @@ def _require_implemented(slot: str) -> None:
     if spec.status == "planned":
         raise SlotNotImplementedError(
             f"slot {slot!r} is declared but not implemented yet (lands in {spec.lands_in})"
-        )
-    if spec.status != "implemented":
-        raise SlotNotImplementedError(
-            f"slot {slot!r} is a {spec.status} slot configured via {spec.configured_via}; "
-            "its policies are not in the policy registry"
         )
 
 

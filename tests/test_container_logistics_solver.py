@@ -17,6 +17,7 @@ from apps.container_logistics.assignment.solver import (
     RandomAssignmentSolver,
     get_solver,
 )
+from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
 from apps.container_logistics.policies.framework import SLOTS, UnknownPolicyError
 
 
@@ -64,9 +65,11 @@ def test_get_solver_unknown_name_raises_listing_known():
     assert "GreedyNearest" in message and "RandomAssignment" in message
 
 
-def test_get_solver_none_is_the_slot_default():
-    """``None``/empty means the dispatch slot's declared default."""
-    assert DEFAULT_SOLVER == SLOTS["dispatch"].default
+def test_get_solver_none_is_the_legacy_leaf_default():
+    """``None``/empty means the default LEAF solver (round 2: the slot default is the
+    ``Partitioned`` decomposition, whose inner defaults to this leaf)."""
+    assert DEFAULT_SOLVER == LEGACY_LEAF_DEFAULT == "RandomAssignment"
+    assert SLOTS["dispatch"].default == "Partitioned"
     assert type(get_solver(None, None)) is SOLVER_REGISTRY[DEFAULT_SOLVER]
     assert type(get_solver("", None)) is SOLVER_REGISTRY[DEFAULT_SOLVER]
 

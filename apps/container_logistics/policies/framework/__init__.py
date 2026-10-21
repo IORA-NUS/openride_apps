@@ -4,8 +4,10 @@ Authors import from here::
 
     from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
-The catalog is NOT re-exported (import ``framework.catalog`` directly); it is the
-only framework module that reaches into ``assignment`` (locally, at call time).
+The catalog is NOT re-exported (import ``framework.catalog`` directly). The catalog and
+``framework.components`` are the only framework modules that reach into ``assignment``
+(locally, at call time). Importing this package imports ``components``, which
+registers the policy-reference resolvers that ``PolicyParams`` uses.
 Leaf package (plan ``docs/plans/policy_slots_p0_p3.md`` §2.7): importing it never
 imports ``apps.container_logistics.assignment.*``.
 """
@@ -23,7 +25,7 @@ from .errors import (
     UnknownPolicyError,
     UnknownSlotError,
 )
-from .params import SUPPORTED_SCHEMA_KEYWORDS, PolicyParams, param
+from .params import SUPPORTED_SCHEMA_KEYWORDS, PolicyParams, PolicyRef, param, ref
 from .registry import (
     PolicySpec,
     default_policy_name,
@@ -32,6 +34,7 @@ from .registry import (
     policy,
     spec_for_class,
 )
+from . import components  # noqa: F401  (registers the ref resolvers into params)
 from .resolve import (
     ResolvedPolicy,
     authored_after_resolution,
@@ -46,6 +49,8 @@ __all__ = [
     "policy",
     "PolicyParams",
     "param",
+    "PolicyRef",
+    "ref",
     "SUPPORTED_SCHEMA_KEYWORDS",
     "PolicySpec",
     "get_policy_spec",

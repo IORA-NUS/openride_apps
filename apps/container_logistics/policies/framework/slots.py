@@ -1,9 +1,11 @@
 """The slot table: every decision point a policy can fill, and its lifecycle status.
 
-A slot is ``implemented`` (registry-backed, fail-loud), ``legacy`` (configured
-elsewhere, listed read-only in the catalog, fail-soft by doc 21 §7) or ``planned``
-(declared so the catalog and error messages can name the phase it lands in).
-Plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.1 and §1.2 item 10.
+A slot is ``implemented`` (registry-backed, fail-loud) or ``planned`` (declared so the
+catalog and error messages can name the phase it lands in). Plan
+``docs/plans/policy_slots_p0_p3.md`` §4 P0.1; round 2
+``docs/plans/policy_slots_round2_whole_tick.md`` §3.1: five slots. The pooled market's
+offer/claim/arbitration are not slots but components of the ``PooledMarket`` dispatch
+policy (``framework/components.py``).
 
 Leaf module: stdlib only (plan §2.7). ``SLOTS`` is immutable and in table order;
 that order is the catalog's order.
@@ -28,33 +30,29 @@ class SlotSpec:
     """One slot's declaration.
 
     ``timings`` are the timings a config may name; ``executable_timings`` the subset
-    the runner can execute today. ``lands_in`` names the phase for planned slots;
-    ``configured_via`` names the legacy config key for legacy slots.
+    the runner can execute today. ``lands_in`` names the phase for planned slots.
 
     Raises ``ValueError`` at construction for an internally inconsistent declaration.
     """
 
     name: str
     kind: Literal["operator", "world"]
-    status: Literal["implemented", "legacy", "planned"]
+    status: Literal["implemented", "planned"]
     default: str | None
     description: str
     timings: tuple[str, ...] = ()
     executable_timings: tuple[str, ...] = ()
     lands_in: str | None = None
-    configured_via: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in ("operator", "world"):
             raise ValueError(f"slot {self.name!r}: kind {self.kind!r} is not 'operator' or 'world'")
-        if self.status not in ("implemented", "legacy", "planned"):
+        if self.status not in ("implemented", "planned"):
             raise ValueError(f"slot {self.name!r}: unknown status {self.status!r}")
-        if self.status != "planned" and not self.default:
-            raise ValueError(f"slot {self.name!r}: a {self.status} slot needs a default policy")
+        if self.status == "implemented" and not self.default:
+            raise ValueError(f"slot {self.name!r}: an implemented slot needs a default policy")
         if self.status == "planned" and not self.lands_in:
             raise ValueError(f"slot {self.name!r}: a planned slot must name the phase it lands in")
-        if self.status == "legacy" and not self.configured_via:
-            raise ValueError(f"slot {self.name!r}: a legacy slot must name its configured_via key")
         extra = set(self.executable_timings) - set(self.timings)
         if extra:
             raise ValueError(
@@ -67,26 +65,14 @@ _TABLE = (
         name="dispatch",
         kind="operator",
         status="implemented",
-        default="RandomAssignment",
-        description="Which free truck serves which unassigned order, per scope per tick.",
+        # The whole-tick default: per-cooperation-group decomposition whose inner
+        # defaults to RandomAssignment (the pre-v2 no-strategy behaviour). The flat
+        # legacy leaf default is policies/dispatch/legacy.LEGACY_LEAF_DEFAULT.
+        default="Partitioned",
+        description="Which free truck serves which unassigned order, decided for the whole tick "
+                    "(the decomposition, e.g. Partitioned or PooledMarket, is part of the selection).",
         timings=("online", "plan"),
         executable_timings=("online",),
-    ),
-    SlotSpec(
-        name="market.offer",
-        kind="operator",
-        status="legacy",
-        default="OfferAll",
-        description="Which of its own orders a company offers to the shared pool.",
-        configured_via="planner.market.offer",
-    ),
-    SlotSpec(
-        name="market.claim",
-        kind="operator",
-        status="legacy",
-        default="ClaimAllPlanned",
-        description="Which planned pool pairs a company bids for.",
-        configured_via="planner.market.claim",
     ),
     SlotSpec(
         name="idle",

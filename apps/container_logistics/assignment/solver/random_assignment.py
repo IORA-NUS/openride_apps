@@ -14,6 +14,9 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     name="RandomAssignment",
     version="1",
     description="Baseline: shuffled orders, each given a random feasible free truck; ignores cost.",
+    # Scope-agnostic leaf: selected at top level it plans the whole tick centrally;
+    # as a composite's inner it decides one scope (round-2 §2.4).
+    information_model="central",
     order_sensitive="byte-identical to the pre-v2 shuffle; order independence would change existing results",
     # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
     # Measured 2026-10-21, decide() on testing.fixtures.scale() (1000 trucks x 500

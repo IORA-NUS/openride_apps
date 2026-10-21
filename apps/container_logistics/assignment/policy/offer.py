@@ -10,6 +10,11 @@ allocation state.
 The framework (``PoolMarket.contribute``) re-validates every placement and
 drops invalid ones with a warning, so a policy returning a bad pool id degrades
 a tick rather than aborting a run.
+
+Each concrete class declares ``version`` and a typed nested ``Params`` (a
+``PolicyParams``): the component catalog and the ``PooledMarket`` dispatch policy's
+refs validate against it (``policies/framework/components.py``, round-2 plan §3.2).
+The instance itself still receives a plain ``params`` dict.
 """
 
 from __future__ import annotations
@@ -18,7 +23,10 @@ import logging
 import math
 import random
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
+
+from apps.container_logistics.policies.framework import PolicyParams, param
 
 from ..constraints import haulier_of
 from ..pools import Pool
@@ -110,6 +118,12 @@ class OfferAllPolicy(BaseOfferPolicy):
     exactly today's edge-direct eligibility (plan D1).
     """
 
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
+
     def offer(
         self,
         *,
@@ -130,6 +144,12 @@ class OfferNonePolicy(BaseOfferPolicy):
     """Control: contribute nothing. Reproduces no-cooperation while the pooled
     topology is still active — every order stays private, so no pooled bid can
     ever be made against it."""
+
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
 
     def offer(
         self,
@@ -165,6 +185,23 @@ class OfferSparePolicy(BaseOfferPolicy):
     serve at all. Plan §12.4 already flags this predicate as under-specified
     and "to be reviewed with the user, not settled design".
     """
+
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        keep_below_km: float | None = param(
+            None,
+            ge=0,
+            help=(
+                "Offer an order when the company's cheapest feasible free truck for it "
+                "costs more than this many km. None = no threshold (infinity)."
+            ),
+        )
+        only_when_short: bool = param(
+            True,
+            help="When the company has fewer free trucks than own orders, offer every own order.",
+        )
 
     def offer(
         self,

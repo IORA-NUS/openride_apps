@@ -28,7 +28,6 @@ import logging
 from typing import Any, Mapping
 
 from apps.container_logistics.policies.framework import (
-    SLOTS,
     PolicyError,
     PolicySpec,
     ResolvedPolicy,
@@ -41,6 +40,7 @@ from apps.container_logistics.policies.framework.resolve import (
     drop_undeclared_legacy_params,
 )
 
+from .legacy import LEGACY_LEAF_DEFAULT
 from .resolved import ResolvedDispatch, candidate_kind_for
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ def _use_spatial_matching(prof: Mapping[str, Any]) -> bool:
 def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
     """Translate the legacy dispatch keys into a ``{"type", "timing", "params"}`` entry.
 
-    ``type`` is ``strategy`` or the slot default. ``params`` keeps only the
+    ``type`` is ``strategy`` or the legacy leaf default (``legacy.LEGACY_LEAF_DEFAULT``). ``params`` keeps only the
     ``solver_params`` keys the policy's ``Params`` declares, via the framework's one
     drop rule (``framework.resolve.drop_undeclared_legacy_params``, logged at
     WARNING): legacy keys were never validated, and ``solver_params`` also feeds the
@@ -112,7 +112,7 @@ def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
     dual-cycle keys. ``use_spatial_matching: false`` becomes ``candidates="sampled"``
     where declared. Raises ``UnknownPolicyError`` for an unregistered ``strategy``.
     """
-    name = prof.get("strategy") or SLOTS["dispatch"].default
+    name = prof.get("strategy") or LEGACY_LEAF_DEFAULT
     spec = get_policy_spec("dispatch", name)
     params = drop_undeclared_legacy_params(
         spec, prof.get("solver_params") or {}, "profile.strategy/solver_params"

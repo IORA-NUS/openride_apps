@@ -14,11 +14,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import scenario_config
-from apps.container_logistics.policies.framework import (
-    SLOTS,
-    default_policy_name,
-    list_policies,
-)
+from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
+from apps.container_logistics.policies.framework import list_policies
 from .order_demand import (
     LEGACY_EARLY_ORDER_COUNT,
     hourly_weights_from_spec,
@@ -30,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 def normalize_solver(raw: Any) -> str:
-    """Coerce a requested solver name to a registered dispatch policy, else the default.
+    """Coerce a requested solver name to a registered dispatch policy, else the legacy leaf default.
 
     Legacy-only: serves the legacy synth paths (``normalize_generate_spec``,
     ``frontend_scenario_config_override``), which read old or foreign recipes and must
@@ -40,7 +37,7 @@ def normalize_solver(raw: Any) -> str:
     """
     name = str(raw or "").strip()
     known = {spec.name for spec in list_policies("dispatch")}
-    return name if name in known else default_policy_name("dispatch")
+    return name if name in known else LEGACY_LEAF_DEFAULT
 
 
 def parse_trip_matrix(raw: Any) -> dict[str, Any]:
@@ -968,7 +965,7 @@ def build_generation_spec_payload(spec: dict[str, Any]) -> dict[str, Any]:
         "orderDemandCurve": deepcopy(spec.get("orderDemandCurve")),
         "tripMatrix": deepcopy(spec.get("tripMatrix")),
         "hauliers": deepcopy(spec.get("hauliers")),
-        "solver": spec.get("solver") or SLOTS["dispatch"].default,
+        "solver": spec.get("solver") or LEGACY_LEAF_DEFAULT,
         "solverParams": deepcopy(spec.get("solverParams")),
         "roleSettings": deepcopy(spec.get("roleSettings")),
         "overrides": deepcopy(spec.get("overrides")),
@@ -1551,7 +1548,7 @@ def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
         if isinstance(gs.get("policies"), dict) and gs["policies"]:
             return deepcopy(gs["policies"])
         raw_solver = gs.get("solver")
-        return {"dispatch": {"type": str(raw_solver).strip() if raw_solver else default_policy_name("dispatch")}}
+        return {"dispatch": {"type": str(raw_solver).strip() if raw_solver else LEGACY_LEAF_DEFAULT}}
 
 
 def scenario_edit_form_from_detail(
@@ -2182,13 +2179,14 @@ def get_scenario_spec(datahub_dir: str, domain: str, slug: str) -> dict[str, Any
 
 
 def known_solvers() -> dict[str, Any]:
-    """The runtime-selectable dispatch policy names and the slot default.
+    """The runtime-selectable dispatch policy names and the default leaf solver
+    (``LEGACY_LEAF_DEFAULT``; the slot default ``Partitioned`` wraps it).
 
     Derived from the policy registry at call time (the single source of truth).
     """
     return {
         "solvers": [spec.name for spec in list_policies("dispatch")],
-        "default": default_policy_name("dispatch"),
+        "default": LEGACY_LEAF_DEFAULT,
     }
 
 

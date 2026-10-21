@@ -11,9 +11,10 @@ tolerated lossy step is dropping undeclared params of a slot translated from the
 LEGACY keys (``solver``/``solverParams``/``planner.deployment``), which were never
 validated; it is logged at WARNING.
 
-Leaf module (plan §2.7): imports only sibling framework modules, never
-``apps.container_logistics.assignment.*``. Missing dependencies are reported via
-``PolicySpec.missing_requirements`` (``find_spec``), so nothing heavy is imported.
+Leaf module (plan §2.7): imports only sibling framework modules and the leaf
+``policies.dispatch.legacy``, never ``apps.container_logistics.assignment.*``. Missing
+dependencies are reported via ``PolicySpec.missing_requirements`` (``find_spec``), so
+nothing heavy is imported.
 """
 
 from __future__ import annotations
@@ -31,6 +32,8 @@ from .errors import (
     SlotNotImplementedError,
     UnknownSlotError,
 )
+from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
+
 from .params import declared_params
 from .registry import default_policy_name, get_policy_spec
 from .slots import SLOTS
@@ -98,11 +101,17 @@ def _check_selectable_slot(slot: Any, where: str) -> None:
             f"Policy slot {slot!r} is declared but not implemented yet (lands in "
             f"{spec.lands_in}). Remove '{where}.{slot}'."
         )
-    if spec.status == "legacy":
-        raise SlotNotImplementedError(
-            f"'{where}.{slot}' is not selectable here yet; configure it via "
-            f"{spec.configured_via} (lands in P5)."
-        )
+
+
+def _unnamed_type(slot: str) -> str:
+    """The policy a block that does not name ``slot`` resolves to.
+
+    This (round-1, flat) resolver selects leaves only, so an unnamed dispatch is the
+    legacy leaf default: exactly what the slot default ``Partitioned`` (inner
+    ``RandomAssignment``) runs. Round-2 C2's nested resolver replaces this with the
+    slot default itself.
+    """
+    return LEGACY_LEAF_DEFAULT if slot == "dispatch" else default_policy_name(slot)
 
 
 def _check_entry_shape(entry: Any, label: str, *, require_type: bool) -> None:
@@ -194,10 +203,11 @@ def resolve_policies_block(
     """Validate ``block`` against the registry; return one resolved policy per slot.
 
     Every implemented slot is present in the result, in ``SLOTS`` order; a slot the
-    block does not name gets its declared default (``{}`` means "all defaults").
+    block does not name gets its default (``{}`` means "all defaults"; see
+    :func:`_unnamed_type` for dispatch).
     ``legacy_slots`` names slots whose entry was translated from the legacy keys:
     their undeclared params are dropped with a WARNING instead of rejected.
-    Raises ``PolicyError`` subclasses (unknown/planned/legacy slot, unknown entry key,
+    Raises ``PolicyError`` subclasses (unknown/planned slot, unknown entry key,
     unknown policy, timing, missing dependency, params).
     """
     if block is None:
@@ -212,7 +222,7 @@ def resolve_policies_block(
             continue
         entry = block.get(slot)
         if entry is None:
-            entry = {"type": default_policy_name(slot)}
+            entry = {"type": _unnamed_type(slot)}
         out[slot] = _resolve_entry(slot, entry, where=where, legacy=slot in legacy_slots)
     return out
 
@@ -263,7 +273,7 @@ def merge_policy_overrides(
         cur = current.get(slot)
         requested = entry.get("type")
         name = requested.strip() if isinstance(requested, str) else (
-            cur.name if cur is not None else default_policy_name(slot)
+            cur.name if cur is not None else _unnamed_type(slot)
         )
         same_type = cur is not None and get_policy_spec(slot, name).name == cur.name
         params = {**(cur.params if same_type else {}), **dict(entry.get("params") or {})}
@@ -290,7 +300,7 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
     Returns ``{slot: {"type"?: name, "params"?: {key: value}}}`` for
     :func:`merge_policy_overrides`. A value is ``json.loads(value)`` when that parses
     (``5`` -> int, ``true`` -> bool, ``"5"`` -> str), else the raw string. Slot names
-    may contain dots (``market.offer``), so a param spec splits on the LAST ``.``
+    may contain dots (``world.shedding``), so a param spec splits on the LAST ``.``
     before the ``=``. Shape only: names and values are validated by the merge.
     Raises ``PolicyError`` for a malformed or contradictory argument.
     """

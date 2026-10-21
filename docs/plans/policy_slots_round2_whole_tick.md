@@ -1,0 +1,934 @@
+# Policy slots, round 2: the dispatch policy gets the whole tick
+
+**Planner spec for the coder.** Worktree `/home/user/openride_apps_policy_slots` (branch `feat/policy-slots`, HEAD `c30fd25`, base `ec085f5`). FE means `/home/user/openride_server/analytics` branch `feat/policy-slots` at `03607b9`; read it with `git show` only, never `checkout`. I changed no files.
+
+Short version. The framework hands one whole-tick `DispatchContext` to one policy and gets one `Plan` back.
+- **The framework owns:** ownership, cooperation feasibility (`ctx.allowed`), the invariants, committing, and the accounting.
+- **The solvers own the decomposition.** Today's two topologies become ordinary built-in solvers:
+  - `Partitioned(inner=…)`
+  - `PooledMarket(offer, claim, arbitration, max_rounds, inner=…)`
+- **Leaves:** `GreedyNearest` and `RandomAssignment` work on any context they are given. Selected at top level, they are central planners.
+- **Removed:** `market.offer` and `market.claim` stop being slots. They become *components* that `PooledMarket` references.
+- **One new concept:** a *policy-reference param*. It expresses nesting in the spec, the CLI, the stamp, the schema and the form.
+- **Accounting:** one framework function computes every share tag's values for every solver. Two historical wire formats are rendered from the same values. The old format, `v1`, is reserved for `Partitioned` so the golden stays byte-identical.
+
+---
+
+## 1. Verified current state (file:line, worktree HEAD)
+
+### 1.1 `assignment/app.py`
+
+| # | Fact | Where |
+|---|---|---|
+| S1 | `assign()` order of operations: reset `_share_tags`; `prof`; `_inject_rebate_book`; read trucks, orders, claimed and busy; `filter_assignable_trucks` → `candidates`; branch on `_resolved_topology(prof) == "pooled"`. | 567-613 |
+| S2 | Partitioned path, setup. It builds `structure`, `adjacency = share_adjacency(structure)` and `component_of` (only when `adjacency and isinstance(structure, dict)`, members of components with length > 1). It builds `rule = PartitionRule(mtt, adjacency)` and `_cost = assignment_cost(t, o, self._solver_params)`. | 615-650 |
+| S2a | Partitioned path, solving. Partition key is `("component", idx)`, else `("haulier", hid)`, else `None`. `truck_buckets` and `order_buckets` are filled in input order. It iterates `order_buckets.items()`, skips the `None` key and empty truck buckets, and solves per bucket through `runner.run(runner.partition_context(...))`, optionally inside `_eventlet_tpool.execute`. | 652-706 |
+| S3 | Partitioned `benefit_km`, computed per bucket after its solve. For each pair whose truck and order hauliers both exist and differ: `own_costs = [_cost(t, order) for t in bucket_trucks if id not in used (this bucket's result) and haulier_of(t) == owner and rule.allowed(t, order)]`, then `best = min(c != inf)`. The tag is `{shared, owner_haulier_id, carrier_haulier_id, benefit_km: round(best - _cost(truck, order), 3) or None}`: 4 keys only, and `-inf` when the chosen cost is `inf`. | 707-737 |
+| S4 | Pooled path, setup. It computes `tick_seed = blake2b(f"{run_id}\|{time_step}")` and builds one `rng = random.Random(tick_seed)`. It calls `self._solver.set_rng(rng)` and `self._solver.set_tiebreak(tick_seed)`, then builds `PoolMarket.from_structure(structure)`. | 495-512 |
+| S4a | Pooled path, run. `trucks_by_haulier` and `orders_by_haulier` skip a `None` haulier. It reads `offer, claim, arbitration, max_rounds = _market_components(prof)`, which calls `resolve_market_config` (fail-soft registries, clamped rounds). It calls `run_pooled_market`, then `_record_round_stats(result, max_rounds, time_step)` and `_patch_round_stats_to_run_config()` (the agent-side `meta.market` writer). | 514-556 |
+| S5 | `publish()` reads each tag with `tag.get` into `AssignedHaulTripPayload` and calls `json.dumps(payload.__dict__, default=str)`. | 762-789 |
+| S6 | `_resolved_topology` is fail-soft: unknown values become `partitioned`. Topology is read on every call. | 172-184 |
+| S6a | `_market_components` caches on the resolved market JSON. | 266-294 |
+
+### 1.2 `assignment/pooled_planner.py` (the market)
+
+| # | Fact | Where |
+|---|---|---|
+| S7 | `owner_reserve_km` takes the minimum over the owner's trucks that are not committed, pass `pair_allowed_own`, and have a finite float cost. | 174-210 |
+| S7a | Contribution, then rounds that end on convergence. Companies are iterated `sorted`. `build_round_candidates` is called through the module global. `_solve_company` keeps its early returns. A company exception is logged as "Deployment solve failed" and that company is skipped. | 406-643 |
+| S7b | The step-6 share tag has 8 keys. `awarded_cost_km` comes from `_finite_or_none(award.cost_km)`. `benefit_km = round(_finite_or_none(reserve - awarded), 3)`. `pool_id` is `award.pool_id`; `market_round` is `award.round`. | 645-688 |
+| S7c | The I-P1 to I-P3 asserts. | 690-703 |
+| S8 | Every `award.cost_km` equals `float(cost(t, o))`, where `cost` is the app's accounting `_cost`: private commits via `float(ctx.cost(...))` (pooled_planner 586), bids via `claim._cost_km` (claim.py:69-73, which turns an exception into `inf`), and `_sweep` copies `bid.cost_km` (arbitration.py:108). So the framework can recompute `awarded_cost_km` from the accounting cost. | |
+| S9 | `pair_allowed_pooled` is only a context field now; `CompanyRule` replaced it. | pooled_planner 164-165 |
+| S10 | `OfferSpare.keep_below_km` defaults to `inf`. That value cannot be a `PolicyParams` value today, because non-finite values are refused. `ClaimIfGainExceeds.min_gain_km` defaults to 0.0, with no bound. | offer.py:184-193; claim.py:165 |
+| S11 | Tests register policies directly into the live registries and expect them to resolve: `CLAIM_REGISTRY["_TestFabricatingClaim"]`. | test_assignment_pooled.py:272 |
+
+### 1.3 RNG
+
+| # | Fact | Where |
+|---|---|---|
+| S12 | Partitioned: the leaf's `self.rng` is the `random` module (never injected), and sampling also uses the module. | scopes.py:271-273 |
+| S12a | Pooled: offer, claim, arbitration, company sampling and the leaf all draw from the single tick `Random`. | |
+| S12b | `DispatchContext` sampling is lazy and draws at most once. | context.py:135-146 |
+
+### 1.4 Constraints and pools
+
+| # | Fact | Where |
+|---|---|---|
+| S13 | `share_eligible` uses edge-direct adjacency. `haulier_matches` fails closed on `None`. | constraints.py:218-228, 329-348 |
+| S13a | `pools_from_structure`: authored pools win, otherwise one pool per edge. Compiled structures derive adjacency from the edges, and the edges from the pools, so the two always agree. Only a hand edit can make them disagree. | pools.py:101-140; hauliers.py:376-403 |
+
+### 1.5 Golden harness and tests
+
+| # | Fact | Where |
+|---|---|---|
+| S14 | `build_app` uses `__new__` with `_solver = get_solver(strategy, solver_params)` (a leaf) and a legacy profile. `run_case` reads `app._share_tags` and `app.round_stats()` (pooled only) and draws `rng_probe`. | tests/golden/harness.py:90-138 |
+| S14a | The identity test compares 5 fields exactly. The via-`__init__` test asserts `type(app._solver) is GreedyNearestSolver`. | test_dispatch_golden_identity.py:66-76; test_dispatch_golden_via_init.py |
+| S15 | Pre-existing tests that lock fail-soft or topology internals: `test_unknown_policy_names_are_fail_soft_and_still_assign`; the `_resolved_topology` tests; `_market_components` used directly; the fail-soft topology and market override tests. | test_assignment_pooled.py:486-517; test_pool_housekeeping.py:45-53; test_assignment_pooled_convergence.py:230-240; test_scenario_market_overrides.py:35-138 |
+| S16 | `__new__` harnesses without `run_id`. | test_container_logistics_hauliers.py:121-131 |
+
+### 1.6 The main tree's uncommitted Kafka work
+
+| # | Fact |
+|---|---|
+| S17 | `git -C /home/user/openride_apps diff`, hunk 1, `app.py`: inserts `_award_sim_clock` / `_award_time_step` right after `self._share_tags = {}` at the top of `assign()`. |
+| S17a | Hunk 2, `app.py`: adds `sim_clock=` and `time_step=` kwargs after `market_round=` in `publish()`. |
+| S17b | The payload dataclass appends the two fields at the end. |
+| S17c | Sim main: inserts `stamp_transport_settings` after the runtime-settings refresh. |
+
+### 1.7 Selection, overrides and control
+
+| # | Fact | Where |
+|---|---|---|
+| S18 | Sim main applies, in order: policy overrides → `· <dispatch>` label; capture; cooperation override → `· <structure>`; `ORSIM_PLANNER_TOPOLOGY` → `· <topology>` (fail-soft); `ORSIM_OFFER/CLAIM/ARBITRATION/MARKET_MAX_ROUNDS` (fail-soft; rounds limited to 1..10, else ignored); run-start check; policies stamp; COOPERATION stamp plus a structure segment if missing. | run_container_logistics_simulation.py:355-484 |
+| S19 | `build_run_policy_overrides` folds `--solver` into `dispatch.type`. `validate_run_policy_args` loads the bundle before validating any name, so a bad name is reported as "no bundle". | openride_control/policies.py:110-119, 186-192 |
+| S20 | `_normalize_policies` translates `solver`, `deployment` and `solverParams` into a flat `dispatch` entry and never looks at topology. Compile mirrors `strategy`, `solver_params` and `deployment`. | preprocess.py:274-342, 696-713 |
+| S21 | Seven slots; `dispatch` default `RandomAssignment`; `market.offer` and `market.claim` have status `legacy`. | slots.py:65-123 |
+| S22 | `STEP_SETTLE_SECONDS = 2`, `STEP_TIMEOUT = 30`. | runtime_settings.py:66-72 |
+| S23 | NetworkFlow's inputs: orders (owner, locations, times), `fleet {company: count}`, `cooperation {(owner, server)}` including self-loops, and a `travel_lookup`. It assigns orders across companies centrally. | /home/user/solvers/dispatch_solvers/standalone/README.md |
+
+---
+
+## 2. The new architecture
+
+```
+AssignmentApp.assign(sim_clock, t)                         (FRAMEWORK, agent-side)
+  read trucks / orders / claimed / busy → candidates        (unchanged lines)
+  world  = DispatchWorld.from_profile(prof, accounting_params=_solver_params)
+             · structure (active, post-override) · rule = PartitionRule(mtt, adjacency)
+             · accounting_cost = assignment_cost(·,·,accounting_params) · own_allowed = pair_allowed(mtt)
+  runner = _dispatch_runner(prof)        # resolved selection tree + bound instance (cached)
+  ctx    = runner.tick_context(candidates, orders, world, settings, clock,
+                               tick_seed=blake2b(run_id|t), execute=direct|tpool)
+  out    = runner.run(ctx):  decide(ctx) → Plan → capture → check_plan(world.allowed!) → commit heads
+  accounts = accounting.account_shares(out.pairs, candidates, world)   ← SOLVER-INDEPENDENT
+  _share_tags = accounting.render_share_tags(accounts, fmt=runner.share_tag_format,
+                                             pair_notes=out.notes.get("pair_notes"))
+  if out.notes has "market": _record_round_stats / meta.market patch  (solver provenance)
+  return out.pairs                         publish() unchanged
+
+SOLVERS (policies/dispatch/library + assignment/solver), selected as a tree:
+  Partitioned(inner)        per_group   compose.cooperation_groups → group_context → decide_in_scope(inner)
+  PooledMarket(offer, claim, arbitration, max_rounds, inner)
+                            per_company pooled_planner.run_pooled_market(..., ScopeDecider(inner))
+  GreedyNearest / RandomAssignment  central (scope-agnostic leaves; inside a wrapper they decide one scope)
+  NetworkFlow (P4)          central     decides the whole tick directly
+```
+
+### 2.1 The whole-tick `DispatchContext` (`dispatch/context.py`, one class for every scope)
+
+The new fields:
+- `scope`, whose kind is one of `tick`, `partition` or `company`.
+- `world`, a read-only `DispatchWorld`.
+- `tick_seed`.
+- `rng`: a property. On the tick scope it is `random.Random(tick_seed)`, built lazily the first time it is read. A sub-scope is handed an explicit value.
+- `tiebreak_seed`: `tick_seed` on the tick scope; on a sub-scope, the value its builder passes.
+- `execute(fn, *args)`: a direct call, or `tpool` when `solve_in_thread` is set.
+- `stats`: shared with the runner.
+- `scope_log`: `None` unless auditing; the battery turns it on.
+- `id_index`: a cached property holding `(trucks_by_id, orders_by_id)`, first document per id. `check_plan` and commit share it.
+
+Unchanged fields: `params`, `clock`, `rebates`, `candidate_settings`, `default_candidate_kind`, `raw_trucks`, `raw_orders`, `allowed_raw`, `accounting_cost`, lazy `trucks` and `orders` views, `candidate_pairs`, `sampled_trucks`, `deadhead_km`, `dual_cycle_cost`.
+
+Spatial pairs on the tick scope come from `spatial_pairs_for_partition(all trucks, all orders, rule=world.rule, settings)`. Sampling on the tick scope draws from `ctx.rng`.
+
+Nothing is copied beyond `tuple(candidates)` and `tuple(orders)`, which the per-bucket code already did.
+
+### 2.2 `DispatchWorld` (`dispatch/world.py`, framework)
+
+- Methods: `rule`, `allowed(t, o)`, `own_allowed`, `accounting_cost`, `partners(hid)`, `may_serve(server, owner)`, `cooperation_pairs(hauliers)` (the `(owner, server)` pairs including self-loops; this is what NetworkFlow needs), `component_of`, `structure`.
+- `validate_cooperation_world(profile)` runs at run start only. It raises `PolicyError` (message 14) when a pool pairs two companies that the adjacency does not.
+
+### 2.3 Built-in solvers and reusable helpers
+
+**`dispatch/compose.py`** (library, callable by any solver):
+- `cooperation_groups(ctx) -> list[GroupScope]` is a verbatim move of S2.
+- `decide_in_scope(policy, node, sub_ctx) -> Plan | None` does decide → `check_plan` against the sub-scope. On a violation it logs, counts and returns `None`.
+- `heads_to_pairs(plan, ctx)`.
+- `ScopeDecider(policy, node, parent_ctx)` is the adapter `pooled_planner` already calls: `candidate_kind`, `company_rule(hid, mtt)`, `company_context(**kw)`, `run(company_ctx)`.
+
+**`dispatch/scopes.py`** remains the only place contexts are built: `tick_context`, `partition_context` (the group scope) and `company_context`. Each takes a `parent` context and inherits `world`, `tick_seed`, `execute`, `stats` and `scope_log` from it.
+
+**`library/partitioned.py`** registers `Partitioned`:
+- Declarations: `information_model="per_group"`, `share_tag_format="v1"`, `module_rng="…pre-v2 byte identity…"`, `order_sensitive="inner ties broken by a module-RNG shuffle over input order (pre-v2)"`.
+- Sub-context values: `rng=self.inner.rng`, `tiebreak=self.inner.tiebreak_seed`, `sample_rng=random` (the module), spatial pairs from `spatial_pairs_for_partition(bucket, rule=world.rule)`.
+- Each group is decided through `ctx.execute(decide_in_scope, …)`.
+- It merges the group plans in group order. Inner exceptions propagate, as today.
+
+**`library/pooled_market.py`** registers `PooledMarket` with `information_model="per_company"` and `share_tag_format="audited"`. `decide(ctx)`:
+1. `self.inner.set_rng(ctx.rng)` and `self.inner.set_tiebreak(ctx.tick_seed)`, through the methods so the monkeypatch test still bites.
+2. Build the offer, claim and arbitration components from the typed params.
+3. Build `trucks_by_haulier` and `orders_by_haulier`, moved from S4a.
+4. `PoolMarket.from_structure(ctx.world.structure)`.
+5. `run_pooled_market(..., PooledPlannerContext(dispatch=ScopeDecider(...), cost=ctx.accounting_cost, rng=ctx.rng, tick_seed=ctx.tick_seed, ...))`.
+6. Return `Plan(chains in award order, notes={"market": {rounds_used, converged, candidate_pairs_round1, candidate_pairs_total, max_rounds}, "pair_notes": {(tid, oid): {"pool_id", "market_round"}}})`.
+
+The company exception path stays, with the log prefix `DISPATCH POLICY CRASHED` and a count in `stats`.
+
+**`assignment/pooled_planner.py`** becomes the market *engine* on the solver side:
+- Step 6 no longer computes tags. It returns `pair_notes`.
+- `owner_reserve_km` and `_finite_or_none` move to `assignment/accounting.py`.
+- `pair_allowed_own` and `pair_allowed_pooled` are dropped from the context (this closes F14).
+- `build_round_candidates`, the constants, `resolve_market_config` and `effective_cooperation_stamp` stay where they are, so monkeypatch targets and imports keep working.
+
+### 2.4 Information model
+
+- `@policy(..., information_model=...)` takes `central`, `per_group` or `per_company`. It is **required** for slot `dispatch`.
+- The effective model of a selection is the top-level policy's model. That rule is sound because an `inner` must be a leaf (`leaf_only` refs; a leaf is a policy with no dispatch ref).
+- It is stamped as `run_config.meta.policies.dispatch.information_model`, shown in the catalog and the CLI, and badged in the form.
+- **Enforcement is structural.** A company scope built by `compose`/`scopes` holds only that company's trucks plus the orders the market made visible. A group scope holds one cooperation group.
+- The battery check `information.scopes_respect_model` audits `scope_log`:
+  - per_company: every sub-scope's trucks belong to one haulier, and every order is owned by that haulier or a world partner.
+  - per_group: trucks and orders all fall inside one cooperation group.
+- Honest limit: this cannot *prove* a third-party solver does not peek. It certifies the helpers and the declared shape.
+
+### 2.5 Accounting flow (`assignment/accounting.py`, framework, no solver input)
+
+```python
+@dataclass(frozen=True)
+class ShareAccount:
+    truck_id: str; order_id: str; owner_haulier_id: str; carrier_haulier_id: str
+    owner_reserve_km: float | None    # owner_reserve_km(...) moved verbatim
+    awarded_cost_km: float            # float(cost(t,o)); exception -> inf (same as claim._cost_km)
+
+def account_shares(pairs, *, candidates, cost, own_allowed) -> list[ShareAccount]
+def render_share_tags(accounts, *, fmt: Literal["v1", "audited"],
+                      pair_notes: Mapping[tuple[str, str], Mapping] | None) -> dict[tuple[str, str], dict]
+```
+
+`account_shares`:
+- Covers cross-company pairs only: both hauliers known and different.
+- The reserve is computed over the owner's trucks in `candidates`, skipping any truck in the committed set.
+- The owner index is built lazily, only when the first cross pair appears.
+
+`render_share_tags`:
+- `v1` gives `{shared, owner_haulier_id, carrier_haulier_id, benefit_km: round(reserve - awarded, 3) if reserve is not None else None}`.
+- `audited` gives the 8 pooled keys. Values pass through `finite_or_none` exactly as S7b does. `pool_id` and `market_round` are read only from whitelisted `pair_notes` keys; they are `None` when absent.
+- What the two formats share: the *values* (reserve, awarded cost, benefit) are computed by one framework function for every solver.
+- What differs: `v1` omits the audit pair and renders a non-finite benefit as ±inf (the FIX-5 defect). It is registration-reserved to `Partitioned`, so pre-v2 partitioned runs stay byte-identical.
+- The F1 one-dial mirror is preserved. `solver_params`, the accounting dials, mirrors the dual-cycle params of the first node in a pre-order walk of the selection tree that declares them; normally that is the inner leaf. The values are stamped as `accounting_params`.
+
+### 2.6 How the market lives as a solver
+
+- **The market keeps:** offers, rounds, claims, arbitration, I-P1 to I-P4, round provenance, and pricing bids with `ctx.accounting_cost` (today's behaviour; a market pricing with its inner's objective would be a new arm).
+- **The framework does:** the cross-company feasibility re-check of every head (world rule), the accounting, and the `meta.market` patch. It still patches only when `notes["market"]` exists, so the multi-writer trap (doc 21 trap 6) stays on the pooled path only.
+
+---
+
+## 3. User-facing selection
+
+### 3.1 Spec (the only dial; `strategy`, `solver_params`, `planner.deployment`, `planner.topology` and `planner.market` become mirrors or legacy)
+
+```json
+"policies": {"dispatch": {"type": "PooledMarket", "timing": "online",
+  "params": {"max_rounds": 20,
+             "offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0}},
+             "claim": {"type": "ClaimAllPlanned"}, "arbitration": {"type": "LowestCost"},
+             "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 5.0}}}}}
+```
+
+Rules:
+- **Slots:** `dispatch` (default `Partitioned`, whose `inner` defaults to `RandomAssignment`, which is the old no-strategy default), plus planned `idle`, `queue`, `world.shedding`, `world.duration`.
+- **Ref values:** in JSON a ref value is always `{type, params?}`. A compiled or stamped ref also carries `version`, which is ignored on read.
+
+### 3.2 The new `PolicyParams` types
+
+- **`PolicyRef`:** declared as `inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True, help=...)`. It is validated against the *live* target registry: the policy registry for `dispatch`, or the existing `OFFER_REGISTRY`, `CLAIM_REGISTRY` and `ARBITRATION_REGISTRY` dicts through `framework/components.py`, so S11 keeps working. The target's params are validated recursively, with the path in the error message.
+- **Nullable number:** `float | None` or `int | None`, where `None` means unset. Needed for `OfferSpare.keep_below_km` (S10). A `None` value is dropped before a legacy component class is instantiated, so it uses its own `inf` default.
+
+Schema additions:
+- A ref is `{"type": "object", "x-policy-ref": "<kind>", "x-leaf-only": bool, "default": {"type": X, "params": {...}}, "description": ...}`.
+- A nullable number is `"type": ["number", "null"]`.
+- Both `x-` keywords join `SUPPORTED_SCHEMA_KEYWORDS`.
+
+### 3.3 CLI (`openride run`, `scenario new/edit`, `run-simulation`, `validate-run-policies`)
+
+- `--policy dispatch=PooledMarket` sets the top type. A type change resets params to that type's defaults.
+- `--policy-param dispatch.inner=RandomAssignment`: a string assigned to a ref sets its type and resets its params.
+- `--policy-param dispatch.inner.candidates=spatial` and `--policy-param dispatch.offer.keep_below_km=3`.
+- Parsing: the slot is the longest prefix that matches a known slot name. Every non-final path segment is a ref.
+- `--solver X` and `ORSIM_SOLVER` set the **innermost leaf**: descend `inner` refs; if the top has none, replace the top. X must be a leaf (message 11).
+- Bench aliases are allowed: `--policies pm=PooledMarket,pr=PooledMarket --policy-param pr.inner=RandomAssignment`.
+
+### 3.4 Dashboard
+
+The "Operator policies" card gets:
+- A dispatch dropdown, with an information-model badge on each option.
+- A schema-driven `PolicyParamsForm`, where a ref param renders a dropdown of its kind plus a nested `PolicyParamsForm` (recursive, indented card) and a nullable number gets an "unset" checkbox.
+- No hardcoded lists.
+- The Run step's **structure dropdown is untouched**: it is world data and the one-dataset/many-arms mechanism (doc 21 §2a).
+
+### 3.5 Stamp (`run_config.meta.policies.dispatch`)
+
+Fields:
+- `name`, `version`, `kind`, `timing`, `source`.
+- `label`, e.g. `"PooledMarket/GreedyNearest"`: the top name plus the `inner` chain.
+- `leaf`.
+- `information_model`, `share_tag_format`.
+- `params`, nested; each ref is `{type, version, params}`.
+- `candidate_settings`, `accounting_params`.
+
+The `Policies effective:` console line prints the label, the model and the params.
+
+### 3.6 Legacy translation (deterministic; one pure leaf function `policies/dispatch/legacy.py`, used by preprocess, the profile resolver and the env converter)
+
+| Legacy input | New selection |
+|---|---|
+| spec `solver` (or `planner.deployment.type`, else the default), params from `deployment.params` ⊕ `solverParams`, `planner.topology` absent or `partitioned` | `{type: Partitioned, params: {inner: {type: S, params: P∩declared}}}` |
+| the same with `planner.topology` set to `pooled` or `two-stage` | `{type: PooledMarket, params: {max_rounds, offer, claim, arbitration from planner.market (defaults OfferAll / ClaimAllPlanned / LowestCost / 20), inner: S}}` |
+| a bundle profile without `policies`: `strategy`, `solver_params`, `use_spatial_matching`, `planner` | the same as above; `use_spatial_matching: false` becomes `inner.candidates = "sampled"` where the leaf declares it; no `strategy` means `RandomAssignment` |
+| undeclared leaf or component params | dropped at WARNING (the one existing legacy-tolerance rule) |
+| an unknown topology, an unknown market component name, or `max_rounds` outside 1..100 or not an int | **loud** `PolicyError` / `SpecValidationError`. Today the runtime fails soft (S6, S15) |
+| `ORSIM_SOLVER` / `--solver S` | innermost leaf becomes S, with params reset; run-name segment ` · S` (unchanged) |
+| `ORSIM_PLANNER_TOPOLOGY=pooled\|two-stage\|partitioned` | top becomes PooledMarket or Partitioned, keeping the current inner. The market params come from the current PooledMarket, else from `profile.planner.market`. Segment ` · pooled` / ` · partitioned`, appended at today's position |
+| `ORSIM_OFFER_POLICY`, `ORSIM_CLAIM_POLICY`, `ORSIM_ARBITRATION_RULE`, `ORSIM_MARKET_MAX_ROUNDS` | the PooledMarket component type (params reset) and `max_rounds` (1..100). The top must be PooledMarket after the topology step, else message 9. Today 11..100 were ignored |
+| previous-round `policies.dispatch: {type: GreedyNearest}` (unreleased) | literal **central** GreedyNearest; bundles compiled that way are refused at run start through the mirror check (message 13) |
+| `solver` / `solverParams` next to `policies` | must equal the innermost leaf's type and params |
+| `planner.deployment` next to `policies` | the existing rule, retargeted to the leaf |
+| authored `planner.topology` next to `policies` | must equal the echo (Partitioned ↔ partitioned, PooledMarket ↔ pooled); for any other top, every value is an error |
+| authored `planner.market` next to `PooledMarket` | must agree with its params |
+| authored `planner.market` next to another top | tolerated as inert pooled-arm configuration, read only by `ORSIM_PLANNER_TOPOLOGY` |
+
+**Compile mirrors**, through one helper `mirror_dispatch_selection`:
+- `strategy` becomes the leaf.
+- `solver_params` and `deployment` are mirrored (existing keys only).
+- `planner.topology` becomes the echo; the key is removed when the echo is `None`.
+- `planner.market` becomes the legacy shape of the PooledMarket params when PooledMarket is selected.
+
+At run start the compiled `profile.policies` is authoritative and the mirrors are *checked*, not read.
+
+### 3.7 Error messages (exact; `where` paths as shown)
+
+1. `policies.dispatch.params.inner: unknown dispatch policy 'GreedyNeerest'. Registered dispatch policies: GreedyNearest, Partitioned, PooledMarket, RandomAssignment. (List them: openride policy list dispatch)`
+2. `policies.dispatch.params.inner: 'PooledMarket' decomposes the tick itself (it has an 'inner' of its own); an inner must be a per-scope solver: GreedyNearest, RandomAssignment.`
+3. `policies.dispatch.params.offer: unknown market.offer component 'OfferAl'. Registered: OfferAll, OfferNone, OfferSpare. (List them: openride policy list market.offer)`
+4. `policies.dispatch.params.inner must be an object {type, params?} (got 'GreedyNearest'). In spec.json write {"type": "GreedyNearest"}; on the CLI --policy-param dispatch.inner=GreedyNearest is accepted.`
+5. `policy overrides.dispatch.params for Partitioned: unknown key 'dual_cycle_bonus_km'. Declared params: inner. 'dual_cycle_bonus_km' is a param of the inner GreedyNearest: use dispatch.inner.dual_cycle_bonus_km.` (This hint is added whenever the inner declares the key.)
+6. `assignment profile planner.topology='nonsense' is not a legacy topology (partitioned, pooled, two-stage). The decomposition is now the dispatch policy: policies.dispatch.type = Partitioned or PooledMarket.`
+7. `spec sets planner.topology='pooled' but policies.dispatch.type='Partitioned'. planner.topology is the legacy spelling of the dispatch decomposition (pooled = PooledMarket, partitioned = Partitioned); remove planner.topology.`
+8. `spec sets planner.market that disagrees with policies.dispatch PooledMarket params (<k>=<a> vs <b>, …). planner.market is the legacy spelling of the PooledMarket params; move the values into policies.dispatch.params and remove planner.market.`
+9. `ORSIM_OFFER_POLICY='OfferSpare' configures the PooledMarket dispatch, but this run's dispatch is Partitioned/GreedyNearest. Add ORSIM_PLANNER_TOPOLOGY=pooled, or select --policy dispatch=PooledMarket --policy-param dispatch.offer=OfferSpare.`
+10. `ORSIM_PLANNER_TOPOLOGY='pooled' selects PooledMarket but ORSIM_POLICY_OVERRIDES sets dispatch.type='Partitioned'; pass one of them.`
+11. `--solver 'PooledMarket' names a decomposition, not a per-scope solver. --solver sets the inner solver (GreedyNearest, RandomAssignment); select a decomposition with --policy dispatch=PooledMarket.`
+12. `--solver 'RandomAssignment' conflicts with dispatch.inner.type='GreedyNearest' from --policy-param/--policy-overrides; --solver is shorthand for the innermost solver, pass one of them.`
+13. `assignment agent '<id>': profile planner.topology='pooled' disagrees with its compiled policies.dispatch (Partitioned). The compiled policies block is authoritative; change a run's decomposition with --policy dispatch=PooledMarket (ORSIM_PLANNER_TOPOLOGY is translated into exactly that). Fix the bundle or recompile.` The same shape is used for `strategy` versus the leaf and `planner.market` versus PooledMarket.
+14. `cooperation structure '<id>': pool '<pid>' lets <a> and <b> share orders but the structure's adjacency does not pair them. Pools and adjacency must agree; recompile the scenario (pools are canonical).`
+15. `@policy(slot='dispatch', name='X'): share_tag_format='v1' is reserved for the Partitioned built-in (the pre-v2 wire format, kept only for byte identity); new policies use the default 'audited'.`
+16. `@policy(slot='dispatch', name='X'): declare information_model= one of central, per_group, per_company (whose private data this policy's decision may use).`
+17. `@policy(slot='dispatch', name='GreedyNearest'): arm_budgets_ms key 'candidate=sampled' is not an arm of this policy. Arms: candidates=sampled.`
+18. `DISPATCH POLICY CONTRACT VIOLATION: <label> v<version> at step <n> returned an invalid tick plan: <problems>. The plan was DISCARDED (nothing committed this tick). This is a policy bug: run \`openride policy validate dispatch <name>\`.`
+19. `DISPATCH POLICY CONTRACT VIOLATION: inner <name> v<version> in scope <key> at step <n> returned an invalid plan: <problems>. The scope's plan was DISCARDED (nothing committed for this scope this tick). …`
+20. `DISPATCH POLICY CRASHED: inner <name> raised for company '<hid>' in round <r> at step <n>; that company commits nothing this round (pooled-market behaviour, unchanged). Traceback follows. (celery journal, not sim.log)`
+21. `--policy-param 'dispach.inner=X': no known slot is a prefix of 'dispach.inner'. Known slots: dispatch.` and `--policy-param '<arg>' must be SLOT.PATH=VALUE with a non-empty path, e.g. dispatch.inner.dual_cycle_bonus_km=0.`
+22. `dispatch fixture <path> is format openride.dispatch_context/1 (one scope); this version replays whole ticks (format /2). Re-capture with --capture-dispatch.`
+
+---
+
+## 4. Module layout (one responsibility each)
+
+**New**
+
+| File | Responsibility |
+|---|---|
+| `policies/framework/components.py` (leaf) | Component kinds (`market.offer`, `market.claim`, `market.arbitration`): the live registry (lazy import), default, description; `RefTarget`; `ref_target(kind, name)`; `ref_names(kind)` |
+| `policies/dispatch/legacy.py` (leaf, stdlib plus framework errors) | `LEGACY_LEAF_DEFAULT="RandomAssignment"`, `LEGACY_TOPOLOGIES`, `legacy_topology(planner)`, `legacy_market_params(planner)` (strict), `wrap_legacy_leaf(leaf_entry, planner)`, `topology_echo(type)`, `market_echo(params)` |
+| `policies/dispatch/world.py` | `DispatchWorld`, `tick_seed(run_id, step)`, `validate_cooperation_world(profile)` |
+| `policies/dispatch/compose.py` | Reusable decomposition helpers (§2.3) |
+| `policies/dispatch/composite.py` | `CompositePolicy(DispatchPolicy)`: holds `inner` and `inner_node`; forwards `set_rng`, `set_tiebreak` and `set_rebate_book` to the inner |
+| `policies/dispatch/library/partitioned.py`, `library/pooled_market.py` | The two decomposition solvers |
+| `assignment/accounting.py` | `ShareAccount`, `owner_reserve_km` (moved), `finite_or_none` (moved), `account_shares`, `render_share_tags` |
+| `tests/golden/compare.py` | F9 published-payload comparison |
+
+**Changed**
+
+| File | Change |
+|---|---|
+| `framework/params.py` | `PolicyRef`, `ref()`, nullable numbers, schema |
+| `framework/registry.py` | New `@policy` kwargs `information_model`, `share_tag_format`, `module_rng`, `arm_budgets_ms`; `PolicySpec.refs` and `is_composite` |
+| `framework/slots.py` | 5 slots; dispatch default `Partitioned`; drop the `legacy` status and `configured_via` |
+| `framework/resolve.py` | Nested resolve, merge, CLI parse, stamp, label |
+| `framework/catalog.py` | Adds `components`, plus the new policy fields |
+| `dispatch/context.py`, `scopes.py`, `runner.py` | Whole tick (`runner.run(ctx) -> TickOutcome(pairs, notes)`; no more partition/company methods) |
+| `dispatch/profile.py` | Tree resolution; `build_policy_tree(node, reuse=None)`; `bind_instance`; `mirror_dispatch_selection` (replaces `mirror_dispatch_params`); run-start check including mirrors and world |
+| `dispatch/resolved.py` | `ResolvedDispatch` gains `information_model`, `share_tag_format`, `label` |
+| `dispatch/base.py` | Adds `decision_rng(ctx)`, a context manager that binds `_rng` and `_tiebreak_seed` to the context for one decision and restores them in `finally` |
+| `dispatch/pair_solver.py` | Default `decide` runs under `decision_rng` |
+| `dispatch/capture.py` | Format /2, whole tick |
+| `assignment/solver/greedy_nearest.py`, `random_assignment.py` | `information_model="central"`, `decision_rng`; Greedy gets `arm_budgets_ms` |
+| `assignment/solver/__init__.py` | `DEFAULT_SOLVER = LEGACY_LEAF_DEFAULT` |
+| `assignment/policy/offer.py`, `claim.py`, `arbitration.py` | A nested typed `Params` and `version="1"` per class; the getters stay as library functions |
+| `assignment/pooled_planner.py` | Engine only (§2.3) |
+| `assignment/app.py` | §5 C3 |
+| `datagen/preprocess.py`, `scenario/spec_compile.py`, `scenario/frontend_scenario_spec.py`, `scenario/scenario_overrides.py`, `scenario/scenario_manager.py` | Selection plumbing (C4) |
+| `apps/simulation/run_container_logistics_simulation.py` | Combined override application, labels, stamp |
+| `openride_control/policies.py`, `command.py`, `manager.py` | Validation order, separate `--solver`, `components` |
+| `openride/policy_cmd.py`, `run_group.py`, `scenario_cmd.py` | CLI |
+| `policies/testing/fixtures.py`, `battery.py`, `bench.py` | Whole tick |
+| `tests/golden/capture_policy_golden.py` | Format 2 → `policy_golden_v2.json.gz`; `policy_golden.json.gz` is deleted |
+| `docs/policy_authoring.md`, `docs/plans/26-policy-slots.draft.md` | Rewritten for the new model |
+
+**Deleted:** `AssignmentApp._assign_pooled`, `_market_components`, `_resolved_topology`; `DispatchRunner.partition_context`, `company_context`, `company_rule` (moved to `compose.ScopeDecider`); `framework.catalog._legacy_names`.
+
+**FE:** `lib/policy-slots.ts` (+test), `components/scenario/PolicyParamsForm.tsx`, `PolicySlotsEditor.tsx`, `app/api/scenarios/policies/route.ts` (adds `components`), `lib/compareRunMeta.ts` (+test), `lib/runNameMeta.ts` (+test).
+
+**Import-cycle rule, extended.**
+- Leaves: `framework/*` (`components.py` imports the registries locally, in a function), `dispatch/{base,plan,pair_solver,resolved,legacy}.py`.
+- `app.py` may import `assignment.accounting` at top (it imports only `constraints`). It imports `policies.dispatch.*` only locally: `_build_dispatch_policy`, `_dispatch_runner`, `_dispatch_world`.
+- `pooled_planner` may import `policies.dispatch.legacy` (a leaf) and nothing else from `policies`.
+- `preprocess` may import exactly `policies.dispatch.legacy` (precedent: it already imports `apps.container_logistics.rebate`).
+
+---
+
+## 5. Ordered work items
+
+### C0: F9 golden comparison (tests only; must pass on `c30fd25` before any production change)
+
+**`tests/golden/compare.py`**
+```python
+TRANSPORT_TICK_KEYS = ("sim_clock", "time_step")
+def published_mismatch(actual, expected, *, sim_clock: str, time_step: int) -> str | None
+```
+For each `(topic, payload)`:
+- Topics must be equal.
+- Equal payload strings pass.
+- Otherwise `d = json.loads(actual)`. If neither key is in `d`, report a mismatch (the exact comparison failed).
+- If exactly one key is present, report a mismatch.
+- If both are present, both must equal the harness tick: `d["sim_clock"] == sim_clock` (a str) and `type(d["time_step"]) is int and d["time_step"] == time_step`. Delete both, then require `json.dumps(d, default=str) == expected` exactly. That keeps key order, float repr and escaping of everything else exact.
+
+**Edits:** `test_dispatch_golden_identity.py` and `test_dispatch_golden_via_init.py` compare `published` through it (`sim_clock = tick_states[case.tick_state].sim_clock`, `time_step = TIME_STEP`). All other fields stay exact. The fixture and `harness.py` are untouched.
+
+**Tests:** `tests/test_golden_published_compare.py`:
+- `test_identical_strings_pass`
+- `test_appended_tick_keys_equal_to_the_harness_tick_pass`, using a real stored payload with `, "sim_clock": "...", "time_step": 42` re-dumped
+- `test_wrong_time_step_fails`
+- `test_bool_time_step_fails`
+- `test_only_one_tick_key_fails`
+- `test_any_other_added_key_fails`
+- `test_changed_benefit_value_fails`
+- `test_reordered_payload_keys_fail`
+
+Each test's docstring says "Verified to have teeth" after a mutation (for example, stripping without checking the values).
+
+**Merge note:** do not edit the two main-tree hunk anchors (S17). In `assign()` the lines `# Reset the collaboration tags…`, `self._share_tags = {}` and `prof = self._assignment_profile()` stay adjacent and unchanged. `publish()` stays byte-unchanged. Imports and every other line are free to change.
+
+### C1: framework types, components, registry, slots, catalog
+
+**`params.py`**
+- `@dataclass(frozen=True) class PolicyRef: type: str; params: PolicyParams | None = None; version: str | None = None`.
+- `def ref(type_name: str) -> PolicyRef`.
+- `param(..., kind: str | None = None, leaf_only: bool = False)`: `kind` is allowed only on fields annotated `PolicyRef`.
+- `from_mapping` resolves refs through a hook. `framework/components.py` registers kind resolvers into `params._REF_RESOLVERS` at import, which avoids a params ↔ registry cycle; the `dispatch` resolver uses `registry.get_policy_spec`.
+- Default refs are resolved lazily. Registration checks only the ref's shape, because of discovery order. Full default resolution is checked by `test_every_policy_default_tree_resolves` and the battery's `params.defaults_validate`.
+- Nullable: `float | None` and `int | None`; bounds apply to numbers only. `to_dict` renders refs nested as `{"type", "params"}`; `to_profile_dict` adds `version`.
+
+**`registry.py`**
+- `policy(..., information_model=None, share_tag_format="audited", module_rng=None, arm_budgets_ms=None)`.
+- For slot `dispatch`, `information_model` is required (message 16).
+- `"v1"` is allowed only for name `Partitioned` (message 15).
+- `arm_budgets_ms` keys that name a str-choice arm are validated at registration (message 17). Ref-arm keys are validated by a test.
+- New `PolicySpec` fields: `information_model`, `share_tag_format`, `module_rng`, `arm_budgets_ms`, and `refs: tuple[(param, kind, leaf_only)]`. Property `is_composite = any(kind == "dispatch")`.
+
+**`slots.py`:** 5 slots; the dispatch default is `"Partitioned"`.
+
+**`catalog.py`:**
+- `policy_catalog() -> {slot: …}` is unchanged in shape.
+- Dispatch entries add `information_model`, `composite`, `share_tag_format`, `module_rng`, `order_sensitive`, `arm_budgets_ms`.
+- New `component_catalog() -> {kind: {default, description, policies:[{name, version, description, params_schema, defaults}]}}`.
+- `openride_control.scenario.cmd_known_policies` returns `{**known_policies(), "slots": …, "components": …}`.
+
+**Market component typed `Params`:**
+- `OfferSpare`: `keep_below_km: float | None = param(None, ge=0, help="… None = no threshold (infinity)")`, `only_when_short: bool = param(True, …)`.
+- `ClaimIfGainExceeds`: `min_gain_km: float = param(0.0, …)`, no bound.
+- All others are empty.
+- A component class without a `Params` (a test injection) is treated as declaring no params.
+
+**Built-ins:** Greedy and Random get `information_model="central"`.
+
+**Tests**
+
+`tests/test_policy_framework_params.py`, extended:
+- `test_ref_param_accepts_registered_target_and_fills_its_defaults`
+- `test_ref_param_rejects_unknown_target_listing_registered` (message 1)
+- `test_ref_param_rejects_composite_where_leaf_only` (2)
+- `test_ref_value_must_be_object_with_type_and_params_only` (4)
+- `test_nested_param_error_names_full_path`
+- `test_nullable_number_accepts_none_and_bounds_apply_to_numbers`
+- `test_json_schema_for_ref_and_nullable_uses_only_supported_keywords`
+- `test_to_dict_roundtrips_nested_refs`
+
+`tests/test_policy_framework_registry.py`, extended:
+- `test_dispatch_policy_must_declare_information_model`
+- `test_share_tag_format_v1_reserved_for_partitioned`
+- `test_arm_budget_keys_must_name_arms`
+- `test_composite_flag_from_a_dispatch_ref`
+
+`tests/test_policy_components.py`, new:
+- `test_component_ref_resolves_a_name_injected_into_the_live_registry`
+- `test_every_builtin_component_declares_params_and_defaults_validate`
+- `test_typed_defaults_reproduce_legacy_empty_params` (each offer/claim/arbitration class, typed-default instance versus a `{}` instance, on a fixed market fixture: identical output)
+- `test_offer_spare_keep_below_none_means_infinity`
+
+`tests/test_policy_catalog.py`, this-branch edits: five slots; `components` has 3 kinds; dispatch entries carry the new fields; `known-policies` keeps the datagen keys.
+
+### C2: legacy translation, world, accounting, resolution tree
+
+**`legacy.py`:** pure functions per §3.6.
+
+**`profile.py`:**
+- `resolve_profile_policies(prof) -> ({slot: ResolvedPolicy}, source)`, with nested params.
+- `resolve_dispatch_for_profile(prof) -> ResolvedDispatch`, a typed tree.
+- `build_policy_tree(node, reuse: DispatchPolicy | None = None) -> DispatchPolicy`.
+- `bind_instance(node, instance) -> DispatchPolicy`:
+  - a registered class whose name equals the top: reuse it (its inner names must match recursively, else raise);
+  - else, descend `inner`;
+  - a registered class whose name equals the innermost leaf: build the wrappers around the instance;
+  - an unregistered class: it becomes the innermost leaf under the legacy candidate rule;
+  - otherwise raise `PolicyError("AssignmentApp._solver is a X but the profile resolves dispatch to Partitioned/Y")`.
+- `mirror_dispatch_selection(profile, resolved)` and `check_mirrors(profile, resolved)` (message 13).
+- `assert_assignment_profiles_resolvable(collection)` now also runs `check_mirrors` and `validate_cooperation_world`.
+
+**`world.py`:** see §2.2.
+
+**`accounting.py`:** see §2.5.
+
+**Tests**
+
+`tests/test_policy_legacy_translation.py`, table-driven over §3.6:
+- `test_legacy_spec_translates[row]`
+- `test_legacy_profile_translates[row]`
+- `test_unknown_topology_is_loud`
+- `test_two_stage_is_pooled_market`
+- `test_unknown_market_component_is_loud`
+- `test_undeclared_component_params_dropped_with_warning`
+- `test_translation_is_deterministic` (same input → same JSON bytes)
+- `test_legacy_market_params_agree_with_resolve_market_config_on_valid_inputs` (a grid)
+
+`tests/test_share_accounting.py`:
+- `test_v1_render_reproduces_every_stored_partitioned_golden_share_tag`: for every partitioned golden case, `render(account(expected pairs, tick-state candidates))` equals the stored `share_tags`. The candidates are rebuilt by applying `filter_assignable_trucks` to the stored tick state.
+- `test_audited_render_reproduces_stored_pooled_tags_except_market_notes`: pool_id and market_round are fed from the stored tags.
+- `test_v1_non_finite_awarded_cost_renders_minus_inf`
+- `test_audited_non_finite_renders_none`
+- `test_reserve_is_min_over_owner_free_feasible_trucks`
+- `test_only_whitelisted_pair_notes_reach_the_tag`
+
+`tests/test_dispatch_world.py`:
+- `test_world_rule_equals_partition_rule_on_a_pair_grid` (a frozen oracle copy of `PartitionRule.allowed`)
+- `test_cooperation_world_check_refuses_pools_outside_adjacency` (14)
+- `test_normalized_structures_pass_the_check[edges|pools]`
+- `test_cooperation_pairs_include_self_loops`
+
+`tests/test_dispatch_profile_resolution.py`, this-branch edits: `test_bind_leaf_instance_at_innermost`, `test_bind_composite_instance_at_top`, `test_bind_mismatch_names_the_tree`, `test_unregistered_leaf_uses_legacy_kind_rule`, `test_mirrors_written_and_checked`, and the cache-rebuild test extended so that a `planner` patch rebuilds the runner.
+
+### C3: whole-tick runtime (HARD GATE: golden)
+
+**`app.py`**
+- `__init__`: `self._solver = build_policy_tree(resolve_dispatch_for_profile(prof))`, wrapped with the stale-worker hint as today.
+- `_dispatch_runner(prof)`: the cache key adds `json.dumps(prof.get("planner"), sort_keys=True, default=str)`; it calls `bind_instance`.
+- `_dispatch_world(prof)`.
+- `assign()`: the body after `candidates` is replaced by the §2 flow:
+  - `tick_seed = self._tick_seed(str(getattr(self, "run_id", "")), int(time_step or 0))`;
+  - `execute` is `_eventlet_tpool.execute` when `solve_in_thread` is set, else a direct call;
+  - log `Pooled cooperation:` when there are market notes, else `Cooperation:`;
+  - the haulier-block warning is unchanged.
+- `_record_round_stats(market_notes, time_step)` reads `notes["max_rounds"]`; its body is otherwise unchanged.
+- `_tick_seed` delegates to `world.tick_seed`.
+- `round_stats` and `_patch_round_stats_to_run_config` are unchanged.
+
+**Byte-identity argument, partitioned default (legacy profile, `__new__` or `__init__`)**
+1. The inputs and `candidates` lines are unchanged.
+2. `world.rule` is `PartitionRule(mtt, share_adjacency(active_cooperation_structure(prof)))`, the same rule as S2.
+3. Building the tick context draws no RNG. Its `rng` is lazy and Partitioned never reads it, so no `Random` is created.
+4. `cooperation_groups` is a verbatim move of S2: the same keys, insertion order, skips and buckets.
+5. Each group context equals the old `partition_context`: `rng = inner.rng`, which is the module because nothing injects; `tiebreak = None`; `sample_rng = random`; the same spatial source.
+6. `decision_rng` binds `_rng` to the module object and `_tiebreak_seed` to `None` for the call, then restores them, so the draws are identical. `check_plan` on each sub-scope does what the old runner did.
+7. The group plans merge in group order, so the commit order equals the old `assignment.extend` order.
+8. The tick-level `check_plan` and the heads mapping are pure, so there are no RNG draws. The pairs are the same document objects, with first doc per id over `candidates`; there are no duplicates in valid input.
+9. Accounting runs after all solves instead of interleaved with them. It is pure, and its truck set equals S3's: the owner's trucks all sit in the owner's bucket, and the used set restricted to those trucks is the same. `v1` renders the exact S3 arithmetic.
+10. `publish` is unchanged, so `published` is identical.
+11. Module RNG consumption is unchanged, so `rng_probe` is identical. With `solve_in_thread` set, `execute` is still called once per group, as today.
+
+**Byte-identity argument, pooled default**
+1. `tick_seed` uses the same blake2b formula (the harness sets `run_id`). `ctx.rng` is `Random(tick_seed)`, created the first time PooledMarket reads it.
+2. `set_rng` and `set_tiebreak` are called on the same leaf instance, before any draw, in the same order as S4.
+3. The components are equivalent (C1 test), and `trucks_by_haulier`/`orders_by_haulier` and the `PoolMarket` are built by moved code.
+4. The engine body is unchanged up to step 6. Removing the tag computation removes no draws.
+5. `ScopeDecider` reproduces the old runner: the same `candidate_kind`, company context (`sample_rng = ctx.rng`) and `run`.
+6. The audited render equals S7b because `awarded == float(accounting_cost) == award.cost_km` (S8), and the reserve uses the same function, trucks and committed set.
+7. The round stats get the same inputs, and `max_rounds` is the validated value, equal to the old clamp on valid configs.
+8. No module draws.
+
+**Edited pre-existing tests (intended contract changes; nothing else may change)**
+
+| Test | New form |
+|---|---|
+| `test_assignment_pooled.py::test_unknown_policy_names_are_fail_soft_and_still_assign` | `test_unknown_market_component_names_fail_loud`: `assign` raises `UnknownPolicyError` naming `NopePolicy` and listing the registered names |
+| `::test_two_stage_topology_is_an_alias_for_pooled` and `::test_unknown_or_missing_topology_falls_back_to_partitioned` | Retargeted to `legacy.legacy_topology`: `two-stage` → pooled; `{}` and `{planner: {}}` → partitioned; `nonsense` raises (6) |
+| `test_pool_housekeeping.py::test_market_components_pick_up_a_behavior_patched_after_construction` | `_dispatch_runner(prof).resolved.params.max_rounds` goes 3 → 9 after the patch |
+| `test_assignment_pooled_convergence.py::test_stamp_market_matches_what_the_app_actually_instantiates` | `effective_cooperation_stamp(profile)["market"] == market_echo(resolve_dispatch_for_profile(profile).params)`, and the PooledMarket component types instantiated from that profile match |
+| The via-`__init__` golden | Asserts the innermost leaf of `app._solver` (`innermost_policy` in `composite.py`) |
+| Docstring-only change: `test_assignment_pooled_benefit.py:51` | The location of `owner_reserve_km` |
+
+**New tests: `tests/test_whole_tick_dispatch.py`**
+- `test_partitioned_groups_match_the_frozen_inline_bucketing` (oracle: a copy of `app.py` 615-700 at `c30fd25`; golden tick A, chain and no-coop)
+- `test_partitioned_never_constructs_the_tick_rng` (monkeypatch `random.Random` to count constructions inside `assign`; expect 0 partitioned, 1 pooled)
+- `test_disallowed_cross_company_head_is_discarded_by_the_framework`: an `isolated_registry` central policy pairs a cargo truck with an acme order on chain A-B-C. Expect `assign() == []`, the ERROR message 18, `_share_tags == {}`, `stats["violations"] == 1`.
+- `test_scope_violation_discards_only_that_group`
+- `test_pooled_market_selection_equals_legacy_topology_path` (pairs, tags, published strings and round stats are equal)
+- `test_central_greedy_serves_only_world_allowed_cross_pairs_and_renders_audited_tags`
+- `test_central_leaves_draw_no_module_rng[GreedyNearest-spatial|GreedyNearest-sampled|RandomAssignment]`
+- `test_market_crash_logs_crashed_prefix_counts_and_skips_company`
+- `test_rebate_book_reaches_the_leaf_through_a_composite`
+
+Update `tests/test_policy_import_cycles.py` to include `assignment.accounting` and the new modules (they are picked up automatically by its walk).
+
+### C4: selection plumbing
+
+**`preprocess._normalize_policies`** wraps through `legacy.wrap_legacy_leaf`. With an authored block it runs the conflict checks of §3.6 (messages 7 and 8, the `solver` and `solverParams` checks against the leaf). Note: `_normalize_planner` always fills a default topology, so the checks read the raw spec's `planner`.
+
+**Recipe echo:** an authored planner is echoed verbatim.
+
+**`spec_compile`:** resolves the tree, calls `mirror_dispatch_selection`, retargets `_refuse_deployment_contradicting_policies` to the leaf, and `_patch_assignment_profiles` asserts `strategy == leaf`.
+
+**`frontend_scenario_spec`:**
+- `drop_dispatch_dials_superseded_by` also drops the carried `planner.topology` and `planner.market` next to a `policies` body.
+- `known_solvers()` returns `{"solvers": leaf names, "default": LEGACY_LEAF_DEFAULT}`.
+- `normalize_solver` returns a leaf.
+- editForm `policySlots` is nested.
+
+**`scenario_overrides`:**
+- `run_dispatch_overrides(collection, *, overrides, solver, topology, offer, claim, arbitration, max_rounds) -> (merged_overrides, labels: {"dispatch": str|None, "topology": str|None})` is the one function the sim main and the control both call. Order: explicit overrides; topology; market env; `--solver` (leaf). Conflicts are messages 10 and 12.
+- `apply_planner_topology_override` and `apply_market_override` become wrappers: the same returns, now loud.
+- `apply_policy_overrides` re-mirrors.
+
+**Sim main:**
+- One application at the old policy-override spot.
+- The dispatch label is appended there and the topology label at its old spot.
+- The run-start check, then the stamp (with the new fields).
+
+**Control:**
+- `build_run_policy_overrides` no longer folds `--solver` in; it travels separately as `ORSIM_SOLVER`.
+- `validate_run_policy_args` first calls `precheck_override_names(overrides, solver)`: every named type and component is registered, and the params of every *named* type are validated against that type. Only then does it load the bundle and call `run_dispatch_overrides`.
+
+**CLI:** nested `--policy-param`. `policy list [slot|kind]` includes components and an info-model column. `policy show` renders refs. `openride run --solver` help reads "innermost per-scope solver".
+
+**Tests**
+
+`tests/test_policies_spec_block.py`, this-branch edits:
+- `test_legacy_solver_translates_to_partitioned_inner`
+- `test_planner_topology_pooled_translates_to_pooled_market_with_market_block`
+- `test_authored_topology_disagreeing_with_policies_is_rejected` (7)
+- `test_authored_market_disagreeing_with_pooled_market_is_rejected` (8)
+- `test_every_shipped_spec_translates_to_partitioned_with_its_solver`
+- `test_policies_block_never_perturbs_generated_agents` (I1, nested)
+
+`tests/test_policies_spec_carry.py`: `test_body_with_policies_drops_carried_topology_and_market`.
+
+`tests/test_legacy_run_env_overrides.py`:
+- `test_topology_env_pooled_keeps_inner_and_market_block`
+- `test_topology_env_equals_compiled_pooled_scenario_outputs`
+- `test_market_env_without_pooled_market_is_loud` (9)
+- `test_env_conflicts_are_loud` (10, 12)
+- `test_run_name_segments_unchanged_for_legacy_inputs[solver|topology|solver+structure+topology]` (expected names hardcoded from `ec085f5` behaviour)
+- `test_market_max_rounds_env_range_1_to_100`
+
+`tests/test_policy_run_overrides.py`: nested-path edits; `test_solver_is_innermost_leaf`; `test_solver_naming_a_composite_is_rejected` (11).
+
+`tests/test_policy_override_equals_compiled_edit.py`: the path becomes `dispatch.inner.dual_cycle_bonus_km`; add a PooledMarket case.
+
+`tests/test_validate_run_policies_order.py`: `test_bad_solver_reported_even_without_a_bundle`, `test_bad_nested_ref_reported_before_bundle_lookup`.
+
+`tests/test_scenario_market_overrides.py`, edits:
+- `fail_soft` → `fail_loud` (unknown topology raises)
+- `patches_only_loaded_behaviors`: a type change resets params; the mirror has the legacy shape
+- `rejects_out_of_range`: 0, 101 and `"x"` raise; 11 is applied
+- `accepts_unknown_algorithm_names` → `rejects_unknown_component_names`
+
+### C5: battery, bench, capture, policy golden
+
+**Fixtures** are whole-tick: `Fixture(id, seed, trucks, orders, structure, max_travel_time_pickup, settings, time_step, run_id, accounting_params={})`. `Fixture.context(runner, …)` goes through `runner.tick_context`. Add `three_company_chain` (A-B-C plus a solo D) and `missing_haulier`.
+
+**Arms:**
+- The default.
+- Each non-default choice of each own `str` param.
+- For each ref param, every other available target of its kind that satisfies `leaf_only`, at its defaults.
+- Not crossed and not recursive.
+
+**Per-arm budgets (the rule):** every arm is gated by `arm_budgets_ms.get(arm, perf_budget_ms)` on `scale`, best of 3.
+- A budget is a *measured property of an arm*: `max(3 × worst of 2×5 runs, 500)`, with the numbers written at the decorator.
+- An arm that has not been measured inherits the default arm's budget, so it fails loudly if it is slower, which forces a measurement.
+- Measure and declare `GreedyNearest` `candidates=sampled` (about 1.6 s measured, so about 5000 ms), plus every Partitioned and PooledMarket arm.
+- Note in the docstring: a budget above `STEP_SETTLE_SECONDS` (2000 ms) means that arm makes the assignment agent a per-step straggler at 1000×500.
+
+**Checks:**
+- Add `information.model_declared`, `information.scopes_respect_model` and `params.rejects_bad_ref`.
+- `no_module_rng` and `order_independent` are skipped (ok, with the reason) when any node of the arm's selection declares `module_rng` or `order_sensitive`; these compose.
+- The battery no longer injects `set_rng`/`set_tiebreak`. The context is the only randomness input, and the module RNG is seeded per decide.
+
+**Tests:**
+- `tests/test_policy_contract_battery.py` runs over the 4 built-ins, all arms, in under 120 s.
+- `tests/test_policy_battery_catches_broken_policies.py`, new cases: `LeakyMarket` fails only `information.scopes_respect_model`; `CrossCompanyCentral` fails only `structure.only_allowed_pairs`; `SlowUndeclaredArm` fails only `performance.scale[candidates=x]`.
+- `test_arm_budget_keys_name_real_arms`.
+
+**Capture /2:** one file per captured tick, `step_<n>.json.gz`, containing format, run_id, time_step, sim_clock, horizon, `tick_seed`, `module_rng_state`, selection (stamp form), candidate_settings, world `{structure, max_travel_time_pickup, accounting_params}`, trucks, orders, `live_heads`, and `rebate_aware`. Replay refuses `rebate_aware: true` and format /1 (message 22).
+
+**Bench:** whole tick. Aliases. Adds the columns `info_model`, `cross_company`, `benefit_km_total` (from `account_shares`, the same function for every policy), plus the existing ones.
+
+**`policy_golden_v2.json.gz`:** Greedy and Random stay at version "1"; dispatch golden v1 proves their behaviour is unchanged. Add Partitioned "1" and PooledMarket "1". State in the commit message that only the harness format changed.
+
+**Tests:** `tests/test_dispatch_capture_and_bench.py` (this-branch edits): `test_replay_whole_tick_reproduces_live_heads[partitioned|pooled]`, `test_format_1_is_refused`, `test_bench_reports_framework_accounting_columns`; `tests/test_policy_golden_versions.py` (v2).
+
+### C6: FE (`feat/policy-slots`, never in the served checkout)
+
+**`lib/policy-slots.ts`:**
+- `ParamSchema.type` may be a `[T, 'null']` tuple; add `x-policy-ref` and `x-leaf-only`.
+- `parseCatalog(slots, components)`.
+- `fieldKind` adds `'policy'` and `'nullable-number'`.
+- Recursive `validateParamValues(schema, values, catalog, path)`.
+- Path-based `withParam(sel, slot, path[], value)` and `withRefType(sel, slot, path[], name, catalog)` (resets the ref's params to its defaults).
+- `defaultSelection` builds nested defaults.
+- `informationModelLabel`.
+
+`PolicyParamsForm` renders refs recursively. `PolicySlotsEditor` shows the badges and drops the legacy-slot summary. The policies route returns `components`. `compareRunMeta.runTagsOf` reads the solver tag from `meta.policies.dispatch.label` and adds the stamped top and leaf names to the parser's known list.
+
+**Tests:** `policy-slots.test.ts` covers refs (unknown target, leaf-only, nested errors with path), nullable, `withRefType` reset, and `selectionForApi` nested shape. `compareRunMeta.test.ts` covers the label. `runNameMeta.test.ts` checks that a `PooledMarket` segment with a stamped name is not read as a structure.
+
+### C7: docs (in-repo)
+
+**`docs/policy_authoring.md`**, rewritten:
+- Whole-tick context and the `world`.
+- Leaves versus composites, and refs (`ref()`, `leaf_only`).
+- Information model.
+- Using `compose` helpers.
+- Plan notes (reserved keys `market`, `pair_notes`).
+- Accounting is not your objective; the two tag formats.
+- Determinism (`ctx.rng`, `decision_rng`, `module_rng`, composition of `order_sensitive`).
+- Per-arm budgets.
+- Capture /2.
+- Selection (spec, CLI paths, `--solver` semantics).
+- A summary of the legacy table.
+
+**`docs/plans/26-policy-slots.draft.md`:** a new section "Round 2: whole-tick dispatch", the changed slot list, comparability, traps.
+
+Append a "Round 2" deviations section to `docs/plans/policy_slots_p0_p3.md` for the coder.
+
+---
+
+## 6. Restarts and comparability
+
+**Restarts**
+- **Celery restart required:** `assignment/app.py`, `accounting.py`, `pooled_planner.py`, `policy/*`, `arbitration.py`, `solver/*`, `policies/**`.
+- **None:** sim main, control plane, CLI (subprocesses).
+- **No api rebuild:** `run_config.meta` is unschema'd.
+- **Dashboard:** HMR plus a hard refresh. Deploy the backend first; the FE requires the `components` key and fails closed without it.
+- **Recompile optional:** old bundles translate. A recompile writes the nested `policies` block, and generated agents stay byte-identical (I1). Bundles compiled on this branch in round 1 (flat `policies.dispatch`) are refused at run start (message 13) until recompiled. Recompile them, never hand-patch.
+
+**Comparability**
+- Every existing scenario at its defaults is byte-identical: golden 70/70, plus the via-`__init__` subset and the out-of-grid real-bundle check (§7).
+- A pooled run selected through `--policy dispatch=PooledMarket` or `ORSIM_PLANNER_TOPOLOGY=pooled` equals the old pooled run (test).
+
+**New arms, not comparable to existing runs:**
+- Top-level `GreedyNearest` or `RandomAssignment` (central).
+- `RandomAssignment candidates=spatial` (round 1).
+- Any `OfferSpare`/`ClaimIfGainExceeds` parameterisation, as before.
+
+All of these are stamped with `label` and `information_model`.
+
+**Fail-loud flips that can refuse launches that used to run:**
+- Unknown market component names.
+- Unknown topology.
+- Mirror disagreement.
+- Pool/adjacency inconsistency.
+- `ORSIM_MARKET_MAX_ROUNDS` from 11 to 100 is now honoured instead of ignored.
+
+---
+
+## 7. Gates
+
+1. `venv/bin/python -m pytest -q -p no:cacheprovider tests/test_dispatch_golden_identity.py tests/test_dispatch_golden_via_init.py tests/test_golden_published_compare.py`: all green (70 + 15 + new). `git log --follow --oneline tests/golden/dispatch_golden_v1.json.gz` shows only `277e67b`, and `git diff 277e67b HEAD -- tests/golden/dispatch_golden_v1.json.gz tests/golden/harness.py` is empty.
+2. Assignment and policy subset: `pytest -q tests/test_assignment_*.py tests/test_container_logistics_*.py tests/test_scenario_market_overrides.py tests/test_pool_*.py tests/test_policy_*.py tests/test_dispatch_*.py tests/test_policies_*.py tests/test_whole_tick_dispatch.py tests/test_share_accounting.py tests/test_legacy_run_env_overrides.py tests/test_random_spatial_candidates.py`: green, apart from the two baseline failures (`test_rebate_aware_flag_defaults_false…`, `test_rules_baseline_does_not_recompile`).
+3. Full suite: `venv/bin/python -m pytest -q -p no:cacheprovider --continue-on-collection-errors -rfE 2>&1 | grep -E '^(FAILED|ERROR)' | sort | diff - /tmp/claude-1000/-home-user/f13570e2-81af-483b-8703-76ae77d0783f/scratchpad/baseline/baseline_failures.txt` gives an empty diff. Current is 37 failed / 2188 passed / 5 skipped / 8 errors. Passed goes up by the new tests only; report the exact number.
+4. All 16 specs compile into a tmp root (the round-1 one-liner). Each bundle's `policies.dispatch` is `Partitioned{inner: <its solver>}`. Compile → recipe → recompile → recompile gives identical agents.
+5. Out-of-grid equivalence. Re-run the round-1 reviewer's comparison: 54 cases through the real `__init__`, `277e67b` (scratch worktree) versus HEAD, partitioned and pooled, over the main-tree bundles `consortium_collab_7d`, `smoke_container_logistics_1d` and `collab_scale_500t_v2`. All identical. Add the pooled-through-env-converter case.
+6. Performance. Run a timing script over `tests.golden.harness.run_case`, cases `A-greedy-partitioned-chain-spatial-cap500`, `A-greedy-pooled-chain-spatial-cap500`, `C-greedy-partitioned-nocoop-only-sampled-cap40`, 20 repeats, interleaved, at `277e67b` versus HEAD. The HEAD median must be ≤ 1.05 × old + 2 ms per case. Report both medians and the load average.
+7. CLI:
+   - `venv/bin/python -m openride.cli policy list`, which shows 5 slots, 3 component kinds and the info models;
+   - `policy show dispatch PooledMarket`;
+   - `policy validate dispatch {Partitioned,PooledMarket,GreedyNearest,RandomAssignment}`: all PASS;
+   - `policy bench dispatch --policies Partitioned,PooledMarket,GreedyNearest --synthetic scale,three_company_chain`;
+   - `solver list`, which lists leaves.
+8. `python -m openride_control.command known-policies`: `slots` (5) and `components` (3). `validate-run-policies --scenario nope --solver Nope` names `Nope`.
+9. `tests/test_policy_import_cycles.py`: green.
+10. FE (`/verify-frontend`): `tsc --noEmit` 0; vitest 45 files, 519 plus the new tests.
+11. **Live, after the user approves a merge and a celery restart:**
+    - `multi_haulier_greedy_solver_500_trucks` n=3 interleaved, and `collab_scale_500t_v2 --structure chain` with `--policy dispatch=PooledMarket` n=3: `empty_ratio`/`dual_cycle_rate` in band, 100% osrm, 0 `DISPATCH POLICY` lines, a stamp label and info model, `meta.market` on pooled only, `benefit == reserve − awarded` on every pooled tag, and the run name unchanged on the default path.
+    - One `ORSIM_PLANNER_TOPOLOGY=pooled` run, whose stamp equals the `--policy` arm.
+    - A browser edit of a nested ref param.
+    - A `--capture-dispatch` run, then bench over it.
+
+---
+
+## 8. Risks, and where the reviewer should look hardest
+
+1. **Accounting re-derivation.**
+   - The partitioned (`v1`) `-inf` versus audited `None` handling.
+   - `awarded_cost_km` recomputed from the accounting cost instead of read from the bid. This holds only while every claim policy bids `float(cost)`; a future claim with another bid price would now be accounted at the framework cost. That is intended; check the docs say so.
+   - The owner-truck set and committed set equivalence (C2 golden-tag replay test).
+2. **RNG.**
+   - `ctx.rng` laziness: `Partitioned` must never touch it.
+   - `decision_rng` restores in `finally`, including on exceptions.
+   - The market must call `set_rng`/`set_tiebreak` through the methods: the monkeypatch test.
+   - A battery that stops injecting must still be truthful about `module_rng` on Partitioned.
+3. **`bind_instance` and the cache key.** A mismatch must raise, never silently rebuild around the wrong leaf; the key must include `planner`.
+4. **Duplicate ids.** The tick-level first-doc rule versus the market's old last-doc `trucks_by_id`. Only corrupt input reaches this; confirm the golden has no duplicates.
+5. **Legacy env converter.** Conflict detection; the order of run-name segments; `--solver` meaning "innermost"; precheck before the bundle (S19).
+6. **Mirrors.** The `strategy`, `planner.topology` and `planner.market` checks at run start must not refuse any main-tree bundle (gate 5 covers it).
+7. **Edited pre-existing tests.** Exactly the §5-C3 and C4 list; the reviewer should reject any other edit.
+8. **The information model is structural.** Check the `LeakyMarket` teeth, and that `scope_log` costs nothing when off.
+9. **`share_tag_format="v1"`** is reserved to Partitioned by registration. Confirm it cannot leak to a new policy.
+10. **The ref resolver hook.** A cycle at registration; component registries mutated by tests; the composite inner must be `leaf_only`.
+11. **The CLI dotted-slot parse** (future `world.shedding`) and FE/py parity of the nullable and ref schema keywords.
+12. **Battery runtime and perf flakiness.** Per-arm budgets on a box that varies 1.3-2×.
+13. **Merge zones (S17).** `publish()` byte-unchanged; the top of `assign()` unchanged.
+
+---
+
+## 9. NetworkFlow (P4) and P5
+
+**P4.** Add `policies/dispatch/library/network_flow.py`: `@policy(slot="dispatch", name="NetworkFlow", information_model="central", requires=("ortools",), perf_budget_ms=…, arm_budgets_ms=…)`. Its `decide(ctx)`:
+- uses `ctx.trucks`/`ctx.orders` over the whole tick;
+- uses `ctx.world.cooperation_pairs(hauliers)` for its `(owner, server)` set and `ctx.allowed` for truck-level feasibility;
+- builds the fleet per company from `ctx.trucks`;
+- returns `Plan(chains)`.
+
+**What does not change for P4:** the framework still checks every head against the world rule, computes the accounting (audited format), and stamps `central`. `Partitioned(inner=NetworkFlow)` gives a per-group MIP and `PooledMarket(inner=NetworkFlow)` a per-company MIP, both with no new code, because NetworkFlow is a leaf. The contract, selection, runner, invariants, accounting, stamp, catalog, form and battery need no change.
+
+**What P4 does add, all additive:**
+- read-only data accessors on the context: `ctx.travel` (an OSRM facility table), facility ids, order time windows;
+- making `timing: "plan"` executable: held tails in the runner (the slot's `executable_timings`);
+- an optional `fallback: PolicyRef = param(ref("GreedyNearest"), kind="dispatch", leaf_only=True)` time-budget fallback that NetworkFlow handles itself.
+
+**P5:**
+- `idle`, `queue`, `world.shedding` and `world.duration` reuse the registry, refs, catalog, form and stamp.
+- World slots are comparability boundaries. `NON_WORLD_KEYS` must stop stripping them.
+- The cooperation **structure** stays world data, not a slot.
+- `market.offer`/`market.claim` were finished here, as components.
+- Per-company configuration (for example `PooledMarket.inner_by_company`) needs one more param type: a map of refs.
+
+---
+
+## 10. For the coordinator
+
+**Out-of-repo docs**
+- **doc 26 (`/home/user/docs/reference/features/26-policy-slots.md`):** promote the in-repo draft, with:
+  - §1 Round 1 / Round 2 tables;
+  - §2 "the boundary": world = ownership, cooperation, feasibility, accounting, invariants, commit; solver = decomposition and coordination;
+  - the built-ins and their info models;
+  - the selection grammar with refs;
+  - the legacy table (§3.6);
+  - the comparability statement (§6);
+  - traps: `v1` tags reserved; `ctx.rng` versus module; mirrors checked at run start; fail-loud flips; restart rule; the deploy order (backend first);
+  - verification evidence and the pending live gates.
+- **CLAUDE.md §5 pointer:** `- **Policy slots — dispatch is ONE whole-tick solver; partitioned/pooled-market decomposition is a solver choice (Partitioned / PooledMarket), cooperation structure stays world data; accounting is framework-owned** (2026-10) → docs/reference/features/26-policy-slots.md`
+- **doc 11 update:**
+  - Per-run `--solver X` / `ORSIM_SOLVER` now sets the innermost per-scope solver of the selected dispatch and fails loud on an unknown name (exit 2 / a 400 from the dashboard).
+  - `--policy dispatch=…` and `--policy-param dispatch.inner.k=v` select the decomposition and nested params.
+  - `ORSIM_PLANNER_TOPOLOGY` and the `ORSIM_OFFER`/`ORSIM_CLAIM`/`ORSIM_ARBITRATION`/`ORSIM_MARKET_MAX_ROUNDS` variables are translated into those and are loud.
+  - The stamp is `run_config.meta.policies.dispatch` (label, information_model).
+- **doc 21 banner** (recommended): §2's table, §7's fail-soft rule and §11's per-run selection are superseded by doc 26. Topology is now a solver choice; market components are fail-loud.
+- **`/restart-for` `SKILL.md` entry:** `apps/container_logistics/policies/**`, `assignment/{app,accounting,pooled_planner,arbitration}.py`, `assignment/policy/*`, `assignment/solver/*` → `systemctl --user restart openride-celery`. `openride_control/policies.py`, `openride/policy_cmd.py`, `apps/simulation/run_container_logistics_simulation.py` → nothing (subprocess).
+
+**Explainer page claims that change**
+- **Slots list:** seven slots become five. `market.offer`/`market.claim` are no longer slots; they are PooledMarket components, together with `market.arbitration`.
+- **Scope:** "the framework calls a policy once per partition or per company" becomes "the policy gets the whole tick; decomposition is a solver (Partitioned, PooledMarket) built from reusable helpers".
+- **Market:** "framework-hosted pooled topology with offer/claim/arbitration registries (fail-soft)" becomes "PooledMarket solver, per_company, components fail-loud; the framework only re-checks feasibility and owns the accounting".
+- **Limits and notes:**
+  - the information model is declared and stamped, with a structural audit;
+  - share tags have two formats with equal values;
+  - per-arm performance budgets;
+  - P4 no longer says "the scope stays a framework decision";
+  - the run-name and stamp label now shows the decomposition, e.g. `PooledMarket/GreedyNearest`.
+
+### Critical Files for Implementation
+- /home/user/openride_apps_policy_slots/apps/container_logistics/assignment/app.py
+- /home/user/openride_apps_policy_slots/apps/container_logistics/assignment/pooled_planner.py
+- /home/user/openride_apps_policy_slots/apps/container_logistics/policies/dispatch/profile.py (plus new compose.py, world.py, legacy.py, library/partitioned.py, library/pooled_market.py)
+- /home/user/openride_apps_policy_slots/apps/container_logistics/policies/framework/params.py (plus registry.py, resolve.py, new components.py)
+- /home/user/openride_apps_policy_slots/apps/container_logistics/scenario/scenario_overrides.py (plus datagen/preprocess.py, apps/simulation/run_container_logistics_simulation.py, openride_control/policies.py)
+---
+
+## Deviations (coder)
+
+Each item says what differs from the text above and why. Anything not listed was
+implemented as written.
+
+### C1
+
+1. **The slot default `Partitioned` is declared but not registered until C3.** `slots.py`
+   says `default="Partitioned"` as specified; `registry.default_policy_name("dispatch")`
+   keeps its strict contract (the default must be registered), so it raises
+   `UnknownPolicyError` until C3 registers `Partitioned`. Every runtime reader that
+   really meant "the default LEAF" now reads `policies/dispatch/legacy.LEGACY_LEAF_DEFAULT`
+   (the final §4/C4 semantics, not a stopgap): `solver.DEFAULT_SOLVER`,
+   `dispatch/profile.legacy_dispatch_from_profile`, and in `frontend_scenario_spec`
+   `normalize_solver`, the editForm `solver`, the editForm fallback and
+   `known_solvers()["default"]`. The one interim piece is the round-1 flat resolver
+   `framework/resolve.py`: a block that does not name `dispatch` (and
+   `merge_policy_overrides` with no current entry) resolves to `LEGACY_LEAF_DEFAULT`
+   through `_unnamed_type` — behaviourally identical to `Partitioned{inner=RandomAssignment}`
+   on today's partitioned runtime. C2's nested resolver replaces `_unnamed_type` with the
+   slot default. Until C3, `openride policy list` marks no dispatch row as default.
+2. `framework/resolve.py` imports the leaf `policies.dispatch.legacy` at module top (for
+   item 1). `legacy.py` holds only `LEGACY_LEAF_DEFAULT`; C2 completes it.
+3. `PolicyParams.from_mapping` gained `path=` (the dotted location used to name nested
+   refs, e.g. `policies.dispatch.params.inner`); it defaults to `where` up to ` for `, so
+   every existing caller keeps its messages. Nested params errors read
+   `<path>.params for <Target>: ...`.
+4. Registration validates defaults with the new `params.check_defaults(cls, where=)`
+   (non-ref defaults fully, ref defaults by shape: a known `kind` and a `ref("<name>")`
+   default) instead of `from_mapping(None)`, which would resolve refs during discovery.
+   `kind` must be a kind with a registered resolver at declaration time; `kind=`/
+   `leaf_only=` on a non-ref field and a ref without `kind` are `PolicyRegistrationError`.
+5. A ref VALUE may carry `version` (the stamp/compiled echo; ignored on read) besides
+   `type`/`params` (`params.REF_ENTRY_KEYS`). Any other key is refused with
+   `<path>: unknown key(s) '<k>' in a policy reference. Allowed keys: type, params (and
+   version, which is ignored).` (the spec gives no text for this case).
+6. `ParamInfo` gained `nullable` and the property `is_ref`; `_ParamMeta` gained `kind`
+   and `leaf_only`. A nullable type error reads `must be a number or null`. `str | None`
+   is an unsupported type (only nullable numbers were specified).
+7. `framework/components.py` also exports `ComponentKind`/`COMPONENT_KINDS`,
+   `live_registry(kind)`, `NoParams` (the params of a component class with no `Params`)
+   and `instantiate_component(kind, ref)`: builds the class with `params=` the typed
+   values minus `None` (so `OfferSpare.keep_below_km=None` takes the class's own `inf`).
+   C3's `PooledMarket` should instantiate through it. The legacy getters
+   (`get_offer_policy`, `get_claim_policy`, `get_arbitration_rule`) are unchanged in C1
+   (still fail-soft, still raw dicts): today's pooled path (`app._market_components`)
+   keeps working, and C3 replaces that path.
+8. Message 2 names the composite's dispatch ref params (`it has an 'inner' of its own`)
+   and the leaves, computed live; the word after "an" is the ref's field name.
+9. `information_model`, when given on a non-dispatch slot, must still be one of the three;
+   it is required only for `dispatch`. `share_tag_format` must be `v1` or `audited`.
+   `arm_budgets_ms` values must be positive ints, and the DEFAULT arm's key
+   (`candidates=spatial`) is refused as "not an arm" (the default arm uses `perf_budget_ms`).
+   `PolicySpec.arm_budgets_ms` is a read-only mapping; the catalog renders it as a dict.
+10. A component's catalog `description` is the first paragraph of its class docstring
+    (no new class attribute); `version` is the class attribute `version="1"` (or `None`
+    for an injected class without one).
+11. Tests: every dummy `@policy(slot="dispatch", ...)` in this branch's tests now passes
+    `information_model="central"` (required by message 16): `test_policy_framework_registry.py`,
+    `test_policy_catalog.py`, `test_policy_battery_catches_broken_policies.py`,
+    `test_dispatch_capture_and_bench.py`, `test_policy_context_company_spatial.py`.
+    Beyond the spec's list I added `test_ref_declaration_errors_are_registration_errors`
+    (params) and `test_every_policy_default_tree_resolves` (registry; named in §5 C1's
+    params bullet), and listed `framework.components`, `framework.catalog` and
+    `dispatch.legacy` as leaves in `test_policy_import_cycles.py`.
+12. This-branch tests whose contract changed with the slot table:
+    `test_policies_spec_block.py::test_unknown_slot_rejected` (known-slot list) and
+    `::test_legacy_market_slot_points_to_planner_market` → `test_market_component_is_not_a_slot`;
+    `test_policy_framework_registry.py::test_registering_into_a_legacy_slot_...` →
+    `test_market_components_are_not_slots`, plus the lookup/discovery tests' legacy lines;
+    `test_container_logistics_solver.py::test_get_solver_none_is_the_slot_default` →
+    `test_get_solver_none_is_the_legacy_leaf_default` (that function was written on this
+    branch, `959b056`, in a pre-existing file).
+13. `openride/policy_cmd.py` still has its `legacy`-status rendering branch; no real
+    catalog produces that status any more, and `tests/test_cli_policy_group.py` feeds it
+    a fake catalog. Left for C4, which rewrites `policy list` (components, info-model column).

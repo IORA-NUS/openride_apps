@@ -43,7 +43,7 @@ from apps.container_logistics.policies.testing import fixtures as fx
 def asks_spatial():
     """A policy whose ``candidates`` defaults to ``sampled`` but whose decide asks for spatial pairs."""
     with isolated_registry():
-        @policy(slot="dispatch", name="AsksSpatial", version="1", description="always reads spatial pairs")
+        @policy(slot="dispatch", information_model="central", name="AsksSpatial", version="1", description="always reads spatial pairs")
         class AsksSpatial(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):

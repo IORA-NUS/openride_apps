@@ -189,7 +189,7 @@ def test_bench_reports_both_policies_on_synthetic():
 def test_bench_counts_violations():
     """Verified to have teeth: reading ``violations`` as ``0`` in ``_bench_one`` failed this test."""
     with isolated_registry():
-        @policy(slot="dispatch", name="DoubleBooker", version="1", description="one order to every truck")
+        @policy(slot="dispatch", information_model="central", name="DoubleBooker", version="1", description="one order to every truck")
         class DoubleBooker(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -214,7 +214,7 @@ def test_capture_sees_the_raw_plan_before_the_invariants(tmp_path):
     Verified to have teeth: moving the capture call after ``check_plan`` in
     ``DispatchRunner.run`` failed this test."""
     with isolated_registry():
-        @policy(slot="dispatch", name="DoubleBooker2", version="1", description="one order to two trucks")
+        @policy(slot="dispatch", information_model="central", name="DoubleBooker2", version="1", description="one order to two trucks")
         class DoubleBooker2(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
