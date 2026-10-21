@@ -4,7 +4,9 @@ What is locked: for 68 stored cases (tick states A/B/C over the compiled
 ``collab_scale_500t_v2`` and ``multi_haulier_greedy_solver_500_trucks`` worlds,
 plus the all-ties world T), the REAL ``AssignmentApp.assign`` + ``publish``
 must reproduce, exactly, the ordered ``(truck, order)`` pairs, the share tags,
-every published MQTT payload STRING, the pooled ``round_stats()``, and the next
+every published MQTT payload STRING (compared by ``tests/golden/compare.py``,
+which tolerates only the transport's appended ``sim_clock``/``time_step`` pair at the
+harness tick, review F9), the pooled ``round_stats()``, and the next
 draw of the ``random`` module after the tick (which locks how many module-RNG
 draws the partitioned path consumes).
 
@@ -38,7 +40,8 @@ from typing import Any
 import pytest
 
 from tests.golden.capture_dispatch_golden import FIXTURE_PATH, FORMAT_VERSION, check_teeth
-from tests.golden.harness import run_case
+from tests.golden.compare import published_mismatch
+from tests.golden.harness import TIME_STEP, run_case
 
 CAPTURE_COMMIT = "ec085f5"
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -69,7 +72,12 @@ def test_golden_case_is_byte_identical(case_id):
     # JSON round trip so tuples/lists and float reprs compare like the stored form.
     actual = json.loads(json.dumps(run_case(case, _FIXTURE["tick_states"])))
     expected = case["expected"]
-    for field in ("pairs", "share_tags", "published", "round_stats", "rng_probe"):
+    tick = _FIXTURE["tick_states"][case["tick_state"]]
+    published_problem = published_mismatch(
+        actual["published"], expected["published"], sim_clock=tick["sim_clock"], time_step=TIME_STEP
+    )
+    assert published_problem is None, f"{case_id}: 'published' differs: {published_problem}"
+    for field in ("pairs", "share_tags", "round_stats", "rng_probe"):
         assert actual[field] == expected[field], (
             f"{case_id}: '{field}' is no longer byte-identical to the golden capture "
             f"({_FIXTURE['header']['capture_commit']}); {_first_difference(actual[field], expected[field])}"

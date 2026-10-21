@@ -36,6 +36,7 @@ from orsim.lifecycle import ORSimApp
 from apps.container_logistics.assignment.app import AssignmentApp
 from apps.container_logistics.assignment.solver import GreedyNearestSolver, RandomAssignmentSolver
 from tests import test_dispatch_golden_identity as _golden
+from tests.golden.compare import published_mismatch
 from tests.golden.harness import MODULE_SEED, RUN_ID, TIME_STEP, StubManager, StubMessenger
 
 _FIXTURE = _golden._FIXTURE
@@ -138,7 +139,12 @@ def test_golden_case_via_init(case_id, monkeypatch):
     # JSON round trip so tuples/lists and float reprs compare like the stored form.
     actual = json.loads(json.dumps(actual))
     expected = case["expected"]
-    for field in ("pairs", "share_tags", "published", "round_stats", "rng_probe"):
+    tick = _FIXTURE["tick_states"][case["tick_state"]]
+    published_problem = published_mismatch(
+        actual["published"], expected["published"], sim_clock=tick["sim_clock"], time_step=TIME_STEP
+    )
+    assert published_problem is None, f"{case_id}: 'published' differs: {published_problem}"
+    for field in ("pairs", "share_tags", "round_stats", "rng_probe"):
         assert actual[field] == expected[field], (
             f"{case_id} (built via AssignmentApp.__init__): '{field}' is no longer "
             f"byte-identical to the golden capture ({_FIXTURE['header']['capture_commit']}); "
