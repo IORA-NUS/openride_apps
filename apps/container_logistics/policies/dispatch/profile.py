@@ -42,6 +42,7 @@ from apps.container_logistics.policies.framework import (
     resolve_policies_block,
     spec_for_class,
 )
+from apps.container_logistics.policies.framework.params import version_echo, warn_version_drift
 from apps.container_logistics.policies.framework.resolve import (
     ENTRY_KEYS,
     INNER_PARAM,
@@ -178,9 +179,11 @@ def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, Resolve
     (review F4). A compiled ``profile.policies`` block is resolved with the same
     strictness as compile: an unknown slot or an entry key outside
     :data:`COMPILED_ENTRY_KEYS` raises (nothing is silently stripped). Its ``version``
-    and ``kind`` (and each nested ref's ``version``) are IGNORED: they are a
+    and ``kind`` (and each nested ref's ``version``) never select anything: they are a
     compile-time echo, the run stamp re-derives them from the registry, so the record
-    is always what ran. A round-1 FLAT block (``{type: GreedyNearest}``) resolves
+    is always what ran. A ``version`` must be a non-blank string or null (else
+    ``PolicyParamsError``), and one that differs from the registered version is logged
+    as ``POLICY VERSION DRIFT`` (WARNING). A round-1 FLAT block (``{type: GreedyNearest}``) resolves
     literally, as a central ``GreedyNearest`` (round-2 §3.6; the run-start mirror
     check then refuses such a bundle). Next to a block, ``use_spatial_matching``
     other than ``true`` is refused. Without a block the legacy keys are translated:
@@ -212,7 +215,11 @@ def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, Resolve
             "by policies.dispatch.params.candidates. Remove use_spatial_matching."
         )
     authored = {slot: _authored_from_compiled(slot, entry) for slot, entry in block.items()}
-    return resolve_policies_block(authored, where="profile.policies"), "bundle"
+    resolved = resolve_policies_block(authored, where="profile.policies")
+    for slot, entry in block.items():  # the top-level echo; nested refs are checked by params
+        warn_version_drift(f"profile.policies.{slot}", slot, resolved[slot].name,
+                           entry.get("version"), resolved[slot].version)
+    return resolved, "bundle"
 
 
 def _authored_from_compiled(slot: Any, entry: Any) -> Any:
@@ -230,6 +237,7 @@ def _authored_from_compiled(slot: Any, entry: Any) -> Any:
             f"A compiled entry carries exactly {', '.join(COMPILED_ENTRY_KEYS)}. "
             "Fix the bundle or recompile the scenario."
         )
+    version_echo(entry.get("version"), where=f"profile.policies.{slot}")
     return {k: v for k, v in entry.items() if k in ENTRY_KEYS}
 
 

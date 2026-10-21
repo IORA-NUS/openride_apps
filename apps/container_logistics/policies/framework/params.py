@@ -29,7 +29,24 @@ registration (its target may register later in discovery); it is resolved lazily
 the first ``from_mapping``/``json_schema``/``to_dict`` that needs it.
 
 Refs are resolved through the hook :data:`_REF_RESOLVERS` (kind -> resolver), filled
-by ``framework/components.py`` at import, so this module never imports the registry.
+by ``framework/components.py`` (``dispatch`` at its import, each component kind when
+its module calls ``register_component_kind``), so this module never imports the
+registry. A kind not yet registered triggers :data:`_REF_KIND_LOADER` once (the
+components module's lazy import of the built-in component modules).
+
+Cycles: a ref whose params come from defaults is resolved under a stack of the
+default-driven ``(kind, name)`` nodes above it (:data:`_DEFAULT_STACK`); meeting one
+again is a cycle of ref defaults that would never terminate, so it raises
+``PolicyParamsError`` naming the cycle (registration refuses dispatch cycles earlier,
+``registry._check_ref_default_cycles``; this is the backstop for component kinds and
+anything that bypassed ``@policy``). Explicit finite nesting (``{type: X, params:
+{inner: {type: X, params: {...}}}}``) is not a cycle and resolves.
+
+Versions: a ref value's ``version`` is the compiled/stamp echo of the target's
+registered version. It never selects anything (the registered version runs), but a
+non-string or blank value is refused (:func:`version_echo`) and a value that differs
+from the registered one is logged at WARNING with the greppable prefix
+``POLICY VERSION DRIFT`` (:func:`warn_version_drift`).
 
 Leaf module: stdlib only (plan §2.7).
 """
@@ -41,7 +58,7 @@ import logging
 import math
 import types
 import typing
-from dataclasses import dataclass
+from contextvars import ContextVar
 from typing import Any, Callable, Mapping, Self
 
 from .errors import PolicyParamsError, PolicyRegistrationError
@@ -58,6 +75,9 @@ __all__ = [
     "check_defaults",
     "SUPPORTED_SCHEMA_KEYWORDS",
     "REF_ENTRY_KEYS",
+    "VERSION_DRIFT_PREFIX",
+    "version_echo",
+    "warn_version_drift",
 ]
 
 SUPPORTED_SCHEMA_KEYWORDS = frozenset({
@@ -79,16 +99,29 @@ _BOUNDS = (
     ("le", lambda v, b: v <= b, "<=", "maximum"),
     ("lt", lambda v, b: v < b, "<", "exclusiveMaximum"),
 )
-# Path segments dropped when a params path is spelled as a CLI --policy-param path.
-_NON_CLI_ROOTS = ("policies", "policy overrides", "profile.policies")
+# The dotted roots a params path can start with that a CLI ``--policy-param`` path
+# drops (matched by STRING prefix, longest first: ``profile.policies`` has a dot).
+# A path under any other root (``planner.market``, ``defaults of X``) has no CLI
+# spelling, and messages then give no ``--policy-param`` hint.
+_CLI_ROOTS = ("profile.policies", "policy overrides", "policies")
+
+#: The greppable prefix of the WARNING logged when a compiled ref's ``version`` differs
+#: from the registered one (:func:`warn_version_drift`).
+VERSION_DRIFT_PREFIX = "POLICY VERSION DRIFT"
 
 #: kind -> resolver ``(name, *, where, leaf_only) -> target``. The target exposes
 #: ``name``, ``version`` and ``params_cls``; the resolver raises a ``PolicyError`` for
 #: an unknown or (``leaf_only``) composite target. Filled by ``framework/components.py``.
 _REF_RESOLVERS: dict[str, Callable[..., Any]] = {}
+#: Called (no args) when a ref kind has no resolver yet: ``framework/components.py``
+#: sets it to its lazy import of the built-in component modules.
+_REF_KIND_LOADER: Callable[[], None] | None = None
+#: The default-driven ``(kind, name)`` refs being resolved, outermost first (cycle guard).
+_DEFAULT_STACK: ContextVar[tuple[tuple[str, str], ...]] = ContextVar("policy_ref_default_stack",
+                                                                     default=())
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class PolicyRef:
     """A reference to another policy (or market component) of some kind.
 
@@ -107,7 +140,7 @@ def ref(type_name: str) -> PolicyRef:
     return PolicyRef(type=type_name)
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class _ParamMeta:
     help: str
     ge: float | None
@@ -119,7 +152,7 @@ class _ParamMeta:
     leaf_only: bool = False
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class ParamInfo:
     """One validated field declaration: name, base type, default and constraints.
 
@@ -255,7 +288,7 @@ def _check_constraints(owner: str, name: str, hint: type, meta: _ParamMeta) -> N
 
 def _check_ref_declaration(owner: str, name: str, default: Any, meta: _ParamMeta) -> None:
     """Shape-only check of a ref field: its kind is known, its default is a ``ref(...)``."""
-    if meta.kind not in _REF_RESOLVERS:
+    if _ref_resolver(meta.kind) is None:
         known = ", ".join(sorted(_REF_RESOLVERS)) or "(none)"
         raise PolicyRegistrationError(
             f"{owner}.{name}: a PolicyRef param needs kind= one of {known} (got {meta.kind!r})."
@@ -435,23 +468,77 @@ def _typed(f: ParamInfo, value: Any, where: str) -> Any:
     return value
 
 
-def _cli_path(path: str) -> str:
-    """``policies.dispatch.params.inner`` -> ``dispatch.inner`` (the --policy-param spelling)."""
-    parts = path.split(".")
-    if parts and parts[0] in _NON_CLI_ROOTS:
-        parts = parts[1:]
-    return ".".join(p for p in parts if p != "params")
+def _ref_resolver(kind: Any) -> Callable[..., Any] | None:
+    """The resolver of ref ``kind``, loading the built-in component kinds once if needed."""
+    resolver = _REF_RESOLVERS.get(kind) if isinstance(kind, str) else None
+    if resolver is None and isinstance(kind, str) and _REF_KIND_LOADER is not None:
+        _REF_KIND_LOADER()
+        resolver = _REF_RESOLVERS.get(kind)
+    return resolver
 
 
-def _ref_entry(value: Any, path: str) -> tuple[str, Mapping[str, Any] | None]:
-    """``(type, raw params)`` of a ref value: a :class:`PolicyRef` or ``{type, params?}``."""
+def _cli_path(path: str) -> str | None:
+    """``policies.dispatch.params.inner`` -> ``dispatch.inner`` (the --policy-param spelling).
+
+    The root (:data:`_CLI_ROOTS`, ``profile.policies.``, ``policy overrides.`` or
+    ``policies.``) is matched by string prefix. ``None`` for a path under any other
+    root: it has no ``--policy-param`` spelling.
+    """
+    for root in _CLI_ROOTS:
+        if path.startswith(root + "."):
+            rest = path[len(root) + 1:]
+            return ".".join(p for p in rest.split(".") if p != "params") or None
+    return None
+
+
+def version_echo(value: Any, *, where: str) -> str | None:
+    """Validate a compiled ``version`` echo: ``None`` (absent) or a non-blank string.
+
+    Raises ``PolicyParamsError`` for anything else (a number, an object, ``""`` or
+    whitespace). The value never selects a version; see :func:`warn_version_drift`.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise PolicyParamsError(
+            f"{where}.version must be a non-empty string or null (got {value!r}): it is the "
+            "compiled echo of the registered version. Recompile the scenario, or remove it."
+        )
+    return value
+
+
+def warn_version_drift(where: str, kind: str, name: str, compiled: str | None,
+                       registered: str | None) -> None:
+    """Log ``POLICY VERSION DRIFT`` when a compiled ``version`` differs from the registered one.
+
+    The registered version is what runs (and what the stamp records); the drift means
+    the bundle was compiled against another version of ``name``. Nothing when
+    ``compiled`` is ``None`` or equal.
+    """
+    if compiled is None or compiled == registered:
+        return
+    logger.warning(
+        "%s: %s names %s %r at version %r, but the registered version is %r; the registered "
+        "version runs (and is stamped). Recompile the scenario so the bundle records what runs.",
+        VERSION_DRIFT_PREFIX, where, kind, name, compiled, registered,
+    )
+
+
+def _ref_entry(value: Any, path: str) -> tuple[str, Mapping[str, Any] | None, str | None]:
+    """``(type, raw params, version echo)`` of a ref value.
+
+    The value is a :class:`PolicyRef` or ``{type, params?, version?}``.
+    """
     if isinstance(value, PolicyRef):
-        return value.type, None if value.params is None else value.params.to_dict()
+        return (value.type, None if value.params is None else value.params.to_dict(),
+                version_echo(value.version, where=path))
     if not isinstance(value, Mapping):
         example = value if isinstance(value, str) and value.strip() else "<name>"
+        cli = _cli_path(path)
+        hint = f"; on the CLI --policy-param {cli}={example} is accepted." if cli else "."
         raise PolicyParamsError(
             f"{path} must be an object {{type, params?}} (got {value!r}). In spec.json write "
-            f'{{"type": "{example}"}}; on the CLI --policy-param {_cli_path(path)}={example} is accepted.'
+            f'{{"type": "{example}"}}{hint}'
         )
     unknown = sorted(str(k) for k in value if k not in REF_ENTRY_KEYS)
     if unknown:
@@ -465,16 +552,37 @@ def _ref_entry(value: Any, path: str) -> tuple[str, Mapping[str, Any] | None]:
     params = value.get("params")
     if params is not None and not isinstance(params, Mapping):
         raise PolicyParamsError(f"{path}.params must be an object (got {params!r}).")
-    return name.strip(), params
+    return name.strip(), params, version_echo(value.get("version"), where=path)
 
 
 def _resolve_ref(f: ParamInfo, value: Any, *, path: str) -> PolicyRef:
-    """Resolve one ref value against the live target registry of ``f.meta.kind``."""
-    name, raw_params = _ref_entry(value, path)
-    resolver = _REF_RESOLVERS.get(f.meta.kind)
+    """Resolve one ref value against the live target registry of ``f.meta.kind``.
+
+    Params that come from defaults (no raw params) are resolved under the cycle guard
+    :data:`_DEFAULT_STACK`; a compiled ``version`` that differs from the target's is
+    logged (:func:`warn_version_drift`).
+    """
+    name, raw_params, compiled_version = _ref_entry(value, path)
+    resolver = _ref_resolver(f.meta.kind)
     if resolver is None:  # declared_params checked the kind; only a cleared hook gets here
         raise PolicyRegistrationError(f"{path}: no resolver registered for ref kind {f.meta.kind!r}.")
     target = resolver(name, where=path, leaf_only=f.meta.leaf_only)
-    params = target.params_cls.from_mapping(raw_params, where=f"{path}.params for {target.name}",
-                                            path=f"{path}.params")
+    warn_version_drift(path, f.meta.kind, target.name, compiled_version, target.version)
+    token = None
+    if raw_params is None:
+        node, stack = (f.meta.kind, target.name), _DEFAULT_STACK.get()
+        if node in stack:
+            cycle = " -> ".join(n for _k, n in (*stack[stack.index(node):], node))
+            raise PolicyParamsError(
+                f"{path}: the policy-reference defaults form a cycle ({cycle}), so resolving "
+                f"{target.name!r} at its defaults would never terminate. Fix the declaration: "
+                "make one default in the cycle a leaf (a policy with no ref of its own)."
+            )
+        token = _DEFAULT_STACK.set((*stack, node))
+    try:
+        params = target.params_cls.from_mapping(raw_params, where=f"{path}.params for {target.name}",
+                                                path=f"{path}.params")
+    finally:
+        if token is not None:
+            _DEFAULT_STACK.reset(token)
     return PolicyRef(type=target.name, params=params, version=target.version)

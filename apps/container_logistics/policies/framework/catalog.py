@@ -18,6 +18,7 @@ import logging
 from typing import Any
 
 from .components import COMPONENT_KINDS, ComponentKind, ref_names, ref_target
+from .errors import PolicyError
 from .registry import PolicySpec, list_policies
 from .slots import SLOTS, SlotSpec
 
@@ -32,7 +33,11 @@ def policy_catalog() -> dict[str, Any]:
     Implemented slots list their registered policies (schema, defaults, missing
     requirements, and the dispatch declarations); planned slots carry only the phase
     they land in. Raises whatever discovery raises (a broken policy module must not
-    silently vanish).
+    silently vanish). ONE bad entry never blanks the catalog: a registered policy whose
+    schema or default tree fails to resolve (an unknown or unavailable default target,
+    a cycle that bypassed registration) is listed with ``available: false``, an
+    ``error`` string (the resolver's message), an empty-object schema and ``{}``
+    defaults (:func:`_described`); every healthy entry is unchanged.
     """
     return {name: _slot_entry(slot) for name, slot in SLOTS.items()}
 
@@ -78,8 +83,7 @@ def _policy_entry(spec: PolicySpec) -> dict[str, Any]:
         "module_rng": spec.module_rng,
         "order_sensitive": spec.order_sensitive,
         "arm_budgets_ms": dict(spec.arm_budgets_ms),
-        "params_schema": spec.params_cls.json_schema(),
-        "defaults": spec.params_cls.from_mapping(None, where=where).to_dict(),
+        **_described(spec.params_cls, where),
     }
 
 
@@ -98,6 +102,23 @@ def _component_policy(kind: str, name: str) -> dict[str, Any]:
         "name": target.name,
         "version": target.version,
         "description": target.description,
-        "params_schema": target.params_cls.json_schema(),
-        "defaults": target.params_cls.from_mapping(None, where=where).to_dict(),
+        **_described(target.params_cls, where),
     }
+
+
+_EMPTY_SCHEMA = {"type": "object", "additionalProperties": False, "properties": {}}
+
+
+def _described(params_cls, where: str) -> dict[str, Any]:
+    """``{params_schema, defaults}``, or, when they fail to resolve, the reported failure.
+
+    The failure form adds ``available: False`` and ``error`` (logged at ERROR), so the
+    editor offers the entry disabled instead of losing the whole catalog.
+    """
+    try:
+        return {"params_schema": params_cls.json_schema(),
+                "defaults": params_cls.from_mapping(None, where=where).to_dict()}
+    except PolicyError as exc:
+        logger.error("policy catalog: %s cannot be described: %s", where, exc)
+        return {"params_schema": dict(_EMPTY_SCHEMA, properties={}), "defaults": {},
+                "available": False, "error": str(exc)}

@@ -27,7 +27,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 
-from apps.container_logistics.policies.framework import PolicyParams, param
+from apps.container_logistics.policies.framework import PolicyParams, param, register_component_kind
 
 from ..pools import Bid, PoolMarket
 from ..solver.base import Cost, Order, Truck
@@ -248,6 +248,11 @@ CLAIM_REGISTRY: Dict[str, Type[BaseClaimPolicy]] = {
 }
 
 DEFAULT_CLAIM_POLICY = "ClaimAllPlanned"
+
+# This module owns the component kind 'market.claim': the framework resolves refs of that kind
+# against the live registry above (framework/components.py, round-2 review #5).
+register_component_kind("market.claim", lambda: CLAIM_REGISTRY, DEFAULT_CLAIM_POLICY,
+                        "Which planned pool pairs a company bids for.")
 
 
 def get_claim_policy(

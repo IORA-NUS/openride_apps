@@ -35,6 +35,7 @@ from .registry import (
     spec_for_class,
 )
 from . import components  # noqa: F401  (registers the ref resolvers into params)
+from .components import register_component_kind
 from .resolve import (
     ResolvedPolicy,
     authored_after_resolution,
@@ -60,6 +61,7 @@ __all__ = [
     "SLOTS",
     "SlotSpec",
     "slot_spec",
+    "register_component_kind",
     "ResolvedPolicy",
     "resolve_policies_block",
     "authored_after_resolution",

@@ -26,7 +26,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
 
-from apps.container_logistics.policies.framework import PolicyParams, param
+from apps.container_logistics.policies.framework import PolicyParams, param, register_component_kind
 
 from ..constraints import haulier_of
 from ..pools import Pool
@@ -249,6 +249,11 @@ OFFER_REGISTRY: Dict[str, Type[BaseOfferPolicy]] = {
 }
 
 DEFAULT_OFFER_POLICY = "OfferAll"
+
+# This module owns the component kind 'market.offer': the framework resolves refs of that kind
+# against the live registry above (framework/components.py, round-2 review #5).
+register_component_kind("market.offer", lambda: OFFER_REGISTRY, DEFAULT_OFFER_POLICY,
+                        "Which of its own orders a company offers to the shared pool.")
 
 
 def get_offer_policy(

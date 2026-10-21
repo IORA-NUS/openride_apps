@@ -74,7 +74,8 @@ def test_components_list_three_kinds_with_live_names_schema_and_defaults():
 
     Verified to have teeth: caching a ``dict(...)`` snapshot of the registry in
     ``components.live_registry`` failed the live-mutation assertion; renaming the
-    ``market.arbitration`` kind in ``components._KINDS`` failed the kind equality.
+    ``market.arbitration`` kind in ``assignment/arbitration.py``'s
+    ``register_component_kind`` call failed the kind equality.
     """
     from apps.container_logistics.assignment.arbitration import ARBITRATION_REGISTRY
     from apps.container_logistics.assignment.policy.claim import CLAIM_REGISTRY

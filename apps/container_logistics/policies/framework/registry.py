@@ -32,6 +32,7 @@ from types import MappingProxyType
 from typing import Callable, Iterator, Mapping, Sequence
 
 from .errors import (
+    PolicyDependencyError,
     PolicyError,
     PolicyRegistrationError,
     SlotNotImplementedError,
@@ -55,6 +56,7 @@ __all__ = [
     "isolated_registry",
     "BUILTIN_POLICY_PACKAGES",
     "INNER_PARAM",
+    "V1_SHARE_TAG_BUILTINS",
 ]
 
 BUILTIN_POLICY_PACKAGES = (
@@ -73,7 +75,12 @@ INFORMATION_MODELS = ("central", "per_group", "per_company")
 #: Share-tag wire formats (round-2 §2.5). ``v1`` is the pre-v2 format, reserved to
 #: the ``Partitioned`` built-in so pre-v2 partitioned runs stay byte-identical.
 SHARE_TAG_FORMATS = ("v1", "audited")
-_V1_OWNER = "Partitioned"
+#: THE allowlist of ``(slot, name)`` that may register ``share_tag_format="v1"``: the
+#: built-ins whose pre-v2 runs must stay byte-identical, and nothing else (message 15).
+#: Keyed on the registered name, not the class: one class backs one name, and built-in
+#: discovery registers ``Partitioned`` first, so another class claiming the name fails
+#: loud in ``_store``. A new policy uses ``audited``; never add to this set.
+V1_SHARE_TAG_BUILTINS = frozenset({("dispatch", "Partitioned")})
 
 #: The dispatch-ref param a composite delegates each scope to (``dispatch/composite.py``).
 #: ``PolicySpec.inner_param`` is the one place the descent rule is read from: the
@@ -136,6 +143,21 @@ class PolicySpec:
         """
         return [mod for mod in self.requires if not _module_findable(mod)]
 
+    def require_available(self, *, where: str | None = None) -> None:
+        """Raise ``PolicyDependencyError`` when :meth:`missing_requirements` is non-empty.
+
+        The one wording for the top-level selection and for a nested ref (``where`` is
+        the ref path, prefixed as ``<where>: ``).
+        """
+        missing = self.missing_requirements()
+        if missing:
+            prefix = f"{where}: " if where else ""
+            raise PolicyDependencyError(
+                f"{prefix}{self.slot.capitalize()} policy {self.name!r} requires module(s) not "
+                f"importable in this environment: {', '.join(missing)}. Install them or pick "
+                "another policy."
+            )
+
     def kind(self) -> str:
         """Return the slot's kind (``operator`` or ``world``)."""
         return SLOTS[self.slot].kind
@@ -168,8 +190,10 @@ def policy(
     unknown or non-implemented slot, malformed metadata, a missing/non-frozen/
     non-``PolicyParams`` nested ``Params``, defaults failing their own validation, a
     wrong slot base class, a dispatch policy without an ``information_model``,
-    ``share_tag_format="v1"`` outside ``Partitioned``, an ``arm_budgets_ms`` key naming
-    no str-choice arm, or ``(slot, name)`` already bound to a different class.
+    ``share_tag_format="v1"`` outside :data:`V1_SHARE_TAG_BUILTINS`, an ``arm_budgets_ms``
+    key naming no str-choice arm, ref defaults that form a cycle through registered
+    dispatch policies (including a self-reference), or ``(slot, name)`` already bound
+    to a different class.
     Re-registering the same class with identical metadata is a no-op.
     """
     def decorate(cls: type) -> type:
@@ -192,11 +216,12 @@ def _build_spec(cls, slot, name, version, description, requires, order_sensitive
     _check_metadata(where, name, version, description, requires, order_sensitive, perf_budget_ms)
     _check_reason(where, "module_rng", module_rng)
     _check_information_model(short, slot, information_model)
-    _check_share_tag_format(short, name, share_tag_format)
+    _check_share_tag_format(short, slot, name, share_tag_format)
     _check_slot_base(cls, slot, where)
     params_cls = _checked_params(cls, where)
     infos = declared_params(params_cls)
     budgets = _checked_arm_budgets(short, infos, arm_budgets_ms)
+    _check_ref_default_cycles(short, slot, name, infos)
     return PolicySpec(slot=slot, name=name, version=version, description=description,
                       requires=tuple(requires), cls=cls, params_cls=params_cls,
                       order_sensitive=order_sensitive, perf_budget_ms=perf_budget_ms,
@@ -247,16 +272,59 @@ def _check_information_model(short: str, slot: str, model) -> None:
         )
 
 
-def _check_share_tag_format(short: str, name: str, fmt) -> None:
+def _check_share_tag_format(short: str, slot: str, name: str, fmt) -> None:
     if fmt not in SHARE_TAG_FORMATS:
         raise PolicyRegistrationError(
             f"{short}: share_tag_format must be one of {', '.join(SHARE_TAG_FORMATS)} (got {fmt!r})."
         )
-    if fmt == "v1" and name != _V1_OWNER:
+    if fmt == "v1" and (slot, name) not in V1_SHARE_TAG_BUILTINS:
+        owners = ", ".join(sorted(n for _s, n in V1_SHARE_TAG_BUILTINS))
         raise PolicyRegistrationError(
-            f"{short}: share_tag_format='v1' is reserved for the {_V1_OWNER} built-in (the pre-v2 "
+            f"{short}: share_tag_format='v1' is reserved for the {owners} built-in (the pre-v2 "
             "wire format, kept only for byte identity); new policies use the default 'audited'."
         )
+
+
+def _check_ref_default_cycles(short: str, slot: str, name: str, infos) -> None:
+    """Refuse dispatch-ref DEFAULTS that lead back to the policy being registered.
+
+    Walks the default ``kind="dispatch"`` refs through the policies registered so far
+    (plus this one, so a self-reference is caught). Every cycle is closed by the
+    registration of its last member, whose targets are then all known, so each cycle
+    is refused exactly there. Unregistered targets end the walk (resolution checks
+    them; ``params._DEFAULT_STACK`` is the backstop for cycles this cannot see, e.g.
+    through component kinds).
+    """
+    if slot != "dispatch":
+        return
+
+    def default_targets(policy_infos):
+        return [(i.name, i.default.type) for i in policy_infos
+                if i.is_ref and i.meta.kind == "dispatch" and isinstance(i.default.type, str)]
+
+    def infos_of(target: str):
+        if target == name:
+            return infos
+        other = _REGISTRY.get(("dispatch", target))
+        return declared_params(other.params_cls) if other is not None else None
+
+    def walk(current: str, policy_infos, trail: list[str], seen: set[str]) -> None:
+        for param_name, target in default_targets(policy_infos):
+            step = [*trail, f"{current}.{param_name}"]
+            if target == name:
+                raise PolicyRegistrationError(
+                    f"{short}: ref param defaults form a cycle ({' -> '.join([*step, target])}), so "
+                    f"resolving {name} at its defaults would never terminate. Make one default in "
+                    "the cycle a leaf (a policy with no dispatch ref of its own)."
+                )
+            if target in seen:
+                continue
+            seen.add(target)
+            target_infos = infos_of(target)
+            if target_infos is not None:
+                walk(target, target_infos, step, seen)
+
+    walk(name, infos, [], set())
 
 
 def _str_arms(infos) -> list[str]:

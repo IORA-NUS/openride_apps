@@ -39,7 +39,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Type
 
-from apps.container_logistics.policies.framework import PolicyParams, param
+from apps.container_logistics.policies.framework import PolicyParams, param, register_component_kind
 
 from .pools import Award, Bid, PoolMarket
 from .tiebreak import stable_tiebreak
@@ -318,6 +318,11 @@ ARBITRATION_REGISTRY: Dict[str, Type[BaseArbitrationRule]] = {
 }
 
 DEFAULT_ARBITRATION_RULE = "LowestCost"
+
+# This module owns the component kind 'market.arbitration': the framework resolves refs of that kind
+# against the live registry above (framework/components.py, round-2 review #5).
+register_component_kind("market.arbitration", lambda: ARBITRATION_REGISTRY, DEFAULT_ARBITRATION_RULE,
+                        "Who wins when two companies bid for the same pooled order.")
 
 
 def get_arbitration_rule(

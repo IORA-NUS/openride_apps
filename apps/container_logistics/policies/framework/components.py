@@ -1,88 +1,189 @@
-"""Policy-reference targets: the dispatch registry and the market component kinds.
+"""Policy-reference targets: the dispatch registry and the registered component kinds.
 
 Single responsibility: answer "what does a ``PolicyRef`` of kind K named N point at?"
 for every ref kind, and register those answers into the params hook
-(``params._REF_RESOLVERS``) at import. Round 2
-``docs/plans/policy_slots_round2_whole_tick.md`` §3.2, §4.
+(``params._REF_RESOLVERS``). Round 2 ``docs/plans/policy_slots_round2_whole_tick.md``
+§3.2, §4.
 
-- ``dispatch``: the policy registry (``registry.get_policy_spec``).
-- ``market.offer`` / ``market.claim`` / ``market.arbitration``: the pooled market's
-  components (``COMPONENT_KINDS``), read from the LIVE legacy dicts ``OFFER_REGISTRY``,
-  ``CLAIM_REGISTRY`` and ``ARBITRATION_REGISTRY`` at call time, so a name a test
-  injects there resolves too (round-2 S11). A component class's nested ``Params`` is
-  its typed params; a class without one declares no params.
+- ``dispatch``: the policy registry (``registry.get_policy_spec``); a target whose
+  ``requires`` are missing is refused with the top level's ``PolicyDependencyError``
+  wording, prefixed by the ref path.
+- Component kinds (``market.offer``, ``market.claim``, ``market.arbitration`` today):
+  NOT framework concepts. The solver side that owns a kind declares it by calling
+  :func:`register_component_kind` at import (``assignment/policy/offer.py``,
+  ``assignment/policy/claim.py``, ``assignment/arbitration.py``), handing over a getter
+  of its LIVE ``{name: class}`` registry, so a name a test injects there resolves too
+  (round-2 S11). A component class's nested ``Params`` is its typed params; a class
+  without one declares no params.
+- Built-in kinds are found even when nothing imported their modules yet:
+  :data:`BUILTIN_COMPONENT_MODULES` is THE one list of modules that declare built-in
+  kinds; it is imported lazily (on the first kind lookup, never at this module's
+  import), the component analogue of ``registry.BUILTIN_POLICY_PACKAGES``. A new
+  solver with its own component kind adds its module there (or imports it before
+  use) and edits nothing else in the framework.
 
 :func:`instantiate_component` builds a component from a resolved ref; a ``None``
 value (an unset nullable number) is dropped first, so the class keeps its own default.
 
 Leaf module (plan §2.7): never imports ``apps.container_logistics.assignment.*`` at
-module top; the component registries are imported locally in :func:`live_registry`.
+module top; the built-in component modules are imported in :func:`_load_builtin_kinds`.
 """
 
 from __future__ import annotations
 
 import importlib
 import inspect
+import itertools
 import logging
-from dataclasses import dataclass
-from types import MappingProxyType
-from typing import Any, Mapping
+import threading
+from dataclasses import dataclass, field
+from typing import Any, Callable, Iterator, Mapping
 
 from . import params as _params
-from .errors import PolicyParamsError, UnknownPolicyError
-from .params import PolicyParams, PolicyRef
+from .errors import PolicyParamsError, PolicyRegistrationError, UnknownPolicyError
+from .params import PolicyParams, PolicyRef, version_echo, warn_version_drift
 from .registry import get_policy_spec, list_policies
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "BUILTIN_COMPONENT_MODULES",
     "ComponentKind",
     "COMPONENT_KINDS",
     "NoParams",
     "RefTarget",
+    "register_component_kind",
     "live_registry",
     "ref_names",
     "ref_target",
     "instantiate_component",
 ]
 
+#: THE one place the framework names where built-in component kinds are declared: each
+#: module calls :func:`register_component_kind` at import. Imported lazily, in this
+#: order (which is also the listing order of their kinds), the first time a kind is
+#: looked up. Not hardcoded kinds: the kinds, defaults and descriptions live there.
+BUILTIN_COMPONENT_MODULES = (
+    "apps.container_logistics.assignment.policy.offer",
+    "apps.container_logistics.assignment.policy.claim",
+    "apps.container_logistics.assignment.arbitration",
+)
+
 
 @dataclass(frozen=True)
 class ComponentKind:
-    """One market component kind: where its live registry lives, its default, its meaning."""
+    """One component kind: its live registry getter, its default name, its meaning.
+
+    ``module`` is the module that declared it (ordering and re-declaration checks).
+    """
 
     kind: str
-    module: str
-    registry: str
     default: str
     description: str
+    registry_getter: Callable[[], Mapping[str, type]] = field(compare=False, repr=False)
+    module: str = ""
 
 
-_KINDS = (
-    ComponentKind(
-        kind="market.offer",
-        module="apps.container_logistics.assignment.policy.offer",
-        registry="OFFER_REGISTRY",
-        default="OfferAll",
-        description="Which of its own orders a company offers to the shared pool.",
-    ),
-    ComponentKind(
-        kind="market.claim",
-        module="apps.container_logistics.assignment.policy.claim",
-        registry="CLAIM_REGISTRY",
-        default="ClaimAllPlanned",
-        description="Which planned pool pairs a company bids for.",
-    ),
-    ComponentKind(
-        kind="market.arbitration",
-        module="apps.container_logistics.assignment.arbitration",
-        registry="ARBITRATION_REGISTRY",
-        default="LowestCost",
-        description="Who wins when two companies bid for the same pooled order.",
-    ),
-)
+_KINDS: dict[str, ComponentKind] = {}
+_KIND_SEQ: dict[str, int] = {}
+_SEQ = itertools.count()
+_LOAD = {"done": False, "running": False}
+_LOCK = threading.RLock()
 
-COMPONENT_KINDS: Mapping[str, ComponentKind] = MappingProxyType({k.kind: k for k in _KINDS})
+
+def register_component_kind(kind: str, registry_getter: Callable[[], Mapping[str, type]],
+                            default: str, description: str) -> ComponentKind:
+    """Declare component ``kind``: refs of that kind resolve against ``registry_getter()``.
+
+    Called by the module that owns the kind, at import, after its registry dict exists.
+    ``registry_getter`` returns the LIVE ``{name: class}`` dict (read on every lookup);
+    ``default`` must be one of its names. Re-declaring a kind from the same module with
+    the same default and description (a reload) replaces the getter; anything else
+    raises ``PolicyRegistrationError``. Returns the declared :class:`ComponentKind`.
+    The declaring module is read from ``registry_getter.__module__`` (a lambda or
+    function defined there), which orders the kinds and guards re-declaration.
+    """
+    module = getattr(registry_getter, "__module__", None) or ""
+    where = f"register_component_kind({kind!r}) from {module or '?'}"
+    if not isinstance(kind, str) or not kind.strip() or kind != kind.strip() or kind == "dispatch":
+        raise PolicyRegistrationError(f"{where}: kind must be a non-blank name other than 'dispatch'.")
+    if not callable(registry_getter):
+        raise PolicyRegistrationError(
+            f"{where}: registry_getter must be a callable returning the live registry."
+        )
+    for label, value in (("default", default), ("description", description)):
+        if not isinstance(value, str) or not value.strip():
+            raise PolicyRegistrationError(f"{where}: {label} must be a non-empty string (got {value!r}).")
+    registry = registry_getter()
+    if not isinstance(registry, Mapping) or default not in registry:
+        raise PolicyRegistrationError(
+            f"{where}: default {default!r} is not in the registry the getter returns "
+            f"({', '.join(sorted(registry)) if isinstance(registry, Mapping) else registry!r})."
+        )
+    spec = ComponentKind(kind=kind, default=default, description=description,
+                         registry_getter=registry_getter, module=module)
+    with _LOCK:
+        existing = _KINDS.get(kind)
+        if existing is not None and (existing.module, existing.default, existing.description) != \
+                (spec.module, spec.default, spec.description):
+            raise PolicyRegistrationError(
+                f"{where}: component kind {kind!r} is already declared by {existing.module} "
+                f"(default {existing.default!r}); one module owns a kind."
+            )
+        _KINDS[kind] = spec
+        _KIND_SEQ.setdefault(kind, next(_SEQ))
+        _params._REF_RESOLVERS[kind] = _resolver(kind)
+    return spec
+
+
+def _load_builtin_kinds() -> None:
+    """Import :data:`BUILTIN_COMPONENT_MODULES` once (re-entrant calls return at once).
+
+    Import errors propagate: a broken component module must not vanish.
+    """
+    with _LOCK:
+        if _LOAD["done"] or _LOAD["running"]:
+            return
+        _LOAD["running"] = True
+        try:
+            for name in BUILTIN_COMPONENT_MODULES:
+                importlib.import_module(name)
+            _LOAD["done"] = True
+        finally:
+            _LOAD["running"] = False
+
+
+def _order(kind: str) -> tuple[int, int]:
+    module = _KINDS[kind].module
+    builtin = BUILTIN_COMPONENT_MODULES.index(module) if module in BUILTIN_COMPONENT_MODULES \
+        else len(BUILTIN_COMPONENT_MODULES)
+    return builtin, _KIND_SEQ[kind]
+
+
+class _LiveKinds(Mapping[str, ComponentKind]):
+    """Read-only live view of the declared kinds; loads the built-in ones on first use.
+
+    Ordered by :data:`BUILTIN_COMPONENT_MODULES` position, then declaration order, so
+    the listing never depends on which module happened to be imported first.
+    """
+
+    def __getitem__(self, kind: str) -> ComponentKind:
+        _load_builtin_kinds()
+        return _KINDS[kind]
+
+    def __iter__(self) -> Iterator[str]:
+        _load_builtin_kinds()
+        return iter(sorted(_KINDS, key=_order))
+
+    def __len__(self) -> int:
+        _load_builtin_kinds()
+        return len(_KINDS)
+
+    def __repr__(self) -> str:
+        return f"COMPONENT_KINDS({list(self)!r})"
+
+
+COMPONENT_KINDS: Mapping[str, ComponentKind] = _LiveKinds()
 
 
 @dataclass(frozen=True)
@@ -111,14 +212,12 @@ class RefTarget:
         return any(kind == "dispatch" for _name, kind, _leaf in self.refs)
 
 
-def live_registry(kind: str) -> dict[str, type]:
-    """The live ``{name: class}`` dict of component ``kind``, imported at call time.
+def live_registry(kind: str) -> Mapping[str, type]:
+    """The live ``{name: class}`` dict of component ``kind``, read through its getter now.
 
-    Local import on purpose: the leaf rule forbids a module-top ``assignment`` import.
-    Raises ``KeyError`` for a kind that is not a component kind.
+    Raises ``KeyError`` for a kind that is not a declared component kind.
     """
-    spec = COMPONENT_KINDS[kind]
-    return getattr(importlib.import_module(spec.module), spec.registry)
+    return COMPONENT_KINDS[kind].registry_getter()
 
 
 def ref_names(kind: str) -> list[str]:
@@ -182,20 +281,36 @@ def instantiate_component(kind: str, value: PolicyRef) -> Any:
 
     ``None`` values are dropped, so an unset nullable param (``OfferSpare.keep_below_km``)
     takes the class's own default (``inf``). An unresolved ref (``params is None``) is
-    built with an empty dict. Raises ``UnknownPolicyError`` for an unknown name.
+    built with an empty dict. Raises ``UnknownPolicyError`` for an unknown name and
+    ``PolicyParamsError`` when ``value.params`` is not the named class's ``Params`` (a
+    ref whose type was swapped after resolution) or ``value.version`` is malformed; a
+    version that differs from the registered one is logged (``POLICY VERSION DRIFT``).
     """
-    target = ref_target(kind, value.type, where=f"{kind} component")
+    where = f"{kind} component"
+    target = ref_target(kind, value.type, where=where)
+    warn_version_drift(where, kind, target.name, version_echo(value.version, where=where),
+                       target.version)
+    if value.params is not None and type(value.params) is not target.params_cls:
+        raise PolicyParamsError(
+            f"{where} {target.name!r}: params are a {type(value.params).__qualname__}, not "
+            f"{target.name}'s {target.params_cls.__qualname__}; resolve the ref again "
+            "(PolicyParams.from_mapping) instead of changing its type."
+        )
     values = value.params.to_dict() if value.params is not None else {}
     return target.cls(params={k: v for k, v in values.items() if v is not None})
 
 
 def _resolver(kind: str):
     def resolve(name: str, *, where: str, leaf_only: bool = False) -> RefTarget:
-        return ref_target(kind, name, where=where, leaf_only=leaf_only)
+        target = ref_target(kind, name, where=where, leaf_only=leaf_only)
+        if kind == "dispatch":  # a nested ref fails loud exactly like the top level
+            get_policy_spec("dispatch", target.name).require_available(where=where)
+        return target
     return resolve
 
 
-# The params hook (round-2 §3.2): registered here, at import, so params.py never
-# imports the registry (no params <-> registry cycle).
-for _kind in ("dispatch", *COMPONENT_KINDS):
-    _params._REF_RESOLVERS[_kind] = _resolver(_kind)
+# The params hook (round-2 §3.2): registered here, so params.py never imports the
+# registry (no params <-> registry cycle). Component kinds add theirs in
+# register_component_kind; a kind not yet declared loads the built-in modules once.
+_params._REF_RESOLVERS["dispatch"] = _resolver("dispatch")
+_params._REF_KIND_LOADER = _load_builtin_kinds

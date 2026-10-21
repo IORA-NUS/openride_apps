@@ -33,7 +33,6 @@ from typing import Any, Collection, Mapping, Sequence
 
 from .components import ref_target
 from .errors import (
-    PolicyDependencyError,
     PolicyError,
     PolicyParamsError,
     PolicyTimingError,
@@ -227,12 +226,7 @@ def _resolve_entry(slot: str, entry: Mapping[str, Any], *, where: str, legacy: b
     label = f"{where}.{slot}"
     _check_entry_shape(entry, label, require_type=True)
     spec = get_policy_spec(slot, entry["type"].strip())
-    missing = spec.missing_requirements()
-    if missing:
-        raise PolicyDependencyError(
-            f"{slot.capitalize()} policy {spec.name!r} requires module(s) not importable in "
-            f"this environment: {', '.join(missing)}. Install them or pick another policy."
-        )
+    spec.require_available()
     timing = _resolve_timing(slot, entry.get("timing"), label)
     raw_params = dict(entry.get("params") or {})
     if legacy:
