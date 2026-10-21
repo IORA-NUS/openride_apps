@@ -8,11 +8,11 @@ from .validation_config import smoke_scenario_config_bundle
 
 
 def known_solvers():
-    """Solver strategy names accepted by ``apply_solver_override`` — sourced from the
-    single registry the assignment agent itself uses, so the two never drift."""
-    from apps.container_logistics.assignment.solver import SOLVER_REGISTRY
+    """Registered dispatch policy names, sorted -- read from the policy registry at
+    call time (the same registry the assignment agent resolves against)."""
+    from apps.container_logistics.policies.framework import list_policies
 
-    return tuple(SOLVER_REGISTRY.keys())
+    return tuple(spec.name for spec in list_policies("dispatch"))
 
 
 def apply_solver_override(assignment_collection, strategy):
@@ -21,20 +21,17 @@ def apply_solver_override(assignment_collection, strategy):
     scenario or touching the on-disk behavior files.
 
     Mutates the behaviors in place (same objects the agent source ships to the workers).
-    Returns the applied strategy, or ``None`` if ``strategy`` is unknown / falsy — in which
-    case nothing is changed and the scenario's own default solver stands (the assignment
-    agent's ``get_solver`` is itself lenient about unknown names).
+    Returns the applied strategy, or ``None`` if ``strategy`` is falsy (nothing changed;
+    the scenario's own solver stands). Raises ``UnknownPolicyError`` for a name that is
+    not a registered dispatch policy, before anything is mutated. This replaced the old
+    warn-and-ignore behaviour: an intended contract change (plan
+    ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7; doc 11 is updated out-of-repo).
     """
+    from apps.container_logistics.policies.framework import get_policy_spec
+
     if not strategy:
         return None
-    valid = known_solvers()
-    if strategy not in valid:
-        logging.warning(
-            "Ignoring unknown solver override %r (known: %s); using scenario default.",
-            strategy,
-            ", ".join(valid),
-        )
-        return None
+    get_policy_spec("dispatch", strategy)
     for behavior in (assignment_collection or {}).values():
         if isinstance(behavior, dict):
             behavior.setdefault("profile", {})["strategy"] = strategy

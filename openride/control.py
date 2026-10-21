@@ -372,7 +372,7 @@ def rebuild_index(domain: str | None = None) -> dict[str, Any]:
 
 
 def known_solvers() -> dict[str, Any]:
-    """Return ``{solvers: [...], default: str}`` from the live SOLVER_REGISTRY."""
+    """Return ``{solvers: [...], default: str}`` from the live dispatch policy registry."""
     payload = _ok(_run_command(["known-solvers"]))
     return {"solvers": payload.get("solvers") or [], "default": payload.get("default")}
 

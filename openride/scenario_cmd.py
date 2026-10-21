@@ -30,7 +30,7 @@ from typing import Any, Optional
 from rich.panel import Panel
 from rich.table import Table
 
-from . import config, control
+from . import control
 from .ui import console, render_scenario_detail, render_scenarios
 
 
@@ -571,24 +571,20 @@ def _create_scenario(
 
 
 def _known_solvers(domain: Optional[str] = None) -> list[str]:
-    try:
-        solvers = control.known_solvers().get("solvers")
-        if solvers:
-            return solvers
-    except control.ControlError:
-        pass
-    return list(config.SOLVERS)
+    """Registered dispatch policy names from the engine. ``ControlError`` propagates."""
+    solvers = control.known_solvers().get("solvers")
+    if not solvers:
+        raise control.ControlError("the engine reported no registered dispatch policies")
+    return list(solvers)
 
 
-def _known_policies(domain: Optional[str] = None) -> dict[str, list[str]]:
-    """Per-role generation policies from the engine registry (fallback: config)."""
-    try:
-        policies = control.known_policies().get("policies")
-        if policies:
-            return policies
-    except (control.ControlError, AttributeError):
-        pass
-    return dict(config.POLICIES)
+def _known_policies(domain: Optional[str] = None) -> dict[str, dict[str, Any]]:
+    """Per-role generation policies and defaults from the engine registry.
+
+    Returns ``{"policies": {role: [...]}, "defaults": {role: name}}``. ``ControlError``
+    propagates (shown as a red error by the caller); there is no local fallback list.
+    """
+    return control.known_policies()
 
 
 def _prompt_int(message: str, default: Any, *, min_: int = 1, max_: Optional[int] = None):
@@ -761,13 +757,15 @@ def interactive_build_spec(domain: Optional[str], *, defaults: Optional[dict[str
         return None
 
     # Per-role generation policy (the new policy-based datagen). Blank/first = default.
-    policies = _known_policies(domain)
+    known = _known_policies(domain)
+    policies = known.get("policies") or {}
+    policy_defaults = known.get("defaults") or {}
 
     def _pick_policy(role: str, prompt: str) -> Optional[str]:
-        choices = policies.get(role) or config.POLICIES.get(role, [])
+        choices = policies.get(role) or []
         if not choices:
             return None
-        default = d.get(f"{role}_policy") or config.DEFAULT_POLICIES.get(role, choices[0])
+        default = d.get(f"{role}_policy") or policy_defaults.get(role) or choices[0]
         return questionary.select(
             prompt, choices=choices, default=default if default in choices else choices[0]
         ).ask()
@@ -958,8 +956,9 @@ def _add_authoring_flags(p, *, require_name: bool) -> None:
     p.add_argument("--order-unit", choices=["per_day", "total"], default=None,
                    help="Whether --orders is a per-day rate or a run total (default: per_day on new)")
     p.add_argument("--early-orders", type=int, help="Number of orders released at t=0")
-    p.add_argument("--solver", choices=config.SOLVERS,
-                   help="Default assignment solver (else a bad name is silently coerced to the engine default)")
+    p.add_argument("--solver",
+                   help="Default assignment solver: a registered dispatch policy name, validated "
+                        "by the engine; list: openride policy list dispatch")
     p.add_argument("--haulier", action="append",
                    help="Haulier 'Name:fleet%%:order%%' (repeatable; shares must total 100)")
     p.add_argument("--demand-curve-file",
@@ -967,12 +966,11 @@ def _add_authoring_flags(p, *, require_name: bool) -> None:
     p.add_argument("--trip-matrix-file",
                    help="pickup/dropoff probability matrix as JSON, CSV, or Excel (.xlsx) — see templates")
     # Per-role generation policy selection (the new policy-based datagen).
-    p.add_argument("--truck-policy", choices=config.POLICIES["truck"],
-                   help="Truck generation policy (default: %s)" % config.DEFAULT_POLICIES["truck"])
-    p.add_argument("--order-policy", choices=config.POLICIES["order"],
-                   help="Order generation policy (default: %s)" % config.DEFAULT_POLICIES["order"])
-    p.add_argument("--facility-policy", choices=config.POLICIES["facility"],
-                   help="Facility generation policy (default: %s)" % config.DEFAULT_POLICIES["facility"])
+    _datagen_help = ("validated by the engine; list them in the `openride scenario` TUI "
+                     "or with `python -m openride_control.command known-policies`")
+    p.add_argument("--truck-policy", help=f"Truck generation policy ({_datagen_help})")
+    p.add_argument("--order-policy", help=f"Order generation policy ({_datagen_help})")
+    p.add_argument("--facility-policy", help=f"Facility generation policy ({_datagen_help})")
     p.add_argument("--order-source",
                    help="Historical data file (JSON/CSV/Excel) for --order-policy historical")
     p.add_argument("--seed", type=int,

@@ -46,7 +46,8 @@ def _pick_solver() -> Optional[str]:
     import questionary
 
     choices = [questionary.Choice("Scenario default", value="__default__")]
-    choices += [questionary.Choice(s, value=s) for s in config.SOLVERS]
+    # Names come from the engine's policy registry; a ControlError propagates to the caller.
+    choices += [questionary.Choice(s, value=s) for s in control.known_solvers().get("solvers") or []]
     answer = questionary.select("Assignment solver:", choices=choices).ask()
     if answer in (None, "__default__"):
         return None
@@ -175,7 +176,9 @@ def register(sub) -> None:
     p = sub.add_parser("run", help="Run a simulation (interactive TUI, or --json scriptable)")
     p.add_argument("scenario_pos", nargs="?", metavar="SCENARIO", help="Scenario slug to run")
     p.add_argument("--scenario", help="Scenario slug (alternative to the positional)")
-    p.add_argument("--solver", choices=config.SOLVERS, help="Assignment solver override")
+    p.add_argument("--solver",
+                   help="Assignment solver override: a registered dispatch policy name, validated "
+                        "by the engine; list: openride policy list dispatch")
     p.add_argument("--structure", help="Cooperation structure id override (declared in the scenario's spec.json)")
     p.add_argument("--sharing-policy", dest="sharing_policy",
                    help="Sharing algorithm override for two-stage planners")

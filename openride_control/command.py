@@ -82,7 +82,8 @@ def _run(argv: list[str] | None = None) -> int:
     run_p.add_argument(
         "--solver",
         default=None,
-        help="Assignment solver strategy override (ORSIM_SOLVER): RandomAssignment | GreedyNearest",
+        help="Assignment solver strategy override (ORSIM_SOLVER): a registered dispatch "
+        "policy name (list: openride policy list dispatch)",
     )
     run_p.add_argument(
         "--cooperation-structure",

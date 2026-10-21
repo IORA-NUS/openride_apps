@@ -28,6 +28,10 @@ from apps.simulation.simulation_runtime import SimulationRuntime
 
 
 from apps.container_logistics.scenario.frontend_scenario_spec import sanitize_run_name
+from apps.container_logistics.policies.dispatch.profile import (
+    assert_assignment_profiles_resolvable,
+)
+from apps.container_logistics.policies.framework import PolicyError
 
 
 def _resolve_scenario_name() -> str:
@@ -36,6 +40,20 @@ def _resolve_scenario_name() -> str:
 
 def _resolve_run_name() -> str | None:
     return sanitize_run_name(os.environ.get("ORSIM_RUN_NAME"))
+
+
+def _refuse_invalid_policy_config(error: PolicyError) -> None:
+    """Print the policy configuration error and exit 2 before any agent spawns."""
+    print(f"Policy configuration invalid; refusing to start the run: {error}")
+    sys.exit(2)
+
+
+def _assert_policies_resolvable_or_exit(assignment_collection) -> None:
+    """Exit 2 (via :func:`_refuse_invalid_policy_config`) on an unresolvable dispatch policy."""
+    try:
+        assert_assignment_profiles_resolvable(assignment_collection)
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
 
 
 def _resolve_solver() -> str | None:
@@ -197,9 +215,12 @@ def main():
     # the requested strategy while reusing the identical (unchanged) scenario data — enabling
     # apples-to-apples solver comparisons on one scenario dir.
     solver = _resolve_solver()
-    applied_solver = apply_solver_override(
-        scenario_manager.get_agent_collection("assignment"), solver
-    )
+    try:
+        applied_solver = apply_solver_override(
+            scenario_manager.get_agent_collection("assignment"), solver
+        )
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
     if applied_solver:
         print(f"Assignment solver override: {applied_solver}")
         # Surface the chosen solver in run lists with zero kafka/schema changes.
@@ -256,6 +277,10 @@ def main():
         )
         if applied_market:
             print(f"Pooled market override: {applied_market}")
+
+    # Fail loud before any agent spawns: an unknown dispatch policy would otherwise
+    # only surface agent-side, in the celery journal.
+    _assert_policies_resolvable_or_exit(scenario_manager.get_agent_collection("assignment"))
 
     # Ship the EFFECTIVE cooperation structure (post-override) to the analytics
     # agent via orsim_settings (the STREAM_GEO pattern: validated allow_unknown,

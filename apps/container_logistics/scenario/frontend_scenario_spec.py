@@ -13,7 +13,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import scenario_config
-from ..assignment.solver import DEFAULT_SOLVER, SOLVER_REGISTRY
+from apps.container_logistics.policies.framework import (
+    SLOTS,
+    default_policy_name,
+    list_policies,
+)
 from .order_demand import (
     LEGACY_EARLY_ORDER_COUNT,
     hourly_weights_from_spec,
@@ -21,15 +25,19 @@ from .order_demand import (
     recommended_early_order_count,
 )
 
-# Selectable assignment strategies, sourced from the solver registry so the
-# frontend/scenario layer can never drift from what the sim can actually run.
-KNOWN_SOLVERS = frozenset(SOLVER_REGISTRY)
-
-
 def normalize_solver(raw: Any) -> str:
-    """Coerce a requested solver name to a known one, else the default."""
+    """Coerce a requested solver name to a registered dispatch policy, else the default.
+
+    Legacy-only: serves the editForm (``scenario_edit_form_from_detail``) and the
+    legacy synth paths (``normalize_generate_spec``,
+    ``frontend_scenario_config_override``), which read old or foreign recipes and must
+    still produce a form/config. The strict surface is compile time
+    (``spec_compile``) and run start, which raise on an unknown name. Names are read
+    from the policy registry at call time, never frozen at import.
+    """
     name = str(raw or "").strip()
-    return name if name in KNOWN_SOLVERS else DEFAULT_SOLVER
+    known = {spec.name for spec in list_policies("dispatch")}
+    return name if name in known else default_policy_name("dispatch")
 
 
 def parse_trip_matrix(raw: Any) -> dict[str, Any]:
@@ -912,7 +920,7 @@ def build_generation_spec_payload(spec: dict[str, Any]) -> dict[str, Any]:
         "orderDemandCurve": deepcopy(spec.get("orderDemandCurve")),
         "tripMatrix": deepcopy(spec.get("tripMatrix")),
         "hauliers": deepcopy(spec.get("hauliers")),
-        "solver": spec.get("solver") or DEFAULT_SOLVER,
+        "solver": spec.get("solver") or SLOTS["dispatch"].default,
         "solverParams": deepcopy(spec.get("solverParams")),
         "roleSettings": deepcopy(spec.get("roleSettings")),
         "overrides": deepcopy(spec.get("overrides")),
@@ -2084,8 +2092,14 @@ def get_scenario_spec(datahub_dir: str, domain: str, slug: str) -> dict[str, Any
 
 
 def known_solvers() -> dict[str, Any]:
-    """The runtime-selectable assignment solver strategies (the single source of truth)."""
-    return {"solvers": sorted(SOLVER_REGISTRY.keys()), "default": DEFAULT_SOLVER}
+    """The runtime-selectable dispatch policy names and the slot default.
+
+    Derived from the policy registry at call time (the single source of truth).
+    """
+    return {
+        "solvers": [spec.name for spec in list_policies("dispatch")],
+        "default": default_policy_name("dispatch"),
+    }
 
 
 def known_policies() -> dict[str, Any]:

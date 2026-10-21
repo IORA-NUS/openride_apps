@@ -1,15 +1,37 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import List
+
+from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
 from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
 
 
+@policy(
+    slot="dispatch",
+    name="RandomAssignment",
+    version="1",
+    description="Baseline: shuffled orders, each given a random feasible free truck; ignores cost.",
+    order_sensitive="byte-identical to the pre-v2 shuffle; order independence would change existing results",
+)
 class RandomAssignmentSolver(BaseAssignmentSolver):
     """Baseline: shuffle orders, give each the first feasible free truck at random.
 
     Ignores ``cost`` — kept as the reference/no-optimisation strategy.
     """
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        candidates: str = param(
+            "sampled",
+            choices=("sampled", "spatial"),
+            help=(
+                "How candidate trucks are generated: 'sampled' samples a capped set of "
+                "trucks per haulier (the historical baseline); 'spatial' restricts "
+                "candidates to the spatial index's nearby pairs."
+            ),
+        )
 
     def solve(
         self,

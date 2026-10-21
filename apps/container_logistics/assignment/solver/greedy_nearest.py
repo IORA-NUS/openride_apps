@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Iterable, List, Tuple
+
+from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
 from ..tiebreak import pair_tiebreak
 from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
 
 
+@policy(
+    slot="dispatch",
+    name="GreedyNearest",
+    version="1",
+    description="Globally greedy nearest-pair sweep, dual-cycle aware.",
+)
 class GreedyNearestSolver(BaseAssignmentSolver):
     """Globally greedy nearest-pair matching within a haulier bucket.
 
@@ -22,6 +31,35 @@ class GreedyNearestSolver(BaseAssignmentSolver):
     Complexity: O(T x O) to build pairs + O(T x O log(T x O)) to sort. At the
     current per-tick caps (<=500 orders, bucketed per haulier) this is cheap.
     """
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        candidates: str = param(
+            "spatial",
+            choices=("spatial", "sampled"),
+            help=(
+                "How candidate (truck, order) pairs are generated: 'spatial' asks the "
+                "spatial index for nearby pairs only; 'sampled' samples a capped set of "
+                "trucks per haulier and scores every truck x order pair."
+            ),
+        )
+        dual_cycle_bonus_km: float = param(
+            5.0,
+            ge=0,
+            help=(
+                "Km subtracted from a pair's deadhead cost when the truck's last drop-off "
+                "is within dual_cycle_radius_km of the order's pickup (a dual cycle). "
+                "The cost is clamped at 0. 0 disables the bonus."
+            ),
+        )
+        dual_cycle_radius_km: float = param(
+            0.5,
+            ge=0,
+            help=(
+                "Max distance in km between the truck's last drop-off and the order's "
+                "pickup for the pair to count as a dual cycle and earn the bonus."
+            ),
+        )
 
     def solve(
         self,

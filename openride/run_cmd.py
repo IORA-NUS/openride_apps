@@ -70,7 +70,7 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
     if args.scenario not in valid_slugs:
         _log(f"error: unknown scenario slug: {args.scenario}")
         return EXIT_BAD_ARGS
-    # Solver choice is already constrained by argparse; None = scenario default.
+    # Not checked here: the engine validates the name at run start (exit 2); None = scenario default.
     solver = args.solver
     headless = not args.no_headless
 

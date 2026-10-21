@@ -17,6 +17,7 @@ from apps.container_logistics.datagen.overrides import (
     override_sha256,
 )
 from apps.container_logistics.datagen.preprocess import Preprocessor, SpecValidationError
+from apps.container_logistics.policies.framework import PolicyError, get_policy_spec
 
 from .scenario_bundle import compile_bundle, write_bundle
 
@@ -63,6 +64,18 @@ def _assert_generation_consistent(result, compiled, has_gen_override: bool) -> N
                 )
 
 
+def _assert_dispatch_policy_registered(strategy: str) -> None:
+    """Raise ``SpecValidationError`` unless ``strategy`` names a registered dispatch policy.
+
+    Fail loud at compile time (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.6): a
+    typo'd ``solver`` must never reach a bundle, since the runtime no longer falls back.
+    """
+    try:
+        get_policy_spec("dispatch", strategy)
+    except PolicyError as exc:
+        raise SpecValidationError(str(exc)) from exc
+
+
 def _stagger_early_orders(order_collection: dict, orsim_settings: dict, early_n: int, truck_n: int) -> None:
     """Place a small warm-up batch into sim hour 0 (behavior-preserving)."""
     order_n = len(order_collection or {})
@@ -106,6 +119,7 @@ def compile_spec_to_bundle(
         spec_json, domain=domain, scenario_dir=scenario_dir, reference_time=reference_time
     )
     spec = compiled.spec
+    _assert_dispatch_policy_registered(spec.assignment_settings["profile"]["strategy"])
     # Optional per-scenario Tier-2 override (scenario_gen.py in the folder). Absent
     # => pure shared-engine generation. Kept for back-compat (customize_spec /
     # customize_catalog / post_generate still fire).

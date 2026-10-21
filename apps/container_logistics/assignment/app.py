@@ -29,10 +29,17 @@ _DEFAULT_MAX_TRUCKS_PER_HAULIER = 500
 # event is pushed immediately, so `ticks_truncated_by_backstop` is never stale.
 _ROUND_STATS_PATCH_EVERY = 5
 
+# Appended to a policy lookup failure raised agent-side (celery journal, not sim.log).
+_STALE_WORKER_HINT = (
+    " If you just added this policy, restart the celery workers "
+    "(systemctl --user restart openride-celery): agents import policy code once at worker start."
+)
+
 from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from apps.container_logistics.rebate import RebateBook
 from apps.container_logistics.statemachine import ContainerLogisticsActions
+from apps.container_logistics.policies.framework import PolicyError
 from .solver import get_solver
 from orsim.lifecycle import ORSimApp
 
@@ -67,11 +74,14 @@ class AssignmentApp(ORSimApp):
             messenger=messenger,
             agent_helper=agent_helper,
         )
-        # Plug-and-play solver selection: ``strategy`` names a solver in the
-        # registry, ``solver_params`` tunes it (e.g. dual-cycle bonus). Unknown
-        # strategy falls back to the default (logged once) rather than crashing.
+        # Plug-and-play solver selection: ``strategy`` names a registered dispatch
+        # policy, ``solver_params`` tunes it (e.g. dual-cycle bonus). An unknown
+        # strategy raises (no fallback); the suffix covers the stale-worker case.
         prof = self.behavior.get("profile") or {}
-        self._solver = get_solver(prof.get("strategy"), prof.get("solver_params"))
+        try:
+            self._solver = get_solver(prof.get("strategy"), prof.get("solver_params"))
+        except PolicyError as exc:
+            raise type(exc)(f"{exc}{_STALE_WORKER_HINT}") from exc
         self._solver_params = prof.get("solver_params") or {}
         # Logged once if haulier scoping blocks all matches (likely missing haulier_id).
         self._warned_haulier_block = False
