@@ -3,8 +3,8 @@
 Responsibility: decide whether the MQTT payloads a golden replay published equal the
 stored ones. Exact string equality is the rule. The single tolerated difference is
 the main tree's Kafka-transport work, which appends ``sim_clock`` and ``time_step``
-to every ``AssignedHaulTripPayload``: when BOTH keys are present and both equal the
-harness tick, they are removed and the remainder must then re-dump to the stored
+to every ``AssignedHaulTripPayload``: when BOTH keys are present, are the LAST two
+keys in that order, and both equal the harness tick, they are removed and the remainder must then re-dump to the stored
 string exactly (key order, float repr and escaping included). Anything else -- one
 key alone, a wrong value, a ``bool`` time step, any other added key, a reordered or
 changed field -- is a mismatch.
@@ -34,6 +34,8 @@ def _payload_mismatch(actual: str, expected: str, *, sim_clock: str, time_step: 
         return "payload string differs and carries no transport tick keys"
     if len(present) == 1:
         return f"payload carries only {present[0]!r} of the transport tick keys {TRANSPORT_TICK_KEYS}"
+    if tuple(doc)[-2:] != TRANSPORT_TICK_KEYS:
+        return f"transport tick keys must be the last two keys, in order {TRANSPORT_TICK_KEYS}"
     if doc["sim_clock"] != sim_clock or not isinstance(doc["sim_clock"], str):
         return f"sim_clock {doc['sim_clock']!r} != harness tick {sim_clock!r}"
     if type(doc["time_step"]) is not int or doc["time_step"] != time_step:

@@ -84,3 +84,12 @@ def test_reordered_payload_keys_fail():
     reordered = dict(reversed(list(doc.items())))
     reordered.update(sim_clock=_CLOCK, time_step=TIME_STEP)
     assert _check(json.dumps(reordered, default=str))
+
+
+def test_tick_keys_anywhere_but_the_end_fail():
+    """The transport APPENDS the pair; the same keys elsewhere are a different payload.
+
+    Verified to have teeth: removing the last-two-keys check let the keys-first payload pass.
+    """
+    doc = {"sim_clock": _CLOCK, "time_step": TIME_STEP, **json.loads(_PAYLOAD)}
+    assert "last two keys" in (_check(json.dumps(doc, default=str)) or "")
