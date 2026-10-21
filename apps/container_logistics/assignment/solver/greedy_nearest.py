@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Iterable, List, Tuple
 
+from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
 from ..tiebreak import pair_tiebreak
@@ -59,6 +60,25 @@ class GreedyNearestSolver(BaseAssignmentSolver):
                 "Max distance in km between the truck's last drop-off and the order's "
                 "pickup for the pair to count as a dual cycle and earn the bonus."
             ),
+        )
+
+    def decide(self, ctx) -> Plan:
+        """Rank by the dual-cycle cost built from this policy's own params.
+
+        With the default/legacy params this equals the framework's accounting cost,
+        because both are ``constraints.assignment_cost`` with the same two floats.
+        """
+        p = ctx.params
+
+        def cost(t: Truck, o: Order) -> float:
+            return ctx.dual_cycle_cost(
+                t, o, bonus_km=p.dual_cycle_bonus_km, radius_km=p.dual_cycle_radius_km
+            )
+
+        if p.candidates == "spatial":
+            return Plan.from_pairs(self.solve_pairs(ctx.candidate_pairs("spatial"), cost=cost))
+        return Plan.from_pairs(
+            self.solve(ctx.sampled_trucks(), list(ctx.raw_orders), pair_allowed=ctx.allowed_raw, cost=cost)
         )
 
     def solve(

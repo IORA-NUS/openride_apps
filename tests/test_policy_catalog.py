@@ -14,6 +14,16 @@ from dataclasses import dataclass
 from apps.container_logistics.policies.framework import SLOTS, PolicyParams, param, policy
 from apps.container_logistics.policies.framework.catalog import policy_catalog
 from apps.container_logistics.policies.framework.registry import isolated_registry
+from apps.container_logistics.policies.dispatch.base import DispatchPolicy
+from apps.container_logistics.policies.dispatch.plan import Plan
+
+
+class _TestPolicyBase(DispatchPolicy):
+    """Dummy dispatch policies subclass this: the dispatch slot requires DispatchPolicy."""
+
+    def decide(self, ctx):
+        return Plan(chains={})
+
 
 EXPECTED_SLOTS = {
     "dispatch": ("operator", "implemented"),
@@ -37,9 +47,9 @@ def _register_dummies():
         pass
 
     policy(slot="dispatch", name="TestCatalogA", version="3", description="Dummy A.",
-           order_sensitive="shuffles on purpose")(type("TestCatalogA", (), {"Params": Params}))
+           order_sensitive="shuffles on purpose")(type("TestCatalogA", (_TestPolicyBase,), {"Params": Params}))
     policy(slot="dispatch", name="TestCatalogB", version="1", description="Dummy B.",
-           requires=("definitely_not_a_module_xyz",))(type("TestCatalogB", (), {"Params": NoParams}))
+           requires=("definitely_not_a_module_xyz",))(type("TestCatalogB", (_TestPolicyBase,), {"Params": NoParams}))
 
 
 def test_all_seven_slots_declared_with_kind_and_status():

@@ -30,6 +30,16 @@ from apps.container_logistics.policies.framework import (
 )
 from apps.container_logistics.policies.framework import registry
 from apps.container_logistics.policies.framework.registry import isolated_registry
+from apps.container_logistics.policies.dispatch.base import DispatchPolicy
+from apps.container_logistics.policies.dispatch.plan import Plan
+
+
+class _TestPolicyBase(DispatchPolicy):
+    """Dummy dispatch policies subclass this: the dispatch slot requires DispatchPolicy."""
+
+    def decide(self, ctx):
+        return Plan(chains={})
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -40,7 +50,7 @@ def _dummy(name: str = "TestDummy", **policy_kwargs):
     class Params(PolicyParams):
         k: float = param(1.0, ge=0, help="A knob.")
 
-    cls = type(name, (), {"Params": Params})
+    cls = type(name, (_TestPolicyBase,), {"Params": Params})
     kwargs = {"slot": "dispatch", "name": name, "version": "1", "description": "A test dummy."}
     kwargs.update(policy_kwargs)
     return policy(**kwargs)(cls)
@@ -173,7 +183,7 @@ def test_params_must_be_a_frozen_dataclass_subclass():
     with isolated_registry():
         for name, (attrs, message) in cases.items():
             with pytest.raises(PolicyRegistrationError, match=message):
-                register(type(name, (), attrs))
+                register(type(name, (_TestPolicyBase,), attrs))
             assert all(s.name != name for s in list_policies()), f"{name} must not be registered"
 
 
@@ -190,7 +200,7 @@ def test_defaults_violating_their_own_bounds_fail_registration():
     with isolated_registry():
         with pytest.raises(PolicyRegistrationError, match=r"defaults fail their own validation.*'k' must be >= 0"):
             policy(slot="dispatch", name="TestBadDefault", version="1", description="x")(
-                type("TestBadDefault", (), {"Params": Params}))
+                type("TestBadDefault", (_TestPolicyBase,), {"Params": Params}))
 
 
 def test_unknown_policy_error_lists_registered_names():
@@ -407,3 +417,18 @@ def test_discovery_finds_both_builtins_with_version_1():
     }
     assert rand.params_cls.from_mapping(None, where="t").to_dict() == {"candidates": "sampled"}
     assert default_policy_name("dispatch") == "RandomAssignment"
+
+
+def test_dispatch_slot_rejects_a_class_that_is_not_a_dispatch_policy():
+    """The shipped table requires every dispatch policy to subclass ``DispatchPolicy``.
+
+    Verified to have teeth: emptying ``_SLOT_BASES`` let the plain class register.
+    """
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        pass
+
+    with isolated_registry():
+        with pytest.raises(PolicyRegistrationError, match="must subclass .*DispatchPolicy"):
+            policy(slot="dispatch", name="TestPlainClass", version="1", description="x")(
+                type("TestPlainClass", (), {"Params": Params}))

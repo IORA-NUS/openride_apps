@@ -14,7 +14,8 @@ regression guard for I-P7).
   iteration order: companies are always iterated ``sorted()``, and the arbitration
   rule is required to be order-independent.
 - Every COMPANY decision is delegated: what to contribute (``ctx.offer``), what to
-  bid on (``ctx.claim``), and which truck serves which job (``ctx.solver``).
+  bid on (``ctx.claim``), and which truck serves which job (``ctx.dispatch``, the
+  dispatch-slot runner; this module never imports ``policies`` itself).
 
 ``PoolMarket`` is the only object allowed to mutate allocation state; this module
 asks it to ``commit`` and never bookkeeps allocation on the side.
@@ -24,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from . import constraints as assign_constraints
@@ -33,7 +34,7 @@ from .arbitration import DEFAULT_ARBITRATION_RULE, BaseArbitrationRule
 from .policy.claim import DEFAULT_CLAIM_POLICY, BaseClaimPolicy
 from .policy.offer import DEFAULT_OFFER_POLICY, BaseOfferPolicy
 from .pools import Award, PoolMarket
-from .solver.base import BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
+from .solver.base import Cost, Order, PairAllowed, Truck
 
 logger = logging.getLogger(__name__)
 
@@ -147,9 +148,15 @@ class PooledMarketResult:
 
 @dataclass
 class PooledPlannerContext:
-    """Everything the host needs for one tick, injected by ``AssignmentApp``."""
+    """Everything the host needs for one tick, injected by ``AssignmentApp``.
 
-    solver: BaseAssignmentSolver
+    ``dispatch`` is the ``DispatchRunner`` (``policies/dispatch/runner.py``); it is
+    typed ``Any`` so this module keeps no import of the policies package.
+    ``candidate_settings`` is its ``CandidateSettings``; ``clock`` its
+    ``DispatchClock``.
+    """
+
+    dispatch: Any
     offer: BaseOfferPolicy
     claim: BaseClaimPolicy
     arbitration: BaseArbitrationRule
@@ -159,9 +166,9 @@ class PooledPlannerContext:
     cost: Cost
     rng: Any
     tick_seed: int
-    spatial_params: Dict[str, Any] = field(default_factory=dict)
-    use_spatial: bool = True
-    max_trucks_per_haulier: int = 500
+    max_travel_time_pickup: Any = None
+    candidate_settings: Any = None
+    clock: Any = None
 
 
 def owner_reserve_km(
@@ -312,33 +319,49 @@ def _solve_company(
     trucks: List[Truck],
     orders: List[Order],
     *,
-    pair_allowed: PairAllowed,
+    haulier_id: str,
+    rnd: int,
     ctx: PooledPlannerContext,
     prebuilt_pairs: Optional[List[Tuple[Truck, Order]]] = None,
 ) -> List[Tuple[Truck, Order]]:
     """One company's deployment solve over its free trucks x its visible orders.
 
-    Identical machinery to the legacy path's ``_solve_bucket`` — spatial candidate
-    generation then a single greedy sweep — just scoped to ONE company instead of a
-    connected component. Because the scope and the eligibility set are now the same
-    object, there is no need for the legacy ``orders_by_haulier`` regrouping that
-    existed only to stop share-ineligible trucks burning the candidate cap (F1).
+    Identical machinery to the legacy path's partition solve — candidates then one
+    dispatch decision — just scoped to ONE company instead of a connected component.
+    Because the scope and the eligibility set are now the same object, there is no
+    need for the legacy ``orders_by_haulier`` regrouping that existed only to stop
+    share-ineligible trucks burning the candidate cap (F1).
+
+    The early returns stay AHEAD of building a context and in today's order: the
+    sampled path draws from the tick RNG, so deciding on an empty scope would shift
+    every later draw (plan ``docs/plans/policy_slots_p0_p3.md`` §7 risk 1).
     """
-    if ctx.use_spatial and hasattr(ctx.solver, "solve_pairs"):
+    if ctx.dispatch.candidate_kind == "spatial":
         # Candidates are built ONCE PER ROUND over the union of eligible fleets
         # (build_round_candidates) and sliced per company, so the pooled arm draws
         # the same candidate width as partitioned (plan §13.4 FIX-2).
         if not prebuilt_pairs:
             return []
-        return list(ctx.solver.solve_pairs(list(prebuilt_pairs), cost=ctx.cost))
-    if not trucks or not orders:
+    elif not trucks or not orders:
         return []
-    # Fallback (spatial disabled, or a solver without solve_pairs): bound the cross
-    # product exactly as the legacy path does.
-    bt = list(trucks)
-    if len(bt) > ctx.max_trucks_per_haulier:
-        bt = ctx.rng.sample(bt, ctx.max_trucks_per_haulier)
-    return list(ctx.solver.solve(bt, orders, pair_allowed=pair_allowed, cost=ctx.cost))
+    company_ctx = ctx.dispatch.company_context(
+        trucks=trucks,
+        orders=orders,
+        haulier_id=haulier_id,
+        round=rnd,
+        rule=_company_rule(ctx, haulier_id),
+        rng=ctx.rng,
+        settings=ctx.candidate_settings,
+        accounting_cost=ctx.cost,
+        clock=ctx.clock,
+        prebuilt_pairs=prebuilt_pairs,
+    )
+    return list(ctx.dispatch.run(company_ctx))
+
+
+def _company_rule(ctx: PooledPlannerContext, carrier: str):
+    """The ``CompanyRule`` for ``carrier``: built by the runner's package, not imported here."""
+    return ctx.dispatch.company_rule(carrier, ctx.max_travel_time_pickup)
 
 
 def run_pooled_market(
@@ -432,6 +455,7 @@ def run_pooled_market(
     converged = False
     candidate_pairs_round1 = 0
     candidate_pairs_total = 0
+    rules_by_carrier: Dict[str, Any] = {}
     for rnd in range(1, max_rounds + 1):
         if not any(market.is_order_free(oid) for oid in input_order_ids):
             converged = True  # nothing left to allocate: a legitimate convergence
@@ -452,25 +476,24 @@ def run_pooled_market(
         ]
 
         def _pair_allowed_for(carrier: str) -> PairAllowed:
-            def _p(t: Truck, o: Order, _c: str = carrier) -> bool:
-                # Own orders keep the STRICT rule; pooled foreign orders drop the
-                # haulier-equality test because visibility already proved
-                # eligibility by construction (the coherence fix, plan §0).
-                if assign_constraints.haulier_of(o) == _c:
-                    return ctx.pair_allowed_own(t, o)
-                return ctx.pair_allowed_pooled(t, o)
-
-            return _p
+            # Own orders keep the STRICT rule; pooled foreign orders drop the
+            # haulier-equality test because visibility already proved eligibility
+            # by construction (the coherence fix, plan §0). See CompanyRule.
+            # Cached: build_round_candidates asks once per candidate pair.
+            rule = rules_by_carrier.get(carrier)
+            if rule is None:
+                rule = rules_by_carrier[carrier] = _company_rule(ctx, carrier)
+            return rule.allowed
 
         candidates_by_haulier: Dict[str, List[Tuple[Truck, Order]]] = {}
-        if ctx.use_spatial and hasattr(ctx.solver, "solve_pairs"):
+        if ctx.dispatch.candidate_kind == "spatial":
             candidates_by_haulier = build_round_candidates(
                 free_trucks_by_haulier=free_trucks_by_haulier,
                 free_orders=free_orders,
                 market=market,
                 owner_by_order_id=owner_by_order_id,
                 pair_allowed_for=_pair_allowed_for,
-                spatial_params=ctx.spatial_params,
+                spatial_params=ctx.candidate_settings.spatial_params(),
             )
             _round_pairs = sum(len(v) for v in candidates_by_haulier.values())
             candidate_pairs_total += _round_pairs
@@ -511,7 +534,8 @@ def run_pooled_market(
                 result = _solve_company(
                     own_trucks,
                     candidate_orders,
-                    pair_allowed=_pair_allowed_for(hid),
+                    haulier_id=hid,
+                    rnd=rnd,
                     ctx=ctx,
                     prebuilt_pairs=candidates_by_haulier.get(hid),
                 )

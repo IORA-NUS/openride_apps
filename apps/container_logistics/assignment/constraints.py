@@ -172,20 +172,36 @@ def assignment_cost(
     bonus_km = float(params.get("dual_cycle_bonus_km", _DEFAULT_DUAL_CYCLE_BONUS_KM))
     radius_km = float(params.get("dual_cycle_radius_km", _DEFAULT_DUAL_CYCLE_RADIUS_KM))
 
-    is_dual_cycle = False
-    last_fac = _truck_last_dropoff_facility(truck)
-    order_pickup_fac = (order.get("profile") or {}).get("pickup_facility_name")
-    if last_fac is not None and order_pickup_fac is not None and last_fac == str(order_pickup_fac):
-        is_dual_cycle = True
-    else:
-        last_loc = _truck_last_dropoff_loc(truck)
-        if last_loc is not None:
-            d = _haversine_km(last_loc, pickup)
-            if d is not None and d <= radius_km:
-                is_dual_cycle = True
+    is_dual_cycle = _is_dual_cycle_pair(truck, order, pickup, radius_km)
 
     cost = base_km - (bonus_km if is_dual_cycle else 0.0)
     return max(0.0, cost)
+
+
+def _is_dual_cycle_pair(
+    truck: Dict[str, Any],
+    order: Dict[str, Any],
+    pickup: Optional[Dict[str, Any]],
+    radius_km: float,
+) -> bool:
+    """The dual-cycle predicate of :func:`assignment_cost`, factored out unchanged.
+
+    True when the order's pickup facility is the truck's last drop-off facility
+    (name match), else when the last drop-off point lies within ``radius_km`` of
+    ``pickup`` (haversine). ``pickup`` is passed in rather than recomputed so
+    ``assignment_cost`` keeps its exact arithmetic; ``None`` disables only the
+    radius branch.
+    """
+    last_fac = _truck_last_dropoff_facility(truck)
+    order_pickup_fac = (order.get("profile") or {}).get("pickup_facility_name")
+    if last_fac is not None and order_pickup_fac is not None and last_fac == str(order_pickup_fac):
+        return True
+    last_loc = _truck_last_dropoff_loc(truck)
+    if last_loc is not None:
+        d = _haversine_km(last_loc, pickup)
+        if d is not None and d <= radius_km:
+            return True
+    return False
 
 
 def haulier_of(entity: Dict[str, Any]) -> Optional[str]:

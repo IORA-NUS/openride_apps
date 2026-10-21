@@ -6,23 +6,6 @@ import logging
 import random
 from typing import Any, Dict, List, Tuple
 
-# The greedy solver builds every feasible (truck, order) pair — O(trucks x orders).
-# Past ~500 trucks/haulier that quadratic dominates and a single assign() call can
-# no longer finish inside the scheduler step barrier, so nothing gets assigned at
-# all (observed: a 5000-truck fleet produced 0 haul trips while 500 produced ~464).
-# We bound the trucks fed to the solver *per haulier bucket* — a randomly sampled
-# subset each tick, so every truck rotates into consideration across ticks without
-# the matching cost growing with fleet size. Tunable via the assignment behavior
-# profile (``max_trucks_per_haulier``).
-#
-# Default 500 keeps the worst case (one haulier holding the whole order batch) at
-# 500 trucks x 500 orders = 250K pairs — the same envelope as the proven-fast
-# 500-truck runs (which produced ~464 haul trips). Above the cap, sampling means a
-# 5000-truck fleet costs the same per tick as a 500-truck one; trucks just rotate
-# in over successive assignment ticks. Raise it to widen the candidate pool (better
-# match quality) at the cost of per-tick solve time.
-_DEFAULT_MAX_TRUCKS_PER_HAULIER = 500
-
 # How often the pooled market's round provenance is pushed onto run_config.
 # Cheap (two HTTP calls, a few dozen times per run) and bounded: the recorded
 # stats can lag the true tick count by at most this many ticks, but a truncation
@@ -40,11 +23,9 @@ from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from apps.container_logistics.rebate import RebateBook
 from apps.container_logistics.statemachine import ContainerLogisticsActions
 from apps.container_logistics.policies.framework import PolicyError
-from .solver import get_solver
 from orsim.lifecycle import ORSimApp
 
 from . import constraints as assign_constraints
-from . import spatial
 from .arbitration import get_arbitration_rule
 from .manager import AssignmentManager
 from .policy.claim import get_claim_policy
@@ -74,12 +55,13 @@ class AssignmentApp(ORSimApp):
             messenger=messenger,
             agent_helper=agent_helper,
         )
-        # Plug-and-play solver selection: ``strategy`` names a registered dispatch
-        # policy, ``solver_params`` tunes it (e.g. dual-cycle bonus). An unknown
-        # strategy raises (no fallback); the suffix covers the stale-worker case.
+        # Plug-and-play dispatch selection: the compiled ``policies.dispatch`` block,
+        # or the legacy ``strategy``/``solver_params`` keys, names a registered
+        # dispatch policy. An unknown name raises (no fallback); the suffix covers
+        # the stale-worker case.
         prof = self.behavior.get("profile") or {}
         try:
-            self._solver = get_solver(prof.get("strategy"), prof.get("solver_params"))
+            self._solver = self._build_dispatch_policy(prof)
         except PolicyError as exc:
             raise type(exc)(f"{exc}{_STALE_WORKER_HINT}") from exc
         self._solver_params = prof.get("solver_params") or {}
@@ -125,6 +107,46 @@ class AssignmentApp(ORSimApp):
 
     def _assignment_profile(self) -> Dict[str, Any]:
         return self.behavior.get("profile") or {}
+
+    # --- the dispatch slot (docs/plans/policy_slots_p0_p3.md §4 P1.10) --------
+    #
+    # Import-cycle rule (plan §2.7): ``policies.dispatch`` modules are imported ONLY
+    # locally in these two methods. ``policies.dispatch`` reaches back into this
+    # package (constraints, spatial), so a module-top import here would cycle
+    # through ``assignment/__init__``.
+
+    @staticmethod
+    def _build_dispatch_policy(prof: Dict[str, Any]):
+        """Resolve the profile's dispatch slot and instantiate that policy (raises)."""
+        from apps.container_logistics.policies.dispatch.profile import (  # local: cycle rule
+            build_dispatch_policy,
+            resolve_dispatch_for_profile,
+        )
+
+        return build_dispatch_policy(resolve_dispatch_for_profile(prof))
+
+    def _dispatch_runner(self, prof: Dict[str, Any]):
+        """The ``DispatchRunner`` for ``self._solver`` under ``prof``, cached on its inputs.
+
+        Keyed like ``_market_components`` rather than built once, so a swapped
+        ``_solver`` or a profile patched after construction (and the tests that build
+        the app via ``__new__``) take effect. Raises ``PolicyError`` on a mismatch.
+        """
+        from apps.container_logistics.policies.dispatch.runner import build_runner_for_app  # local: cycle rule
+
+        key = (
+            id(self._solver),
+            json.dumps(prof.get("policies"), sort_keys=True, default=str),
+            prof.get("strategy"),
+            json.dumps(prof.get("solver_params"), sort_keys=True, default=str),
+            prof.get("use_spatial_matching", True),
+        )
+        cached_key, cached = getattr(self, "_dispatch_runner_cache", (None, None))
+        if cached is not None and cached_key == key:
+            return cached
+        runner = build_runner_for_app(self._solver, prof)
+        self._dispatch_runner_cache = (key, runner)
+        return runner
 
     def _order_publish_payload(self, order: Dict[str, Any]) -> Dict[str, Any]:
         """Shape expected by ``TruckApp.handle_assignment`` / smoke tests."""
@@ -443,12 +465,15 @@ class AssignmentApp(ORSimApp):
         orders: List[Dict[str, Any]],
         prof: Dict[str, Any],
         time_step: int,
+        sim_clock: str = "",
     ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
         """One planner per company, cooperating through shared order pools.
 
         Seeds the tick RNG, builds the :class:`PoolMarket` from the active
         structure, and hands off to :func:`run_pooled_market` (plan §4.1 steps 2-7).
         """
+        from apps.container_logistics.policies.dispatch.context import DispatchClock  # local: cycle rule
+
         max_pickup_travel = prof.get("max_travel_time_pickup")
 
         def _cost(t: Dict[str, Any], o: Dict[str, Any]) -> float:
@@ -495,8 +520,9 @@ class AssignmentApp(ORSimApp):
                 orders_by_haulier.setdefault(hid, []).append(o)
 
         offer, claim, arbitration, max_rounds = self._market_components(prof)
+        runner = self._dispatch_runner(prof)
         ctx = PooledPlannerContext(
-            solver=self._solver,
+            dispatch=runner,
             offer=offer,
             claim=claim,
             arbitration=arbitration,
@@ -506,16 +532,12 @@ class AssignmentApp(ORSimApp):
             cost=_cost,
             rng=rng,
             tick_seed=tick_seed,
-            spatial_params={
-                "cell_deg": float(prof.get("spatial_cell_deg", spatial.DEFAULT_CELL_DEG)),
-                "per_order": max(1, int(prof.get(
-                    "spatial_candidates_per_order", spatial.DEFAULT_PER_ORDER_CANDIDATES
-                ))),
-                "max_rings": max(0, int(prof.get("spatial_max_rings", spatial.DEFAULT_MAX_RINGS))),
-            },
-            use_spatial=bool(prof.get("use_spatial_matching", True)),
-            max_trucks_per_haulier=max(
-                1, int(prof.get("max_trucks_per_haulier", _DEFAULT_MAX_TRUCKS_PER_HAULIER))
+            max_travel_time_pickup=max_pickup_travel,
+            candidate_settings=runner.candidate_settings(prof),
+            clock=DispatchClock(
+                sim_clock=sim_clock,
+                time_step=int(time_step or 0),
+                horizon_steps=getattr(self, "_sim_horizon_steps", None),
             ),
         )
 
@@ -550,17 +572,6 @@ class AssignmentApp(ORSimApp):
         respect_online = bool(prof.get("respect_truck_online_state", True))
         reject_busy = bool(prof.get("reject_if_active_haul_trip", True))
         max_pickup_travel = prof.get("max_travel_time_pickup")
-        max_trucks_per_haulier = max(
-            1, int(prof.get("max_trucks_per_haulier", _DEFAULT_MAX_TRUCKS_PER_HAULIER))
-        )
-        # Spatial matching: only score trucks near each order's pickup instead of
-        # the full per-haulier cross product. Bounds cost *and* favours low-deadhead
-        # (nearest) trucks. On by default; the random-sample cap above is the
-        # fallback when disabled or when the solver can't take pre-built pairs.
-        use_spatial = bool(prof.get("use_spatial_matching", True))
-        cell_deg = float(prof.get("spatial_cell_deg", spatial.DEFAULT_CELL_DEG))
-        per_order = max(1, int(prof.get("spatial_candidates_per_order", spatial.DEFAULT_PER_ORDER_CANDIDATES)))
-        max_rings = max(0, int(prof.get("spatial_max_rings", spatial.DEFAULT_MAX_RINGS)))
         solve_in_thread = bool(prof.get("solve_in_thread", False))
 
         projection_truck = {"state": 1, "profile": 1, "persona": 1, "_id": 1, "meta": 1}
@@ -596,7 +607,7 @@ class AssignmentApp(ORSimApp):
         # the DEFAULT IS STILL 'partitioned' and everything below this branch is the
         # legacy path, byte-for-byte unchanged — it is the regression guard for I-P7.
         if self._resolved_topology(prof) == "pooled":
-            return self._assign_pooled(candidates, orders, prof, time_step)
+            return self._assign_pooled(candidates, orders, prof, time_step, sim_clock)
 
         # Cooperation (collaboration plan §3): the baked structure decides which
         # hauliers may share jobs. No structure / no edges => adjacency is empty and
@@ -610,24 +621,29 @@ class AssignmentApp(ORSimApp):
                     for hid in members:
                         component_of[str(hid)] = idx
 
-        def _pair_allowed(t: Dict[str, Any], o: Dict[str, Any]) -> bool:
-            # Own-haulier pairs keep the strict rule; cross pairs require a
-            # structure edge (share_eligible) + physical feasibility. Own and
-            # partner trucks compete ON EQUAL FOOTING — the deadhead cost decides,
-            # never fleet availability.
-            if assign_constraints.haulier_matches(t, o):
-                return assign_constraints.pair_allowed(
-                    t, o, max_travel_time_pickup=max_pickup_travel
-                )
-            if adjacency and assign_constraints.share_eligible(t, o, adjacency):
-                return assign_constraints.pair_allowed_ignoring_haulier(
-                    t, o, max_travel_time_pickup=max_pickup_travel
-                )
-            return False
+        # Spatial matching (the default `candidates` of GreedyNearest) scores only
+        # trucks near each order's pickup instead of the full per-haulier cross
+        # product; the random-sample cap is the fallback. Both live behind the
+        # dispatch runner now (plan §4 P1.10), parsed from the same profile keys.
+        from apps.container_logistics.policies.dispatch.allowed import PartitionRule  # local: cycle rule
+        from apps.container_logistics.policies.dispatch.context import DispatchClock  # local: cycle rule
+
+        runner = self._dispatch_runner(prof)
+        settings = runner.candidate_settings(prof)
+        clock = DispatchClock(
+            sim_clock=sim_clock,
+            time_step=int(time_step or 0),
+            horizon_steps=getattr(self, "_sim_horizon_steps", None),
+        )
+        # Own-haulier pairs keep the strict rule; cross pairs require a structure
+        # edge + physical feasibility. Own and partner trucks compete ON EQUAL
+        # FOOTING — the deadhead cost decides, never fleet availability.
+        rule = PartitionRule(max_travel_time_pickup=max_pickup_travel, adjacency=adjacency)
+        _pair_allowed = rule.allowed
 
         def _cost(t: Dict[str, Any], o: Dict[str, Any]) -> float:
-            # Soft objective (deadhead km, dual-cycle aware). Cost-blind solvers
-            # (e.g. RandomAssignment) ignore this; greedy minimises it.
+            # The framework's accounting objective (deadhead km, dual-cycle aware):
+            # used for benefit_km below and handed to cost-blind policies.
             return assign_constraints.assignment_cost(t, o, self._solver_params)
 
         # Partition both sides by the structure's connected component — one logical
@@ -654,58 +670,21 @@ class AssignmentApp(ORSimApp):
                 _partition_key(assign_constraints.haulier_of(o)), []
             ).append(o)
 
-        def _serves(truck_haulier: str, order_haulier: str) -> bool:
-            return truck_haulier == order_haulier or (
-                order_haulier in adjacency.get(truck_haulier, ())
-            )
-
         def _solve_bucket(
             bucket_trucks: List[Dict[str, Any]],
             bucket_orders: List[Dict[str, Any]],
+            partition_key: Tuple[str, Any],
         ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
-            if use_spatial and hasattr(self._solver, "solve_pairs"):
-                # Candidates are generated PER ORDER-HAULIER over only the trucks
-                # eligible to serve that haulier (own + edge partners). A single
-                # component-wide index let share-INELIGIBLE trucks (in the bucket
-                # but with no edge — e.g. C's trucks for A's orders in a chain
-                # A-B-C) consume the per-order candidate cap by pure proximity and
-                # starve orders while their own haulier had free trucks in range.
-                # ONE solve still runs over the union of pairs, so trucks/orders
-                # are never double-assigned across the groups.
-                orders_by_haulier: Dict[str, List[Dict[str, Any]]] = {}
-                for o in bucket_orders:
-                    oh = assign_constraints.haulier_of(o)
-                    if oh:
-                        orders_by_haulier.setdefault(oh, []).append(o)
-                pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-                for oh, o_group in orders_by_haulier.items():
-                    eligible = [
-                        t for t in bucket_trucks
-                        if (assign_constraints.haulier_of(t) or "") and _serves(
-                            assign_constraints.haulier_of(t), oh
-                        )
-                    ]
-                    if not eligible:
-                        continue
-                    pairs.extend(
-                        spatial.iter_candidate_pairs(
-                            eligible,
-                            o_group,
-                            pair_allowed=_pair_allowed,
-                            cell_deg=cell_deg,
-                            per_order=per_order,
-                            max_rings=max_rings,
-                        )
-                    )
-                return list(self._solver.solve_pairs(pairs, cost=_cost))
-            # Fallback (spatial disabled, or a solver without solve_pairs): bound
-            # the cross product by random-sampling the truck pool per partition.
-            bt = bucket_trucks
-            if len(bt) > max_trucks_per_haulier:
-                bt = random.sample(bt, max_trucks_per_haulier)
-            return list(
-                self._solver.solve(bt, bucket_orders, pair_allowed=_pair_allowed, cost=_cost)
+            ctx = runner.partition_context(
+                trucks=bucket_trucks,
+                orders=bucket_orders,
+                partition_key=partition_key,
+                rule=rule,
+                settings=settings,
+                accounting_cost=_cost,
+                clock=clock,
             )
+            return runner.run(ctx)
 
         assignment: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
         share_tags: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -717,9 +696,11 @@ class AssignmentApp(ORSimApp):
             if not bucket_trucks:
                 continue
             if solve_in_thread and _eventlet_tpool is not None:
-                result = _eventlet_tpool.execute(_solve_bucket, bucket_trucks, bucket_orders)
+                result = _eventlet_tpool.execute(
+                    _solve_bucket, bucket_trucks, bucket_orders, partition_key
+                )
             else:
-                result = _solve_bucket(bucket_trucks, bucket_orders)
+                result = _solve_bucket(bucket_trucks, bucket_orders, partition_key)
             # benefit_km = owner's best own truck STILL FREE after this solve minus
             # the chosen cost — computed by a direct scan of the partition's own-fleet
             # trucks (bounded: cross matches are few), NOT from the capped candidate

@@ -57,9 +57,10 @@ BUILTIN_POLICY_PACKAGES = (
 )
 
 # Per-slot required base class, as "module:QualName", imported lazily at registration
-# so this leaf never imports the slot's contract module at top. P1 adds
-# "dispatch": "apps.container_logistics.policies.dispatch.base:DispatchPolicy".
-_SLOT_BASES: dict[str, str] = {}
+# so this leaf never imports the slot's contract module at top.
+_SLOT_BASES: dict[str, str] = {
+    "dispatch": "apps.container_logistics.policies.dispatch.base:DispatchPolicy",
+}
 
 _REGISTRY: dict[tuple[str, str], "PolicySpec"] = {}
 _DISCOVERY = {"done": False, "running": False}
