@@ -25,6 +25,13 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     # 133.4 ms -> 3 x 133.4 = 400 -> floor 500. This box varies 1.3-2x on its own
     # (CLAUDE.md §17), hence the 3x margin and the battery's best-of-3.
     perf_budget_ms=500,
+    # Per-arm budget (round-2 C5 rule: max(3 x worst of 2 x 5 runs, 500)). Measured
+    # 2026-10-21 on the whole-tick testing.fixtures.scale() (1000 trucks x 500 orders,
+    # one haulier, tick-scope sample cap 500 -> 250k pairs), 2 x 5 runs, load avg
+    # 5.8-6.5 on 32 cores: 1865.1-1929.1 ms, worst 1929.1 -> 3 x 1929.1 = 5787 -> 5790.
+    # ABOVE STEP_SETTLE_SECONDS (2000 ms): at 1000 x 500 this arm makes the assignment
+    # agent a per-step straggler (its ~1.9 s solve alone is close to the settle window).
+    arm_budgets_ms={"candidates=sampled": 5790},
 )
 class GreedyNearestSolver(BaseAssignmentSolver):
     """Globally greedy nearest-pair matching within a haulier bucket.

@@ -205,16 +205,19 @@ def register(sub) -> None:
     val.add_argument("name")
     val.set_defaults(func=_cmd_validate)
 
-    bench = psub.add_parser("bench", help="Single-tick bench on synthetic or captured fixtures")
+    bench = psub.add_parser("bench", help="Whole-tick bench on synthetic or captured fixtures")
     bench.add_argument("slot")
-    bench.add_argument("--policies", required=True, metavar="A,B", help="Comma-separated policy names")
+    bench.add_argument("--policies", required=True, metavar="A,ALIAS=B",
+                       help="Comma-separated NAME or ALIAS=NAME entries (one policy benched in several "
+                            "configurations: pm=PooledMarket,pr=PooledMarket)")
     src = bench.add_mutually_exclusive_group(required=True)
     src.add_argument("--fixtures", default=None, metavar="DIR",
                      help="Captured fixtures (openride run --capture-dispatch)")
     src.add_argument("--synthetic", default=None, metavar="NAME[,NAME]|all",
                      help="Synthetic fixture(s), e.g. scale")
     bench.add_argument("--policy-param", dest="policy_param", action="append", default=[],
-                       metavar="POLICY.KEY=VALUE",
-                       help="Param override for one benched policy, repeatable; VALUE is JSON when it parses")
+                       metavar="ALIAS.PATH=VALUE",
+                       help="Param override for one benched entry, repeatable; nested like --policy-param "
+                            "(pr.inner=RandomAssignment, pr.inner.candidates=spatial); VALUE is JSON when it parses")
     bench.add_argument("--json", action="store_true", help="Emit the raw report JSON")
     bench.set_defaults(func=_cmd_bench)

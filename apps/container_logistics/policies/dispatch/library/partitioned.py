@@ -54,12 +54,15 @@ _INNER_HELP = (
     module_rng="pre-v2 byte identity: each group's inner shuffle and its sample cap draw from the "
                "random MODULE, exactly as the pre-v2 partitioned path did",
     order_sensitive="inner ties broken by a module-RNG shuffle over input order (pre-v2)",
-    # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
-    # Measured 2026-10-21 on testing.fixtures.scale() (1000 trucks x 500 orders, one
-    # haulier, default inner RandomAssignment sampled), 2 x 5 runs, load avg 3.3 on 32
-    # cores: 165.1-171.2 ms, worst 171.2 -> 3 x 171.2 = 513.6 -> 520. The group split
-    # adds nothing measurable over the inner (RandomAssignment alone: worst 168.2).
-    perf_budget_ms=520,
+    # Per-arm budgets for the battery's performance.scale check (round-2 C5 rule:
+    # max(3 x worst of 2 x 5 runs, 500)). Measured 2026-10-21 on the whole-tick
+    # testing.fixtures.scale() (1000 trucks x 500 orders, one haulier, so one group),
+    # 2 x 5 runs, load avg 5.8-6.5 on 32 cores:
+    #   default (inner RandomAssignment, sampled): 175.4-217.0 ms -> 3 x 217.0 = 651 -> 660
+    #   inner=GreedyNearest (spatial):             110.0-129.6 ms -> 3 x 129.6 = 389 -> 500
+    # (round-1 partition-scope measurement at load 3.3 was 165.1-171.2 ms -> 520.)
+    perf_budget_ms=660,
+    arm_budgets_ms={"inner=GreedyNearest": 500},
 )
 class Partitioned(CompositePolicy):
     """Decide each cooperation group of the tick with ``inner``; merge the plans in group order."""

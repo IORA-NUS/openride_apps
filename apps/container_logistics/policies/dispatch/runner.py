@@ -27,9 +27,11 @@ company crashed) are in memory only and shared with every scope of the tick.
 :func:`build_runner_for_policy` builds a runner from a registered name alone (the
 battery, bench and capture replay share it).
 
-Capture (format ``/1``, one file per decided sub-scope): the hook rides on the tick
-context and is called around every ``decide_in_scope``, and around ``run`` on a
-sub-scope context; a whole-tick decision is not captured until format ``/2`` (C5).
+Capture (format ``/2``, one file per captured TICK): the hook is called around
+``run`` (``before_decide(ctx)``, then ``capture(ctx=, plan=, problems=)`` with the raw
+plan, before ``check_plan``). It also rides on the tick context, so
+``compose.decide_in_scope`` calls it around every sub-scope decision; the capture
+recorder ignores those (a whole tick replays its sub-scopes).
 
 Framework side of the boundary. Not a leaf module (plan §2.7): ``assignment/app.py``
 imports :func:`build_runner_for_app` locally, inside its one accessor.
@@ -88,7 +90,8 @@ class DispatchRunner:
 
     ``policy`` is the built top-level policy and ``resolved`` its ``ResolvedDispatch``
     tree. ``capture`` is the P3 fixture hook: ``capture(ctx=..., plan=...,
-    problems=...)``, called after a sub-scope's ``decide`` and BEFORE its check
+    problems=...)``, called after ``decide`` (the tick's in :meth:`run`, and each
+    sub-scope's through ``compose.decide_in_scope``) and BEFORE the check
     (``problems`` holds only a violation ``decide`` raised); with ``before_decide(ctx)``
     it is called first, so it can snapshot RNG state without consuming it. ``None``
     costs one ``if`` per scope. Raises ``PolicyTimingError`` for a timing it cannot
@@ -146,7 +149,7 @@ class DispatchRunner:
 
     def run(self, ctx: DispatchContext) -> TickOutcome:
         """Decide for ``ctx`` and return what to commit (no pairs on a violation)."""
-        capture = self._capture if ctx.scope.kind != "tick" else None
+        capture = self._capture
         if capture is not None:
             before = getattr(capture, "before_decide", None)
             if before is not None:
@@ -207,8 +210,9 @@ def build_runner_for_app(policy: DispatchPolicy, prof: Mapping[str, Any]) -> Dis
 
     top, bound = bind_profile_instance(prof, policy)
     settings = CaptureSettings.from_profile(prof)
-    # Capture records the per-scope decisions of the innermost solver (format /1).
-    capture = None if settings is None else CaptureRecorder(settings, resolved=bound.innermost)
+    # Capture records whole ticks of the bound selection (format /2).
+    capture = None if settings is None else CaptureRecorder(
+        settings, resolved=bound, rebate_aware=CaptureSettings.rebate_aware_of(prof))
     return DispatchRunner(policy=top, resolved=bound, capture=capture)
 
 

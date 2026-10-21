@@ -193,16 +193,18 @@ def _run(argv: list[str] | None = None) -> int:
     pval_p.add_argument("--slot", required=True)
     pval_p.add_argument("--name", required=True)
 
-    pbench_p = sub.add_parser("policy-bench", help="Single-tick bench of policies on synthetic or captured fixtures")
+    pbench_p = sub.add_parser("policy-bench", help="Whole-tick bench of policies on synthetic or captured fixtures")
     pbench_p.add_argument("--slot", required=True)
-    pbench_p.add_argument("--policies", required=True, metavar="A,B")
+    pbench_p.add_argument("--policies", required=True, metavar="A,ALIAS=B",
+                          help="Comma-separated NAME or ALIAS=NAME entries, e.g. pm=PooledMarket,pr=PooledMarket")
     pbench_src = pbench_p.add_mutually_exclusive_group(required=True)
     pbench_src.add_argument("--fixtures", default=None, metavar="DIR",
                             help="Directory of captured step_*.json.gz (run-simulation --capture-dispatch)")
     pbench_src.add_argument("--synthetic", default=None, metavar="NAME[,NAME]|all",
                             help="Synthetic fixture(s), e.g. scale")
-    pbench_p.add_argument("--policy-param", action="append", default=[], metavar="POLICY.KEY=VALUE",
-                          help="Param override for one benched policy, repeatable; VALUE is JSON when it parses.")
+    pbench_p.add_argument("--policy-param", action="append", default=[], metavar="ALIAS.PATH=VALUE",
+                          help="Param override for one benched entry, repeatable (nested: pr.inner=RandomAssignment, "
+                          "pr.inner.candidates=spatial); VALUE is JSON when it parses.")
 
     vrp_p = sub.add_parser(
         "validate-run-policies",

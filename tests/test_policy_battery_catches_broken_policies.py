@@ -2,11 +2,17 @@
 
 What is locked: deliberately broken dispatch policies, each registered under
 ``isolated_registry()``, fail precisely the expected battery checks and nothing
-else (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3 tests) -- including a policy
-broken ONLY under a non-default ``choices`` value, which fails that arm's check while
-its default arm passes, and a policy that draws from the ``random`` module behind an
-injected RNG -- and a policy whose ``Params`` defaults break their own bounds cannot
-be registered at all.
+else (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3 tests; round 2 §5 C5, whole
+ticks) -- including a policy broken ONLY under a non-default ``choices`` value, which
+fails that arm's check while its default arm passes; a policy that draws from the
+``random`` module; a ``per_company`` market whose company scopes leak other companies'
+trucks (``LeakyMarket``: only ``information.scopes_respect_model``); a central policy
+that ignores the cooperation structure (``CrossCompanyCentral``: only
+``structure.only_allowed_pairs``); and an arm slower than the budget it inherits
+because nobody measured it (``SlowUndeclaredArm``: only that arm's
+``performance.scale``, and declaring a measured ``arm_budgets_ms`` entry clears it)
+-- and a policy whose ``Params`` defaults break their own bounds cannot be
+registered at all.
 
 Why: a battery that passes everything proves nothing. Each broken policy is a
 correct baseline (orders and trucks taken in id order, each order to the first free
@@ -27,7 +33,14 @@ only plan lengths in ``_reproducible`` failed
 ``test_clock_seeded_policy_fails_determinism_reproducible``; returning ``[{}]`` from
 ``policy_arms`` failed ``test_policy_broken_only_under_a_non_default_choice_fails_that_arm``;
 and ``touched = False`` in ``_decide_via_runner`` failed
-``test_module_rng_policy_fails_only_no_module_rng``.
+``test_module_rng_policy_fails_only_no_module_rng``. Round 2 C5 (each mutation in
+``battery.py`` restored after, verified by hash): returning ``[]`` from
+``_scope_problems`` failed ``test_leaky_market_fails_only_scopes_respect_model``;
+making the tick context's feasibility always true (``allowed_raw=lambda t, o: True``
+in ``scopes.tick_context``, a scratch copy) failed
+``test_cross_company_central_fails_only_only_allowed_pairs``;
+``_arm_budget`` returning a budget of 10x the default for unmeasured arms failed
+``test_slow_undeclared_arm_fails_only_its_performance_scale``.
 """
 
 from __future__ import annotations
@@ -38,6 +51,9 @@ from dataclasses import dataclass
 
 import pytest
 
+from apps.container_logistics.assignment import constraints as assign_constraints
+from apps.container_logistics.policies.dispatch import scopes
+from apps.container_logistics.policies.dispatch.allowed import CompanyRule
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
@@ -46,13 +62,14 @@ from apps.container_logistics.policies.framework.registry import isolated_regist
 from apps.container_logistics.policies.testing.battery import DISPATCH_CHECKS, battery_check_ids, run_battery
 
 
-def _first_feasible(ctx, trucks=None):
+def _first_feasible(ctx, trucks=None, allowed=None):
     """Each order (by id) takes the first free allowed truck (by id, unless given)."""
     trucks = sorted(ctx.raw_trucks, key=lambda t: str(t["_id"])) if trucks is None else trucks
+    allowed = ctx.allowed_raw if allowed is None else allowed
     used, chains = set(), {}
     for o in sorted(ctx.raw_orders, key=lambda o: str(o["_id"])):
         for t in trucks:
-            if t["_id"] not in used and ctx.allowed_raw(t, o):
+            if t["_id"] not in used and allowed(t, o):
                 used.add(t["_id"])
                 chains[str(t["_id"])] = (str(o["_id"]),)
                 break
@@ -230,3 +247,95 @@ def test_registering_bad_param_defaults_raises():
 
                 def decide(self, ctx):
                     return Plan(chains={})
+
+
+def test_leaky_market_fails_only_scopes_respect_model():
+    """A ``per_company`` policy whose company scopes hold EVERY company's trucks.
+
+    Its plan is a correct one (decided on the tick), so only the information audit
+    of the scopes it built can see the leak.
+    """
+    with isolated_registry():
+        @policy(slot="dispatch", information_model="per_company", name="LeakyMarket", version="1",
+                description="company scopes that leak other companies' trucks")
+        class LeakyMarket(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                pass
+
+            def decide(self, ctx):
+                hids = sorted({assign_constraints.haulier_of(o) for o in ctx.raw_orders} - {None})
+                for hid in hids:
+                    scopes.company_context(  # the leak: all trucks, not just hid's
+                        policy=self, params=ctx.params, candidate_kind=ctx.default_candidate_kind,
+                        trucks=list(ctx.raw_trucks),
+                        orders=[o for o in ctx.raw_orders if assign_constraints.haulier_of(o) == hid],
+                        haulier_id=hid, round=1,
+                        rule=CompanyRule(haulier_id=hid, max_travel_time_pickup=ctx.world.max_travel_time_pickup),
+                        rng=ctx.rng, settings=ctx.candidate_settings, accounting_cost=ctx.accounting_cost,
+                        clock=ctx.clock, parent=ctx,
+                    )
+                return Plan(chains=_first_feasible(ctx))
+
+        assert _failing("LeakyMarket") == {"information.scopes_respect_model"}
+
+
+def test_cross_company_central_fails_only_only_allowed_pairs():
+    """A central policy that lets any company serve any other's orders, ignoring the structure.
+
+    Only ``three_company_chain`` exposes it (``h_d`` is solo, ``h_a``/``h_c`` are not
+    partners); the framework's world rule on the tick scope is what refuses it.
+    """
+    with isolated_registry():
+        @policy(slot="dispatch", information_model="central", name="CrossCompanyCentral", version="1",
+                description="serves across every company pair")
+        class CrossCompanyCentral(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                pass
+
+            def decide(self, ctx):
+                def anyone(t, o):
+                    th, oh = assign_constraints.haulier_of(t), assign_constraints.haulier_of(o)
+                    return ctx.allowed_raw(t, o) or (th is not None and oh is not None and th != oh)
+
+                return Plan(chains=_first_feasible(ctx, allowed=anyone))
+
+        assert _failing("CrossCompanyCentral") == {"structure.only_allowed_pairs"}
+
+
+def _slow_undeclared_arm(budgets=None):
+    budget_ms = 500
+
+    @policy(slot="dispatch", information_model="central", name="SlowUndeclaredArm", version="1",
+            description="fast by default, slow on one arm", perf_budget_ms=budget_ms, arm_budgets_ms=budgets)
+    class SlowUndeclaredArm(DispatchPolicy):
+        @dataclass(frozen=True)
+        class Params(PolicyParams):
+            variant: str = param("a", choices=("a", "x"), help="x is slow at scale")
+
+        def decide(self, ctx):
+            if ctx.params.variant == "x" and len(ctx.raw_trucks) >= 1000:  # only the scale fixture
+                time.sleep((budget_ms + 200) / 1000.0)
+            return Plan(chains=_first_feasible(ctx))
+
+    return SlowUndeclaredArm
+
+
+def test_slow_undeclared_arm_fails_only_its_performance_scale():
+    """An arm nobody measured inherits the default arm's budget, so being slower fails it loudly.
+
+    (The spec names the arm ``candidates=x``; a ``candidates`` value must be a real
+    candidate kind, so the arm here is ``variant=x``.) Declaring the arm's measured
+    budget clears exactly that failure.
+    """
+    with isolated_registry():
+        _slow_undeclared_arm()
+        failing = _failing("SlowUndeclaredArm")
+        assert failing == {"performance.scale[variant=x]"}, sorted(failing)
+        detail = next(r.detail for r in run_battery("dispatch", "SlowUndeclaredArm")
+                      if r.id == "performance.scale[variant=x]")
+        assert "arm not measured" in detail and "budget 500 ms" in detail
+    with isolated_registry():
+        _slow_undeclared_arm({"variant=x": 2100})
+        assert _failing("SlowUndeclaredArm") == set()

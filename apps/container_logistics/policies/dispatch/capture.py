@@ -1,29 +1,42 @@
-"""Dispatch-context capture: write one decision's inputs to disk, and replay them.
+"""Dispatch capture: write one whole tick's inputs to disk, and replay them.
 
-Single responsibility: the ``openride.dispatch_context/1`` fixture format (plan
-``docs/plans/policy_slots_p0_p3.md`` §4 P3.4): one file per decided SUB-scope (a
-partitioned group or a pooled company, decided by the innermost solver). The
-whole-tick format ``/2`` lands with round-2 work item C5.
+Single responsibility: the ``openride.dispatch_context/2`` fixture format (round 2,
+``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5): ONE file per captured tick,
+``<dir>/step_<n>.json.gz``, holding everything the selected dispatch policy decided
+from:
+
+- ``format``, ``run_id``, ``time_step``, ``sim_clock``, ``horizon_steps``;
+- ``tick_seed`` (the tick context's ``ctx.rng`` is ``Random(tick_seed)``) and
+  ``module_rng_state`` (the ``random`` module's state just before ``decide``:
+  ``Partitioned`` draws from the module by declaration);
+- ``selection``: the bound selection in stamp form (``name``, ``version``, ``label``,
+  ``leaf``, ``information_model``, ``share_tag_format``, ``timing``, nested ``params``
+  with each ref as ``{type, version, params}``);
+- ``candidate_settings``; ``world`` = ``{structure, max_travel_time_pickup,
+  accounting_params}`` (``DispatchWorld.from_profile`` rebuilds the same world);
+- ``trucks``, ``orders`` (the candidates and unassigned orders, in tick order);
+- ``live_heads``: the raw plan's heads (captured BEFORE the invariants judged it), or
+  ``None`` when ``decide`` returned no ``Plan``;
+- ``rebate_aware``: whether the profile opted the solver into rebate pricing. The
+  rebate book is NOT captured, so such a tick cannot be replayed (refused).
+
+Surfaces:
 
 - :class:`CaptureSettings` comes from ``profile["policy_capture"]``; absent (the
   default) means ``None`` and the runner gets no hook at all.
-- :class:`CaptureRecorder` is the runner hook. It snapshots RNG state before
-  ``decide`` (``getstate`` consumes nothing) and writes the fixture after ``decide``
-  and before the invariants, honouring ``every_n_ticks`` and ``max_files``. A write
-  failure is logged (``DISPATCH CAPTURE FAILED``) and never raised.
+- :class:`CaptureRecorder` is the runner hook. On a capture tick it snapshots the
+  module RNG before ``decide`` (``getstate`` consumes nothing) and writes the fixture
+  after ``decide`` and before the invariants, honouring ``every_n_ticks`` and
+  ``max_files``. Sub-scope calls (``compose.decide_in_scope``) are ignored: the whole
+  tick replays them. A write failure is logged (``DISPATCH CAPTURE FAILED``) and
+  never raised.
 - :func:`parse_capture_spec` parses the ``every=N,max=M`` text that
-  ``ORSIM_CAPTURE_DISPATCH`` / ``--capture-dispatch`` carry (the one parser for all
-  three surfaces).
-- :func:`context_to_fixture` / :func:`context_from_fixture` convert both ways;
-  :func:`replay_heads` re-runs a fixture with its recorded RNG state and tiebreak.
+  ``ORSIM_CAPTURE_DISPATCH`` / ``--capture-dispatch`` carry (the one parser).
+- :func:`read_fixture` refuses format ``/1`` (message 22) and anything else;
+  :func:`context_from_fixture` rebuilds the tick context for any runner;
+  :func:`replay_heads` re-decides the captured selection with the recorded RNG state.
 
-Why RNG state is recorded: on the partitioned path GreedyNearest breaks equal-cost
-ties with a shuffle on the ``random`` MODULE and the sampled kind draws from it too;
-on the pooled path both draw from the tick ``Random``. Heads are reproducible only
-from the exact state at decide time, so the fixture carries it (an extension of the
-plan's field list, under ``"rng"``).
-
-Framework side of the boundary. Not a leaf module (imports ``scopes``/``allowed``).
+Framework side of the boundary. Not a leaf module (imports ``context``/``world``).
 """
 
 from __future__ import annotations
@@ -34,15 +47,12 @@ import json
 import logging
 import os
 import random
-import re
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Iterator, Mapping
 
 from apps.container_logistics.policies.framework.errors import PolicyError
 
-from . import scopes
-from .allowed import CompanyRule, PartitionRule
 from .context import DispatchClock, DispatchContext
 from .helpers.candidates import CandidateSettings
 from .plan import Plan
@@ -51,6 +61,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "FIXTURE_FORMAT",
+    "FORMAT_1",
     "CAPTURE_SPEC_FORMAT",
     "CaptureSettings",
     "CaptureRecorder",
@@ -58,14 +69,18 @@ __all__ = [
     "context_to_fixture",
     "context_from_fixture",
     "fixture_path",
+    "fixture_world",
     "write_fixture",
     "read_fixture",
+    "check_fixture",
     "replay_heads",
-    "restored_rngs",
+    "restored_module_rng",
+    "selection_stamp",
 ]
 
-FIXTURE_FORMAT = "openride.dispatch_context/1"
-_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+FIXTURE_FORMAT = "openride.dispatch_context/2"
+#: The round-1 one-scope format: refused on read (message 22).
+FORMAT_1 = "openride.dispatch_context/1"
 _DEFAULT_EVERY_N_TICKS = 1
 _DEFAULT_MAX_FILES = 40
 CAPTURE_SPEC_FORMAT = "every=N,max=M"
@@ -103,6 +118,12 @@ class CaptureSettings:
         run_id = raw.get("run_id")
         return cls(dir=directory, every_n_ticks=every, max_files=cap,
                    run_id=None if run_id is None else str(run_id))
+
+    @staticmethod
+    def rebate_aware_of(prof: Mapping[str, Any]) -> bool:
+        """``profile.planner.rebate_aware`` (``AssignmentApp._rebate_aware``'s rule)."""
+        planner = (prof or {}).get("planner") or {}
+        return bool(planner.get("rebate_aware", False)) if isinstance(planner, Mapping) else False
 
     def wants(self, time_step: int) -> bool:
         """True when ``time_step`` is a capture tick."""
@@ -143,77 +164,69 @@ def parse_capture_spec(text: str) -> dict[str, int]:
             "max_files": out.get("max_files", _DEFAULT_MAX_FILES)}
 
 
-def _rng_entry(rng: Any) -> dict[str, Any]:
-    state = rng.getstate()
-    return {"module": rng is random, "state": [state[0], list(state[1]), state[2]]}
+def _module_state() -> list[Any]:
+    state = random.getstate()
+    return [state[0], list(state[1]), state[2]]
 
 
-def _rng_snapshot(ctx: DispatchContext) -> dict[str, Any]:
-    # _sample_rng is the scope's sampling RNG, chosen by scopes.py; read here (same
-    # package) because capture must record exactly what sampled_trucks draws from.
-    sample = getattr(ctx, "_sample_rng", None)
-    snap: dict[str, Any] = {"policy": _rng_entry(ctx.rng)}
-    snap["sample"] = {"same_as_policy": True} if sample is ctx.rng else _rng_entry(sample)
-    return snap
-
-
-def _ids(pairs: Any) -> list[list[str]]:
-    return [[str(t.get("_id")), str(o.get("_id"))] for t, o in pairs]
+def selection_stamp(node: Any) -> dict[str, Any]:
+    """The bound ``ResolvedDispatch`` tree in stamp form (``run_config.meta.policies.dispatch`` shape)."""
+    params = node.params
+    return {
+        "name": node.name,
+        "version": node.version,
+        "label": node.label,
+        "leaf": node.leaf,
+        "information_model": node.information_model,
+        "share_tag_format": node.share_tag_format,
+        "timing": node.timing,
+        "params": None if params is None else params.to_profile_dict(),
+    }
 
 
 def context_to_fixture(
     ctx: DispatchContext,
     plan: Any,
-    policy_spec: Any,
+    resolved: Any,
     *,
-    rng_state: Mapping[str, Any] | None = None,
+    module_rng_state: list[Any] | None,
     run_id: str | None = None,
+    rebate_aware: bool = False,
 ) -> dict[str, Any]:
-    """The ``openride.dispatch_context/1`` dict for one decided scope.
+    """The ``openride.dispatch_context/2`` dict for one decided TICK context.
 
-    ``policy_spec`` is anything with ``name`` and ``version`` (a ``PolicySpec`` or a
-    ``ResolvedDispatch``). ``live_heads`` is ``plan.heads()``, or ``None`` when
-    ``plan`` is not a ``Plan``. ``spatial_pairs`` is set for company scope (the
-    round's prebuilt slice) and ``None`` for partition scope (recomputed on replay).
-    Raises ``PolicyError`` when ``ctx.rule`` is missing.
+    ``resolved`` is the bound selection (a ``ResolvedDispatch`` tree). ``live_heads``
+    is ``plan.heads()``, or ``None`` when ``plan`` is not a ``Plan``. Raises
+    ``PolicyError`` for a sub-scope context or one without a world.
     """
-    if ctx.rule is None:
-        raise PolicyError(f"scope {ctx.scope.key} has no rule; a context without one cannot be captured")
-    spatial = None
-    if ctx.scope.kind == "company":
-        # Only a spatial-kind company scope has a prebuilt slice (any other kind's is
-        # empty, and asking it for spatial pairs is a contract violation).
-        spatial = _ids(ctx.candidate_pairs("spatial")) if ctx.default_candidate_kind == "spatial" else []
+    if ctx.scope.kind != "tick" or ctx.world is None:
+        raise PolicyError(f"scope {ctx.scope.key}: only a whole-tick context with a world is captured (format /2)")
+    world = ctx.world
     return {
         "format": FIXTURE_FORMAT,
         "run_id": run_id,
         "time_step": ctx.clock.time_step,
         "sim_clock": ctx.clock.sim_clock,
         "horizon_steps": ctx.clock.horizon_steps,
-        "scope": {"kind": ctx.scope.kind, "key": ctx.scope.key, "round": ctx.scope.round},
-        "policy": {
-            "name": policy_spec.name,
-            "version": policy_spec.version,
-            "params": None if ctx.params is None else ctx.params.to_dict(),
-        },
-        "candidate_kind": ctx.default_candidate_kind,
+        "tick_seed": ctx.tick_seed,
+        "module_rng_state": module_rng_state,
+        "selection": selection_stamp(resolved),
         "candidate_settings": ctx.candidate_settings.to_dict(),
-        "rule": ctx.rule.to_dict(),
-        "tiebreak_seed": ctx.tiebreak_seed,
-        "rng": None if rng_state is None else dict(rng_state),
+        "world": {
+            "structure": None if world.structure is None else dict(world.structure),
+            "max_travel_time_pickup": world.max_travel_time_pickup,
+            "accounting_params": dict(world.accounting_params),
+        },
         "trucks": list(ctx.raw_trucks),
         "orders": list(ctx.raw_orders),
-        "spatial_pairs": spatial,
         "live_heads": [list(h) for h in plan.heads()] if isinstance(plan, Plan) else None,
+        "rebate_aware": bool(rebate_aware),
     }
 
 
-def fixture_path(directory: str, time_step: int, scope_key: str, round: int | None = None) -> str:
-    """``<dir>/step_<n>_<scope-key>[_r<round>].json.gz`` with the key made filename-safe."""
-    stem = f"step_{int(time_step)}_{_UNSAFE.sub('-', scope_key)}"
-    if round is not None:
-        stem += f"_r{int(round)}"  # pooled rounds share a step and a company
-    return os.path.join(directory, stem + ".json.gz")
+def fixture_path(directory: str, time_step: int) -> str:
+    """``<dir>/step_<n>.json.gz``: one file per captured tick."""
+    return os.path.join(directory, f"step_{int(time_step)}.json.gz")
 
 
 def write_fixture(path: str, fx: Mapping[str, Any]) -> None:
@@ -229,27 +242,41 @@ def write_fixture(path: str, fx: Mapping[str, Any]) -> None:
     os.replace(tmp, path)
 
 
+def check_fixture(fx: Any, path: str = "<fixture>") -> Mapping[str, Any]:
+    """``fx`` when it is a format ``/2`` fixture; raises ``PolicyError`` otherwise (message 22 for ``/1``)."""
+    fmt = fx.get("format") if isinstance(fx, Mapping) else None
+    if fmt == FORMAT_1:
+        raise PolicyError(
+            f"dispatch fixture {path} is format {FORMAT_1} (one scope); this version replays whole ticks "
+            "(format /2). Re-capture with --capture-dispatch."
+        )
+    if fmt != FIXTURE_FORMAT:
+        raise PolicyError(f"{path}: not a {FIXTURE_FORMAT} fixture (format={fmt!r}).")
+    return fx
+
+
 def read_fixture(path: str) -> dict[str, Any]:
-    """Read one fixture file. Raises ``PolicyError`` for an unknown ``format``."""
+    """Read one fixture file. Raises ``PolicyError`` for format ``/1`` (message 22) or any other format."""
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         fx = json.load(fh)
-    if not isinstance(fx, dict) or fx.get("format") != FIXTURE_FORMAT:
-        raise PolicyError(f"{path}: not a {FIXTURE_FORMAT} fixture (format={fx.get('format')!r}).")
-    return fx
+    return dict(check_fixture(fx, path))
 
 
 class CaptureRecorder:
     """The runner's capture hook: ``before_decide(ctx)`` then ``__call__(ctx=, plan=, problems=)``.
 
-    Writes at most ``settings.max_files`` files (counting files already in the
-    directory) and only on ``settings.wants(time_step)`` ticks. Never raises.
+    Records whole ticks only (a sub-scope call is ignored). Writes at most
+    ``settings.max_files`` files (counting files already in the directory) and only
+    on ``settings.wants(time_step)`` ticks. ``resolved`` is the bound selection.
+    Never raises.
     """
 
-    def __init__(self, settings: CaptureSettings, *, resolved: Any) -> None:
+    def __init__(self, settings: CaptureSettings, *, resolved: Any, rebate_aware: bool = False) -> None:
         self.settings = settings
         self.resolved = resolved
+        self.rebate_aware = bool(rebate_aware)
         self.written: int | None = None
-        self._pending: tuple[int, dict[str, Any]] | None = None
+        self._pending: tuple[int, list[Any]] | None = None
 
     def _room_left(self) -> bool:
         if self.written is None:
@@ -261,148 +288,111 @@ class CaptureRecorder:
         return self.written < self.settings.max_files
 
     def _wants(self, ctx: DispatchContext) -> bool:
-        return self.settings.wants(ctx.clock.time_step) and self._room_left()
+        return ctx.scope.kind == "tick" and self.settings.wants(ctx.clock.time_step) and self._room_left()
 
     def before_decide(self, ctx: DispatchContext) -> None:
-        """Snapshot RNG state for ``ctx`` when this scope will be captured."""
+        """Snapshot the module RNG for ``ctx`` when this tick will be captured."""
+        if ctx.scope.kind != "tick":
+            return
         self._pending = None
         try:
             if self._wants(ctx):
-                self._pending = (id(ctx), _rng_snapshot(ctx))
+                self._pending = (id(ctx), _module_state())
         except Exception:  # noqa: BLE001 - capture must never break a tick
-            logger.exception("DISPATCH CAPTURE FAILED: RNG snapshot for scope %s (celery journal)",
-                             ctx.scope.key)
+            logger.exception("DISPATCH CAPTURE FAILED: RNG snapshot at step %d (celery journal)",
+                             ctx.clock.time_step)
 
     def __call__(self, *, ctx: DispatchContext, plan: Any, problems: list[str]) -> None:
+        if ctx.scope.kind != "tick":
+            return
         pending, self._pending = self._pending, None
         if pending is None or pending[0] != id(ctx):
             return
-        path = fixture_path(self.settings.dir, ctx.clock.time_step, ctx.scope.key, ctx.scope.round)
+        path = fixture_path(self.settings.dir, ctx.clock.time_step)
         try:
-            fx = context_to_fixture(ctx, plan, self.resolved, rng_state=pending[1],
-                                    run_id=self.settings.run_id)
+            fx = context_to_fixture(ctx, plan, self.resolved, module_rng_state=pending[1],
+                                    run_id=self.settings.run_id, rebate_aware=self.rebate_aware)
             write_fixture(path, fx)
             self.written = (self.written or 0) + 1
         except Exception:  # noqa: BLE001 - logged loudly, never blocks the tick
             logger.exception(
-                "DISPATCH CAPTURE FAILED: could not write %s for scope %s at step %d; the tick "
-                "continues uncaptured (agent-side: see celery's journal, not sim.log).",
-                path, ctx.scope.key, ctx.clock.time_step,
+                "DISPATCH CAPTURE FAILED: could not write %s at step %d; the tick continues "
+                "uncaptured (agent-side: see celery's journal, not sim.log).",
+                path, ctx.clock.time_step,
             )
 
 
-def _rule_from(d: Mapping[str, Any]) -> PartitionRule | CompanyRule:
-    if d.get("kind") == "partition":
-        return PartitionRule(max_travel_time_pickup=d.get("max_travel_time_pickup"),
-                             adjacency={k: set(v) for k, v in (d.get("adjacency") or {}).items()})
-    if d.get("kind") == "company":
-        return CompanyRule(haulier_id=d["haulier_id"], max_travel_time_pickup=d.get("max_travel_time_pickup"))
-    raise PolicyError(f"fixture rule kind {d.get('kind')!r} is not 'partition' or 'company'.")
+def fixture_world(fx: Mapping[str, Any]) -> Any:
+    """The captured tick's ``DispatchWorld`` (``DispatchWorld.from_profile`` on the captured world)."""
+    from .world import DispatchWorld
+
+    world = fx["world"]
+    prof: dict[str, Any] = {"max_travel_time_pickup": world.get("max_travel_time_pickup")}
+    structure = world.get("structure")
+    if structure is not None:
+        prof["cooperation"] = {"active": structure.get("id"), "structures": [structure]}
+    return DispatchWorld.from_profile(prof, accounting_params=world.get("accounting_params") or {})
 
 
-def _partition_key(scope_key: str) -> tuple[str, Any]:
-    _prefix, kind, value = scope_key.split(":", 2)
-    return (kind, int(value)) if kind == "component" else (kind, value)
+def context_from_fixture(fx: Mapping[str, Any], runner: Any = None, *, scope_log: list | None = None) -> DispatchContext:
+    """Rebuild the captured tick's context for ``runner``'s selection (``runner.tick_context``).
 
-
-def _pairs_from_ids(fx: Mapping[str, Any]) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    trucks: dict[str, dict[str, Any]] = {}
-    for t in fx["trucks"]:
-        trucks.setdefault(str(t.get("_id")), t)
-    orders: dict[str, dict[str, Any]] = {}
-    for o in fx["orders"]:
-        orders.setdefault(str(o.get("_id")), o)
-    try:
-        return [(trucks[tid], orders[oid]) for tid, oid in fx["spatial_pairs"] or ()]
-    except KeyError as exc:
-        raise PolicyError(f"fixture spatial pair names {exc} which is not in its trucks/orders") from exc
-
-
-def context_from_fixture(fx: Mapping[str, Any], runner: Any = None, *, rng: Any = None) -> DispatchContext:
-    """Rebuild a ``DispatchContext`` from fixture ``fx`` for ``runner``'s policy.
-
-    ``runner`` defaults to a fresh runner for the captured policy and params
-    (``build_runner_for_policy``). Built through ``scopes`` like every context.
-    ``rng`` is the company scope's sampling RNG (default: the runner policy's
-    ``rng``); a partition scope always samples from the ``random`` module.
+    ``runner`` defaults to a fresh runner for the captured selection. The world, tick
+    seed, candidate settings, clock and documents are the captured ones. Raises
+    ``PolicyError`` for a fixture that is not format ``/2``.
     """
-    from .runner import build_runner_for_policy, framework_accounting_cost
+    from .runner import build_runner_for_policy
 
-    if fx.get("format") != FIXTURE_FORMAT:
-        raise PolicyError(f"not a {FIXTURE_FORMAT} fixture (format={fx.get('format')!r}).")
+    check_fixture(fx)
     if runner is None:
-        runner = build_runner_for_policy(fx["policy"]["name"], fx["policy"]["params"])
-    scope = fx["scope"]
-    common = dict(
-        trucks=list(fx["trucks"]),
+        runner = build_runner_for_policy(fx["selection"]["name"], fx["selection"]["params"])
+    return runner.tick_context(
+        candidates=list(fx["trucks"]),
         orders=list(fx["orders"]),
-        rule=_rule_from(fx["rule"]),
+        world=fixture_world(fx),
         settings=CandidateSettings(**fx["candidate_settings"]),
-        accounting_cost=framework_accounting_cost(fx["policy"]["params"]),
         clock=DispatchClock(sim_clock=fx["sim_clock"], time_step=fx["time_step"],
                             horizon_steps=fx.get("horizon_steps")),
+        tick_seed=fx["tick_seed"],
+        scope_log=scope_log,
     )
-    common.update(policy=runner.policy, params=runner.resolved.params, candidate_kind=runner.candidate_kind)
-    if scope["kind"] == "company":
-        return scopes.company_context(
-            haulier_id=fx["rule"]["haulier_id"], round=scope["round"],
-            rng=runner.policy.rng if rng is None else rng,
-            prebuilt_pairs=_pairs_from_ids(fx), **common,
-        )
-    return scopes.partition_context(partition_key=_partition_key(scope["key"]), **common)
-
-
-def _restore(entry: Mapping[str, Any]) -> random.Random:
-    r = random.Random()
-    r.setstate((entry["state"][0], tuple(entry["state"][1]), entry["state"][2]))
-    return r
 
 
 @contextmanager
-def restored_rngs(fx: Mapping[str, Any]) -> Iterator[tuple[Any, Any]]:
-    """Yield ``(policy_rng, sample_rng)`` restored from ``fx["rng"]``; ``None`` = the module.
+def restored_module_rng(fx: Mapping[str, Any]) -> Iterator[None]:
+    """The ``random`` module set to the captured ``module_rng_state`` for the block, restored after.
 
-    A module entry seeds the global ``random`` state for the block and puts the
-    previous state back afterwards. Raises ``PolicyError`` when the fixture has no
-    recorded RNG state.
+    Raises ``PolicyError`` when the fixture has no recorded state.
     """
-    snap = fx.get("rng")
-    if not snap:
-        raise PolicyError("fixture has no recorded RNG state; it cannot be replayed exactly")
+    state = fx.get("module_rng_state")
+    if not state:
+        raise PolicyError("fixture has no recorded module RNG state; it cannot be replayed exactly")
     saved = random.getstate()
+    random.setstate((state[0], tuple(state[1]), state[2]))
     try:
-        policy_entry = snap["policy"]
-        if policy_entry["module"]:
-            random.setstate(_restore(policy_entry).getstate())
-            policy_rng = None
-        else:
-            policy_rng = _restore(policy_entry)
-        sample_entry = snap["sample"]
-        if sample_entry.get("same_as_policy"):
-            sample_rng = policy_rng
-        elif sample_entry["module"]:
-            random.setstate(_restore(sample_entry).getstate())
-            sample_rng = None
-        else:
-            sample_rng = _restore(sample_entry)
-        yield policy_rng, sample_rng
+        yield
     finally:
         random.setstate(saved)
 
 
 def replay_heads(fx: Mapping[str, Any]) -> list[list[str]]:
-    """Re-run the captured policy on ``fx`` with its recorded RNG state and tiebreak.
+    """Re-decide the captured selection on ``fx`` with its recorded tick seed and module RNG state.
 
     Returns the plan's heads as ``[[truck_id, order_id], ...]``, comparable with
-    ``fx["live_heads"]``. Raises ``PolicyError`` for a fixture without RNG state or
-    an unregistered policy.
+    ``fx["live_heads"]``. Raises ``PolicyError`` for a fixture that is not format
+    ``/2``, one captured with ``rebate_aware: true`` (the rebate book is not
+    captured), one without RNG state, or an unregistered selection.
     """
     from .runner import build_runner_for_policy
 
-    runner = build_runner_for_policy(fx["policy"]["name"], fx["policy"]["params"])
-    with restored_rngs(fx) as (policy_rng, sample_rng):
-        runner.policy.set_rng(policy_rng)
-        runner.policy.set_tiebreak(fx.get("tiebreak_seed"))
-        ctx = context_from_fixture(fx, runner, rng=sample_rng if sample_rng is not None else random)
+    check_fixture(fx)
+    if fx.get("rebate_aware"):
+        raise PolicyError(
+            f"dispatch fixture at step {fx.get('time_step')} was captured with planner.rebate_aware: true; "
+            "the rebate book is not captured, so the tick cannot be replayed exactly."
+        )
+    runner = build_runner_for_policy(fx["selection"]["name"], fx["selection"]["params"])
+    with restored_module_rng(fx):
+        ctx = context_from_fixture(fx, runner)
         plan = runner.policy.decide(ctx)
     return [list(h) for h in plan.heads()]

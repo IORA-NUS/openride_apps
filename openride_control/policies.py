@@ -241,27 +241,45 @@ def _cli_value(raw: str) -> Any:
 
 
 def parse_bench_params(names: Sequence[str], args: Sequence[str] = ()) -> dict[str, dict[str, Any]]:
-    """``POLICY.KEY=VALUE`` strings -> ``{policy: {key: value}}`` (shape only).
+    """``ALIAS.PATH=VALUE`` strings -> ``{alias: nested params override}`` (shape only).
 
+    ``names`` are the benched entries (``NAME`` or ``ALIAS=NAME``; a bare name is its
+    own alias). The path follows ``--policy-param``'s rule (round-2 §3.3): every
+    non-final segment is a policy reference, and a value given to a reference itself
+    sets its type (``pr.inner=RandomAssignment``; ``pr.inner.candidates=spatial``).
     VALUE is JSON when it parses, else the raw string. Raises ``PolicyError`` for a
-    malformed argument, a repeated key, or a policy that is not in ``names``.
+    malformed argument, a repeated key, or an alias that is not benched.
     """
     from apps.container_logistics.policies.framework import PolicyError
+    from apps.container_logistics.policies.testing.bench import parse_bench_entries
 
+    aliases = [e.alias for e in parse_bench_entries(names)]
     out: dict[str, dict[str, Any]] = {}
     for arg in args or ():
         key_part, sep, value = str(arg).partition("=")
-        name, dot, key = key_part.strip().partition(".")
-        if not sep or not dot or not name or not key:
+        alias, dot, path_text = key_part.strip().partition(".")
+        path = path_text.split(".") if path_text else []
+        if not sep or not dot or not alias or not path or not all(path):
             raise PolicyError(
-                f"--policy-param {arg!r} must be POLICY.KEY=VALUE, e.g. GreedyNearest.dual_cycle_bonus_km=0."
+                f"--policy-param {arg!r} must be ALIAS.PATH=VALUE, e.g. GreedyNearest.dual_cycle_bonus_km=0 "
+                "or pr.inner=RandomAssignment."
             )
-        if name not in names:
-            raise PolicyError(f"--policy-param {arg!r} names {name!r}, which is not benched ({list(names)}).")
-        bucket = out.setdefault(name, {})
+        if alias not in aliases:
+            raise PolicyError(f"--policy-param {arg!r} names {alias!r}, which is not benched ({aliases}).")
+        bucket = out.setdefault(alias, {})
+        for ref_name in path[:-1]:  # every non-final segment is a policy reference
+            ref_value = bucket.setdefault(ref_name, {})
+            if isinstance(ref_value, str):  # an earlier `alias.ref=Name` set the ref's type
+                ref_value = bucket[ref_name] = {"type": ref_value}
+            bucket = ref_value.setdefault("params", {})
+        key, parsed = path[-1], _cli_value(value)
+        existing = bucket.get(key)
+        if isinstance(existing, dict) and isinstance(parsed, str) and "type" not in existing:
+            existing["type"] = parsed  # `alias.ref=Name` after `alias.ref.k=v`
+            continue
         if key in bucket:
-            raise PolicyError(f"--policy-param sets {name}.{key} twice; pass it once.")
-        bucket[key] = _cli_value(value)
+            raise PolicyError(f"--policy-param sets {alias}.{path_text} twice; pass it once.")
+        bucket[key] = parsed
     return out
 
 
@@ -324,13 +342,16 @@ def cmd_policy_bench(
 ) -> dict[str, Any]:
     """``{ok, action, report: BenchReport.to_dict(), table: str}`` for ``policies`` (comma list).
 
+    Each entry is ``NAME`` or ``ALIAS=NAME`` (round-2 §3.3: ``pm=PooledMarket,pr=PooledMarket``
+    with ``params=["pr.inner=RandomAssignment"]``); ``params`` are ``ALIAS.PATH=VALUE``.
+
     Exactly one of ``fixtures_dir`` (captured ``step_*.json.gz``, via
     ``bench.load_fixtures``) and ``synthetic`` (fixture names or ``all``) is required.
     Any refusal (bad slot, unknown policy, bad params, empty fixture set) gives
     ``{ok: false, code: "INVALID", message}``.
     """
     from apps.container_logistics.policies.framework import PolicyError, get_policy_spec
-    from apps.container_logistics.policies.testing.bench import bench, load_fixtures, render_table
+    from apps.container_logistics.policies.testing.bench import bench, load_fixtures, parse_bench_entries, render_table
 
     action = "policy_bench"
     try:
@@ -339,8 +360,8 @@ def cmd_policy_bench(
         names = [n.strip() for n in str(policies or "").split(",") if n.strip()]
         if not names:
             raise PolicyError("--policies needs at least one policy name, e.g. GreedyNearest,RandomAssignment.")
-        for name in names:
-            get_policy_spec(slot, name)
+        for entry in parse_bench_entries(names):
+            get_policy_spec(slot, entry.name)
         if (fixtures_dir is None) == (synthetic is None):
             raise PolicyError("pass exactly one of --fixtures DIR or --synthetic NAME[,NAME]|all.")
         fixtures = load_fixtures(fixtures_dir) if fixtures_dir is not None else _synthetic(synthetic or "")

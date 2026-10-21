@@ -64,11 +64,32 @@ Doc = dict[str, Any]
     description="One planner per company; companies offer orders into shared pools, claim and "
                 "are arbitrated in rounds until the market converges. The pre-v2 'pooled' topology.",
     information_model="per_company",
-    # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
-    # Measured 2026-10-21 on testing.fixtures.scale() (1000 trucks x 500 orders, one
-    # company, no pools, default inner RandomAssignment sampled), 2 x 5 runs, load avg
-    # 3.3 on 32 cores: 148.1-177.4 ms, worst 177.4 -> 3 x 177.4 = 532.2 -> 540.
-    perf_budget_ms=540,
+    # Per-arm budgets for the battery's performance.scale check (round-2 C5 rule:
+    # max(3 x worst of 2 x 5 runs, 500)). Measured 2026-10-21 on the whole-tick
+    # testing.fixtures.scale() (1000 trucks x 500 orders, one company, no pools),
+    # 2 x 5 runs, load avg 5.8-6.5 on 32 cores (one arm changes one param):
+    #   default (OfferAll/ClaimAllPlanned/LowestCost, inner RandomAssignment):
+    #                                155.8-159.0 ms -> 477 -> 500
+    #   offer=OfferNone              155.9-161.3 ms -> 484 -> 500
+    #   offer=OfferSpare             155.7-204.9 ms -> 615 -> 620
+    #   claim=ClaimIfGainExceeds     154.8-158.2 ms -> 475 -> 500
+    #   claim=ClaimNone              153.0-205.0 ms -> 615 -> 620
+    #   arbitration=HighestBenefit   153.5-156.3 ms -> 469 -> 500
+    #   arbitration=OwnerFirst       152.3-156.9 ms -> 471 -> 500
+    #   arbitration=RandomAward      155.3-159.0 ms -> 477 -> 500
+    #   inner=GreedyNearest          143.3-192.8 ms -> 578 -> 580
+    # (round-1 partition-scope default measurement at load 3.3 was 148.1-177.4 -> 540.)
+    perf_budget_ms=500,
+    arm_budgets_ms={
+        "offer=OfferNone": 500,
+        "offer=OfferSpare": 620,
+        "claim=ClaimIfGainExceeds": 500,
+        "claim=ClaimNone": 620,
+        "arbitration=HighestBenefit": 500,
+        "arbitration=OwnerFirst": 500,
+        "arbitration=RandomAward": 500,
+        "inner=GreedyNearest": 580,
+    },
 )
 class PooledMarket(CompositePolicy):
     """Offer, claim and arbitrate in rounds; each company's deployment decided by ``inner``."""

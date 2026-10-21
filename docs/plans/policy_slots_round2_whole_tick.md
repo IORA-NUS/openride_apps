@@ -1248,3 +1248,199 @@ implemented as written.
     budgets, `LeakyMarket`/`scope_log` battery checks (C5; `scope_log` is recorded
     already). The C2 review's suggestion to move `INNER_PARAM`/`selection_chain` into
     `dispatch/` and let solvers declare `pair_note_keys` is not done (post-C3 design).
+
+### Review fixes after C3 (framework)
+
+These fix the early review's findings 1, 2, 5, 7, 11 and 15 (backend). The tests are
+in `tests/test_policy_framework_review_fixes.py` (21 cases). Each one was
+mutation-checked: 20 mutations, all caught, files restored by hash.
+
+1. **#1. A nested dispatch ref fails loud on missing `requires`.**
+   - `PolicySpec.require_available(*, where=None)` is now the one place that words a
+     missing dependency. The top level (`resolve._resolve_entry`) calls it unprefixed,
+     so its text is byte-identical to before.
+   - The `dispatch` ref resolver (`components._resolver`) calls it with the ref path:
+     `policies.dispatch.params.inner: Dispatch policy 'X' requires module(s) ...`.
+   - `ref_target` itself does NOT check `requires`. It also serves listings (message
+     2's leaf list, the catalog), and an unavailable leaf must still show up there.
+2. **#2. Ref-default cycles. Decision: registration refuses them, a resolution guard is
+   the backstop, and the catalog reports bad entries.**
+   - **Registration:** `registry._check_ref_default_cycles` walks the default
+     `kind="dispatch"` refs through the registered policies plus the one being
+     registered, so a self-reference is caught too. A cycle is refused at the
+     registration that closes it, with
+     `@policy(...): ref param defaults form a cycle (A.inner -> B.inner -> A), ...`.
+   - **Resolution:** `params._DEFAULT_STACK` (a ContextVar) holds the `(kind, name)`
+     refs whose params come from defaults. Meeting one again raises `PolicyParamsError`
+     naming the cycle. This covers what registration cannot see: component kinds, which
+     are not `@policy`-registered, and specs mutated behind the registry's back.
+     Explicit finite nesting is not tracked and still resolves.
+   - **Catalog:** `policy_catalog()` and `component_catalog()` no longer let one entry
+     blank the catalog. An entry whose schema or defaults fail with a `PolicyError` (an
+     unknown or unavailable default target, a bypassed cycle) is listed with
+     `available: false`, `error: <message>`, an empty-object `params_schema` and `{}`
+     defaults, and is logged at ERROR. Healthy entries are unchanged. Discovery errors
+     still propagate, as documented.
+   - The FE `depth` backstop (review #2) is not backend work and is left to the FE.
+3. **#5. Generality.**
+   - **(a) Component kinds.** `framework.components.register_component_kind(kind,
+     registry_getter, default, description)` (exported from `framework`) is how a solver
+     side declares a kind. `offer.py`, `claim.py` and `arbitration.py` call it at import,
+     after their registry and DEFAULT constants, and the descriptions moved there
+     verbatim.
+     - `ComponentKind` is now `(kind, default, description, registry_getter, module)`.
+       The old `module`/`registry` string fields are gone, and `live_registry(kind)`
+       calls the getter.
+     - The framework still finds the built-in kinds when nothing has imported them.
+       `components.BUILTIN_COMPONENT_MODULES` is the ONE list of declaring modules. It
+       is imported lazily on the first kind lookup: through `COMPONENT_KINDS` (now a
+       live read-only Mapping) or through `params._REF_KIND_LOADER` when a ref kind has
+       no resolver yet.
+     - Listing order is that list's order, then declaration order, so it does not
+       depend on import order (tested both ways, in a subprocess).
+     - This is an explicit import list, not a package scan, so the "auto-discovery in
+       exactly one function" rule (house style §2.12) still holds.
+     - The declaring module comes from `registry_getter.__module__`. Re-declaring from
+       the same module with the same default and description replaces the getter (a
+       reload). Anything else raises `PolicyRegistrationError`. `default` must be in
+       the registry, and `dispatch` is not a component kind.
+     - The leaf rule holds: no framework module imports `assignment.*` at import (the
+       import-cycle tests and a subprocess probe).
+   - **(b) The v1 reservation.** It is `registry.V1_SHARE_TAG_BUILTINS =
+     frozenset({("dispatch", "Partitioned")})`, the one documented allowlist; `_V1_OWNER`
+     is gone. Message 15 is unchanged. It is keyed on `(slot, name)`, not the class:
+     one class backs one name, and discovery registers the built-in first, so a foreign
+     class claiming the name fails in `_store`. The test stand-ins also keep working.
+   - **(c) No `dispatch.legacy` import in the framework.** C3 had already removed it.
+     It is now locked by an AST test over imports AND string constants, and by a
+     subprocess check that importing `framework.components` does not load the module.
+4. **#7. Ref `version`. Decision: validated and drift-logged; it still never selects
+   anything.**
+   - `params.version_echo` accepts `None` (absent) or a non-blank `str`. Anything else
+     (a number, bool, object, list, `""` or whitespace) is
+     `PolicyParamsError: <path>.version must be a non-empty string or null ...`.
+   - `params.warn_version_drift` logs at WARNING with the prefix
+     `POLICY VERSION DRIFT` (`params.VERSION_DRIFT_PREFIX`) when a compiled version
+     differs from the registered one. The registered version still runs and is stamped,
+     as §3.1 specified ("ignored on read" now means "not used to select").
+   - Applied to:
+     - nested refs (`params._resolve_ref`);
+     - a `PolicyRef` passed in code;
+     - the top level of a compiled `profile.policies` block (`dispatch/profile.py`:
+       shape in `_authored_from_compiled`, drift after resolution; the only profile.py
+       edit);
+     - `instantiate_component`.
+   - WARNING, not ERROR, because the run is still well-defined: a recompile fixes the
+     record.
+5. **#11. CLI hint.** `params._cli_path` matches `_CLI_ROOTS` (`profile.policies`,
+   `policy overrides`, `policies`) by string prefix, so
+   `profile.policies.dispatch.params.inner` gives `--policy-param dispatch.inner=X`. A
+   path under any other root (`planner.market...`, `defaults of X...`) returns `None`,
+   and message 4 then ends after the spec.json example, with no CLI clause. Message 4
+   for `policies.dispatch...` is unchanged.
+6. **#15. Backend nits.**
+   - The "misplaced absolute import in `resolve.py`" had already gone with C3's
+     `dispatch.legacy` removal. Nothing was left to move.
+   - `instantiate_component` now refuses `value.params` that is not the named class's
+     `Params` (`PolicyParamsError`) and validates and drift-logs `value.version`.
+7. **Two C2 review items, re-checked here.**
+   - **`tick_seed` single source: already done in C3.** `dispatch/world.tick_seed` is
+     the only formula. `AssignmentApp._tick_seed` delegates to it, and `PooledMarket`
+     reads `ctx.tick_seed`, which the app computes through it.
+   - **Split `dataclasses` imports.** C3 had already merged the one in
+     `assignment/accounting.py`. The only remaining split was `framework/params.py`
+     (round 1): merged into `import dataclasses`.
+8. **Test edits:** only the `test_policy_catalog.py` docstring that pointed at the
+   removed `components._KINDS` table.
+
+### C5
+
+1. **`dispatch/runner.py` is edited** (not in the C5 file list; capture /2 needs it).
+   `DispatchRunner.run` now calls the capture hook for EVERY context (the `kind !=
+   "tick"` guard is gone), so a whole tick is captured around its decide.
+   `build_runner_for_app` builds `CaptureRecorder(settings, resolved=<the bound
+   tree>, rebate_aware=CaptureSettings.rebate_aware_of(prof))`. `compose.decide_in_scope`
+   still calls the hook around each sub-scope (unchanged file); `CaptureRecorder` and
+   the battery's recorder ignore non-tick scopes. The sim main is unchanged: `/2`
+   needs nothing more from the env (`policy_capture.dir/run_id` as before).
+2. **Capture /2 field names.** `horizon_steps` (the spec's "horizon"). `selection` is
+   the bound `ResolvedDispatch` in stamp form: `name, version, label, leaf,
+   information_model, share_tag_format, timing, params` (refs `{type, version,
+   params}`). `module_rng_state` is `[version, [625 ints], gauss]`. `live_heads` are
+   the RAW plan's heads (captured before `check_plan`, as in /1). `rebate_aware` is
+   read with `AssignmentApp._rebate_aware`'s rule, duplicated as
+   `CaptureSettings.rebate_aware_of` (app.py is not mine). Replay refusal text for
+   `rebate_aware: true` (the spec gives none): `dispatch fixture at step <n> was
+   captured with planner.rebate_aware: true; the rebate book is not captured, so the
+   tick cannot be replayed exactly.` Message 22 is raised by `capture.check_fixture`,
+   used by `read_fixture`, `context_from_fixture`, `replay_heads` and so `load_fixtures`.
+   Removed /1 helpers: `restored_rngs`, the per-scope `fixture_path(dir, step, key,
+   round)` (now `fixture_path(dir, step)`); new: `FORMAT_1`, `check_fixture`,
+   `fixture_world`, `restored_module_rng`, `selection_stamp`.
+3. **Fixtures.** `Fixture(id, seed, trucks, orders, structure=None,
+   max_travel_time_pickup=None, settings, time_step=0, run_id=None,
+   accounting_params={})`; `run_id=None` means `fixture:<id>` for the tick seed; empty
+   `accounting_params` means the selection's own dials (`accounting_params_for`, the
+   F1 rule), as before. The world is built by `DispatchWorld.from_profile` on a
+   profile carrying the structure (`fixtures.world_profile`), and fixture structures
+   come from `datagen.hauliers.normalize_cooperation` (`cooperation_structure`), so they
+   have the compiled shape (edges, adjacency, components, pools). The round-1 fields
+   `rule`, `partition_key`, `tiebreak_seed` are gone. `seeded_module_random` moved here
+   (the battery re-exports it); `Fixture.module_random()` seeds the module per decide.
+   `missing_haulier`: 4+3 `h_a` documents plus 2 trucks and 2 orders with no
+   `haulier_id` anywhere. New `MULTI_COMPANY_FIXTURES = (tied_costs, three_company_chain)`.
+4. **Battery ids.** `ARM_CHECKS` gained `information.scopes_respect_model` and
+   `performance.scale` (both per arm, `scale` is the last arm check);
+   `information.model_declared` and `params.rejects_bad_ref` are default-arm only. So a
+   policy has 27 default checks plus 20 per non-default arm (Greedy/Random/Partitioned
+   47, PooledMarket 187). `scopes_respect_model` adds one rule beyond §2.4: for a
+   `per_group`/`per_company` selection every COMMITTED head must lie inside one logged
+   sub-scope (a non-central policy that commits a head decided outside every scope
+   decided centrally); a `per_company` scope's company is its key (`company:<h>`).
+   `central` passes with "no sub-scope restriction". `rejects_bad_ref` tries an
+   unregistered target on every ref and, where `leaf_only`, every registered
+   decomposition. Determinism runs on `tied_costs`, `three_company_chain` and
+   `scale_30x20x2` (plus `scale_200x100x2` for `reproducible`); there is no tiebreak
+   dimension any more (the tick context always carries `tiebreak_seed = tick_seed`).
+   `no_module_rng` no longer excludes `scale` (tick-scope sampling draws from
+   `ctx.rng`). A ref arm is `{param: {"type": T}}`, labelled `param=T`
+   (`battery.arm_label`, public). `decide_seeded(runner, fixture, *, trucks, orders)`
+   lost `seed`/`tiebreak`.
+5. **`SlowUndeclaredArm`** fails `performance.scale[variant=x]`, not `[candidates=x]`:
+   a `candidates` value must be a real candidate kind or the runner refuses to build.
+   The test also proves that declaring `arm_budgets_ms={"variant=x": 2100}` clears it.
+6. **Budgets** (measured 2026-10-21, whole-tick `scale`, 2 x 5 runs, load avg 5.8-6.5,
+   numbers at the decorators): GreedyNearest `candidates=sampled` 1865-1929 ms ->
+   **5790** (above STEP_SETTLE_SECONDS, noted); Partitioned default 175-217 -> **660**
+   (was 520), `inner=GreedyNearest` 110-130 -> 500; PooledMarket default 156-159 ->
+   **500** (was 540), OfferNone 500, OfferSpare 620, ClaimIfGainExceeds 500, ClaimNone
+   620, HighestBenefit 500, OwnerFirst 500, RandomAward 500, `inner=GreedyNearest` 580.
+   GreedyNearest and RandomAssignment DEFAULT budgets were not re-declared (not in the
+   C5 list). Flag: this session's RandomAssignment default worst was 212.2 ms (3x =
+   637 > its 550); the battery passes (best of 3 ~175 ms), but by the rule its budget
+   should be re-measured.
+7. **Bench.** Extra column `label` (the selection, e.g. `PooledMarket/GreedyNearest`),
+   because two aliases of one policy are otherwise indistinguishable; `policy` is the
+   alias. Columns: `policy, label, info_model, fixtures, assigned, orders,
+   assign_rate, deadhead_km_total, deadhead_km_mean, dual_cycle, cross_company,
+   benefit_km_total, solve_ms_p50, solve_ms_max, violations`. `benefit_km_total` sums
+   `owner_reserve_km - awarded_cost_km` over the shares where both are finite.
+   Overrides are the nested `--policy-param` shape merged over the policy's defaults
+   with `framework.resolve.merge_params`; the control's `parse_bench_params(entries,
+   args)` parses `ALIAS.PATH=VALUE` with the §3.3 path rule; a repeated alias is
+   refused. `load_fixtures` sorts by step number.
+8. **Policy golden format 2** is `{"format": 2, "policies": {name: {version, cases:
+   [{fixture, heads}]}}}`, one case per whole-tick fixture (10 per policy, no tiebreak
+   variants). `tests/golden/policy_golden.json.gz` is deleted in the working tree
+   (not staged).
+9. **Tests.** Edited (all written on this branch, `21bd28e`; no pre-branch test was
+   edited): `test_policy_contract_battery.py` (4 built-ins, arm lists, < 120 s),
+   `test_policy_battery_catches_broken_policies.py` (+3 cases, `_first_feasible` gains
+   `allowed=`), `test_dispatch_capture_and_bench.py` (rewritten for /2 and the bench
+   columns), `test_policy_golden_versions.py` (v2). New: `test_policy_arm_budgets.py`.
+   Unedited but now exercising a tick context: `test_policy_context_company_spatial::
+   test_partition_scope_builds_spatial_pairs_on_demand` (its name is stale; it passes)
+   and `test_policy_battery_structure_via_check_plan.py`. Every new invariant test was
+   mutation-checked in a scratch mirror (17 mutations plus a golden-entry drop, all
+   caught, files restored and compared by hash).
+10. The golden gate is 94 now (93 + the one `3d7e84e` added).

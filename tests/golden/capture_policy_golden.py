@@ -1,11 +1,21 @@
 """Capture the per-policy golden heads (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.8).
 
-Responsibility: run every registered dispatch policy (or one, ``--policy NAME``) on
-the synthetic fixtures of ``policies.testing.fixtures`` and record its heads in
-``tests/golden/policy_golden.json.gz`` as ``{name: {version, cases: [{fixture,
-tiebreak, heads}]}}``. ``tests/test_policy_golden_versions.py`` recomputes the cases
-with :func:`golden_cases` and fails when a policy's output moved but its
-``version=`` did not.
+Responsibility: run every registered dispatch policy (or one, ``--policy NAME``) at
+its defaults on every whole-tick synthetic fixture of ``policies.testing.fixtures``
+and record its heads in ``tests/golden/policy_golden_v2.json.gz`` as format 2:
+``{"format": 2, "policies": {name: {version, cases: [{fixture, heads}]}}}``.
+``tests/test_policy_golden_versions.py`` recomputes the cases with
+:func:`golden_cases` and fails when a policy's output moved but its ``version=`` did
+not.
+
+Format 2 (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5) is a
+HARNESS change only: each case is one whole tick (``Fixture.context`` ->
+``runner.tick_context``), decided with nothing injected (the context's
+``Random(tick_seed)`` is the randomness input, the module RNG seeded with the
+fixture's ``seed``). The format-1 file (``policy_golden.json.gz``: one partition scope
+per case, with and without an injected tiebreak) is deleted. GreedyNearest and
+RandomAssignment keep version "1": the dispatch golden (``dispatch_golden_v1``)
+proves their behaviour unchanged; only how this file exercises them changed.
 
 Run from the repo root (either form)::
 
@@ -36,33 +46,41 @@ from apps.container_logistics.policies.framework.registry import get_policy_spec
 from apps.container_logistics.policies.testing import fixtures as fx
 from apps.container_logistics.policies.testing.battery import decide_seeded
 
-GOLDEN_PATH = Path(__file__).resolve().parent / "policy_golden.json.gz"
+GOLDEN_PATH = Path(__file__).resolve().parent / "policy_golden_v2.json.gz"
+GOLDEN_FORMAT = 2
 GENERATOR_COMMAND = "tests/golden/capture_policy_golden.py"
 
-__all__ = ["GOLDEN_PATH", "golden_cases", "load_golden", "encode_golden", "main"]
-
-# (fixture factory, tiebreak seed): every synthetic fixture on the legacy partitioned
-# path (no tiebreak), plus the two where the pooled tiebreak decides the outcome.
-_TIEBREAK = 4242
-_CASES = [(make, None) for make in fx.ROBUSTNESS_FIXTURES] + [(fx.tied_costs, _TIEBREAK), (fx.scale, _TIEBREAK)]
+__all__ = ["GOLDEN_PATH", "GOLDEN_FORMAT", "golden_cases", "load_golden", "load_golden_file", "encode_golden", "main"]
 
 
 def golden_cases(name: str) -> list[dict[str, Any]]:
-    """The cases recorded for dispatch policy ``name``: heads per (fixture, tiebreak)."""
+    """The cases recorded for dispatch policy ``name``: its heads on each whole-tick fixture."""
     cases = []
-    for make, tiebreak in _CASES:
+    for make in fx.ROBUSTNESS_FIXTURES:
         fixture = make()
-        _ctx, plan = decide_seeded(build_runner_for_policy(name), fixture, seed=fixture.seed, tiebreak=tiebreak)
-        cases.append({"fixture": fixture.id, "tiebreak": tiebreak, "heads": [list(h) for h in plan.heads()]})
+        _ctx, plan = decide_seeded(build_runner_for_policy(name), fixture)
+        cases.append({"fixture": fixture.id, "heads": [list(h) for h in plan.heads()]})
     return cases
 
 
-def load_golden(path: Path = GOLDEN_PATH) -> dict[str, Any]:
-    """The decoded golden file; ``{}`` when it does not exist yet."""
+def load_golden_file(path: Path = GOLDEN_PATH) -> dict[str, Any]:
+    """The decoded golden file, ``{"format": 2, "policies": {}}`` when it does not exist yet.
+
+    Raises ``ValueError`` for another format.
+    """
     if not path.exists():
-        return {}
+        return {"format": GOLDEN_FORMAT, "policies": {}}
     with gzip.open(path, "rt", encoding="utf-8") as fh:
-        return json.load(fh)
+        doc = json.load(fh)
+    if not isinstance(doc, dict) or doc.get("format") != GOLDEN_FORMAT:
+        raise ValueError(f"{path}: policy golden format {doc.get('format') if isinstance(doc, dict) else doc!r}, "
+                         f"expected {GOLDEN_FORMAT}")
+    return doc
+
+
+def load_golden(path: Path = GOLDEN_PATH) -> dict[str, Any]:
+    """``{name: {version, cases}}`` of the golden file (``{}`` when it does not exist yet)."""
+    return dict(load_golden_file(path)["policies"])
 
 
 def encode_golden(golden: dict[str, Any]) -> bytes:
@@ -84,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         spec = get_policy_spec("dispatch", name)
         golden[name] = {"version": spec.version, "cases": golden_cases(name)}
         print(f"captured {name} v{spec.version}: {len(golden[name]['cases'])} cases")
-    GOLDEN_PATH.write_bytes(encode_golden(golden))
+    GOLDEN_PATH.write_bytes(encode_golden({"format": GOLDEN_FORMAT, "policies": golden}))
     print(f"wrote {GOLDEN_PATH}")
     return 0
 

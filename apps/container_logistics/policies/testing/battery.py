@@ -1,43 +1,62 @@
 """The policy contract battery: ``run_battery(slot, name) -> list[CheckResult]``.
 
-Single responsibility: decide, for one registered policy, whether it honours the
-dispatch contract (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.2). Five groups;
-the ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in that order:
+Single responsibility: decide, for one registered dispatch policy, whether it honours
+the dispatch contract on WHOLE TICKS (round 2, ``docs/plans/policy_slots_round2_whole_tick.md``
+§5 C5; plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.2). Every decision is one tick
+(``fixtures.Fixture.context`` -> ``DispatchRunner.tick_context``) through
+``DispatchRunner.run``, so what passes here is what the sim executes, leaf or
+decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in order:
 
-- ``structure`` -- on every fixture: the plan passes ``invariants.check_plan``.
-  Each verdict is derived from ``check_plan``'s own messages
-  (:func:`classify_contract_problem`), so a new invariant is battery-checked the day
-  it lands; ``Plan.from_pairs``' "truck twice" violation is ``no_truck_twice``.
+- ``structure`` -- on every fixture: the tick plan passes ``invariants.check_plan``
+  (on the tick scope its feasibility is the WORLD rule, so a cross-company head the
+  structure does not permit fails ``only_allowed_pairs``). Each verdict is derived
+  from ``check_plan``'s own messages (:func:`classify_contract_problem`);
+  ``Plan.from_pairs``' "truck twice" violation is ``no_truck_twice``.
 - ``robustness`` -- one per fixture: ``decide`` does not raise anything but a
-  contract violation. Contract breaches are reported once, under ``structure``, so
-  one bug fails one check.
-- ``determinism`` -- ``reproducible``: two fresh instances with the same
-  ``Random(seed)`` and tiebreak give the same plan; ``order_independent``: with a
-  tiebreak seed, 20 shuffles of trucks and orders give one plan (skipped, ok, when
-  the policy declares ``order_sensitive``); ``no_module_rng``: with an injected RNG,
-  ``decide`` leaves the ``random`` module's state untouched.
-- ``performance`` -- ``scale``: best of 3 decide times under ``spec.perf_budget_ms``.
-- ``params`` -- defaults validate; unknown keys, out-of-bounds values and bad
-  choices are rejected; the schema uses only ``SUPPORTED_SCHEMA_KEYWORDS``.
+  contract violation (reported once, under ``structure``).
+- ``determinism`` -- ``reproducible``: two fresh instances on the same tick give the
+  same plan; ``order_independent``: 20 shuffles of trucks and orders give one plan;
+  ``no_module_rng``: ``decide`` leaves the ``random`` module's state untouched. The
+  last two are skipped (ok, with the reason) when ANY node of the arm's selection
+  declares ``order_sensitive`` / ``module_rng``: the declarations compose.
+- ``information`` -- ``scopes_respect_model`` (per arm): the sub-scopes the policy
+  built (``ctx.scope_log``, recorded only while auditing) respect its declared
+  model: ``per_company`` -- every sub-scope's trucks belong to one company and every
+  order is that company's or a world partner's; ``per_group`` -- every sub-scope lies
+  inside one cooperation group; and for both, every committed head lies inside one
+  sub-scope (a non-central policy that commits a head it decided outside any scope
+  decided centrally). ``central`` has no sub-scope restriction. This certifies the
+  ``compose``/``scopes`` helpers and the declared shape; it cannot prove a policy
+  never peeks at ``ctx`` beyond them. ``model_declared`` (default arm only): the
+  registration's model is one of the three and is what the resolved selection carries.
+- ``performance`` -- ``scale`` (per arm): best of 3 decide times on the 1000 x 500
+  ``scale`` tick under ``spec.arm_budgets_ms.get(arm, spec.perf_budget_ms)``. A
+  budget is a MEASURED property of an arm (``max(3 x worst of 2 x 5 runs, 500)``,
+  numbers at the decorator). An unmeasured arm inherits the default arm's budget,
+  so it fails loudly when slower, which forces a measurement. NOTE: a budget above
+  ``STEP_SETTLE_SECONDS`` (2000 ms; ``scenario/runtime_settings.py``
+  ``LONG_RUN_STEP_SETTLE_SECONDS``) means
+  that arm makes the assignment agent a per-step straggler at 1000 trucks x 500
+  orders: every such tick the scheduler waits for it (CLAUDE.md §6.17b).
+- ``params`` -- defaults validate (the whole default tree builds); unknown keys,
+  out-of-bounds values, bad choices and bad policy references (an unregistered
+  target; a decomposition where ``leaf_only``) are rejected; the schema uses only
+  ``SUPPORTED_SCHEMA_KEYWORDS``.
 
-**Arms.** Every non-default ``choices`` value of every declared ``str`` param is an
-arm (other params at defaults). The :data:`ARM_CHECKS` (structure, robustness,
-determinism) run again per arm, with the arm in the id:
-``structure.no_order_twice[candidates=sampled]``. Performance gates the default arm
-only, because ``perf_budget_ms`` is measured on it; each arm's ``robustness.scale``
-detail reports its decide time. :func:`battery_check_ids` lists every id for a policy.
+**Arms** (:func:`policy_arms`): the defaults; each non-default ``choices`` value of
+each of the policy's OWN ``str`` params; and for each policy-reference param, every
+other AVAILABLE target of its kind (``requires`` installed; a leaf where
+``leaf_only``) at that target's defaults. Arms are not crossed and not recursive (an
+inner's own arms are certified by the inner's battery). Every :data:`ARM_CHECKS` id
+runs per arm, with the arm in the id: ``structure.no_order_twice[candidates=sampled]``,
+``performance.scale[inner=GreedyNearest]``.
 
-**The runner path.** Every decision goes through ``DispatchRunner.run`` (the capture
-hook records the raw plan), so what passes here is what the sim executes: the
-runner's own violation verdict is cross-checked against ``check_plan``, and its
-decide timer is the performance measurement. The runner's CONTRACT VIOLATION log
-line is silenced while the battery runs (the battery reports it as a FAIL instead).
-
-The global ``random`` state is seeded per decide and restored afterwards, because
-the partition scope samples from the module (``scopes.partition_context``). A fixture
-context is a partition scope under a tick context (``fixtures.Fixture.context``), so a
-decomposition solver (``Partitioned``, ``PooledMarket``) is exercised too; round-2 C5
-replaces this with whole-tick fixtures and per-arm budgets.
+Randomness: the battery injects NOTHING (no ``set_rng``/``set_tiebreak``). The
+context is the only randomness input (``ctx.rng = Random(tick_seed)``); the
+``random`` module is seeded with the fixture's ``seed`` around each decide and
+restored afterwards (``Partitioned`` draws from it by declaration). The runner's
+CONTRACT VIOLATION log lines are silenced while the battery runs (it reports them as
+FAILs instead).
 
 Testing side: reads the registry and the dispatch framework; registers nothing.
 """
@@ -53,20 +72,20 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
+from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.dispatch import compose as _compose_module
 from apps.container_logistics.policies.dispatch import runner as _runner_module
 from apps.container_logistics.policies.dispatch.context import DispatchContext
 from apps.container_logistics.policies.dispatch.invariants import check_plan
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.dispatch.runner import DispatchRunner, build_runner_for_policy
-from apps.container_logistics.policies.framework.errors import (
-    PolicyParamsError,
-    SlotNotImplementedError,
-)
+from apps.container_logistics.policies.framework.components import ref_names, ref_target
+from apps.container_logistics.policies.framework.errors import PolicyError, SlotNotImplementedError
 from apps.container_logistics.policies.framework.params import SUPPORTED_SCHEMA_KEYWORDS, declared_params
-from apps.container_logistics.policies.framework.registry import PolicySpec, get_policy_spec
+from apps.container_logistics.policies.framework.registry import PolicySpec, get_policy_spec, list_policies
 
 from . import fixtures as fx
+from .fixtures import seeded_module_random
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +94,8 @@ __all__ = [
     "DISPATCH_CHECKS",
     "ARM_CHECKS",
     "STRUCTURE_CHECKS",
+    "INFORMATION_MODELS",
+    "arm_label",
     "battery_check_ids",
     "policy_arms",
     "classify_contract_problem",
@@ -82,6 +103,8 @@ __all__ = [
     "decide_seeded",
     "seeded_module_random",
 ]
+
+INFORMATION_MODELS: tuple[str, ...] = ("central", "per_group", "per_company")
 
 STRUCTURE_CHECKS: tuple[str, ...] = (
     "returns_plan", "no_truck_twice", "no_order_twice", "only_in_scope", "only_allowed_pairs",
@@ -93,15 +116,18 @@ ARM_CHECKS: tuple[str, ...] = (
     "determinism.reproducible",
     "determinism.order_independent",
     "determinism.no_module_rng",
+    "information.scopes_respect_model",
+    "performance.scale",
 )
 
 DISPATCH_CHECKS: tuple[str, ...] = (
     *ARM_CHECKS,
-    "performance.scale",
+    "information.model_declared",
     "params.defaults_validate",
     "params.rejects_unknown_key",
     "params.rejects_out_of_bounds",
     "params.rejects_bad_choice",
+    "params.rejects_bad_ref",
     "params.schema_keywords_supported",
 )
 
@@ -124,18 +150,17 @@ _RAISED_MESSAGE_KINDS: tuple[tuple[str, re.Pattern[str]], ...] = (
 # not know yet) still FAILS: it is never silently dropped.
 _UNCLASSIFIED = "returns_plan"
 
-_SEED = 7
-_TIEBREAK = 4242
 _SHUFFLES = 20
 _PERF_REPEATS = 3
+_BAD_REF = "__battery_not_a_policy__"
 
 
 @dataclass(frozen=True)
 class CheckResult:
     """One check's verdict. ``id`` is ``<group>.<check>``; ``check`` carries the arm.
 
-    ``arm`` is ``""`` for the default params, else ``"<param>=<value>"``, and then
-    ``check`` ends in ``[<arm>]`` (e.g. ``no_order_twice[candidates=sampled]``).
+    ``arm`` is ``""`` for the default params, else ``"<param>=<value>"`` (a ref arm
+    names the target: ``inner=GreedyNearest``), and then ``check`` ends in ``[<arm>]``.
     """
 
     group: str
@@ -150,55 +175,73 @@ class CheckResult:
         return f"{self.group}.{self.check}"
 
 
-@contextmanager
-def seeded_module_random(seed: int) -> Iterator[None]:
-    """Seed the global ``random`` state for the block, then put the previous state back."""
-    saved = random.getstate()
-    random.seed(seed)
-    try:
-        yield
-    finally:
-        random.setstate(saved)
-
-
 def decide_seeded(
     runner: DispatchRunner,
     fixture: Any,
     *,
-    seed: int,
-    tiebreak: int | None,
     trucks: list[dict[str, Any]] | None = None,
     orders: list[dict[str, Any]] | None = None,
 ) -> tuple[DispatchContext, Any]:
-    """``runner.policy.decide`` on a fresh fixture context with ``Random(seed)`` injected.
+    """``runner.policy.decide`` on a fresh whole-tick fixture context, module RNG seeded.
 
-    The policy's raw output, NOT the runner path (no ``check_plan``): this is what
-    the policy golden captures. The module RNG is seeded with ``seed`` for the call.
-    Exceptions propagate.
+    The policy's raw output, NOT the runner path (no ``check_plan``): this is what the
+    policy golden captures. Nothing is injected (the context is the randomness input);
+    the ``random`` module is seeded with ``fixture.seed`` for the call. Exceptions
+    propagate.
     """
-    runner.policy.set_rng(random.Random(seed))
-    runner.policy.set_tiebreak(tiebreak)
-    with seeded_module_random(seed):
+    with fixture.module_random():
         ctx = fixture.context(runner, trucks=trucks, orders=orders)
         return ctx, runner.policy.decide(ctx)
 
 
+# --- arms --------------------------------------------------------------------
+
+def _ref_arm_targets(info: Any) -> list[str]:
+    """Every other available target of ``info``'s kind (a leaf where ``leaf_only``), sorted."""
+    kind, default = info.meta.kind, getattr(info.default, "type", None)
+    names = []
+    if kind == "dispatch":
+        for spec in list_policies("dispatch"):
+            if spec.missing_requirements() or (info.meta.leaf_only and spec.is_composite):
+                continue
+            names.append(spec.name)
+    else:
+        names = list(ref_names(kind))
+    return [n for n in sorted(names) if n != default]
+
+
 def policy_arms(spec: PolicySpec) -> list[dict[str, Any]]:
-    """``[{}]`` (the defaults) plus ``{param: choice}`` per non-default choice of each ``str`` param."""
+    """``[{}]`` (the defaults) plus one single-param arm per non-default choice or ref target.
+
+    A str arm is ``{param: choice}``; a ref arm is ``{param: {"type": target}}`` (the
+    target at its defaults). Own params only, declared order; not crossed, not recursive.
+    """
     arms: list[dict[str, Any]] = [{}]
     for info in declared_params(spec.params_cls):
-        if info.type is not str or info.meta.choices is None:
-            continue
-        arms += [{info.name: c} for c in info.meta.choices if c != info.default]
+        if info.is_ref:
+            arms += [{info.name: {"type": t}} for t in _ref_arm_targets(info)]
+        elif info.type is str and info.meta.choices is not None:
+            arms += [{info.name: c} for c in info.meta.choices if c != info.default]
     return arms
 
 
-def _arm_label(arm: Mapping[str, Any]) -> str:
-    return ",".join(f"{k}={v}" for k, v in arm.items())
+def arm_label(arm: Mapping[str, Any]) -> str:
+    """``""`` for the defaults, else ``param=value`` (``param=Target`` for a ref arm)."""
+    return ",".join(f"{k}={v['type'] if isinstance(v, Mapping) else v}" for k, v in arm.items())
 
 
 def _arm_suffix(arm: Mapping[str, Any]) -> str:
-    return f"[{_arm_label(arm)}]" if arm else ""
+    return f"[{arm_label(arm)}]" if arm else ""
+
+
+def _arm_budget(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[int, str]:
+    """The arm's budget and where it comes from (measured key, or the default arm's)."""
+    label = arm_label(arm)
+    if not label:
+        return spec.perf_budget_ms, "perf_budget_ms"
+    if label in spec.arm_budgets_ms:
+        return spec.arm_budgets_ms[label], f"arm_budgets_ms[{label!r}]"
+    return spec.perf_budget_ms, "perf_budget_ms (arm not measured: it inherits the default arm's budget)"
 
 
 def battery_check_ids(slot: str, name: str) -> list[str]:
@@ -259,16 +302,19 @@ def _arm_results(spec: PolicySpec, arm: dict[str, Any]) -> list[CheckResult]:
     checks["determinism.reproducible"] = _bind(_reproducible, spec, arm)
     checks["determinism.order_independent"] = _bind(_order_independent, spec, arm)
     checks["determinism.no_module_rng"] = _bind(_no_module_rng, outcomes)
+    checks["information.scopes_respect_model"] = _bind(_scopes_respect_model, outcomes)
+    checks["performance.scale"] = _bind(_performance_scale, spec, arm)
     return [_timed(cid, checks[cid], arm) for cid in ARM_CHECKS]
 
 
 def _default_only_results(spec: PolicySpec) -> list[CheckResult]:
     checks: dict[str, Callable[[], tuple[bool, str]]] = {
-        "performance.scale": _bind(_performance_scale, spec),
+        "information.model_declared": _bind(_model_declared, spec),
         "params.defaults_validate": _bind(_defaults_validate, spec),
         "params.rejects_unknown_key": _bind(_rejects_unknown_key, spec),
         "params.rejects_out_of_bounds": _bind(_rejects_out_of_bounds, spec),
         "params.rejects_bad_choice": _bind(_rejects_bad_choice, spec),
+        "params.rejects_bad_ref": _bind(_rejects_bad_ref, spec),
         "params.schema_keywords_supported": _bind(_schema_keywords_supported, spec),
     }
     return [_timed(cid, checks[cid], {}) for cid in DISPATCH_CHECKS if cid not in ARM_CHECKS]
@@ -286,7 +332,7 @@ def _timed(check_id: str, fn: Callable[[], tuple[bool, str]], arm: Mapping[str, 
     except Exception as exc:  # noqa: BLE001 - a crashing check is a FAIL, never a crash of the battery
         ok, detail = False, f"raised {type(exc).__name__}: {exc}"
     return CheckResult(group=group, check=f"{check}{_arm_suffix(arm)}", ok=ok, detail=detail,
-                       ms=round((time.perf_counter() - start) * 1000.0, 3), arm=_arm_label(arm))
+                       ms=round((time.perf_counter() - start) * 1000.0, 3), arm=arm_label(arm))
 
 
 # --- the runner path ---------------------------------------------------------
@@ -300,8 +346,8 @@ class _ViolationFilter(logging.Filter):
 def _quiet_runner_violations() -> Iterator[None]:
     """Drop the CONTRACT VIOLATION ERROR lines for the block (the battery reports them).
 
-    The runner logs a tick violation (message 18); a scope violation (message 19) is
-    logged by ``compose``, which the runner also uses for a sub-scope context.
+    The runner logs a tick violation (message 18); a sub-scope violation (message 19)
+    is logged by ``compose``.
     """
     flt = _ViolationFilter()
     loggers = (_runner_module.logger, _compose_module.logger)
@@ -315,29 +361,43 @@ def _quiet_runner_violations() -> Iterator[None]:
 
 
 class _PlanRecorder:
-    """Capture hook: the raw plan and any violation ``decide`` raised (``DispatchRunner.run``)."""
+    """Capture hook: the raw TICK plan and any violation ``decide`` raised (``DispatchRunner.run``).
+
+    Sub-scope calls (``compose.decide_in_scope`` reuses the hook) are ignored.
+    """
 
     def __init__(self) -> None:
         self.plan: Any = None
         self.raised: list[str] = []
 
     def __call__(self, *, ctx: DispatchContext, plan: Any, problems: list[str]) -> None:
+        if ctx.scope.kind != "tick":
+            return
         self.plan = plan
         self.raised = list(problems)
 
 
 @dataclass(frozen=True)
 class _Decision:
-    """One ``DispatchRunner.run`` on one fixture: what came back and what it touched."""
+    """One ``DispatchRunner.run`` on one whole-tick fixture: what came back and what it touched."""
 
-    fixture_id: str
+    fixture: Any
     n_trucks: int
     plan: Any
-    problems: tuple[tuple[str, str], ...]   # (structure check, message)
-    error: str | None                       # a non-contract exception, as text
+    pairs: tuple[tuple[str, str], ...]          # committed heads (truck id, order id)
+    problems: tuple[tuple[str, str], ...]       # (structure check, message)
+    error: str | None                           # a non-contract exception, as text
     decide_ms: float
     module_rng_touched: bool
-    cap_binds: bool
+    scope_log: tuple[Mapping[str, Any], ...]
+
+    @property
+    def fixture_id(self) -> str:
+        return self.fixture.id
+
+
+def _arm_params(arm: Mapping[str, Any]) -> dict[str, Any]:
+    return {k: dict(v) if isinstance(v, Mapping) else v for k, v in arm.items()}
 
 
 def _decide_via_runner(
@@ -345,28 +405,28 @@ def _decide_via_runner(
     arm: Mapping[str, Any],
     fixture: Any,
     *,
-    seed: int,
-    tiebreak: int | None,
     trucks: list[dict[str, Any]] | None = None,
     orders: list[dict[str, Any]] | None = None,
 ) -> _Decision:
-    """``DispatchRunner.run`` on a fresh ``spec`` instance with params ``arm``.
+    """``DispatchRunner.run`` on a fresh ``spec`` instance with params ``arm``, on one tick.
 
-    ``Random(seed)`` is injected and the module RNG seeded with ``seed``. The
-    structure problems are ``check_plan``'s (or the violation ``decide`` raised),
-    classified per check; a runner verdict that disagrees with them is a problem too.
+    The module RNG is seeded with ``fixture.seed``; nothing is injected. The
+    structure problems are ``check_plan``'s against the tick context (or the violation
+    ``decide`` raised), classified per check; a runner verdict that disagrees with
+    them is a problem too. The sub-scopes the policy builds are recorded
+    (``scope_log``) for the information audit.
     """
     recorder = _PlanRecorder()
-    runner = build_runner_for_policy(spec.name, dict(arm), capture=recorder)
-    runner.policy.set_rng(random.Random(seed))
-    runner.policy.set_tiebreak(tiebreak)
+    runner = build_runner_for_policy(spec.name, _arm_params(arm), capture=recorder)
     n_trucks = len(fixture.trucks if trucks is None else trucks)
     error: str | None = None
-    with seeded_module_random(seed):
+    scope_log: list[dict[str, Any]] = []
+    pairs: list[tuple[str, str]] = []
+    with fixture.module_random():
         before = random.getstate()
-        ctx = fixture.context(runner, trucks=trucks, orders=orders)
+        ctx = fixture.context(runner, trucks=trucks, orders=orders, scope_log=scope_log)
         try:
-            runner.run(ctx)
+            pairs = [(str(t.get("_id")), str(o.get("_id"))) for t, o in runner.run(ctx).pairs]
         except Exception as exc:  # noqa: BLE001 - reported by robustness
             error = f"{type(exc).__name__}: {exc}"
         touched = random.getstate() != before
@@ -381,14 +441,15 @@ def _decide_via_runner(
             problems.append((_UNCLASSIFIED, f"the runner {'discarded' if discarded else 'committed'} the plan "
                                             f"but check_plan found {len(problems)} problem(s)"))
     return _Decision(
-        fixture_id=fixture.id,
+        fixture=fixture,
         n_trucks=n_trucks,
         plan=recorder.plan,
+        pairs=tuple(pairs),
         problems=tuple(problems),
         error=error,
         decide_ms=runner.stats["total_ms"],
         module_rng_touched=touched,
-        cap_binds=n_trucks > fixture.settings.max_trucks_per_scope,
+        scope_log=tuple(scope_log),
     )
 
 
@@ -396,15 +457,13 @@ class _Outcomes:
     """One runner decision per ``ROBUSTNESS_FIXTURES`` fixture for one arm, made on first use."""
 
     def __init__(self, spec: PolicySpec, arm: dict[str, Any]) -> None:
-        self._spec, self._arm = spec, arm
+        self.spec, self.arm = spec, arm
         self._by_fixture: dict[str, _Decision] = {}
 
     def get(self, make: Callable[[], Any]) -> _Decision:
         key = make.__name__
         if key not in self._by_fixture:
-            fixture = make()
-            self._by_fixture[key] = _decide_via_runner(self._spec, self._arm, fixture,
-                                                       seed=fixture.seed, tiebreak=None)
+            self._by_fixture[key] = _decide_via_runner(self.spec, self.arm, make())
         return self._by_fixture[key]
 
     def all(self) -> list[_Decision]:
@@ -426,7 +485,7 @@ def _structure_check(outcomes: _Outcomes, check: str) -> tuple[bool, str]:
         return False, "; ".join(problems)
     note = (f" (not checked on {', '.join(skipped)}: no Plan to check, see robustness.* "
             "and the other structure.* checks)") if skipped else ""
-    return True, f"check_plan clean on {len(outcomes.all()) - len(skipped)} fixture(s){note}"
+    return True, f"check_plan clean on {len(outcomes.all()) - len(skipped)} whole tick(s){note}"
 
 
 # --- robustness --------------------------------------------------------------
@@ -444,7 +503,7 @@ def _robustness_check(outcomes: _Outcomes, make: Callable[[], Any]) -> tuple[boo
 # --- determinism -------------------------------------------------------------
 
 def _determinism_fixtures() -> list[Any]:
-    return [fx.tied_costs(), fx.scale(n_trucks=30, n_orders=20, hauliers=2, seed=9)]
+    return [fx.tied_costs(), fx.three_company_chain(), fx.scale(n_trucks=30, n_orders=20, hauliers=2, seed=9)]
 
 
 def _plan_items(d: _Decision) -> Any:
@@ -461,17 +520,16 @@ def _plan_mapping(d: _Decision) -> Any:
 def _reproducible(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str]:
     fixtures = _determinism_fixtures() + [fx.scale(n_trucks=200, n_orders=100, hauliers=2, seed=5)]
     for fixture in fixtures:
-        for tiebreak in (None, _TIEBREAK):
-            first = _decide_via_runner(spec, arm, fixture, seed=_SEED, tiebreak=tiebreak)
-            second = _decide_via_runner(spec, arm, fixture, seed=_SEED, tiebreak=tiebreak)
-            if _plan_items(first) != _plan_items(second):
-                return False, (f"{fixture.id} (tiebreak={tiebreak}): two fresh instances with Random({_SEED}) "
-                               f"gave different plans: {_plan_items(first)[:4]} vs {_plan_items(second)[:4]}")
-    return True, f"same plan twice on {', '.join(f.id for f in fixtures)}, with and without a tiebreak"
+        first = _decide_via_runner(spec, arm, fixture)
+        second = _decide_via_runner(spec, arm, fixture)
+        if _plan_items(first) != _plan_items(second):
+            return False, (f"{fixture.id}: two fresh instances on the same tick (tick seed {fixture.tick_seed}) "
+                           f"gave different plans: {_plan_items(first)[:4]} vs {_plan_items(second)[:4]}")
+    return True, f"same plan twice on {', '.join(f.id for f in fixtures)}"
 
 
 def _order_independent(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str]:
-    """Shuffling trucks and orders (tiebreak set) must not change the plan.
+    """Shuffling trucks and orders (same tick seed) must not change the plan.
 
     Narrower than it reads: the fixtures keep fewer trucks than the spatial
     per-order cap (``spatial_candidates_per_order``, default 40), because
@@ -484,16 +542,15 @@ def _order_independent(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str
                   "dense real ticks the candidate set itself depends on input order")
     declared = _declared_on_selection(spec, arm, "order_sensitive")
     if declared:
-        return True, f"order_sensitive: {declared}"
+        return True, f"skipped: order_sensitive declared by {declared}"
     for fixture in _determinism_fixtures():
-        want = _plan_mapping(_decide_via_runner(spec, arm, fixture, seed=_SEED, tiebreak=_TIEBREAK))
+        want = _plan_mapping(_decide_via_runner(spec, arm, fixture))
         for i in range(_SHUFFLES):
             shuffler = random.Random(1000 + i)
             trucks, orders = list(fixture.trucks), list(fixture.orders)
             shuffler.shuffle(trucks)
             shuffler.shuffle(orders)
-            got = _plan_mapping(_decide_via_runner(spec, arm, fixture, seed=_SEED, tiebreak=_TIEBREAK,
-                                                   trucks=trucks, orders=orders))
+            got = _plan_mapping(_decide_via_runner(spec, arm, fixture, trucks=trucks, orders=orders))
             if got != want:
                 return False, f"{fixture.id}: shuffle {i} changed the plan: {str(got)[:120]} vs {str(want)[:120]}"
     names = ", ".join(f.id for f in _determinism_fixtures())
@@ -503,10 +560,10 @@ def _order_independent(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str
 def _declared_on_selection(spec: PolicySpec, arm: Mapping[str, Any], attr: str) -> str:
     """``"<name>: <reason>"`` for every node of the arm's selection tree declaring ``attr``; "" if none.
 
-    A composite's declaration composes with its inner's (round-2 §5 C5): the default
-    ``PooledMarket`` is order-sensitive because its default inner ``RandomAssignment`` is.
+    The declarations compose (round-2 §5 C5): the default ``PooledMarket`` is
+    order-sensitive because its default inner ``RandomAssignment`` is.
     """
-    node = build_runner_for_policy(spec.name, dict(arm)).resolved
+    node = build_runner_for_policy(spec.name, _arm_params(arm)).resolved
     reasons = []
     while node is not None:
         reason = getattr(get_policy_spec("dispatch", node.name), attr)
@@ -517,47 +574,109 @@ def _declared_on_selection(spec: PolicySpec, arm: Mapping[str, Any], attr: str) 
 
 
 def _no_module_rng(outcomes: _Outcomes) -> tuple[bool, str]:
-    """With ``Random(seed)`` injected, ``DispatchRunner.run`` leaves ``random.getstate()`` alone.
+    """``DispatchRunner.run`` leaves ``random.getstate()`` alone on every whole tick.
 
-    Scoped to fixtures whose trucks fit ``max_trucks_per_scope``: the partition
-    scope's ``sampled_trucks`` draws from the random MODULE when that cap binds, by
-    framework design (byte identity on the partitioned path), so the ``scale``
-    fixture (1000 trucks > 500) is excluded. Any module draw on the others is the
-    policy's own.
+    Nothing is injected: the tick context's ``ctx.rng`` (``Random(tick_seed)``) is the
+    only sanctioned randomness, and tick-scope sampling draws from it, so every
+    fixture (``scale`` included) is checked. Skipped when a node of the selection
+    declares ``module_rng`` (``Partitioned``: the pre-v2 groups draw from the module).
     """
-    declared = _declared_on_selection(outcomes._spec, outcomes._arm, "module_rng")
+    declared = _declared_on_selection(outcomes.spec, outcomes.arm, "module_rng")
     if declared:
-        return True, f"module_rng: {declared}"
-    checked, excluded, touched = [], [], []
+        return True, f"skipped: module_rng declared by {declared}"
+    checked, touched = [], []
     for d in outcomes.all():
-        if d.cap_binds:
-            excluded.append(d.fixture_id)
-        elif d.error is None:
+        if d.error is None:
             checked.append(d.fixture_id)
             if d.module_rng_touched:
                 touched.append(d.fixture_id)
     if touched:
-        return False, (f"decide drew from the random MODULE on {', '.join(touched)} although Random(seed) was "
-                       "injected; draw only from ctx.rng / self.rng")
-    note = (f"; not checked on {', '.join(excluded)}: the sample cap binds there and the partition scope "
-            "samples from the module by design") if excluded else ""
-    return True, f"random module state unchanged on {len(checked)} fixture(s){note}"
+        return False, (f"decide drew from the random MODULE on {', '.join(touched)}; draw only from ctx.rng, "
+                       "or declare module_rng= at @policy")
+    return True, f"random module state unchanged on {len(checked)} whole tick(s)"
+
+
+# --- information -------------------------------------------------------------
+
+def _model_declared(spec: PolicySpec) -> tuple[bool, str]:
+    model = spec.information_model
+    if model not in INFORMATION_MODELS:
+        return False, f"information_model {model!r} is not one of {list(INFORMATION_MODELS)}"
+    resolved = build_runner_for_policy(spec.name).resolved.information_model
+    if resolved != model:
+        return False, f"the resolved selection carries information_model {resolved!r}, the registration {model!r}"
+    return True, f"information_model {model!r} (stamped as meta.policies.dispatch.information_model)"
+
+
+def _group_key(world: Any, hid: Any) -> Any:
+    if hid is None:
+        return None
+    return ("component", world.component_of[hid]) if hid in world.component_of else ("haulier", hid)
+
+
+def _scope_problems(model: str, entry: Mapping[str, Any], world: Any,
+                    truck_h: Mapping[str, Any], order_h: Mapping[str, Any]) -> list[str]:
+    where = f"scope {entry['key']}"
+    t_h = [truck_h.get(t) for t in entry["trucks"]]
+    o_h = [order_h.get(o) for o in entry["orders"]]
+    if model == "per_company":
+        hid = entry["key"].partition(":")[2] if entry["kind"] == "company" else (t_h[0] if t_h else None)
+        out = [f"{where} (company {hid}) holds truck {t} of {h}" for t, h in zip(entry["trucks"], t_h) if h != hid]
+        visible = {hid} | set(world.partners(hid)) if hid is not None else set()
+        out += [f"{where} (company {hid}) sees order {o} of {h}, neither its own nor a partner's"
+                for o, h in zip(entry["orders"], o_h) if h not in visible]
+        return out
+    keys = {_group_key(world, h) for h in t_h + o_h}
+    if len(keys) > 1 or None in keys:
+        return [f"{where} spans cooperation groups {sorted(map(str, keys))}"]
+    return []
+
+
+def _scopes_respect_model(outcomes: _Outcomes) -> tuple[bool, str]:
+    """Audit the sub-scopes the policy built against its declared information model."""
+    model = build_runner_for_policy(outcomes.spec.name, _arm_params(outcomes.arm)).resolved.information_model
+    if model == "central":
+        return True, "central: decides the whole tick; no sub-scope restriction to audit"
+    if model not in INFORMATION_MODELS:
+        return False, f"information_model {model!r} is not one of {list(INFORMATION_MODELS)}"
+    problems: list[str] = []
+    scopes = 0
+    for d in outcomes.all():
+        if d.error is not None:
+            continue
+        world = d.fixture.world()
+        truck_h = {str(t.get("_id")): assign_constraints.haulier_of(t) for t in d.fixture.trucks}
+        order_h = {str(o.get("_id")): assign_constraints.haulier_of(o) for o in d.fixture.orders}
+        members: list[tuple[set[str], set[str]]] = []
+        for entry in d.scope_log:
+            scopes += 1
+            problems += [f"{d.fixture_id}: {p}" for p in _scope_problems(model, entry, world, truck_h, order_h)]
+            members.append((set(entry["trucks"]), set(entry["orders"])))
+        for tid, oid in d.pairs:
+            if not any(tid in ts and oid in os_ for ts, os_ in members):
+                problems.append(f"{d.fixture_id}: committed head ({tid}, {oid}) was decided outside every "
+                                f"sub-scope; a {model} policy decides each head inside one scope")
+    if problems:
+        shown = "; ".join(problems[:6]) + (f"; ... {len(problems) - 6} more" if len(problems) > 6 else "")
+        return False, f"{model}: {shown}"
+    return True, f"{model}: {scopes} sub-scope(s) audited (scope_log), every committed head inside one"
 
 
 # --- performance -------------------------------------------------------------
 
-def _performance_scale(spec: PolicySpec) -> tuple[bool, str]:
+def _performance_scale(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str]:
     fixture = fx.scale()
+    budget, source = _arm_budget(spec, arm)
     times = []
     for _ in range(_PERF_REPEATS):
-        d = _decide_via_runner(spec, {}, fixture, seed=fixture.seed, tiebreak=None)
+        d = _decide_via_runner(spec, arm, fixture)
         if d.error is not None:
             return False, f"decide raised {d.error}"
         times.append(d.decide_ms)
     best = min(times)
     listed = ", ".join(f"{t:.1f}" for t in times)
-    verdict = f"best {best:.1f} ms of [{listed}] on {fixture.id}, budget {spec.perf_budget_ms} ms"
-    return best <= spec.perf_budget_ms, verdict
+    verdict = f"best {best:.1f} ms of [{listed}] on {fixture.id}, budget {budget} ms ({source})"
+    return best <= budget, verdict
 
 
 # --- params ------------------------------------------------------------------
@@ -572,7 +691,7 @@ def _defaults_validate(spec: PolicySpec) -> tuple[bool, str]:
 def _rejected(spec: PolicySpec, raw: dict[str, Any]) -> bool:
     try:
         spec.params_cls.from_mapping(raw, where=f"battery for {spec.name}")
-    except PolicyParamsError:
+    except PolicyError:
         return True
     return False
 
@@ -600,6 +719,8 @@ def _out_of_bounds_values(info: Any) -> list[tuple[str, Any]]:
 def _rejects_out_of_bounds(spec: PolicySpec) -> tuple[bool, str]:
     tried, accepted = [], []
     for info in declared_params(spec.params_cls):
+        if info.is_ref:
+            continue
         for bound, value in _out_of_bounds_values(info):
             tried.append(f"{info.name}={value!r} ({bound})")
             if not _rejected(spec, {info.name: value}):
@@ -612,7 +733,7 @@ def _rejects_out_of_bounds(spec: PolicySpec) -> tuple[bool, str]:
 def _rejects_bad_choice(spec: PolicySpec) -> tuple[bool, str]:
     tried, accepted = [], []
     for info in declared_params(spec.params_cls):
-        if info.meta.choices is None:
+        if info.is_ref or info.meta.choices is None:
             continue
         value = "__battery_not_a_choice__"
         tried.append(info.name)
@@ -621,6 +742,31 @@ def _rejects_bad_choice(spec: PolicySpec) -> tuple[bool, str]:
     if accepted:
         return False, "; ".join(accepted)
     return True, ("rejected a bad choice for " + ", ".join(tried)) if tried else "no choice params"
+
+
+def _composite_targets() -> list[str]:
+    return [s.name for s in list_policies("dispatch") if s.is_composite]
+
+
+def _rejects_bad_ref(spec: PolicySpec) -> tuple[bool, str]:
+    """Every ref param refuses an unregistered target and, where ``leaf_only``, a decomposition."""
+    tried, accepted = [], []
+    for info in declared_params(spec.params_cls):
+        if not info.is_ref:
+            continue
+        bad = [{"type": _BAD_REF}]
+        if info.meta.kind == "dispatch" and info.meta.leaf_only:
+            bad += [{"type": name} for name in _composite_targets()]
+        for value in bad:
+            tried.append(f"{info.name}={value['type']}")
+            if not _rejected(spec, {info.name: value}):
+                accepted.append(f"{info.name}={value['type']!r} was accepted")
+        # Sanity: the declared kind really resolves its own default (no vacuous refusals).
+        ref_target(info.meta.kind, info.default.type, where=f"battery for {spec.name}.{info.name}",
+                   leaf_only=info.meta.leaf_only)
+    if accepted:
+        return False, "; ".join(accepted)
+    return True, ("rejected " + ", ".join(tried)) if tried else "no policy-reference params"
 
 
 def _schema_keywords_supported(spec: PolicySpec) -> tuple[bool, str]:
