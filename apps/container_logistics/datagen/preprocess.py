@@ -270,6 +270,46 @@ class Preprocessor:
         )
 
     @staticmethod
+    def _warn_pools_without_pooled_dispatch(slug, cooperation, authored: dict, provenance: dict) -> None:
+        """Warn when the active structure declares pools but the dispatch top is ``Partitioned``.
+
+        The arm must always be NAMED, never inherited silently (plan §14.7 item 5). A
+        scenario that declares cooperation pools but whose dispatch selection is
+        ``Partitioned`` (per-haulier scopes) never runs the shared-pool decomposition
+        while its pools sit visibly intact in the editor -- the state CRITICAL-1 leaves
+        behind when a save drops the ``planner`` key. Deliberately NOT an error:
+        partitioned + cooperation is legitimate (and the default). Decided on the
+        RESOLVED ``policies.dispatch`` top (authored or translated from the legacy
+        ``planner.topology``), never on the legacy dial alone: an authored
+        ``PooledMarket`` block used to be told shared-pool planning was OFF (final
+        review MINOR-5).
+        """
+        try:
+            top = (authored.get("dispatch") or {}).get("type")
+            if top != _legacy_dispatch.PARTITIONED:
+                return
+            active = H.active_structure(cooperation)
+            pools = active.get("pools") or []
+            if not pools:
+                return
+            if provenance.get("dispatch") == "legacy":
+                fix = ("set planner.topology='pooled' (or run with --policy dispatch=PooledMarket / "
+                       "ORSIM_PLANNER_TOPOLOGY=pooled). A dropped 'planner' key silently produces "
+                       "this state.")
+            else:
+                fix = ("set policies.dispatch.type='PooledMarket' (keeping params.inner), or run "
+                       "with --policy dispatch=PooledMarket.")
+            logging.warning(
+                "Scenario %r declares %d cooperation pool(s) on structure %r but "
+                "policies.dispatch resolves to %s (per-haulier scopes), so the shared-pool "
+                "decomposition (%s) is OFF for this scenario. If that is not intended, %s",
+                slug, len(pools), active.get("id"), _legacy_dispatch.PARTITIONED,
+                _legacy_dispatch.POOLED_MARKET, fix,
+            )
+        except Exception:  # pragma: no cover - a warning must never break a compile
+            logging.debug("pools/dispatch mismatch check failed", exc_info=True)
+
+    @staticmethod
     def _normalize_policies(raw: dict, planner_cfg: dict) -> tuple[dict, dict]:
         """Shape-check the ``policies`` block; translate the legacy dispatch keys.
 
@@ -610,28 +650,6 @@ class Preprocessor:
         authored_pool_ids = H.authored_pool_structure_ids(raw.get("cooperation"))
         planner_cfg = cls._normalize_planner(raw.get("planner"))
 
-        # The arm must always be NAMED, never inherited silently (plan §14.7 item 5).
-        # A scenario that declares cooperation pools but resolves to `partitioned`
-        # runs the LEGACY planner while its pools sit visibly intact in the editor —
-        # which is exactly the state CRITICAL-1 leaves behind when a save drops the
-        # `planner` key. This warning is a cheap detector for that silent flip; it is
-        # deliberately NOT an error, because partitioned + cooperation is a legitimate
-        # (and currently default) configuration.
-        try:
-            _active_struct = H.active_structure(cooperation)
-            _declared_pools = _active_struct.get("pools") or []
-            if _declared_pools and planner_cfg.get("topology") == "partitioned":
-                logging.warning(
-                    "Scenario %r declares %d cooperation pool(s) on structure %r but "
-                    "planner.topology resolves to 'partitioned', so shared-pool "
-                    "planning is OFF for this scenario. If that is not intended, set "
-                    "planner.topology='pooled' (or run with ORSIM_PLANNER_TOPOLOGY="
-                    "pooled). A dropped 'planner' key silently produces this state.",
-                    slug, len(_declared_pools), _active_struct.get("id"),
-                )
-        except Exception:  # pragma: no cover - a warning must never break a compile
-            logging.debug("pools/topology mismatch check failed", exc_info=True)
-
         # --- order location distribution (matrix/random/historical) ---
         catalog = cls.catalog()
         codes = list(catalog.codes())
@@ -740,6 +758,8 @@ class Preprocessor:
         # solver_params keeps the one-dial rule (defaults <- deployment.params <-
         # dispatch params) because it also drives the framework's accounting (F6).
         policies_authored, policies_provenance = cls._normalize_policies(raw, planner_cfg)
+        cls._warn_pools_without_pooled_dispatch(slug, cooperation, policies_authored,
+                                                policies_provenance)
         # The mirrors carry the innermost per-scope solver (round-2 §3.6); spec_compile
         # re-mirrors from the resolved tree and asserts strategy == leaf.
         dispatch_entry = cls.dispatch_leaf_entry(policies_authored["dispatch"])

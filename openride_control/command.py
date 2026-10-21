@@ -115,7 +115,7 @@ def _run(argv: list[str] | None = None) -> int:
         default=None,
         metavar="every=N,max=M",
         help="Capture dispatch contexts for `policy-bench --fixtures` (ORSIM_CAPTURE_DISPATCH): "
-        "every N-th tick, at most M files, under <datahub>/fixtures/dispatch/<run_id>.",
+        "every N-th dispatch tick (not sim step), at most M files, under <datahub>/fixtures/dispatch/<run_id>.",
     )
     run_p.add_argument(
         "--cooperation-structure",

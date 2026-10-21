@@ -40,7 +40,7 @@ from .errors import (
     UnknownSlotError,
 )
 from .params import PolicyParams, declared_params
-from .registry import INNER_PARAM, PolicySpec, default_policy_name, get_policy_spec
+from .registry import INNER_PARAM, PolicySpec, default_policy_name, get_policy_spec, list_policies
 from .slots import SLOTS
 
 logger = logging.getLogger(__name__)
@@ -261,18 +261,36 @@ def _inner_key_hint(slot: str, spec: PolicySpec, raw: Mapping[str, Any]) -> str:
     if inner_param is None or not unknown:
         return ""
     value = raw.get(inner_param)
+    if isinstance(value, str):
+        value = {"type": value}
     inner_name = value.get("type") if isinstance(value, Mapping) else None
-    if not isinstance(inner_name, str):
+    stated = isinstance(inner_name, str)
+    if not stated:
         inner_name = getattr(spec.params_cls, "__dataclass_fields__")[inner_param].default.type
     try:
         inner_spec = get_policy_spec("dispatch", inner_name.strip())
     except PolicyError:
         return ""
     inner_declared = {info.name for info in declared_params(inner_spec.params_cls)}
-    return " ".join(
-        f"{k!r} is a param of the inner {inner_spec.name}: use {slot}.{inner_param}.{k}."
-        for k in unknown if k in inner_declared
-    )
+    hints = []
+    for k in unknown:
+        if k in inner_declared:
+            hints.append(f"{k!r} is a param of the inner {inner_spec.name}: use {slot}.{inner_param}.{k}.")
+        elif not stated:
+            # The inner is not named here (e.g. the control's precheck, before the bundle
+            # says which inner the run has): the DEFAULT inner lacking the key says
+            # nothing, so name every registered leaf that declares it (final review MINOR-10).
+            owners = _leaves_declaring(slot, k)
+            if owners:
+                hints.append(f"{k!r} is a param of an inner solver (e.g. {', '.join(owners)}): "
+                             f"use {slot}.{inner_param}.{k}.")
+    return " ".join(hints)
+
+
+def _leaves_declaring(slot: str, key: str) -> list[str]:
+    """Sorted names of the registered non-composite ``slot`` policies that declare param ``key``."""
+    return sorted(s.name for s in list_policies(slot) if not s.is_composite
+                  and key in {info.name for info in declared_params(s.params_cls)})
 
 
 def resolve_policies_block(

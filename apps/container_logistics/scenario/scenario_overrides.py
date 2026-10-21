@@ -79,12 +79,26 @@ def apply_policy_overrides(assignment_collection, overrides):
 
 
 def _profiles_with_current(assignment_collection):
-    """``[(profile, {slot: ResolvedPolicy}), ...]`` for every dict behavior (profiles created if absent)."""
+    """``[(profile, {slot: ResolvedPolicy}), ...]`` for every dict behavior (profiles created if absent).
+
+    Each SOURCE profile's format marker is checked first (``legacy.check_policies_format``,
+    the agent id prefixed), BEFORE anything is resolved or committed: an override must
+    never manufacture the round-2 marker on a round-1 flat bundle, whose
+    ``policies.dispatch {type: X}`` meant the per-scope solver X and would otherwise
+    run as a CENTRAL X (final review MAJOR-1). Raises ``PolicyError``.
+    """
+    from apps.container_logistics.policies.dispatch import legacy
+    from apps.container_logistics.policies.framework import PolicyError
+
     out = []
-    for behavior in (assignment_collection or {}).values():
+    for agent_id, behavior in (assignment_collection or {}).items():
         if not isinstance(behavior, dict):
             continue
         profile = behavior.setdefault("profile", {})
+        try:
+            legacy.check_policies_format(profile)
+        except PolicyError as exc:
+            raise type(exc)(f"assignment agent {agent_id!r}: {exc}") from exc
         out.append((profile, current_policies_for_profile(profile)[0]))
     return out
 
@@ -96,10 +110,18 @@ def _merged(current, overrides):
 
 
 def _commit(planned):
-    """Write each ``(profile, merged)`` selection, its format marker and its mirrors (in place)."""
+    """Write each ``(profile, merged)`` selection, its format marker and its mirrors (in place).
+
+    Refuses (before writing anything) to stamp the marker onto a profile whose
+    ``policies`` block lacks it: only a legacy profile (no ``policies``, translated) or
+    a round-2 block may be committed (final review MAJOR-1; the primary check is
+    :func:`_profiles_with_current`, this is the backstop at the write).
+    """
     from apps.container_logistics.policies.dispatch import legacy
     from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_selection
 
+    for profile, _merged_sel in planned:
+        legacy.check_policies_format(profile)
     for profile, merged in planned:
         profile["policies"] = {slot: r.to_profile() for slot, r in merged.items()}
         profile[legacy.POLICIES_FORMAT_KEY] = legacy.POLICIES_FORMAT
@@ -400,7 +422,7 @@ def _set_innermost(entry, explicit, current, leaf):
     if stated is not None and stated != leaf:
         where = ".".join(["dispatch", *path, "type"])
         raise PolicyError(
-            f"--solver {leaf!r} conflicts with {where}={stated!r} from --policy-param/"
+            f"--solver {leaf!r} conflicts with {where}={stated!r} from --policy/--policy-param/"
             "--policy-overrides; --solver is shorthand for the innermost solver, pass one of them."
         )
     if not path:
@@ -517,7 +539,9 @@ def _label_value(value, stated):
         if not ks:
             return value["type"]
         return f"{value['type']}({','.join(f'{k}={_label_value(inner.get(k), sub[k])}' for k in ks)})"
-    return json.dumps(value, separators=(",", ":"), sort_keys=True)
+    # ensure_ascii=True is LOAD-BEARING (final review MINOR-3): it escapes a value's " · "
+    # (and any non-ASCII) so a param value can never forge a run-name segment separator.
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
 
 
 def apply_solver_override(assignment_collection, strategy):

@@ -169,7 +169,7 @@ def test_orsim_solver_conflicting_with_policy_override_raises(monkeypatch, capsy
     out = capsys.readouterr().out
     assert out.startswith("Policy configuration invalid; refusing to start the run:")
     assert ("--solver 'RandomAssignment' conflicts with dispatch.inner.type='GreedyNearest' from "
-            "--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, "
+            "--policy/--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, "
             "pass one of them.") in out
     with pytest.raises(PolicyError) as exc:  # a central top: --solver would replace it
         run_dispatch_overrides(_collection({}), overrides={"dispatch": {"type": "GreedyNearest"}},

@@ -243,7 +243,7 @@ Schema additions:
 
 ### 3.3 CLI (`openride run`, `scenario new/edit`, `run-simulation`, `validate-run-policies`)
 
-- `--policy dispatch=PooledMarket` sets the top type. A type change resets params to that type's defaults.
+- `--policy dispatch=PooledMarket` sets the top type. A type change resets params to the new type's defaults, except that a new decomposition keeps the current per-scope solver (the current `inner`, or the current top when that is a leaf) as its `inner`, with that solver's params, unless the request names the inner's type; every other param resets. (Reworded by the final review fixes, MINOR-8; see Deviations.)
 - `--policy-param dispatch.inner=RandomAssignment`: a string assigned to a ref sets its type and resets its params.
 - `--policy-param dispatch.inner.candidates=spatial` and `--policy-param dispatch.offer.keep_below_km=3`.
 - Parsing: the slot is the longest prefix that matches a known slot name. Every non-final path segment is a ref.
@@ -1795,3 +1795,230 @@ phase held level (one `gc.collect()` before each sample) the same pooled case is
 layers on the pooled path, which builds per-company contexts, plans and id indexes. The
 earlier "no waiver" entry under "Review fixes after C3 (runtime)" measured against
 ba74fbe (round-2 C2), not against the spec's 277e67b, and is superseded by this one.
+
+### Final review fixes (runtime)
+
+1. **MAJOR-4: the partition scope's sample RNG is a required argument.**
+   - `scopes.partition_context` takes `sample_rng` as a required keyword with no
+     default. It was hardcoded to the `random` module, so no composite built on the
+     shipped helpers could pass `determinism.no_module_rng` without declaring
+     `module_rng`. `None` still means "draw from this context's `rng`", as on the tick
+     scope, but a caller has to pass it explicitly.
+   - `Partitioned._group_context` passes the `random` module, with a comment giving the
+     reason: the pre-v2 inline `random.sample` and the golden's module-RNG lock. Its
+     `module_rng` declaration now covers a draw its own code names. The golden still
+     passes, 94/94.
+   - A third-party composite passes `sample_rng=ctx.rng` and calls
+     `inner.set_rng(ctx.rng)` once per tick, which is the pattern `PooledMarket` uses.
+     It then passes the battery's `no_module_rng` with no declaration.
+   - The `rng=` half of the review's suggestion was not added. The context's `rng` is
+     still `policy.rng`, and the existing `set_rng` injection already lets a composite
+     choose it. A second channel for the same value would only add a way for the two to
+     disagree.
+   - The composite how-to (`docs/policy_authoring.md`) is not edited here because
+     another agent owns it. It should say: pass `sample_rng=ctx.rng` and inject
+     `ctx.rng` into the inner.
+2. **MAJOR-5 / FIX-12: PooledMarket company solves go through `ctx.execute`.** This
+   corrects C3 deviation 8. The final review calls it "C3 deviation 9"; it is item 8
+   under "### C3". It also corrects the "PooledMarket none (pre-v2)" line in "Review
+   fixes after C3 (runtime)" #5.
+   - `compose.ScopeDecider.run` now calls
+     `company_ctx.execute(decide_in_scope, self.policy, self.node, company_ctx)`. The
+     company context inherits `execute` from the market's context.
+   - `DispatchRunner._decide` still does not wrap a composite, so no offload is nested.
+   - The "byte identity keeps it direct" argument for deviation 8 was wrong:
+     - With the flag off, `execute` is `direct_execute`, a plain call. Every golden case
+       runs this way.
+     - With the flag on, `tpool.execute` is synchronous, so the order of company solves
+       and every RNG draw are unchanged.
+     - The golden still passes, 94/94.
+   - With `solve_in_thread` on, a heavy inner (NetworkFlow) now leaves the eventlet hub
+     for each company solve, up to `max_rounds` × companies times per tick, as
+     `Partitioned` does per group.
+   - Docstrings in `pooled_market.py`, `compose.py` and the `runner.py` comment are
+     updated.
+3. **Tests.**
+   - New: `tests/test_policy_final_review_runtime.py`, 4 tests:
+     - The signature of `partition_context` has no `sample_rng` default.
+     - A per-group composite built on `compose`/`scopes` with the shipped
+       `RandomAssignment` inner. It passes the battery's own `_no_module_rng` with no
+       `module_rng` declaration when it passes `ctx.rng`, and fails it on `scale` when
+       it passes the module.
+     - PooledMarket on golden tick A with a counting stub tpool, for inner GreedyNearest
+       and for RandomAssignment:
+       - one offload per company solve (11 and 10 solves), each at depth 1, and none
+         when the flag is off;
+       - pairs, share tags and the `random` state after the tick are identical with the
+         flag on and off.
+   - Edits this change forced:
+     - `test_policy_round2_c3_review_fixes.py::test_solve_in_thread_reaches_every_top_level_solver_once_per_decision`:
+       the expected PooledMarket count changes from 0 to 11, and its docstring is
+       updated.
+     - `sample_rng=random` is added to every test call of `scopes.partition_context`,
+       which keeps their previous behaviour. The affected files are
+       `test_random_spatial_candidates.py`, `test_dispatch_context_helpers.py` (3
+       calls), `test_dispatch_profile_resolution.py`, `test_policy_round2_c3_fixes.py`,
+       `test_policy_round2_c3_review_fixes.py` and `test_dispatch_plan_and_invariants.py`.
+   - No `policies/testing/*` call site needed a change.
+   - Mutation checks, each restored and confirmed by sha1:
+     - a default on `sample_rng` fails the signature test;
+     - `partition_context` ignoring its argument and sampling from the module fails the
+       decision-RNG case;
+     - the direct company solve fails both pooled cases and the c3 PooledMarket case
+       (0 offloads);
+     - wrapping composites in `_decide` fails both pooled cases (12 and 11 offloads,
+       depth 2) and the c3 Partitioned case (3) and PooledMarket case (12).
+
+### Final review fixes (selection)
+
+1. **MAJOR-1: an override can no longer create the `policies_format` marker.**
+   - `scenario_overrides._profiles_with_current` runs `legacy.check_policies_format` on
+     every source profile before it resolves anything. Every override path reaches it:
+     `run_dispatch_overrides` (`ORSIM_POLICY_OVERRIDES`, `ORSIM_PLANNER_TOPOLOGY`, the
+     market variables, `ORSIM_SOLVER`) and `apply_policy_overrides`. The sim main and the
+     control-plane dry run (`validate-run-policies`) both go through
+     `run_dispatch_overrides`.
+   - The error has the agent id as prefix, the same shape as
+     `assert_assignment_profiles_resolvable`.
+   - `_commit` is a backstop. It runs the same check on every planned profile before it
+     writes any of them, so it never stamps marker 2 onto a `policies` block that had no
+     marker.
+   - The review's `fin/marker_bypass.py` now refuses all five cases: no override,
+     `--solver GreedyNearest`, `--solver RandomAssignment`,
+     `--policy-param dispatch.dual_cycle_bonus_km=0` and `--policy dispatch=PooledMarket`.
+   - Legacy profiles (no `policies`) and marked round-2 profiles still accept overrides.
+   - **Correction to the `572f4e4` commit message.** It says the check now covers
+     "agent-side" callers. No agent-side caller exists: `AssignmentApp` never runs
+     `check_policies_format`. The callers are run-start only: the sim main
+     (`_assert_policies_resolvable_or_exit` and, now, the override application) and the
+     control dry run. No agent-side caller was added, because `assignment/app.py` belongs
+     to the runtime fixes. Because the sim main gates every run, a refused bundle never
+     reaches an agent.
+2. **MINOR-2: a central top and a per-scope `--solver` of the same name still give the same
+   run-name segment. This is documented, not changed.**
+   - `--policy dispatch=GreedyNearest` and `--solver GreedyNearest` both give
+     ` · GreedyNearest`.
+   - The stamp tells them apart: label `GreedyNearest`/central versus
+     `Partitioned/GreedyNearest`/per_group. Every round-2 run carries the stamp, and the
+     frontend reads the stamp first.
+   - No legacy input can produce a leaf top. A prefix keyed on the resolved top could
+     therefore never change a legacy name; the 24/24 legacy-name harness would stay
+     identical.
+   - It is not implemented because it changes the run-name format the frontend parses.
+     `lib/runNameMeta.ts` reads bare names, `Name(k=v)` and `A/B` labels, and would need
+     to learn the prefix in the other repo. Doing that inside this merge buys little
+     while the stamp already tells the two apart.
+   - The follow-up format, if the coordinator wants it: when the RESOLVED top is a leaf (no
+     `inner_param`) and a segment is emitted, write it as ` · central:<Leaf>` or
+     ` · central:<Leaf>(k=v,...)`. Key it on the resolved top, not the request, so a
+     central bundle plus `--solver Y` gives ` · central:Y`. The `:` is free: MINOR-3 below
+     keeps it out of policy names.
+3. **MINOR-3: policy names are restricted at registration, and label values are escaped
+   on purpose.**
+   - `registry.check_policy_name` is called from `_check_metadata` for every `@policy`. It
+     requires `POLICY_NAME_PATTERN = [A-Za-z_][A-Za-z0-9_.-]*`, the frontend's
+     `NODE_NAME` grammar. Any other name raises `PolicyRegistrationError`.
+   - The pattern rules out every run-name separator (` · `, `/`, `(`, `)`), and also `=`,
+     `,`, `:`, whitespace and non-ASCII.
+     - `=` and `,` are refused because a name sits inside `Name(k=v,...)` labels next to
+       them, and the frontend's split is not specified for them.
+     - `:` is kept free for prefixes such as `lifecycle:` (and a possible `central:`).
+     - All four built-in names match the pattern.
+   - **Component names are NOT checked.** Component classes register by being put into
+     plain module dicts (`OFFER_REGISTRY` and the like) that the framework reads live
+     through `components.register_component_kind`. There is no registration call to hook,
+     and `components.py` and those modules are outside this change's file set.
+     `check_policy_name` is public, so the follow-up is to call it on each registry name
+     in `register_component_kind` and in `_component_target`.
+   - `scenario_overrides._label_value` now passes `ensure_ascii=True` explicitly, with a
+     comment saying it is load-bearing. A test pins that ` · `, `/`, `,)`, `"` and `ü` in a
+     param value come out JSON-escaped. For example `a · b` becomes `"a · b"`, so
+     the segment never contains a raw ` · ` and stays ASCII.
+4. **MINOR-4: `--capture-dispatch every=N` now counts dispatch ticks.**
+   - `CaptureRecorder` counts the whole ticks it sees (`ticks_seen`). The first tick is
+     always captured, then every N-th one. `CaptureSettings.wants(tick_index)` replaces
+     `wants(time_step)`.
+   - This is the less surprising of the two fixes. The field (`every_n_ticks`) and the help
+     ("every N-th tick") already said ticks. On `consortium_collab_7d` (one tick every 28
+     steps) the old step modulus made `every=4` capture every tick and `every=10` every
+     5th tick.
+   - The help in `openride/run_group.py` and `openride_control/command.py` now says "every
+     N-th dispatch tick (not sim step)".
+   - Caveat: a runner rebuilt mid-run (`AssignmentApp` rebuilds it when the profile is
+     patched) starts counting again from zero. The `max_files` cap still counts the files
+     already on disk.
+   - `test_dispatch_capture_and_bench.py::test_capture_writes_fixture_when_enabled` now
+     expects `step_3`/`step_6` (ticks 0 and 2), not the step-modulus `step_4`/`step_6`.
+5. **MINOR-5: the compile warning reads the resolved selection.**
+   - `Preprocessor._warn_pools_without_pooled_dispatch` runs after `_normalize_policies`.
+     It warns only when the active structure declares pools AND the resolved
+     `policies.dispatch` top (authored, or translated from `planner.topology`) is
+     `Partitioned`.
+   - An authored `PooledMarket` spec with no `planner` is no longer warned.
+   - The wording is in `policies.dispatch` terms. The advice depends on where the
+     selection came from:
+     - an authored block is told to set `policies.dispatch.type='PooledMarket'`;
+     - a legacy spec keeps the `planner.topology` / `ORSIM_PLANNER_TOPOLOGY` advice,
+       plus `--policy dispatch=PooledMarket`.
+   - The two existing tests in `test_assemble_spec_key_registry.py` now look for the new
+     needle, "decomposition (PooledMarket) is OFF".
+6. **MINOR-6: compile writes only authored `policies` slots into `spec.json`.**
+   - `frontend_scenario_spec._spec_from_recipe` drops every `policies` slot that the input
+     spec did not author before `write_spec`. A legacy spec keeps its legacy keys
+     (`solver`, `planner`) and no derived block.
+   - The bundle's `$.recipe` is unchanged and still carries the full block, so recompiling
+     from the bundle is unaffected.
+   - Gate, through the real `compile_scenario` in a tmp `ORSIM_SCENARIOS_DIR`, all 16
+     shipped specs:
+     - the written `spec.json` has no `policies` (16/16);
+     - the profile is `Partitioned{inner: GreedyNearest}` with marker 2 (16/16);
+     - compile, recompile from the written `spec.json`, and compile from `$.recipe` give
+       identical truck, order, facility and assignment agents (16/16).
+   - The written `spec.json` still differs from the git-tracked file for 13 of the 16 specs.
+     The differences are the earlier recipe normalisation: `cooperation`, `hour_axis`,
+     `referenceTime`, `facilityRules*` and `planner` defaults, and on
+     `agent_pipeline_smoke` the `matrix`->`historical` alias and `source`. None of them
+     is `policies`, and they are not from this round. `collab_smoke_12t`,
+     `consortium_baseline_7d` and `consortium_collab_7d` are written back unchanged.
+   - This also removes the second consequence the review raised: a spec compiled on
+     round-1 code carrying a flat leaf that later reads as authored central. No new
+     compile writes a derived block.
+7. **MINOR-8: §3.3 reworded in place.** The sentence "A type change resets params to that
+   type's defaults" now matches `resolve._carried_inner`. A new decomposition keeps the
+   current per-scope solver as its `inner`, with its params, unless the request names the
+   inner's type. The current per-scope solver is the current `inner`, or the current top
+   when that is a leaf. Every other param resets. No code changed.
+8. **MINOR-9: message 12 names `--policy` too.** It now reads `... from
+   --policy/--policy-param/--policy-overrides; ...`. The conflicting type can come from
+   `--policy dispatch=X`. `openride/scenario_cmd._refuse_solver_conflict` already said
+   `--policy/--policy-param`. The exact-text pins in `test_policy_run_overrides.py` and
+   `test_legacy_run_env_overrides.py` are updated. §3.7's message 12 text is not edited
+   (this section is append-only); the code is the reference.
+9. **MINOR-10: message 5's hint survives an explicitly named top.**
+   - The case is `--policy dispatch=Partitioned --policy-param dispatch.dual_cycle_bonus_km=0`.
+     The control precheck validates it before any bundle is read, so it checks against
+     the DEFAULT inner, RandomAssignment, which does not declare the key.
+   - When the inner's type is not stated and the default inner lacks the key,
+     `resolve._inner_key_hint` now names every registered leaf that declares it:
+     `'dual_cycle_bonus_km' is a param of an inner solver (e.g. GreedyNearest): use
+     dispatch.inner.dual_cycle_bonus_km.`
+   - When the request does state an inner that lacks the key, there is still no hint,
+     because one would mislead. When the stated or default inner declares the key, the
+     spec's message 5 wording is unchanged.
+10. **Tests.**
+    - New: `tests/test_policy_final_review_selection.py`, 26 tests (MAJOR-1 ×8, MINOR-9,
+      MINOR-10, MINOR-3 ×13, MINOR-4, MINOR-6 ×2).
+    - New: `test_assemble_spec_key_registry.py::test_pools_warning_reads_the_resolved_dispatch_selection`
+      (MINOR-5).
+    - Mutation checks, each restored with `cmp`:
+      - without the `_profiles_with_current` check, 5 MAJOR-1 cases fail;
+      - without the `_commit` backstop, its test fails;
+      - without both, the control dry run accepts;
+      - `ensure_ascii=False` fails the escape test;
+      - without `check_policy_name`, 10/11 name cases fail (the empty name was already
+        refused);
+      - the step modulus in `before_decide` makes `every=4` capture all 9 ticks;
+      - the old unconditional warning fails the MINOR-5 test (and one sibling);
+      - writing the bare recipe fails the MINOR-6 legacy test;
+      - the old message-12 wording fails its test;
+      - without the unstated-inner hint branch, the MINOR-10 test fails.

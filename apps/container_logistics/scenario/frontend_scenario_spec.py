@@ -1805,6 +1805,29 @@ def _stage_external_sources(payload: dict[str, Any], tmp_dir: str) -> None:
     pol["source"] = os.path.join("inputs", dst_name)  # folder-relative → portable
 
 
+def _spec_from_recipe(recipe: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """The ``spec.json`` to persist: the recipe, minus every ``policies`` slot the spec did not author.
+
+    The recipe's ``policies`` block also carries the LEGACY translation of a spec that
+    never wrote one (``solver`` + ``planner.topology`` -> ``Partitioned{inner: X}``);
+    echoing that derived block into ``spec.json`` dirtied every git-tracked legacy
+    spec on its first compile, and a spec written by an older translation would then
+    be read as authored (final review MINOR-6). So only the slots ``payload`` authored
+    are written; a legacy spec keeps its legacy keys (``solver``, ``planner``), from
+    which the next compile translates the same selection. The bundle's ``$.recipe``
+    is untouched (it stays the self-contained round-trip source).
+    """
+    authored = payload.get("policies") if isinstance(payload.get("policies"), dict) else {}
+    block = recipe.get("policies")
+    if not isinstance(block, dict):
+        return recipe
+    kept = {slot: entry for slot, entry in block.items() if slot in authored}
+    out = {k: v for k, v in recipe.items() if k != "policies"}
+    if kept:
+        out["policies"] = kept
+    return out
+
+
 def _compile_into_folder(
     datahub_dir: str,
     domain: str,
@@ -1867,7 +1890,7 @@ def _compile_into_folder(
         # source is self-contained (matrix/curve inlined) and round-trips cleanly
         # through the Preprocessor on the next recompile.
         recipe = bundle.get("recipe") if isinstance(bundle, dict) else None
-        write_spec(tmp, recipe if isinstance(recipe, dict) else payload)
+        write_spec(tmp, _spec_from_recipe(recipe, payload) if isinstance(recipe, dict) else payload)
 
         if not bundle_complete(tmp):
             raise RuntimeError("Scenario generation incomplete")

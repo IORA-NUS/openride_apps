@@ -155,11 +155,11 @@ def test_capture_writes_fixture_when_enabled(tmp_path):
             "policy_capture": {"dir": str(tmp_path / "cap"), "every_n_ticks": 2, "max_files": 2}}
     runner = build_runner_for_app(build_runner_for_policy("GreedyNearest").policy, prof)
     fixture = fx.three_company_chain()
-    for step in (3, 4, 6, 8):  # 3 is off-cadence; 8 is past max_files
+    for step in (3, 4, 6, 8):  # ticks 0..3: every 2nd TICK is 3 and 6; 8 would be past max_files
         fixture = fx.Fixture(**{**fixture.__dict__, "time_step": step})
         runner.run(fixture.context(runner))
     names = sorted(os.listdir(tmp_path / "cap"))
-    assert names == ["step_4.json.gz", "step_6.json.gz"]
+    assert names == ["step_3.json.gz", "step_6.json.gz"]
     raw = (tmp_path / "cap" / names[0]).read_bytes()
     assert raw[4:8] == b"\x00\x00\x00\x00", "gzip mtime must be 0 (byte-stable files)"
     doc = capture.read_fixture(str(tmp_path / "cap" / names[0]))
@@ -167,7 +167,7 @@ def test_capture_writes_fixture_when_enabled(tmp_path):
                         "module_rng_state", "selection", "candidate_settings", "world", "trucks", "orders",
                         "live_heads", "rebate_aware"}
     assert doc["format"] == "openride.dispatch_context/2"
-    assert doc["time_step"] == 4 and doc["tick_seed"] == fx.Fixture(**{**fixture.__dict__, "time_step": 4}).tick_seed
+    assert doc["time_step"] == 3 and doc["tick_seed"] == fx.Fixture(**{**fixture.__dict__, "time_step": 3}).tick_seed
     assert doc["selection"]["label"] == "Partitioned/GreedyNearest"
     assert doc["selection"]["params"]["inner"] == {
         "type": "GreedyNearest", "version": "1",

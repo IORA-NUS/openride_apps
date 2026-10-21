@@ -206,7 +206,7 @@ def register(sub) -> None:
                         "dispatch.inner.dual_cycle_bonus_km=0, dispatch.offer=OfferSpare); VALUE is "
                         "JSON when it parses")
     p.add_argument("--capture-dispatch", dest="capture_dispatch", metavar="every=N,max=M",
-                   help="Capture dispatch contexts every N-th tick (at most M files) under "
+                   help="Capture dispatch contexts every N-th dispatch tick (not sim step; at most M files) under "
                         "<datahub>/fixtures/dispatch/<run_id>, for openride policy bench --fixtures")
     p.add_argument("--structure", help="Cooperation structure id override (declared in the scenario's spec.json)")
     p.add_argument("--sharing-policy", dest="sharing_policy",

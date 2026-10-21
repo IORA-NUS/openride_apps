@@ -25,6 +25,7 @@ import importlib
 import importlib.util
 import logging
 import pkgutil
+import re
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -241,10 +242,30 @@ def _check_slot_registrable(slot: str, where: str) -> None:
         )
 
 
+#: What a policy NAME may be (final review MINOR-3): the frontend's ``NODE_NAME``
+#: grammar (``lib/runNameMeta.ts``). A name is a run-name segment and a node of a
+#: ``A/B`` label, so the separators ``" · "``, ``/``, ``(``, ``)``, ``=`` and ``,``
+#: (and any whitespace) would make the segment unparseable; ``:`` is kept free for a
+#: prefix such as ``lifecycle:``.
+POLICY_NAME_PATTERN = r"[A-Za-z_][A-Za-z0-9_.-]*"
+_POLICY_NAME_RE = re.compile(POLICY_NAME_PATTERN)
+
+
+def check_policy_name(name: object, where: str) -> None:
+    """Raise ``PolicyRegistrationError`` unless ``name`` matches :data:`POLICY_NAME_PATTERN`."""
+    if not isinstance(name, str) or not _POLICY_NAME_RE.fullmatch(name):
+        raise PolicyRegistrationError(
+            f"{where}: name {name!r} must match {POLICY_NAME_PATTERN} (letters, digits, '_', "
+            "'.', '-'; no spaces): a policy name is a run-name segment and a node of the "
+            "'A/B' selection label, so ' · ', '/', '(', ')', '=' and ',' would break both."
+        )
+
+
 def _check_metadata(where, name, version, description, requires, order_sensitive, perf_budget_ms) -> None:
     for label, value in (("name", name), ("version", version), ("description", description)):
         if not isinstance(value, str) or not value.strip():
             raise PolicyRegistrationError(f"{where}: {label} must be a non-empty string (got {value!r}).")
+    check_policy_name(name, where)
     if isinstance(requires, str) or not all(isinstance(r, str) and r for r in requires):
         raise PolicyRegistrationError(
             f"{where}: requires must be a sequence of module names, e.g. ('ortools',) (got {requires!r})."

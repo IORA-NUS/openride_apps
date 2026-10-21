@@ -173,7 +173,7 @@ def test_env_conflicts_are_loud():
                                overrides={"dispatch": {"params": {"inner": {"type": "GreedyNearest"}}}})
     assert str(exc.value) == (
         "--solver 'RandomAssignment' conflicts with dispatch.inner.type='GreedyNearest' from "
-        "--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, pass one of them.")
+        "--policy/--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, pass one of them.")
     with pytest.raises(PolicyError, match=r"ORSIM_OFFER_POLICY='OfferSpare' conflicts with dispatch.offer.type='OfferAll'"):
         run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="pooled", offer="OfferSpare",
                                overrides={"dispatch": {"params": {"offer": {"type": "OfferAll"}}}})

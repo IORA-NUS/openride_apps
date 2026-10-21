@@ -26,8 +26,9 @@ Surfaces:
   default) means ``None`` and the runner gets no hook at all.
 - :class:`CaptureRecorder` is the runner hook. On a capture tick it snapshots the
   module RNG before ``decide`` (``getstate`` consumes nothing) and writes the fixture
-  after ``decide`` and before the invariants, honouring ``every_n_ticks`` and
-  ``max_files``. Sub-scope calls (``compose.decide_in_scope``) are ignored: the whole
+  after ``decide`` and before the invariants, honouring ``every_n_ticks`` (every N-th
+  whole dispatch TICK this recorder sees, counted from its first, which is always
+  captured -- NOT every N-th sim step; final review MINOR-4) and ``max_files``. Sub-scope calls (``compose.decide_in_scope``) are ignored: the whole
   tick replays them. A write failure is logged (``DISPATCH CAPTURE FAILED``) and
   never raised.
 - :func:`parse_capture_spec` parses the ``every=N,max=M`` text that
@@ -89,7 +90,12 @@ _SPEC_KEYS = {"every": "every_n_ticks", "max": "max_files"}
 
 @dataclass(frozen=True)
 class CaptureSettings:
-    """Where and how often to capture: every ``every_n_ticks``-th step, at most ``max_files``."""
+    """Where and how often to capture: every ``every_n_ticks``-th dispatch tick, at most ``max_files``.
+
+    Ticks, not sim steps: an assignment agent ticks every ``steps_per_action`` steps
+    (28 on ``consortium_collab_7d``), so a step modulus would capture every
+    ``lcm(N, cadence) / cadence``-th tick (``every=4`` there: every tick).
+    """
 
     dir: str
     every_n_ticks: int
@@ -125,9 +131,9 @@ class CaptureSettings:
         planner = (prof or {}).get("planner") or {}
         return bool(planner.get("rebate_aware", False)) if isinstance(planner, Mapping) else False
 
-    def wants(self, time_step: int) -> bool:
-        """True when ``time_step`` is a capture tick."""
-        return int(time_step) % self.every_n_ticks == 0
+    def wants(self, tick_index: int) -> bool:
+        """True when the ``tick_index``-th dispatch tick (0-based) is a capture tick."""
+        return int(tick_index) % self.every_n_ticks == 0
 
 
 def _positive_int(value: Any, key: str) -> int:
@@ -267,8 +273,10 @@ class CaptureRecorder:
 
     Records whole ticks only (a sub-scope call is ignored). Writes at most
     ``settings.max_files`` files (counting files already in the directory) and only
-    on ``settings.wants(time_step)`` ticks. ``resolved`` is the bound selection.
-    Never raises.
+    on ``settings.wants(tick_index)`` ticks, ``tick_index`` counting the whole ticks
+    this recorder has seen (0 = the first, always captured). A rebuilt runner (the
+    assignment app rebuilds it when its profile is patched) starts counting afresh.
+    ``resolved`` is the bound selection. Never raises.
     """
 
     def __init__(self, settings: CaptureSettings, *, resolved: Any, rebate_aware: bool = False) -> None:
@@ -277,6 +285,7 @@ class CaptureRecorder:
         self.rebate_aware = bool(rebate_aware)
         self.written: int | None = None
         self._pending: tuple[int, list[Any]] | None = None
+        self.ticks_seen = 0
 
     def _room_left(self) -> bool:
         if self.written is None:
@@ -287,16 +296,17 @@ class CaptureRecorder:
             self.written = sum(1 for n in names if n.startswith("step_") and n.endswith(".json.gz"))
         return self.written < self.settings.max_files
 
-    def _wants(self, ctx: DispatchContext) -> bool:
-        return ctx.scope.kind == "tick" and self.settings.wants(ctx.clock.time_step) and self._room_left()
+    def _wants(self, tick_index: int) -> bool:
+        return self.settings.wants(tick_index) and self._room_left()
 
     def before_decide(self, ctx: DispatchContext) -> None:
         """Snapshot the module RNG for ``ctx`` when this tick will be captured."""
         if ctx.scope.kind != "tick":
             return
         self._pending = None
+        tick_index, self.ticks_seen = self.ticks_seen, self.ticks_seen + 1
         try:
-            if self._wants(ctx):
+            if self._wants(tick_index):
                 self._pending = (id(ctx), _module_state())
         except Exception:  # noqa: BLE001 - capture must never break a tick
             logger.exception("DISPATCH CAPTURE FAILED: RNG snapshot at step %d (celery journal)",
