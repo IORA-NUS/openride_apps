@@ -81,6 +81,21 @@ def _declares(spec: PolicySpec, key: str) -> bool:
     return key in spec.params_cls.__dataclass_fields__
 
 
+def _use_spatial_matching(prof: Mapping[str, Any]) -> bool:
+    """The legacy ``use_spatial_matching`` flag, strictly boolean (absent means true).
+
+    The pre-v2 code read it with ``bool(...)``; a non-boolean here is a malformed
+    profile, so it raises instead of silently picking an arm (plan §2.6).
+    """
+    value = prof.get("use_spatial_matching", True)
+    if not isinstance(value, bool):
+        raise PolicyError(
+            f"assignment profile use_spatial_matching must be true or false (got {value!r}, "
+            f"a {type(value).__name__})."
+        )
+    return value
+
+
 def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
     """Translate the legacy dispatch keys into a ``{"type", "timing", "params"}`` entry.
 
@@ -98,7 +113,7 @@ def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
     dropped = sorted(k for k in raw if not _declares(spec, k))
     if dropped:
         logger.debug("legacy solver_params keys %s are not %s params; not passed to it", dropped, name)
-    if prof.get("use_spatial_matching", True) is False and _declares(spec, "candidates"):
+    if not _use_spatial_matching(prof) and _declares(spec, "candidates"):
         params["candidates"] = "sampled"
     return {"type": name, "timing": "online", "params": params}
 
@@ -142,11 +157,21 @@ def _resolve_entry(entry: Mapping[str, Any], *, source: str, where: str) -> Reso
     return ResolvedDispatch(
         name=spec.name,
         version=spec.version,
-        timing=entry.get("timing") or "online",
+        timing=_checked_timing(entry.get("timing", "online"), where),
         params=params,
         candidate_kind=candidate_kind,
         source=source,
     )
+
+
+def _checked_timing(timing: Any, where: str) -> str:
+    """A declared dispatch timing; executability is checked where it runs (P4 adds 'plan')."""
+    allowed = SLOTS["dispatch"].timings
+    if not isinstance(timing, str) or timing not in allowed:
+        raise PolicyTimingError(
+            f"{where}.timing={timing!r} is not a dispatch timing. Allowed: {', '.join(allowed)}."
+        )
+    return timing
 
 
 def build_dispatch_policy(resolved: ResolvedDispatch) -> Any:
@@ -174,7 +199,7 @@ def resolve_for_instance(policy: Any, prof: Mapping[str, Any]) -> ResolvedDispat
             )
         return resolved
     _refuse_unregistered_subclass(type(policy))
-    spatial = bool(prof.get("use_spatial_matching", True)) and hasattr(policy, "solve_pairs")
+    spatial = _use_spatial_matching(prof) and hasattr(policy, "solve_pairs")
     return ResolvedDispatch(
         name=type(policy).__name__,
         version="unregistered",
