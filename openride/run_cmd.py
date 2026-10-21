@@ -70,7 +70,8 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
     if args.scenario not in valid_slugs:
         _log(f"error: unknown scenario slug: {args.scenario}")
         return EXIT_BAD_ARGS
-    # --solver X is sugar for --policy dispatch=X. Validated against the scenario's
+    # --solver X is the innermost per-scope solver (ORSIM_SOLVER), shipped next to the
+    # --policy/--policy-param overrides. Both are validated against the scenario's
     # compiled assignment profile before anything spawns; None = scenario default.
     from . import control
 
@@ -87,11 +88,12 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
     except control.ControlError as exc:
         _log(f"error: {exc}")
         return EXIT_BAD_ARGS
-    solver = (policy_overrides.get("dispatch") or {}).get("type") or args.solver
+    solver = args.solver
     headless = not args.no_headless
 
     runner = SimulationRunner(
         scenario=args.scenario,
+        solver=solver,
         policy_overrides=policy_overrides,
         capture_dispatch=capture_dispatch,
         run_name=args.run_name,

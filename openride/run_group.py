@@ -124,8 +124,8 @@ def _cmd_run(args) -> int:
     if solver is None and not args.scenario and not getattr(args, "policy", None):
         solver = _pick_solver()
 
-    # --solver X is sugar for --policy dispatch=X; validated against the scenario now,
-    # not after the sim has spawned.
+    # --solver X is the innermost per-scope solver (ORSIM_SOLVER, shipped separately);
+    # validated with the policy flags against the scenario now, not after the sim has spawned.
     try:
         policy_overrides = control.validate_run_policies(
             scenario, solver, getattr(args, "policy", None), getattr(args, "policy_param", None)
@@ -133,7 +133,6 @@ def _cmd_run(args) -> int:
     except control.ControlError as exc:
         console.print(f"[red]Invalid policy override:[/] {exc}")
         return 2
-    solver = (policy_overrides.get("dispatch") or {}).get("type") or solver
     try:
         capture_dispatch = control.validate_capture_dispatch(getattr(args, "capture_dispatch", None))
     except control.ControlError as exc:
@@ -142,7 +141,7 @@ def _cmd_run(args) -> int:
 
     headless = not args.no_headless
     runner = SimulationRunner(
-        scenario=scenario, run_name=args.run_name, headless=headless,
+        scenario=scenario, run_name=args.run_name, headless=headless, solver=solver,
         cooperation_structure=getattr(args, "structure", None),
         sharing_policy=getattr(args, "sharing_policy", None),
         policy_overrides=policy_overrides,
@@ -195,15 +194,17 @@ def register(sub) -> None:
     p.add_argument("scenario_pos", nargs="?", metavar="SCENARIO", help="Scenario slug to run")
     p.add_argument("--scenario", help="Scenario slug (alternative to the positional)")
     p.add_argument("--solver",
-                   help="Assignment solver override: a registered dispatch policy name, validated "
-                        "by the engine; list: openride policy list dispatch")
+                   help="Innermost per-scope solver override: the inner solver of the selected "
+                        "decomposition (e.g. Partitioned/<solver>), validated by the engine; "
+                        "list: openride solver list")
     p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME",
-                   help="Per-run policy override, repeatable (e.g. dispatch=GreedyNearest); "
-                        "--solver X is the same as --policy dispatch=X")
+                   help="Per-run policy override, repeatable (e.g. dispatch=PooledMarket keeps the "
+                        "per-scope solver; a leaf such as dispatch=GreedyNearest is a CENTRAL solver)")
     p.add_argument("--policy-param", dest="policy_param", action="append", default=[],
-                   metavar="SLOT.KEY=VALUE",
-                   help="Per-run policy param override, repeatable (e.g. "
-                        "dispatch.dual_cycle_bonus_km=0); VALUE is JSON when it parses")
+                   metavar="SLOT.PATH=VALUE",
+                   help="Per-run policy param override, repeatable, nested through refs (e.g. "
+                        "dispatch.inner.dual_cycle_bonus_km=0, dispatch.offer=OfferSpare); VALUE is "
+                        "JSON when it parses")
     p.add_argument("--capture-dispatch", dest="capture_dispatch", metavar="every=N,max=M",
                    help="Capture dispatch contexts every N-th tick (at most M files) under "
                         "<datahub>/fixtures/dispatch/<run_id>, for openride policy bench --fixtures")

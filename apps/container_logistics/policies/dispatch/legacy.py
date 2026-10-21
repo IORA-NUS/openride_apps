@@ -14,6 +14,12 @@ echoes compile writes back into those keys. Plan
   tolerance rule).
 - :func:`wrap_legacy_leaf` wraps a leaf entry in ``Partitioned`` or ``PooledMarket``.
 - :func:`topology_echo` / :func:`market_echo` are the compile mirrors.
+- :func:`check_authored_planner` refuses an authored ``planner.topology`` /
+  ``planner.market`` that contradicts an authored ``policies.dispatch`` (messages 7, 8).
+- :data:`POLICIES_FORMAT` / :func:`check_policies_format`: the bundle-format marker a
+  round-2 compile (and per-run override) writes next to ``profile.policies``, so a
+  round-1 flat block (whose ``{type: GreedyNearest}`` meant the per-scope solver, and
+  now means a CENTRAL one) is refused at run start instead of silently changing arm.
 
 The LEAF entry handed to :func:`wrap_legacy_leaf` is already translated by the caller
 (``dispatch/profile.legacy_dispatch_from_profile`` for a bundle profile); its name and
@@ -48,7 +54,17 @@ __all__ = [
     "wrap_legacy_leaf",
     "topology_echo",
     "market_echo",
+    "check_authored_planner",
+    "POLICIES_FORMAT",
+    "POLICIES_FORMAT_KEY",
+    "check_policies_format",
 ]
+
+#: ``profile[POLICIES_FORMAT_KEY]``: the format of the ``profile.policies`` block next to
+#: it. 2 = round 2 (a dispatch selection is a tree; a flat leaf top is central). Absent
+#: next to ``policies``: a round-1 compile (refused, :func:`check_policies_format`).
+POLICIES_FORMAT_KEY = "policies_format"
+POLICIES_FORMAT = 2
 
 #: The per-scope solver a legacy selection with no ``solver``/``strategy`` runs: the
 #: pre-v2 default. It is the default ``inner`` of the slot default ``Partitioned``.
@@ -244,3 +260,94 @@ def market_echo(params: Any) -> dict[str, Any]:
         }
     out["max_rounds"] = values["max_rounds"]
     return out
+
+
+def check_authored_planner(planner: Any, dispatch: Mapping[str, Any]) -> None:
+    """Refuse a legacy ``planner`` spelling that contradicts an authored ``policies.dispatch``.
+
+    ``planner`` is the RAW authored block (never the compile-normalised one, which
+    fills a default topology); ``dispatch`` the authored ``policies.dispatch`` entry.
+    Round-2 §3.6:
+
+    - an authored ``planner.topology`` (a non-empty value) must equal the echo of the
+      top type (``Partitioned`` <-> ``partitioned``, ``PooledMarket`` <-> ``pooled`` or
+      ``two-stage``); next to any other top every value is an error (message 7);
+    - an authored ``planner.market`` next to ``PooledMarket`` must resolve to the same
+      ``offer``/``claim``/``arbitration``/``max_rounds`` as its params, defaults filled
+      on both sides (message 8); next to any other top it is inert pooled-arm
+      configuration (read only by ``ORSIM_PLANNER_TOPOLOGY``) and is not read.
+
+    Params that do not resolve on the ``policies`` side are left for the resolver to
+    name. Raises ``PolicyError`` (and the errors of :func:`legacy_market_params` for a
+    malformed authored ``planner.market`` next to ``PooledMarket``).
+    """
+    if not isinstance(planner, Mapping) or not isinstance(dispatch, Mapping):
+        return
+    top = dispatch.get("type")
+    top = top.strip() if isinstance(top, str) else top
+    topology = planner.get("topology")
+    if topology not in (None, ""):
+        canonical = LEGACY_TOPOLOGIES.get(topology) if isinstance(topology, str) else None
+        if canonical is None or _TOP_FOR_TOPOLOGY[canonical] != top:
+            raise PolicyError(
+                f"spec sets planner.topology={topology!r} but policies.dispatch.type={top!r}. "
+                "planner.topology is the legacy spelling of the dispatch decomposition (pooled = "
+                f"{POOLED_MARKET}, partitioned = {PARTITIONED}); remove planner.topology."
+            )
+    if top != POOLED_MARKET or planner.get("market") is None:
+        return
+    disagree = _market_disagreements(planner, dispatch.get("params"))
+    if disagree:
+        raise PolicyError(
+            "spec sets planner.market that disagrees with policies.dispatch PooledMarket params "
+            f"({', '.join(disagree)}). planner.market is the legacy spelling of the PooledMarket "
+            "params; move the values into policies.dispatch.params and remove planner.market."
+        )
+
+
+def _market_disagreements(planner: Mapping[str, Any], authored_params: Any) -> list[str]:
+    """``["<k>=<planner.market value> vs <policies value>", ...]`` over the resolved market params."""
+    # Local import: the registry discovers the policy library (agent-side modules).
+    from apps.container_logistics.policies.framework.registry import get_policy_spec
+
+    params_cls = get_policy_spec("dispatch", POOLED_MARKET).params_cls
+    authored = dict(authored_params) if isinstance(authored_params, Mapping) else {}
+    try:
+        ours = params_cls.from_mapping(authored, where="policies.dispatch.params").to_dict()
+    except PolicyError:
+        return []  # the resolver names the bad policies value with its own path
+    legacy = legacy_market_params(planner)
+    if "inner" in authored:
+        legacy["inner"] = authored["inner"]
+    theirs = params_cls.from_mapping(legacy, where="planner.market").to_dict()
+    out: list[str] = []
+    for key in (*MARKET_ROLES, "max_rounds"):
+        _diff(key, theirs.get(key), ours.get(key), out)
+    return out
+
+
+def _diff(path: str, a: Any, b: Any, out: list[str]) -> None:
+    if isinstance(a, Mapping) and isinstance(b, Mapping):
+        for key in list(a) + [k for k in b if k not in a]:
+            _diff(f"{path}.{key}", a.get(key), b.get(key), out)
+    elif isinstance(a, bool) != isinstance(b, bool) or a != b:
+        out.append(f"{path}={a!r} vs {b!r}")
+
+
+def check_policies_format(profile: Mapping[str, Any]) -> None:
+    """Refuse a ``profile.policies`` block that is not the round-2 format.
+
+    A profile without ``policies`` is a legacy profile (translated, always accepted).
+    Next to ``policies`` the marker must be exactly :data:`POLICIES_FORMAT` (an int,
+    not a bool). Raises ``PolicyError`` naming the fix (recompile).
+    """
+    if not isinstance(profile, Mapping) or profile.get("policies") is None:
+        return
+    marker = profile.get(POLICIES_FORMAT_KEY)
+    if isinstance(marker, bool) or marker != POLICIES_FORMAT:
+        raise PolicyError(
+            f"profile.policies has {POLICIES_FORMAT_KEY}={marker!r}, not {POLICIES_FORMAT}: it was "
+            "compiled before round 2, when a flat policies.dispatch {type: X} meant the per-scope "
+            "solver X under planner.topology; it now means a CENTRAL X. Recompile the scenario "
+            "(openride scenario compile <slug>); never hand-patch the bundle."
+        )

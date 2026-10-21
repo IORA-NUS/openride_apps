@@ -3,7 +3,9 @@
 Plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.4/P3.6/P3.7. What is locked and why:
 
 - the ``policy`` group exposes list/show/validate/bench, and ``solver list`` renders
-  exactly ``policy list dispatch`` (one catalog, no second list to drift);
+  ``policy list dispatch`` restricted to the per-scope solvers (one catalog, no
+  second list to drift); ``policy list`` shows the component kinds and an
+  information-model column, ``policy show`` renders ref params (round-2 §5 C4);
 - the control wrappers parse the control plane's payloads (the transport is
   monkeypatched; the real command is exercised by the P3 gate);
 - ``policy validate`` exits 1 on any FAIL, so it can gate a script;
@@ -45,14 +47,33 @@ _FAKE_CATALOG = {
                  "k": {"type": "number", "default": 1.0, "minimum": 0.0, "description": "a knob"}}},
              "defaults": {"k": 1.0}},
             {"name": "Beta", "version": "1", "description": "second", "requires": [], "missing": [],
-             "available": True, "order_sensitive": None,
-             "params_schema": {"type": "object", "properties": {}}, "defaults": {}},
+             "available": True, "order_sensitive": None, "information_model": "per_group",
+             "composite": True, "inner_param": "inner",
+             "params_schema": {"type": "object", "properties": {
+                 "offer": {"type": "object", "x-policy-ref": "market.offer", "x-leaf-only": False,
+                           "default": {"type": "OfferAll", "params": {}}, "description": "an offer"},
+                 "inner": {"type": "object", "x-policy-ref": "dispatch", "x-leaf-only": True,
+                           "default": {"type": "Alpha", "params": {"k": 1.0}}, "description": "the solver"}}},
+             "defaults": {}},
         ],
     },
-    "market.offer": {"kind": "operator", "status": "legacy", "default": "OfferAll",
-                     "names": ["OfferAll", "OfferNone"], "configured_via": "planner.market.offer"},
     "idle": {"kind": "operator", "status": "planned", "lands_in": "P5"},
 }
+_FAKE_COMPONENTS = {
+    "market.offer": {"default": "OfferAll", "description": "offers", "policies": [
+        {"name": "OfferAll", "version": "1", "description": "all", "defaults": {},
+         "params_schema": {"type": "object", "properties": {}}},
+        {"name": "OfferNone", "version": "1", "description": "none", "defaults": {},
+         "params_schema": {"type": "object", "properties": {}}}]},
+}
+
+
+def _fake_catalogs(monkeypatch):
+    from openride.ui import console
+
+    monkeypatch.setattr(control, "known_policy_slots", lambda: _FAKE_CATALOG)
+    monkeypatch.setattr(control, "known_policy_components", lambda: _FAKE_COMPONENTS)
+    monkeypatch.setattr(console, "width", 240)  # no cell wrapping in the asserted text
 
 
 def _subparser_names(tree: ast.AST, subparsers_var: str) -> set[str]:
@@ -116,40 +137,58 @@ def test_policy_group_parses_each_subcommand():
                            "--fixtures", "/tmp"])
 
 
-def test_solver_list_is_an_alias(monkeypatch, capsys):
-    """``solver list`` prints exactly what ``policy list dispatch`` prints, text and JSON.
+def test_solver_list_is_policy_list_dispatch_restricted_to_leaves(monkeypatch, capsys):
+    """``solver list`` prints ``policy list dispatch`` without the decompositions (round 2:
+    ``--solver`` accepts only per-scope solvers), text and JSON.
 
-    Verified to have teeth: changing the alias to ``render_policy_list(None, ...)``
-    (every slot instead of dispatch) failed it.
+    Verified to have teeth: changing it to ``render_policy_list(None, ...)`` (every slot
+    instead of dispatch) failed the JSON keys; dropping ``leaves_only=True`` listed Beta.
     """
-    monkeypatch.setattr(control, "known_policy_slots", lambda: _FAKE_CATALOG)
+    _fake_catalogs(monkeypatch)
 
     def out(argv):
         assert cli.main(argv) == 0
         return capsys.readouterr().out
 
-    assert out(["solver", "list"]) == out(["policy", "list", "dispatch"])
+    leaves, full = out(["solver", "list"]), out(["policy", "list", "dispatch"])
+    assert "Alpha" in leaves and "Beta" not in leaves and "Beta" in full
     alias_json = json.loads(out(["solver", "list", "--json"]))
-    assert alias_json == json.loads(out(["policy", "list", "dispatch", "--json"]))
     assert list(alias_json) == ["dispatch"]
+    assert [p["name"] for p in alias_json["dispatch"]["policies"]] == ["Alpha"]
+    full_json = json.loads(out(["policy", "list", "dispatch", "--json"]))
+    assert [p["name"] for p in full_json["dispatch"]["policies"]] == ["Alpha", "Beta"]
 
 
-def test_policy_list_marks_default_missing_deps_and_muted_slots(monkeypatch, capsys):
-    monkeypatch.setattr(control, "known_policy_slots", lambda: _FAKE_CATALOG)
+def test_policy_list_marks_default_missing_deps_muted_slots_components_and_models(monkeypatch, capsys):
+    """Verified to have teeth: dropping the component rows from ``render_policy_list``
+    failed the ``OfferNone`` assertion; dropping the model column failed ``per_group``."""
+    _fake_catalogs(monkeypatch)
     assert cli.main(["policy", "list"]) == 0
     text = capsys.readouterr().out
     assert "missing: ortools" in text, "a policy with a missing dependency must say so"
-    assert "OfferAll" in text and "legacy" in text and "planned" in text
+    assert "market.offer" in text and "OfferNone" in text and "component" in text
+    assert "planned" in text and "per_group" in text and "composite" in text
     assert "✓" in text
+    assert cli.main(["policy", "list", "market.offer"]) == 0
+    only_kind = capsys.readouterr().out
+    assert "OfferNone" in only_kind and "Alpha" not in only_kind
     assert cli.main(["policy", "list", "nope"]) == 2
-    assert "unknown policy slot 'nope'" in capsys.readouterr().out
+    assert "unknown policy slot or component kind 'nope'" in capsys.readouterr().out
 
 
 def test_policy_show_renders_params_and_rejects_unknown_names(monkeypatch, capsys):
-    monkeypatch.setattr(control, "known_policy_slots", lambda: _FAKE_CATALOG)
+    """Verified to have teeth: rendering a ref param's raw ``type`` (``object``) instead
+    of ``_type_cell`` failed the ``ref → market.offer`` assertion."""
+    _fake_catalogs(monkeypatch)
     assert cli.main(["policy", "show", "dispatch", "Alpha"]) == 0
     text = capsys.readouterr().out
     assert "version 3" in text and "a knob" in text and ">= 0.0" in text
+    assert cli.main(["policy", "show", "dispatch", "Beta"]) == 0
+    text = capsys.readouterr().out
+    assert "ref → market.offer" in text and "OfferAll, OfferNone" in text, "a ref lists its kind's names"
+    assert "ref → dispatch (leaf)" in text and "per_group" in text
+    assert cli.main(["policy", "show", "market.offer", "OfferNone"]) == 0
+    assert "none" in capsys.readouterr().out
     assert cli.main(["policy", "show", "dispatch", "Gamma"]) == 2
     assert "registered: Alpha, Beta" in capsys.readouterr().out
     assert cli.main(["policy", "show", "idle", "X"]) == 2
@@ -278,7 +317,7 @@ def test_sim_main_applies_capture_after_the_policy_overrides():
 
     source = inspect.getsource(launcher.main)
     at = source.index("_apply_capture_env_or_exit(")
-    assert source.index("_apply_policy_overrides_or_exit(") < at < source.index(
+    assert source.index("_apply_dispatch_overrides_or_exit(") < at < source.index(
         "_assert_policies_resolvable_or_exit("
     )
 

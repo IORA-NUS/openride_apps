@@ -113,8 +113,14 @@ def test_catalog_exposes_inner_param_and_the_solver_override_descends_it():
         assert entries[spec.name]["inner_param"] == spec.inner_param
     assert (entries["Partitioned"]["inner_param"], entries["PooledMarket"]["inner_param"]) == ("inner", "inner")
     assert entries["GreedyNearest"]["inner_param"] is None and entries["RandomAssignment"]["inner_param"] is None
+    from apps.container_logistics.scenario.scenario_overrides import (
+        current_policies_for_profile,
+        run_dispatch_overrides,
+    )
+
     coll = {"a0": {"profile": {"strategy": "RandomAssignment"}}}
-    resolved = apply_policy_overrides(coll, {"dispatch": {"type": "GreedyNearest"}})
+    run_dispatch_overrides(coll, solver="GreedyNearest")  # C4: --solver is its own channel
+    resolved, _source = current_policies_for_profile(coll["a0"]["profile"])
     assert resolved["dispatch"].label == "Partitioned/GreedyNearest", "--solver sets the innermost solver"
 
 

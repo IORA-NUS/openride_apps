@@ -2,13 +2,15 @@
 
 Single responsibility: the control plane's policy surface.
 
-- Turn ``run-simulation``'s ``--solver`` / ``--policy`` / ``--policy-param`` /
-  ``--policy-overrides`` flags into
-  the ``ORSIM_POLICY_OVERRIDES`` object and dry-run it against the scenario's compiled
-  assignment profile, so a typo or an out-of-range param is refused synchronously
-  instead of in the background sim's log (plan ``docs/plans/policy_slots_p0_p3.md``
-  §4 P2.6). The dry run uses the same ``apply_policy_overrides`` the sim main
-  applies, on a deep copy, and never writes. ``--capture-dispatch`` is checked with
+- Turn ``run-simulation``'s ``--policy`` / ``--policy-param`` / ``--policy-overrides``
+  flags into the ``ORSIM_POLICY_OVERRIDES`` object (``--solver`` travels separately as
+  ``ORSIM_SOLVER``: the innermost per-scope solver, round-2 §3.3) and dry-run both
+  against the scenario's compiled assignment profile, so a typo or an out-of-range
+  param is refused synchronously instead of in the background sim's log (plan
+  ``docs/plans/policy_slots_p0_p3.md`` §4 P2.6). Names are checked BEFORE the bundle
+  is read (``scenario_overrides.precheck_override_names``); the dry run then uses the
+  same ``scenario_overrides.run_dispatch_overrides`` the sim main applies, on a deep
+  copy, and never writes. ``--capture-dispatch`` is checked with
   the sim's own parser (``dispatch.capture.parse_capture_spec``).
 - ``policy-validate`` / ``policy-bench`` payloads (plan §4 P3.6) over the contract
   battery and the single-tick bench (``docs/policy_authoring.md``).
@@ -80,7 +82,6 @@ def _set_once(target: dict[str, Any], key: str, value: Any, field: str, origin: 
 
 
 def build_run_policy_overrides(
-    solver: str | None,
     policies: Sequence[str] = (),
     params: Sequence[str] = (),
     overrides_json: str | None = None,
@@ -89,7 +90,9 @@ def build_run_policy_overrides(
 
     Starts from ``--policy-overrides`` (:func:`parse_policy_overrides_json`, entries
     copied whole so unknown keys reach the validating merge), then adds
-    ``--policy``/``--policy-param`` and ``--solver X`` (= ``--policy dispatch=X``).
+    ``--policy``/``--policy-param``. ``--solver`` is NOT folded in: it is the innermost
+    per-scope solver of whatever the overrides select, applied by
+    ``scenario_overrides.run_dispatch_overrides`` (shipped as ``ORSIM_SOLVER``).
     The same field (a slot's ``type``, ``timing`` or one param key) set to two
     different values by two sources raises ``PolicyError``; equal values are fine.
     """
@@ -107,16 +110,6 @@ def build_run_policy_overrides(
                 raise PolicyError(f"--policy-overrides.{slot}.params must be an object (got {bucket!r}).")
             for key, value in entry["params"].items():
                 _set_once(bucket, key, value, f"{slot}.params.{key}", "--policy-param")
-    solver = (solver or "").strip()
-    if solver:
-        current = (out.get("dispatch") or {}).get("type")
-        if current not in (None, solver):
-            raise PolicyError(
-                f"--solver {solver!r} conflicts with dispatch type {current!r} from "
-                "--policy/--policy-overrides; --solver is shorthand for --policy dispatch=NAME, "
-                "pass one of them."
-            )
-        out.setdefault("dispatch", {})["type"] = solver
     return out
 
 
@@ -170,28 +163,40 @@ def validate_run_policy_args(
 ) -> dict[str, Any] | str:
     """Dry-run a run's policy flags against the scenario's assignment profile.
 
-    Returns the overrides object to ship (``{}`` when no flag was given; the scenario
-    is then not read), or the error message (``str``) when the flags, the merge, or
-    the patched profile fail to resolve, or when the scenario has no readable bundle
-    (never validated against slot defaults: that would name the wrong policy). A
-    bundle compiled before policy slots goes through the legacy translation, exactly
-    as at run start.
+    Order (round-2 §5 C4): build the overrides object (:func:`build_run_policy_overrides`;
+    ``solver`` stays separate), then check every NAME it carries and ``solver``
+    (``scenario_overrides.precheck_override_names``) BEFORE the bundle is read, so a
+    bad name is reported as itself and never as a missing scenario; then load the
+    bundle and apply both with ``scenario_overrides.run_dispatch_overrides`` (the sim
+    main's one application point) on a deep copy, followed by the run-start checks.
+    Returns the overrides object to ship as ``ORSIM_POLICY_OVERRIDES`` (``{}`` when no
+    flag was given; with neither overrides nor ``solver`` the scenario is not read),
+    or the error message (``str``) when a name, the merge or the patched profile fails,
+    or when the scenario has no readable bundle (never validated against slot
+    defaults: that would name the wrong policy). A bundle compiled before policy
+    slots goes through the legacy translation, exactly as at run start.
     """
     from apps.container_logistics.policies.dispatch.profile import (
         assert_assignment_profiles_resolvable,
     )
     from apps.container_logistics.policies.framework import PolicyError
-    from apps.container_logistics.scenario.scenario_overrides import apply_policy_overrides
+    from apps.container_logistics.scenario.scenario_overrides import (
+        assert_policies_format,
+        precheck_override_names,
+        run_dispatch_overrides,
+    )
 
     try:
-        overrides = build_run_policy_overrides(solver, policies, params, overrides_json)
-        if not overrides:
+        overrides = build_run_policy_overrides(policies, params, overrides_json)
+        precheck_override_names(overrides, solver)
+        if not overrides and not (solver or "").strip():
             return {}
         collection = load_assignment_collection(scenario)
         if collection is None:
             return _missing_bundle_message(scenario)
         collection = copy.deepcopy(collection)
-        apply_policy_overrides(collection, overrides)
+        run_dispatch_overrides(collection, overrides=overrides, solver=solver)
+        assert_policies_format(collection)
         assert_assignment_profiles_resolvable(collection)
     except PolicyError as exc:
         return str(exc)
@@ -209,7 +214,9 @@ def cmd_validate_run_policies(
 
     The synchronous dry run the dashboard's run route calls before it spawns
     ``run-simulation`` in the background (review F2): the same
-    :func:`validate_run_policy_args` ``run-simulation`` runs.
+    :func:`validate_run_policy_args` ``run-simulation`` runs. ``overrides`` is the
+    ``ORSIM_POLICY_OVERRIDES`` object WITHOUT ``solver`` (which ships as
+    ``ORSIM_SOLVER``; round-2 §5 C4).
     """
     action = "validate_run_policies"
     result = validate_run_policy_args(scenario, solver, policies, params, overrides_json)

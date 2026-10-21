@@ -92,7 +92,7 @@ def test_run_start_wiring_exits_2_before_the_cooperation_stamp(capsys):
 
     source = inspect.getsource(launcher.main)
     check = source.index("_assert_policies_resolvable_or_exit(")
-    assert source.index("apply_market_override(") < check < source.index(
+    assert source.index("_apply_dispatch_overrides_or_exit(") < check < source.index(
         "Ship the EFFECTIVE cooperation structure"
     ), "the run-start check must run after the overrides and before the cooperation stamp"
 

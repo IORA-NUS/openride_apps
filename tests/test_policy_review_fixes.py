@@ -230,20 +230,21 @@ def test_policy_overrides_json_merges_with_flags_and_conflicts_are_refused():
 
     js = json.dumps({"dispatch": {"type": "GreedyNearest", "timing": "online",
                                   "params": {"dual_cycle_bonus_km": 0}}})
-    merged = build_run_policy_overrides("GreedyNearest", [], ["dispatch.dual_cycle_radius_km=1"], js)
+    # Round 2 (C4): --solver is not folded in (it ships as ORSIM_SOLVER; its conflicts
+    # are run_dispatch_overrides' message 12, tests/test_policy_run_overrides.py).
+    merged = build_run_policy_overrides([], ["dispatch.dual_cycle_radius_km=1"], js)
     assert merged == {"dispatch": {"type": "GreedyNearest", "timing": "online",
                                    "params": {"dual_cycle_bonus_km": 0, "dual_cycle_radius_km": 1}}}
-    for solver, policies, params, needle in [
-        ("RandomAssignment", [], [], "--solver 'RandomAssignment' conflicts"),
-        (None, ["dispatch=RandomAssignment"], [], "--policy sets dispatch.type"),
-        (None, [], ["dispatch.dual_cycle_bonus_km=2"], "--policy-param sets dispatch.params.dual_cycle_bonus_km"),
-        (None, [], ["dispatch.dual_cycle_bonus_km=false"], "--policy-param sets"),
+    for policies, params, needle in [
+        (["dispatch=RandomAssignment"], [], "--policy sets dispatch.type"),
+        ([], ["dispatch.dual_cycle_bonus_km=2"], "--policy-param sets dispatch.params.dual_cycle_bonus_km"),
+        ([], ["dispatch.dual_cycle_bonus_km=false"], "--policy-param sets"),
     ]:
         with pytest.raises(PolicyError, match=needle):
-            build_run_policy_overrides(solver, policies, params, js)
+            build_run_policy_overrides(policies, params, js)
     for bad in ("{not json", "[1]", '{"dispatch": 3}'):
         with pytest.raises(PolicyError, match="--policy-overrides"):
-            build_run_policy_overrides(None, [], [], bad)
+            build_run_policy_overrides([], [], bad)
 
 
 def _run_command(argv, capsys):
@@ -290,10 +291,12 @@ def test_validate_run_policies_command(smoke_slug, monkeypatch, capsys):
                         lambda self, **kw: pytest.fail("validate-run-policies must not spawn"))
     rc, payload = _run_command(["validate-run-policies", "--scenario", smoke_slug,
                                 "--solver", "RandomAssignment",
-                                "--policy-overrides", json.dumps({"dispatch": {"params": {"candidates": "spatial"}}})],
+                                "--policy-overrides", json.dumps(
+                                    {"dispatch": {"params": {"inner": {"params": {"candidates": "spatial"}}}}})],
                                capsys)
     assert rc == 0 and payload["ok"] is True and payload["action"] == "validate_run_policies", payload
-    assert payload["overrides"] == {"dispatch": {"params": {"candidates": "spatial"}, "type": "RandomAssignment"}}
+    # Round 2 (C4): the payload's overrides are ORSIM_POLICY_OVERRIDES; --solver is not folded in.
+    assert payload["overrides"] == {"dispatch": {"params": {"inner": {"params": {"candidates": "spatial"}}}}}
     rc, payload = _run_command(["validate-run-policies", "--scenario", smoke_slug,
                                 "--policy-param", "dispatch.inner.candidates=near"], capsys)
     assert rc == 1 and payload == {**payload, "ok": False, "action": "validate_run_policies"}

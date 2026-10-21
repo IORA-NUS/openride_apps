@@ -55,6 +55,7 @@ __all__ = [
     "authored_after_resolution",
     "merge_policy_overrides",
     "merge_params",
+    "check_named_overrides",
     "parse_policy_cli_args",
     "policies_stamp",
 ]
@@ -392,15 +393,19 @@ def merge_policy_overrides(
 def _carried_inner(spec: PolicySpec, current: ResolvedPolicy | None, entry: Mapping[str, Any]) -> dict[str, Any]:
     """The params a CHANGED top type starts from: ``{}``, plus the current per-scope solver.
 
-    When the new type delegates through ``inner_param`` and the override does not set
-    it, the current selection's per-scope solver (its inner, or the current top itself
+    When the new type delegates through ``inner_param`` and the override does not name
+    its type (it may set its params), the current selection's per-scope solver (its inner, or the current top itself
     when that is a leaf) is carried over with its params, so changing the
     decomposition (``--policy dispatch=PooledMarket``) never silently swaps the
     solver: the same rule ``ORSIM_PLANNER_TOPOLOGY`` follows (round-2 §3.6, review C2
     finding 2). Every other param resets to the new type's defaults.
     """
     descend = spec.inner_param
-    if current is None or descend is None or descend in (entry.get("params") or {}):
+    stated = (entry.get("params") or {}).get(descend) if descend is not None else None
+    # An override that names the inner's TYPE replaces it; one that only sets the
+    # inner's params (``--policy-param dispatch.inner.k=v``) merges into the carried one.
+    names_type = isinstance(stated, str) or (isinstance(stated, Mapping) and stated.get("type") is not None)
+    if current is None or descend is None or names_type:
         return {}
     current_spec = get_policy_spec(spec.slot, current.name)
     if current_spec.inner_param is not None:
@@ -445,6 +450,61 @@ def _merge_ref(info: Any, current: Any, value: Any, *, path: str) -> Any:
     params = merge_params(target, (cur.get("params") or {}) if same else {},
                           dict(value.get("params") or {}), path=f"{path}.params")
     return {"type": target.name, "params": params}
+
+
+def check_named_overrides(overrides: Mapping[str, Any]) -> None:
+    """Validate what a per-run ``overrides`` object NAMES, without a profile to merge into.
+
+    Checks every slot (known and implemented) and entry shape, and for every entry or
+    nested reference that names a ``type``: the type is registered (unknown policy or
+    component: ``UnknownPolicyError``; a decomposition where a leaf is required:
+    message 2) and the params given for it validate against it, defaults filled
+    (unknown keys, bounds, types; timing too). A reference whose type is NOT named
+    (``dispatch.inner.k=v``) is left out: its params belong to whatever the profile
+    selects there, which only the merge (:func:`merge_policy_overrides`) can know.
+    For the control plane's dry run before any bundle is read (round-2 §5 C4).
+    Raises ``PolicyError`` subclasses with the merge's paths
+    (``policy overrides.<slot>.params...``).
+    """
+    if not isinstance(overrides, Mapping):
+        raise PolicyError(f"policy overrides must be an object of slot -> entry (got {overrides!r}).")
+    for slot, entry in overrides.items():
+        _check_selectable_slot(slot, "policy overrides")
+        label = f"policy overrides.{slot}"
+        _check_entry_shape(entry, label, require_type=False)
+        if entry.get("type") is None:
+            continue
+        spec = get_policy_spec(slot, str(entry["type"]).strip())
+        named = {**entry, "params": _named_only(spec, dict(entry.get("params") or {}),
+                                                path=f"{label}.params")}
+        _resolve_entry(slot, named, where="policy overrides", legacy=False)
+
+
+def _named_only(spec: Any, params: Mapping[str, Any], *, path: str) -> dict[str, Any]:
+    """``params`` minus every reference whose type is not named (recursively); names are checked."""
+    infos = {info.name: info for info in declared_params(spec.params_cls)}
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        info = infos.get(key)
+        if info is None or not info.is_ref:
+            out[key] = value  # an undeclared key is refused by the resolver
+            continue
+        if isinstance(value, str):
+            value = {"type": value}
+        if not isinstance(value, Mapping):
+            out[key] = value  # malformed: the resolver refuses it with message 4
+            continue
+        if value.get("type") is None:
+            continue
+        if not isinstance(value["type"], str):
+            out[key] = dict(value)
+            continue
+        target = ref_target(info.meta.kind, value["type"].strip(), where=f"{path}.{key}",
+                            leaf_only=info.meta.leaf_only)
+        out[key] = {**value, "type": target.name,
+                    "params": _named_only(target, dict(value.get("params") or {}),
+                                          path=f"{path}.{key}.params")}
+    return out
 
 
 def _cli_value(raw: str) -> Any:

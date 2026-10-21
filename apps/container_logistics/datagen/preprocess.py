@@ -241,26 +241,22 @@ class Preprocessor:
         }
 
     @staticmethod
-    def _recipe_planner(planner_cfg: dict, authored_deployment: dict, provenance: dict) -> dict:
+    def _recipe_planner(planner_cfg: dict, raw_planner: Any, provenance: dict) -> Any:
         """The ``planner`` block the recipe echoes (``spec.json`` is written from it).
 
-        Under a LEGACY dispatch translation the compiled ``deployment`` mirror is
-        echoed, as before. Under an AUTHORED ``policies.dispatch`` the deployment is
-        echoed exactly as authored (absent stays absent), never as the mirror:
-        ``policies`` is the round-trip source, and a mirror written back into
-        ``spec.json`` would contradict the next hand edit of ``policies`` and be
-        refused by the compile every time (``spec_compile`` refuses a contradicting
-        ``planner.deployment``). An authored deployment's accounting-only keys
-        therefore survive a recompile.
+        Under a LEGACY dispatch translation the normalised block (with the compiled
+        ``deployment`` mirror) is echoed, as before. Under an AUTHORED
+        ``policies.dispatch`` the authored ``planner`` is echoed VERBATIM (absent stays
+        absent; round-2 §5 C4): ``policies`` is the round-trip source, and a normalised
+        block written back into ``spec.json`` would carry a defaulted
+        ``topology='partitioned'`` (refused next to any other top, message 7) and the
+        ``deployment`` mirror (refused when the next hand edit of ``policies``
+        disagrees). An authored deployment's accounting-only keys therefore survive a
+        recompile.
         """
-        planner = deepcopy(planner_cfg)
         if provenance.get("dispatch") != "authored":
-            return planner
-        if authored_deployment:
-            planner["deployment"] = deepcopy(authored_deployment)
-        else:
-            planner.pop("deployment", None)
-        return planner
+            return deepcopy(planner_cfg)
+        return deepcopy(raw_planner)
 
     @staticmethod
     def _strict_bool(value, where: str) -> bool:
@@ -279,16 +275,18 @@ class Preprocessor:
 
         Returns ``(authored, provenance)``: ``authored`` is the block as it will be
         echoed into the recipe, always carrying ``dispatch``; ``provenance`` maps each
-        slot to ``"authored"`` or ``"legacy"``. SHAPE ONLY (no registry): slot names,
-        policy names and params are validated by ``spec_compile`` via
-        ``policies.framework.resolve``. Without ``policies.dispatch`` the legacy dial is
+        slot to ``"authored"`` or ``"legacy"``. SHAPE ONLY (no registry) except the legacy
+        planner checks: slot names, policy names and params are validated by
+        ``spec_compile`` via ``policies.framework.resolve``. Without ``policies.dispatch`` the legacy dial is
         translated: the per-scope solver ``type = solver or planner.deployment.type or
         default``, ``params = {**deployment.params, **solverParams}``, wrapped in the
         decomposition ``planner.topology`` names (``legacy.wrap_legacy_leaf``:
         ``Partitioned``, or ``PooledMarket`` with ``planner.market``), ``timing =
         "online"``. With it, a ``solver`` naming another solver than the innermost one,
         or ``solverParams`` that disagree with its params, are refused (they are its
-        legacy spellings).
+        legacy spellings), and so are an authored ``planner.topology`` / ``planner.market``
+        that contradict it (``legacy.check_authored_planner``, round-2 §3.6 messages 7
+        and 8; read from the RAW spec ``planner``).
         Raises ``SpecValidationError``.
         """
         block = raw.get("policies")
@@ -330,6 +328,12 @@ class Preprocessor:
                 raise SpecValidationError(str(exc)) from exc
             provenance["dispatch"] = "legacy"
             return authored, provenance
+        # The RAW planner: ``planner_cfg`` has a default topology filled in, which would
+        # read as an authored ``partitioned`` next to every non-Partitioned block.
+        try:
+            _legacy_dispatch.check_authored_planner(raw.get("planner"), authored["dispatch"])
+        except ValueError as exc:  # PolicyError: messages 7 / 8, or a malformed planner.market
+            raise SpecValidationError(str(exc)) from exc
         dispatch, path = Preprocessor._dispatch_leaf_and_path(authored["dispatch"])
         if solver not in (None, "") and str(solver) != dispatch["type"]:
             raise SpecValidationError(
@@ -823,7 +827,7 @@ class Preprocessor:
                     for s in cooperation["structures"]
                 ],
             },
-            "planner": cls._recipe_planner(planner_cfg, authored_deployment, policies_provenance),
+            "planner": cls._recipe_planner(planner_cfg, raw.get("planner"), policies_provenance),
             # The authored block (legacy translations included) is the round-trip
             # source; ``solver`` is a read-only mirror of policies.dispatch.type and
             # ``solverParams`` is retired (its values now live in policies.dispatch.params).

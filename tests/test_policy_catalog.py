@@ -161,10 +161,12 @@ def test_known_policies_command_keeps_datagen_keys_and_adds_slots_and_components
 
 
 def test_known_solvers_is_derived_from_the_registry():
-    """``known_solvers()`` lists exactly the registered dispatch names, read live.
+    """``known_solvers()`` lists exactly the registered dispatch LEAVES (the per-scope
+    solvers ``--solver`` accepts; round-2 §5 C4), read live.
 
     Verified to have teeth: hardcoding ``["GreedyNearest", "RandomAssignment"]`` as
-    ``known_solvers()["solvers"]`` failed the live-registration assertion.
+    ``known_solvers()["solvers"]`` failed the live-registration assertion; dropping the
+    ``not spec.is_composite`` filter failed the first assertion.
     """
     from apps.container_logistics.policies.framework import list_policies
     from apps.container_logistics.scenario import scenario_overrides
@@ -174,8 +176,9 @@ def test_known_solvers_is_derived_from_the_registry():
     )
 
     info = known_solvers()
-    assert info == {"solvers": [p.name for p in list_policies("dispatch")],
+    assert info == {"solvers": [p.name for p in list_policies("dispatch") if not p.is_composite],
                     "default": "RandomAssignment"}
+    assert "Partitioned" not in info["solvers"] and "GreedyNearest" in info["solvers"]
     with isolated_registry():
         _register_dummies()
         assert "TestCatalogA" in known_solvers()["solvers"]

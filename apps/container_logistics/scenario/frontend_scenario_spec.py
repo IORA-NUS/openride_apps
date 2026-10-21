@@ -678,8 +678,9 @@ def drop_dispatch_dials_superseded_by(
     A body that speaks ``policies`` (non-null) is authoritative about dispatch, so the
     legacy spellings it superseded must not be inherited back next to it (the compile
     refuses a contradicting pair): ``solver``, ``solverParams`` and the carried
-    ``planner.deployment`` (the compiled mirror a saved spec echoes; the rest of the
-    carried ``planner`` stays). Asymmetric on purpose: a stale legacy client that sends
+    ``planner.deployment``, ``planner.topology`` and ``planner.market`` (the legacy
+    spellings of the per-scope solver and of the decomposition, round-2 §3.6; the rest
+    of the carried ``planner`` stays). Asymmetric on purpose: a stale legacy client that sends
     only ``solver`` over a carried ``policies`` is NOT reconciled here and gets the
     compile's loud "solver disagrees with policies.dispatch" error instead of being
     silently ignored. Returns ``carried`` unchanged (same object) otherwise; never
@@ -691,9 +692,13 @@ def drop_dispatch_dials_superseded_by(
         return carried
     out = {k: v for k, v in carried.items() if k not in ("solver", "solverParams")}
     planner = out.get("planner")
-    if isinstance(planner, dict) and "deployment" in planner:
-        out["planner"] = {k: v for k, v in planner.items() if k != "deployment"}
+    if isinstance(planner, dict) and any(k in planner for k in _PLANNER_DISPATCH_SPELLINGS):
+        out["planner"] = {k: v for k, v in planner.items() if k not in _PLANNER_DISPATCH_SPELLINGS}
     return out
+
+
+#: The carried ``planner`` keys that spell the dispatch selection (dropped next to ``policies``).
+_PLANNER_DISPATCH_SPELLINGS = ("deployment", "topology", "market")
 
 
 def assemble_spec(
@@ -1552,8 +1557,25 @@ def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
         )
         if isinstance(gs.get("policies"), dict) and gs["policies"]:
             return deepcopy(gs["policies"])
-        raw_solver = gs.get("solver")
-        return {"dispatch": {"type": str(raw_solver).strip() if raw_solver else LEGACY_LEAF_DEFAULT}}
+        return {"dispatch": _legacy_fallback_selection(gs)}
+
+
+def _legacy_fallback_selection(gs: dict[str, Any]) -> dict[str, Any]:
+    """A legacy spec's raw ``solver`` as a NESTED selection, for display only.
+
+    Always ``{type: <decomposition>, params: {inner: {type: <raw solver>, ...}}}`` (the
+    editor reads ``policySlots`` nested, round-2 §3.4): the decomposition the raw
+    ``planner`` names when it translates, else ``Partitioned``. The raw solver text is
+    kept as written so the editor can show the error.
+    """
+    from apps.container_logistics.policies.dispatch import legacy
+
+    raw_solver = gs.get("solver")
+    leaf = {"type": str(raw_solver).strip() if raw_solver else LEGACY_LEAF_DEFAULT, "params": {}}
+    try:
+        return legacy.wrap_legacy_leaf(leaf, gs.get("planner"))
+    except ValueError:  # PolicyError: the planner itself does not translate
+        return {"type": legacy.PARTITIONED, "params": {"inner": leaf}}
 
 
 def _edit_form_solver(policy_slots: dict[str, Any]) -> Any:
@@ -2195,13 +2217,16 @@ def get_scenario_spec(datahub_dir: str, domain: str, slug: str) -> dict[str, Any
 
 
 def known_solvers() -> dict[str, Any]:
-    """The runtime-selectable dispatch policy names and the default leaf solver
-    (``LEGACY_LEAF_DEFAULT``; the slot default ``Partitioned`` wraps it).
+    """The per-scope solvers ``--solver`` / ``ORSIM_SOLVER`` accept, and the default one.
 
-    Derived from the policy registry at call time (the single source of truth).
+    ``solvers`` are the registered dispatch LEAVES (a decomposition such as
+    ``Partitioned``/``PooledMarket`` is selected with ``--policy dispatch=...``, never
+    as a solver); ``default`` is ``LEGACY_LEAF_DEFAULT``, the slot default
+    ``Partitioned``'s inner. Derived from the policy registry at call time (the single
+    source of truth).
     """
     return {
-        "solvers": [spec.name for spec in list_policies("dispatch")],
+        "solvers": [spec.name for spec in list_policies("dispatch") if not spec.is_composite],
         "default": LEGACY_LEAF_DEFAULT,
     }
 

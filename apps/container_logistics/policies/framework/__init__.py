@@ -39,6 +39,7 @@ from .components import register_component_kind
 from .resolve import (
     ResolvedPolicy,
     authored_after_resolution,
+    check_named_overrides,
     merge_policy_overrides,
     parse_policy_cli_args,
     policies_stamp,
@@ -65,6 +66,7 @@ __all__ = [
     "ResolvedPolicy",
     "resolve_policies_block",
     "authored_after_resolution",
+    "check_named_overrides",
     "merge_policy_overrides",
     "parse_policy_cli_args",
     "policies_stamp",

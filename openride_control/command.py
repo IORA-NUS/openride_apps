@@ -82,32 +82,33 @@ def _run(argv: list[str] | None = None) -> int:
     run_p.add_argument(
         "--solver",
         default=None,
-        help="Assignment solver strategy override (ORSIM_SOLVER): a registered dispatch "
-        "policy name (list: openride policy list dispatch)",
+        help="Innermost per-scope solver override (ORSIM_SOLVER): a registered dispatch "
+        "leaf, set as the inner of the selected decomposition (list: openride solver list)",
     )
     run_p.add_argument(
         "--policy",
         action="append",
         default=[],
         metavar="SLOT=NAME",
-        help="Per-run policy override, repeatable (e.g. dispatch=GreedyNearest); "
-        "--solver X is the same as --policy dispatch=X. Validated before spawning.",
+        help="Per-run policy override, repeatable (e.g. dispatch=PooledMarket; a leaf such as "
+        "dispatch=GreedyNearest is a CENTRAL solver). Validated before spawning.",
     )
     run_p.add_argument(
         "--policy-param",
         action="append",
         default=[],
-        metavar="SLOT.KEY=VALUE",
-        help="Per-run policy param override, repeatable (e.g. "
-        "dispatch.dual_cycle_bonus_km=0); VALUE is JSON when it parses, else a string.",
+        metavar="SLOT.PATH=VALUE",
+        help="Per-run policy param override, repeatable, nested through refs (e.g. "
+        "dispatch.inner.dual_cycle_bonus_km=0, dispatch.inner=RandomAssignment, "
+        "dispatch.offer=OfferSpare); VALUE is JSON when it parses, else a string.",
     )
     run_p.add_argument(
         "--policy-overrides",
         default=None,
         metavar="JSON",
         help="Full per-run policy overrides object {slot: {type?, timing?, params?}}; merged "
-        "with --solver/--policy/--policy-param (the same field set twice to different "
-        "values is refused). Validated before spawning.",
+        "with --policy/--policy-param (the same field set twice to different values is "
+        "refused); --solver then sets its innermost solver. Validated before spawning.",
     )
     run_p.add_argument(
         "--capture-dispatch",
@@ -214,7 +215,7 @@ def _run(argv: list[str] | None = None) -> int:
     vrp_p.add_argument("--scenario", default=None)
     vrp_p.add_argument("--solver", default=None)
     vrp_p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME")
-    vrp_p.add_argument("--policy-param", action="append", default=[], metavar="SLOT.KEY=VALUE")
+    vrp_p.add_argument("--policy-param", action="append", default=[], metavar="SLOT.PATH=VALUE")
     vrp_p.add_argument("--policy-overrides", default=None, metavar="JSON")
 
     exists_sc_p = sub.add_parser("scenario-exists", help="Check whether a scenario slug is runnable")

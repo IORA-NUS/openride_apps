@@ -1555,3 +1555,150 @@ by hash. Files: `assignment/app.py` (outside the merge zones), `assignment/accou
      silence a real block by mismatched but present ids.
 6. **Test edits:** `tests/test_pool_housekeeping.py::test_market_components_pick_up_a_behavior_patched_after_construction`
    (restored, see 3). No other existing test changed.
+
+### C4
+
+1. **Run-name segment formats (sim main; `scenario_overrides.dispatch_override_label`).**
+   The dispatch label is built ONLY from `ORSIM_POLICY_OVERRIDES` (`--policy`/
+   `--policy-param`/`--policy-overrides`) and `ORSIM_SOLVER`; the topology variable keeps its
+   own segment (appended at its old place, after the structure override) and the market
+   variables add none, as before. A node of the selection's `inner` chain is *touched* when
+   the request names its type (`--solver` names the innermost one) or sets one of its own
+   params. Then:
+   - only the innermost per-scope solver touched: `<Leaf>` / `<Leaf>(k=v,...)` (the pre-v2
+     `--solver X` segment, unchanged): `--solver X` → ` · X`;
+     `dispatch.inner.dual_cycle_bonus_km=0` → ` · GreedyNearest(dual_cycle_bonus_km=0.0)`;
+   - any node above it touched: the whole chain, `/`-joined, each node `<Name>` or
+     `<Name>(k=v,...)`: `--policy dispatch=PooledMarket` → ` · PooledMarket/GreedyNearest`
+     (the stamp label); `--policy dispatch=PooledMarket --policy-param dispatch.max_rounds=5
+     --policy-param dispatch.offer.keep_below_km=3 ...` →
+     ` · PooledMarket(max_rounds=5,offer=OfferSpare(keep_below_km=3.0))/GreedyNearest(dual_cycle_bonus_km=0.0)`;
+     a component ref renders as `<Type>` / `<Type>(k=v)`;
+   - `(k=v,...)` lists only the params the request set on that node, keys sorted, values the
+     validated value as compact JSON (the round-1 rule).
+   Both shapes are what the FE parser classifies (`Name(...)`, and `A/B` whose every part is
+   one). **Known limit:** a central leaf (`--policy dispatch=GreedyNearest`) and the per-scope
+   `--solver GreedyNearest` both read ` · GreedyNearest` in the run NAME; the stamp
+   (`label`, `information_model`) tells them apart, and the FE prefers the stamp. Legacy
+   inputs reproduce `ec085f5` byte for byte: verified by driving `ec085f5`'s own `main()` and
+   this branch's with the same harness (`test_legacy_run_env_overrides.py`, compiled and
+   legacy bundles).
+2. **`run_dispatch_overrides` builds ONE override entry per behavior and merges it once**
+   (not four sequential merges), so the steps compose: the topology step sets the top (and,
+   for a new `PooledMarket`, `planner.market` under what the request stated), the market
+   step sets component refs (a same-type ref keeps its params), and the solver step does a
+   trial merge to find the innermost path, then names the type there. Every behavior is
+   validated before any is mutated. It returns `(merged_overrides, labels)`; nothing
+   requested returns `({}, {dispatch: None, topology: None})` and mutates nothing.
+   Additions beyond the spec: a market variable that contradicts a type/value the explicit
+   overrides set is refused (`ORSIM_OFFER_POLICY='OfferSpare' conflicts with
+   dispatch.offer.type='OfferAll' from ORSIM_POLICY_OVERRIDES ...`; no spec text);
+   `ORSIM_MARKET_MAX_ROUNDS` accepts an int or an integer string (the env form), never a bool
+   or float; an unknown `--solver` is `--solver 'Nope': Unknown dispatch policy 'Nope'. ...`;
+   an unknown topology is message 6's env variant `ORSIM_PLANNER_TOPOLOGY='x' is not a legacy
+   topology (...). The decomposition is now the dispatch policy: --policy
+   dispatch=Partitioned or --policy dispatch=PooledMarket.` Message 12 uses the spec's
+   `--solver` wording on the env path too (one text). `apply_solver_override`,
+   `apply_planner_topology_override`, `apply_market_override` are wrappers with their old
+   returns; `leaf_retargeted`, `_retarget_compiled_decomposition`, `_patch_compiled_market`
+   and `_rewrite_compiled_dispatch` are deleted.
+3. **A top-type change now carries the current inner when the override sets only the
+   inner's params** (`framework.resolve._carried_inner`; the CLI's `scenario_cmd._carried_inner`
+   follows the same rule). C3 carried it only when the override did not mention `inner`
+   at all, so `--policy dispatch=PooledMarket --policy-param dispatch.inner.dual_cycle_bonus_km=0`
+   resolved the params against the DEFAULT inner (RandomAssignment) and failed. An override
+   that names the inner's type still replaces it.
+4. **Recipe planner echo:** under an AUTHORED `policies.dispatch` the recipe's `planner` is
+   the raw authored value verbatim (`None` when absent); under a legacy translation it stays
+   the normalised block with the deployment mirror (unchanged bytes for every shipped spec).
+   `_recipe_planner(planner_cfg, raw_planner, provenance)` replaces the authored-deployment
+   argument (the authored deployment is part of the raw planner).
+5. **Messages 7/8 live in `legacy.check_authored_planner`** (preprocess calls it with the RAW
+   spec planner; `PolicyError` → `SpecValidationError`). Message 8 compares the resolved
+   `PooledMarket` params of both sides through the registry (defaults filled, so an authored
+   `{}` market agrees with defaults-only params) and lists every disagreeing leaf path
+   (`offer.type='OfferAll' vs 'OfferSpare', offer.params.keep_below_km=None vs 3.0, ...`;
+   comparing two different component types lists their params too). A `policies` side that
+   does not resolve is left to the resolver's own message. An empty `topology: ""` reads as
+   absent (the compile's falsy rule). The `spec` variant of message 6 is not added:
+   `_normalize_planner` already refuses an unknown topology first with its pre-existing
+   `planner: unknown topology ...` text, which two pre-existing tests match.
+6. **Bundle-format marker (C2 review #7, C3 deviation 15's open item): `profile.policies_format
+   = 2`** (`legacy.POLICIES_FORMAT_KEY`/`POLICIES_FORMAT`), written by
+   `spec_compile._patch_assignment_profiles` and by every per-run override commit
+   (`scenario_overrides._commit`). `legacy.check_policies_format` refuses a profile that has
+   `policies` without it (message: `profile.policies has policies_format=None, not 2: it was
+   compiled before round 2, when a flat policies.dispatch {type: X} meant the per-scope solver
+   X under planner.topology; it now means a CENTRAL X. Recompile the scenario ...`); a legacy
+   profile (no `policies`) needs none. The check runs at run start in the sim main and in the
+   control dry run through `scenario_overrides.assert_policies_format`, NOT inside
+   `profile.assert_assignment_profiles_resolvable`: `profile.py` was owned by the runtime
+   review-fix agent during C4. Folding the call in there (one run-start check) is a one-line
+   follow-up. Every main-tree bundle has no `policies` and passes.
+7. **`candidate_settings.sample_scope`** is stamped (C3 review #3): `per_haulier` for a
+   `central` top (the tick scope, `context.TICK_SAMPLE_SCOPE`), `per_group` for Partitioned,
+   `per_company` for PooledMarket, mapped from the top's `information_model`
+   (`sim main.sample_scope_for`).
+8. **Control:** `build_run_policy_overrides(policies, params, overrides_json)` lost its
+   `solver` argument; `validate_run_policy_args` = build → `precheck_override_names(overrides,
+   solver)` (new, `scenario_overrides`; the name/params part is
+   `framework.check_named_overrides`, which validates every NAMED type and ref with the
+   merge's paths and skips refs whose type is not named, since their params belong to the
+   bundle's selection) → bundle → `run_dispatch_overrides` → format and run-start checks. With
+   neither overrides nor a solver the bundle is not read. The payload shape is unchanged:
+   `{"ok": true, "action": "validate_run_policies", "overrides": {...}}` /
+   `{"ok": false, "action": "validate_run_policies", "message": "..."}` (+ `commandId`);
+   `overrides` is the `ORSIM_POLICY_OVERRIDES` object and never contains `--solver`.
+   `openride run`/`run --json` now hand `--solver` to `SimulationRunner(solver=...)`
+   (`ORSIM_SOLVER`), as the control plane's `run-simulation` already did.
+9. **CLI.** `policy list [SLOT|KIND]` lists slots and the three component kinds (a kind name
+   lists only that kind) with an `Info model` column (`composite (inner)` under a
+   decomposition); `policy show SLOT|KIND NAME` renders a ref param as `ref → <kind>`
+   (`(leaf)`), its default type and the names it accepts, plus model / share tag format /
+   module RNG. `solver list` is `policy list dispatch` restricted to the leaves (no longer
+   byte-equal to it; its test was updated). The round-1 `legacy` slot rendering is removed.
+   `scenario new/edit --solver X` never writes a flat leaf: flags rebase nested over the
+   current block (`merge_params`, carried inner on a top change), then `--solver` sets the
+   innermost solver (new with no selection: `{type: Partitioned, params: {inner: {type: X}}}`;
+   a central top is replaced; the same solver keeps its params; a flags-stated different
+   type there, or a decomposition name, is refused). `new --spec-file` of a legacy spec rebases
+   on its translation and drops the dials it supersedes (`drop_dispatch_dials_superseded_by`).
+   `known_solvers()` (frontend_scenario_spec and scenario_overrides) lists leaves only.
+10. **Fixes found on the way:** `spec_compile._profile_policies` folded a legacy
+    `use_spatial_matching: false` into the TOP's params, which under the round-2 translation
+    is `Partitioned` (no `candidates`), i.e. silently not at all; it now folds into the
+    innermost solver. The editForm display fallback (a spec that does not compile) is nested
+    (`{type: Partitioned|PooledMarket, params: {inner: {type: <raw solver>, params: {}}}}`).
+11. **Tests.** New: `tests/test_legacy_run_env_overrides.py` (11),
+    `tests/test_validate_run_policies_order.py` (3). This-branch edits:
+    `test_policies_spec_block.py` (+5 spec-listed/extended: pooled translation, messages 7
+    and 8, recipe verbatim, format marker; I1 now nested over both topologies; the stale
+    deployment case uses `Partitioned{inner}` because the legacy recipe's `topology:
+    partitioned` would now trip message 7 first), `test_policies_spec_carry.py` (+1),
+    `test_policy_run_overrides.py` (env helper renamed to `_apply_dispatch_overrides_or_exit`,
+    message 12, `--solver` innermost / composite (11), sample scope, the `Policies
+    effective:` line, CLI `--solver` nested, the control payload without the solver),
+    `test_policy_override_equals_compiled_edit.py` (paths `dispatch.inner.*`, compile cases on
+    `Partitioned{inner}` plus central and PooledMarket recompiles, the PooledMarket per-run
+    case), `test_policy_review_fixes.py` (`build_run_policy_overrides` signature, payload
+    without solver), `test_frontend_editform_policy_slots.py` (nested fallback; the compiled
+    case authors `Partitioned{inner}` because the smoke spec's `topology: partitioned` would
+    trip message 7 next to a central leaf), `test_cli_policy_group.py` (round-2 fake catalog
+    with components, model column, ref rendering, `solver list` leaves), `test_policy_catalog.py`
+    (`known_solvers` leaves), `test_policy_fail_loud.py` / `test_cli_policy_group.py` (the
+    renamed sim-main helper in the source-order asserts), `test_policy_round2_c3_fixes.py`
+    (the C3-transitional `--solver` assertion now goes through `run_dispatch_overrides`).
+    `test_assemble_spec_key_registry.py`: a pre-existing FILE, but the edited lines are the
+    `policies` sentinel this branch added in round 1 (`b98d452`); its flat
+    `{type: GreedyNearest}` next to the sentinel planner's `topology: pooled` now trips
+    message 7, so it is respelled as the same round-1 selection in round-2 form
+    (`PooledMarket{max_rounds: 7, inner: GreedyNearest(3.25)}`). Nothing pre-branch changed.
+    **Pre-existing test edited (spec-listed only):** `test_scenario_market_overrides.py`:
+    `fail_soft` → `fail_loud`; `patches_only_loaded_behaviors` (type change resets params,
+    legacy-shape mirror); `rejects_out_of_range` (0, 101, "x" raise; 11 applied);
+    `accepts_unknown_algorithm_names` → `rejects_unknown_component_names`; module docstring.
+    Mutation checks: 39 mutations over the new invariant tests (files restored by hash),
+    37 caught; the two survivors (removing `_set_innermost`'s same-type early return, and
+    making `_merge_ref` reset a same-type ref) each leave the other mechanism holding the
+    "same solver keeps its params" assertion, which that test's docstring states instead of
+    claiming teeth.

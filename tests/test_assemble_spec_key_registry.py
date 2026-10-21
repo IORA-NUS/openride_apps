@@ -53,8 +53,10 @@ def _sentinel_for(key: str):
         "solverParams": {"dual_cycle_bonus_km": 3.25},
         # The policy-slot selection (policy slots plan §4 P2.4). CARRY_IF_ABSENT: a save
         # that does not speak it must keep the authored dispatch policy and params.
-        "policies": {"dispatch": {"type": "GreedyNearest", "timing": "online",
-                                  "params": {"dual_cycle_bonus_km": 3.25}}},
+        # Round 2 (§3.6): the same selection spelled as a tree, so it agrees with the
+        # sentinel planner's topology 'pooled' / market (messages 7, 8) and solver.
+        "policies": {"dispatch": {"type": "PooledMarket", "timing": "online", "params": {
+            "max_rounds": 7, "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 3.25}}}}},
         "roleSettings": {"truck": {"speed": 42}},
         "overrides": {"facility": {"gate_count": 8}},
         # Per-facility rules (facility rules plan §9). CARRY_IF_ABSENT, matching

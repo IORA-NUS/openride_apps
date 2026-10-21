@@ -430,6 +430,19 @@ def known_policy_slots() -> dict[str, Any]:
     return slots
 
 
+def known_policy_components() -> dict[str, Any]:
+    """Return the component catalog (``known-policies.components``): ``{kind: entry}``.
+
+    Round 2: the market components (``market.offer``/``claim``/``arbitration``) that
+    ``PooledMarket`` references; ``ControlError`` when the control plane predates them.
+    """
+    payload = _ok(_run_command(["known-policies"]))
+    components = payload.get("components")
+    if not isinstance(components, dict):
+        raise ControlError("known-policies returned no 'components' catalog (control plane predates round 2?)")
+    return components
+
+
 def policy_validate(slot: str, name: str) -> dict[str, Any]:
     """Run the contract battery; return ``{ok, slot, name, results: [...], message}``.
 

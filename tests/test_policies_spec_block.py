@@ -85,6 +85,141 @@ def test_legacy_solver_translates_to_partitioned_inner():
     assert _profile(compiled)["solver_params"]["dual_cycle_bonus_km"] == 3.0
 
 
+def test_planner_topology_pooled_translates_to_pooled_market_with_market_block():
+    """Round 2 (§3.6): ``planner.topology`` pooled (or ``two-stage``) wraps the legacy
+    solver in ``PooledMarket`` whose params are the ``planner.market`` block; absent
+    roles take their kind's default and an absent ``max_rounds`` is 20.
+
+    Verified to have teeth: making ``wrap_legacy_leaf`` ignore the topology failed the
+    type assertion; dropping the market read failed the params assertion."""
+    market = {"offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0}}, "max_rounds": 5}
+    for topology in ("pooled", "two-stage"):
+        compiled = _compile(_spec(solver="GreedyNearest",
+                                  planner={"topology": topology, "market": market}))
+        entry = compiled.recipe["policies"]["dispatch"]
+        assert entry == {"type": "PooledMarket", "timing": "online", "params": {
+            "max_rounds": 5,
+            "offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0}},
+            "claim": {"type": "ClaimAllPlanned", "params": {}},
+            "arbitration": {"type": "LowestCost", "params": {}},
+            "inner": {"type": "GreedyNearest", "params": {}}}}, topology
+        assert _profile(compiled)["strategy"] == "GreedyNearest"
+    with pytest.raises(SpecValidationError, match="unknown market.offer component 'OfferAl'"):
+        _compile(_spec(planner={"topology": "pooled", "market": {"offer": {"type": "OfferAl"}}}))
+
+
+def _part(leaf="GreedyNearest", **params):
+    inner = {"type": leaf, "params": params} if params else {"type": leaf}
+    return {"dispatch": {"type": "Partitioned", "params": {"inner": inner}}}
+
+
+_POOLED = {"dispatch": {"type": "PooledMarket", "params": {
+    "max_rounds": 5, "offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0}},
+    "inner": {"type": "GreedyNearest"}}}}
+
+
+def test_authored_topology_disagreeing_with_policies_is_rejected():
+    """Message 7, read from the RAW planner: agreeing spellings (and an absent or empty
+    topology) compile; any value next to a central top is refused.
+
+    Verified to have teeth: reading the normalised ``planner_cfg`` (which fills
+    ``partitioned``) made the central-without-topology case raise; deleting the check
+    let the pooled/Partitioned pair compile."""
+    with pytest.raises(SpecValidationError) as exc:
+        _compile(_spec(planner={"topology": "pooled"}, policies=_part()))
+    assert str(exc.value) == (
+        "spec sets planner.topology='pooled' but policies.dispatch.type='Partitioned'. "
+        "planner.topology is the legacy spelling of the dispatch decomposition (pooled = "
+        "PooledMarket, partitioned = Partitioned); remove planner.topology.")
+    with pytest.raises(SpecValidationError, match="planner.topology='partitioned' but policies.dispatch.type='GreedyNearest'"):
+        _compile(_spec(planner={"topology": "partitioned"}, policies={"dispatch": {"type": "GreedyNearest"}}))
+    with pytest.raises(SpecValidationError, match="planner.topology='partitioned' but policies.dispatch.type='PooledMarket'"):
+        _compile(_spec(planner={"topology": "partitioned"}, policies=_POOLED))
+    _compile(_spec(planner={"topology": "partitioned"}, policies=_part()))
+    _compile(_spec(planner={"topology": "two-stage"}, policies=_POOLED))
+    _compile(_spec(policies={"dispatch": {"type": "GreedyNearest"}}))  # no planner: central is fine
+    _compile(_spec(planner={"timing": {"mode": "online"}}, policies={"dispatch": {"type": "GreedyNearest"}}))
+
+
+def test_authored_market_disagreeing_with_pooled_market_is_rejected():
+    """Message 8: an authored ``planner.market`` next to ``PooledMarket`` must resolve to
+    its params (defaults filled on both sides); next to another top it is inert.
+
+    Verified to have teeth: deleting the market comparison let the first spec compile;
+    comparing without filling defaults refused the agreeing (defaults-only) case."""
+    with pytest.raises(SpecValidationError) as exc:
+        _compile(_spec(planner={"market": {"offer": {"type": "OfferAll"}, "max_rounds": 9}}, policies=_POOLED))
+    assert str(exc.value) == (
+        "spec sets planner.market that disagrees with policies.dispatch PooledMarket params "
+        "(offer.type='OfferAll' vs 'OfferSpare', offer.params.keep_below_km=None vs 3.0, "
+        "offer.params.only_when_short=None vs True, max_rounds=9 vs 5). planner.market is the "
+        "legacy spelling of the PooledMarket params; move the values into policies.dispatch.params "
+        "and remove planner.market.")
+    agreeing = {"offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0, "only_when_short": True}},
+                "claim": {"type": "ClaimAllPlanned", "params": {}}, "max_rounds": 5}
+    _compile(_spec(planner={"topology": "pooled", "market": agreeing}, policies=_POOLED))
+    defaults_only = {"dispatch": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
+    _compile(_spec(planner={"market": {}}, policies=defaults_only))
+    # Inert next to another top (the pooled-arm configuration ORSIM_PLANNER_TOPOLOGY reads).
+    compiled = _compile(_spec(planner={"market": {"offer": {"type": "OfferNone"}}}, policies=_part()))
+    assert compiled.recipe["planner"] == {"market": {"offer": {"type": "OfferNone"}}}
+
+
+def test_recipe_echoes_an_authored_planner_verbatim(tmp_path, monkeypatch):
+    """Next to an authored block the recipe (= ``spec.json``) echoes the AUTHORED
+    ``planner`` (absent stays absent), so the compile-normalised default topology never
+    comes back as an authored ``partitioned`` that would refuse a central or PooledMarket
+    recompile; a legacy translation keeps echoing the normalised block (with its mirror).
+
+    Verified to have teeth: echoing ``deepcopy(planner_cfg)`` for an authored block in
+    ``Preprocessor._recipe_planner`` made both recompiles raise message 7."""
+    for policies in ({"dispatch": {"type": "GreedyNearest"}}, _POOLED):
+        first = _bundle(tmp_path, monkeypatch, _spec(policies=policies), "a")
+        assert first["recipe"]["planner"] is None
+        second = _bundle(tmp_path, monkeypatch, first["recipe"], "b")
+        assert _assignment_profile(second) == _assignment_profile(first)
+    authored = {"timing": {"mode": "online"}, "sharing": None, "topology": "pooled"}
+    first = _bundle(tmp_path, monkeypatch, _spec(planner=authored, policies=_POOLED), "c")
+    assert first["recipe"]["planner"] == authored
+    legacy = _compile(_spec(solver="GreedyNearest"))
+    assert legacy.recipe["planner"]["topology"] == "partitioned"
+    assert legacy.recipe["planner"]["deployment"]["type"] == "GreedyNearest"
+
+
+def test_compiled_profile_carries_the_round2_format_marker(tmp_path, monkeypatch):
+    """C2 review #7: every compiled ``profile.policies`` carries ``policies_format: 2``,
+    and the run-start check refuses a block without it (a round-1 flat bundle, whose
+    ``{type: GreedyNearest}`` meant the per-scope solver, would otherwise run CENTRAL).
+    A per-run override writes the marker too; a legacy profile needs none.
+
+    Verified to have teeth: dropping the marker write in
+    ``spec_compile._patch_assignment_profiles`` failed the first assertion; dropping the
+    ``assert_policies_format`` call in the sim main's run-start check let the round-1
+    profile through (exit code assertion)."""
+    import apps.simulation.run_container_logistics_simulation as launcher
+    from apps.container_logistics.scenario.scenario_overrides import (
+        apply_policy_overrides,
+        assert_policies_format,
+    )
+
+    prof = _assignment_profile(_bundle(tmp_path, monkeypatch, _spec(solver="GreedyNearest")))
+    assert prof["policies_format"] == 2
+    assert_policies_format({"a0": {"profile": prof}})
+    round1 = {k: v for k, v in prof.items() if k != "policies_format"}
+    round1["policies"] = {"dispatch": {"type": "GreedyNearest", "version": "1", "kind": "operator",
+                                       "timing": "online", "params": {}}}
+    round1.pop("planner", None)  # the hand-deleted topology echo C2 review #7 describes
+    with pytest.raises(Exception, match="policies_format=None, not 2: it was compiled before round 2"):
+        assert_policies_format({"a0": {"profile": round1}})
+    with pytest.raises(SystemExit) as stop:
+        launcher._assert_policies_resolvable_or_exit({"a0": {"profile": round1}})
+    assert stop.value.code == 2
+    coll = {"a0": {"profile": {"strategy": "GreedyNearest"}}}
+    assert_policies_format(coll)  # legacy: translated, no marker needed
+    apply_policy_overrides(coll, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 1.0}}}}})
+    assert coll["a0"]["profile"]["policies_format"] == 2
+
+
 def test_planner_deployment_translates_when_no_solver():
     compiled = _compile(_spec(planner={"deployment": {
         "type": "GreedyNearest", "params": {"dual_cycle_radius_km": 0.9}}}))
@@ -252,7 +387,8 @@ def test_stale_deployment_mirror_never_outlives_an_authored_param(tmp_path, monk
         solver="GreedyNearest", solverParams={"dual_cycle_bonus_km": 0}), "c")
     assert legacy_first["recipe"]["planner"]["deployment"]["params"]["dual_cycle_bonus_km"] == 0
     stale = deepcopy(legacy_first["recipe"])
-    stale["policies"] = {"dispatch": {"type": "GreedyNearest"}}
+    # Round 2: the legacy recipe's planner.topology='partitioned' agrees with Partitioned.
+    stale["policies"] = {"dispatch": {"type": "Partitioned", "params": {"inner": {"type": "GreedyNearest"}}}}
     with pytest.raises(SpecValidationError, match="planner.deployment.params that disagree"):
         _bundle(tmp_path, monkeypatch, stale, "d")
 
@@ -294,22 +430,32 @@ def test_recipe_echoes_authored_not_resolved(tmp_path, monkeypatch):
 
 def test_policies_block_never_perturbs_generated_agents(tmp_path, monkeypatch):
     """Invariant I1: trucks, orders and facilities are byte-equal with and without an
-    equivalent ``policies`` block (the selection is carried data, not a sampling input).
+    equivalent ``policies`` block (the selection is carried data, not a sampling input),
+    for the NESTED blocks of both legacy topologies (round 2): ``Partitioned{inner}`` and
+    ``PooledMarket{market, inner}`` (the authored block replaces ``planner.topology`` /
+    ``planner.market``, as the editor saves it).
 
     Verified to have teeth: adding ``+ (1 if raw.get("policies") else 0)`` to the
     master seed in ``Preprocessor.compile`` failed the agent comparison.
     """
-    spec = json.loads(SMOKE_SPEC.read_text())
-    legacy = _bundle(tmp_path, monkeypatch, spec, "legacy")
-    with_block = deepcopy(spec)
-    with_block["policies"] = deepcopy(legacy["recipe"]["policies"])
-    with_block["solver"] = None
-    authored = _bundle(tmp_path, monkeypatch, with_block, "authored")
-    for role in ("truck", "order", "facility"):
-        a = json.dumps(legacy["agents"][role], sort_keys=True)
-        b = json.dumps(authored["agents"][role], sort_keys=True)
-        assert a == b, f"{role} agents changed when the policies block was added"
-    assert _assignment_profile(legacy)["policies"] == _assignment_profile(authored)["policies"]
+    base = json.loads(SMOKE_SPEC.read_text())
+    for topology in ("partitioned", "pooled"):
+        spec = deepcopy(base)
+        spec["planner"]["topology"] = topology
+        legacy = _bundle(tmp_path, monkeypatch, spec, f"legacy_{topology}")
+        with_block = deepcopy(spec)
+        with_block["policies"] = deepcopy(legacy["recipe"]["policies"])
+        assert with_block["policies"]["dispatch"]["params"]["inner"]["type"] == "GreedyNearest"
+        with_block["solver"] = None
+        for key in ("deployment", "topology", "market"):
+            with_block["planner"].pop(key)
+        authored = _bundle(tmp_path, monkeypatch, with_block, f"authored_{topology}")
+        for role in ("truck", "order", "facility"):
+            a = json.dumps(legacy["agents"][role], sort_keys=True)
+            b = json.dumps(authored["agents"][role], sort_keys=True)
+            assert a == b, f"[{topology}] {role} agents changed when the policies block was added"
+        assert _assignment_profile(legacy)["policies"] == _assignment_profile(authored)["policies"]
+        assert _assignment_profile(legacy)["planner"]["topology"] == topology
 
 
 @pytest.mark.parametrize("path", sorted(glob.glob(str(REPO_ROOT / "scenarios" / "*" / "spec.json"))))

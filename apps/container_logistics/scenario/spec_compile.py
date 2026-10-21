@@ -17,6 +17,7 @@ from apps.container_logistics.datagen.overrides import (
     override_sha256,
 )
 from apps.container_logistics.datagen.preprocess import Preprocessor, SpecValidationError
+from apps.container_logistics.policies.dispatch import legacy as _legacy
 from apps.container_logistics.policies.dispatch.profile import as_dispatch_node, mirror_dispatch_selection
 from apps.container_logistics.policies.framework import (
     PolicyError,
@@ -188,8 +189,14 @@ def _profile_policies(prof: dict, resolved: dict[str, ResolvedPolicy], provenanc
             "it is superseded. Set policies.dispatch.params.candidates='sampled' instead "
             "and remove use_spatial_matching."
         )
-    if "candidates" in block["dispatch"]["params"]:
-        block["dispatch"]["params"]["candidates"] = "sampled"
+    # The per-scope solver is the one that declares ``candidates`` (round-2: the
+    # translated top is a decomposition, whose own params carry only the ``inner``).
+    node, spec = block["dispatch"], get_policy_spec("dispatch", block["dispatch"]["type"])
+    while spec.inner_param is not None and isinstance(node["params"].get(spec.inner_param), dict):
+        node = node["params"][spec.inner_param]
+        spec = get_policy_spec("dispatch", node["type"])
+    if "candidates" in node["params"]:
+        node["params"]["candidates"] = "sampled"
     return block
 
 
@@ -197,7 +204,8 @@ def _patch_assignment_profiles(assignment: dict, resolved: dict[str, ResolvedPol
     """Write ``profile.policies`` onto every generated assignment behavior (in place).
 
     Behaviors may share one profile dict (the builder hands out the same object), so
-    each profile is patched once. Raises ``SpecValidationError`` if the
+    each profile is patched once, and gets the round-2 format marker
+    (``legacy.POLICIES_FORMAT_KEY``). Raises ``SpecValidationError`` if the
     ``profile.strategy`` mirror is not the resolved selection's innermost solver.
     """
     seen: set[int] = set()
@@ -214,6 +222,7 @@ def _patch_assignment_profiles(assignment: dict, resolved: dict[str, ResolvedPol
                 "override must not set strategy; set policies.dispatch)."
             )
         prof["policies"] = _profile_policies(prof, resolved, provenance)
+        prof[_legacy.POLICIES_FORMAT_KEY] = _legacy.POLICIES_FORMAT
 
 
 def _stagger_early_orders(order_collection: dict, orsim_settings: dict, early_n: int, truck_n: int) -> None:

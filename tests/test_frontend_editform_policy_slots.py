@@ -56,13 +56,16 @@ def test_editform_solver_mirror_is_raw_text_not_coerced():
     turned the typo into ``RandomAssignment``."""
     form = _form({"solver": "GreedyNeerest"})
     assert form["solver"] == "GreedyNeerest"
-    assert form["policySlots"] == {"dispatch": {"type": "GreedyNeerest"}}
+    # Round 2 (C4): the display fallback is nested too (the editor reads policySlots nested).
+    assert form["policySlots"] == {
+        "dispatch": {"type": "Partitioned", "params": {"inner": {"type": "GreedyNeerest", "params": {}}}}}
 
 
 def test_editform_of_a_compiled_scenario_carries_policy_slots(tmp_path, monkeypatch):
     monkeypatch.setenv("ORSIM_SCENARIOS_DIR", str(tmp_path / "root"))
     spec = json.loads(SMOKE_SPEC.read_text())
-    spec["policies"] = {"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 1.25}}}
+    spec["policies"] = {"dispatch": {"type": "Partitioned", "params": {"inner": {
+        "type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 1.25}}}}}
     spec["solver"] = None
     # A body speaking policies must not also carry the legacy planner.deployment it
     # supersedes: a contradicting one is a compile error (review F1).

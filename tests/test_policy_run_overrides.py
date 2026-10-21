@@ -5,8 +5,9 @@ What is locked (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P2.2, P2.5, P2.6):
   names may contain dots.
 - A changed type resets params to the new policy's defaults; the same type merges.
   Every merge is re-validated (no silent acceptance of a bad override).
-- ``ORSIM_SOLVER`` still works and is ``dispatch.type`` sugar; disagreeing with
-  ``ORSIM_POLICY_OVERRIDES`` is refused.
+- ``ORSIM_SOLVER`` / ``--solver`` still work and set the INNERMOST per-scope solver
+  (round-2 §3.3; a decomposition name is message 11); disagreeing with a type that
+  ``ORSIM_POLICY_OVERRIDES`` names at that place is refused (message 12).
 - The override patches ``profile.policies`` and the ``strategy`` mirror, never
   ``solver_params``, and a legacy profile's ``use_spatial_matching`` is folded away
   (the runtime resolver refuses it next to ``policies``).
@@ -37,6 +38,8 @@ from apps.container_logistics.policies.framework import (
 from apps.container_logistics.scenario.scenario_overrides import (
     apply_policy_overrides,
     apply_solver_override,
+    current_policies_for_profile,
+    run_dispatch_overrides,
 )
 
 
@@ -114,14 +117,23 @@ def test_invalid_override_param_raises():
         merge_policy_overrides(current, {"dispach": {"type": "GreedyNearest"}})
 
 
+_ENV = ("ORSIM_POLICY_OVERRIDES", "ORSIM_SOLVER", "ORSIM_PLANNER_TOPOLOGY", "ORSIM_OFFER_POLICY",
+        "ORSIM_CLAIM_POLICY", "ORSIM_ARBITRATION_RULE", "ORSIM_MARKET_MAX_ROUNDS")
+
+
+def _clean_env(monkeypatch):
+    for name in _ENV:
+        monkeypatch.delenv(name, raising=False)
+
+
 def test_orsim_solver_still_works(monkeypatch):
     import apps.simulation.run_container_logistics_simulation as launcher
 
-    monkeypatch.delenv("ORSIM_POLICY_OVERRIDES", raising=False)
+    _clean_env(monkeypatch)
     monkeypatch.setenv("ORSIM_SOLVER", "GreedyNearest")
     coll = _collection({"strategy": "RandomAssignment"})
-    name, overridden = launcher._apply_policy_overrides_or_exit(coll)
-    assert (name, overridden) == ("GreedyNearest", True)
+    merged, labels = launcher._apply_dispatch_overrides_or_exit(coll)
+    assert labels == {"dispatch": "GreedyNearest", "topology": None} and merged
     assert coll["assignment_0"]["profile"]["strategy"] == "GreedyNearest"
     assert apply_solver_override(_collection({}), "RandomAssignment") == "RandomAssignment"
     # A params-only override labels the policy with exactly the overridden params
@@ -130,27 +142,89 @@ def test_orsim_solver_still_works(monkeypatch):
     monkeypatch.setenv("ORSIM_POLICY_OVERRIDES",  # round 2: the solver's params are the inner's
                        json.dumps({"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}))
     coll = _collection({"strategy": "GreedyNearest"})
-    assert launcher._apply_policy_overrides_or_exit(coll) == (
-        "GreedyNearest(dual_cycle_bonus_km=0.0)", True)
+    assert launcher._apply_dispatch_overrides_or_exit(coll)[1]["dispatch"] == \
+        "GreedyNearest(dual_cycle_bonus_km=0.0)"
     monkeypatch.delenv("ORSIM_POLICY_OVERRIDES")
-    assert launcher._apply_policy_overrides_or_exit(_collection({})) == (None, False)
+    untouched = _collection({})
+    assert launcher._apply_dispatch_overrides_or_exit(untouched) == ({}, {"dispatch": None, "topology": None})
+    assert untouched == _collection({}), "nothing requested mutates nothing"
 
 
 def test_orsim_solver_conflicting_with_policy_override_raises(monkeypatch, capsys):
-    """Verified to have teeth: removing the conflict check (ORSIM_SOLVER silently wins)
-    failed the ``pytest.raises``."""
+    """Message 12, at the place ``--solver`` sets: the inner of a decomposition, the top
+    of a central selection.
+
+    Verified to have teeth: removing the conflict check in
+    ``scenario_overrides._set_innermost`` (ORSIM_SOLVER silently wins) failed both
+    ``pytest.raises``."""
     import apps.simulation.run_container_logistics_simulation as launcher
 
-    monkeypatch.setenv("ORSIM_SOLVER", "GreedyNearest")
-    monkeypatch.setenv("ORSIM_POLICY_OVERRIDES", json.dumps({"dispatch": {"type": "RandomAssignment"}}))
-    with pytest.raises(PolicyError) as exc:
-        launcher._resolve_policy_overrides()
-    assert str(exc.value) == ("ORSIM_SOLVER='GreedyNearest' conflicts with ORSIM_POLICY_OVERRIDES "
-                              "dispatch.type='RandomAssignment'")
+    _clean_env(monkeypatch)
+    monkeypatch.setenv("ORSIM_SOLVER", "RandomAssignment")
+    monkeypatch.setenv("ORSIM_POLICY_OVERRIDES",
+                       json.dumps({"dispatch": {"params": {"inner": {"type": "GreedyNearest"}}}}))
     with pytest.raises(SystemExit) as stop:
-        launcher._apply_policy_overrides_or_exit(_collection({}))
+        launcher._apply_dispatch_overrides_or_exit(_collection({}))
     assert stop.value.code == 2
-    assert capsys.readouterr().out.startswith("Policy configuration invalid; refusing to start the run:")
+    out = capsys.readouterr().out
+    assert out.startswith("Policy configuration invalid; refusing to start the run:")
+    assert ("--solver 'RandomAssignment' conflicts with dispatch.inner.type='GreedyNearest' from "
+            "--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, "
+            "pass one of them.") in out
+    with pytest.raises(PolicyError) as exc:  # a central top: --solver would replace it
+        run_dispatch_overrides(_collection({}), overrides={"dispatch": {"type": "GreedyNearest"}},
+                               solver="RandomAssignment")
+    assert str(exc.value).startswith("--solver 'RandomAssignment' conflicts with dispatch.type='GreedyNearest'")
+    # Agreeing is fine, and a decomposition top keeps its own params.
+    merged, labels = run_dispatch_overrides(
+        _collection({}), overrides={"dispatch": {"params": {"inner": {"type": "GreedyNearest"}}}},
+        solver="GreedyNearest")
+    assert labels["dispatch"] == "GreedyNearest"
+
+
+def test_solver_is_innermost_leaf():
+    """``--solver X`` sets the innermost per-scope solver of whatever is selected
+    (Partitioned's or PooledMarket's ``inner``), replaces a central leaf top, resets
+    params only when the type changes, and keeps the decomposition's own params.
+
+    Verified to have teeth: making ``_set_innermost`` always write the top type turned
+    the Partitioned case into a central RandomAssignment. (The "same type keeps its
+    params" assertion is held by two independent mechanisms, ``_set_innermost``'s early
+    return and ``merge_params``' same-type merge; removing either alone survives.)"""
+    def label(profile, **kw):
+        coll = _collection(profile)
+        run_dispatch_overrides(coll, **kw)
+        return current_policies_for_profile(coll["assignment_0"]["profile"])[0]["dispatch"]
+
+    assert label({"strategy": "GreedyNearest"}, solver="RandomAssignment").label == \
+        "Partitioned/RandomAssignment"
+    pooled = label({"strategy": "GreedyNearest", "planner": {"topology": "pooled", "market": {"max_rounds": 7}}},
+                   solver="RandomAssignment")
+    assert pooled.label == "PooledMarket/RandomAssignment" and pooled.params["max_rounds"] == 7
+    central = label({}, overrides={"dispatch": {"type": "GreedyNearest"}}, solver=None)
+    assert central.label == "GreedyNearest", "a leaf --policy is a CENTRAL arm (round 2)"
+    same = label({"strategy": "GreedyNearest", "solver_params": {"dual_cycle_bonus_km": 2.0}},
+                 solver="GreedyNearest")
+    assert same.params["inner"]["params"]["dual_cycle_bonus_km"] == 2.0, "the same type keeps its params"
+    swapped = label({"strategy": "GreedyNearest", "solver_params": {"dual_cycle_bonus_km": 2.0}},
+                    overrides={"dispatch": {"type": "PooledMarket"}}, solver="RandomAssignment")
+    assert swapped.label == "PooledMarket/RandomAssignment"
+
+
+def test_solver_naming_a_composite_is_rejected():
+    """Message 11. Verified to have teeth: dropping the ``is_composite`` check in
+    ``_checked_solver`` built ``Partitioned/Partitioned``-shaped garbage that the
+    resolver refused with message 2 instead."""
+    coll = _collection({"strategy": "GreedyNearest"})
+    for name in ("PooledMarket", "Partitioned"):
+        with pytest.raises(PolicyError) as exc:
+            run_dispatch_overrides(coll, solver=name)
+        assert str(exc.value) == (
+            f"--solver {name!r} names a decomposition, not a per-scope solver. --solver sets the inner "
+            f"solver (GreedyNearest, RandomAssignment); select a decomposition with --policy dispatch={name}.")
+    assert coll == _collection({"strategy": "GreedyNearest"}), "nothing mutated"
+    with pytest.raises(UnknownPolicyError, match="^--solver 'Nope': Unknown dispatch policy 'Nope'"):
+        run_dispatch_overrides(coll, solver="Nope")
 
 
 def test_override_patches_profile_policies_and_strategy_mirror():
@@ -217,8 +291,10 @@ def test_run_config_meta_mirrors_policies(capsys):
     stamp = mgr.orsim_settings["POLICIES"]
     assert stamp["dispatch"]["source"] == "legacy-profile"
     assert stamp["dispatch"]["candidate_settings"]["max_trucks_per_scope"] == 40
-    # Round 2: a legacy profile's selection is Partitioned/GreedyNearest (C4 adds the label).
-    assert "Policies effective: dispatch=Partitioned v1 timing=online params=" in capsys.readouterr().out
+    # Round 2 (C4): the line prints the selection label and its information model.
+    assert ("Policies effective: dispatch=Partitioned/GreedyNearest v1 timing=online "
+            "information_model=per_group params=") in capsys.readouterr().out
+    assert stamp["dispatch"]["candidate_settings"]["sample_scope"] == "per_group"
     assert mgr.get_run_config_meta()["policies"] == stamp
 
 
@@ -256,9 +332,11 @@ def test_run_simulation_command_rejects_bad_policy_without_spawning(tmp_path, mo
     assert rc == 1 and not spawned
     assert payload["ok"] is False and payload["action"] == "run_simulation"
     assert "'dual_cycle_bonus_km' must be >= 0" in payload["message"]
-    rc = command._run(["run-simulation", "--solver", "RandomAssignment", "--policy", "dispatch=GreedyNearest"])
+    rc = command._run(["run-simulation", "--scenario", slug,
+                       "--solver", "RandomAssignment", "--policy", "dispatch=GreedyNearest"])
     assert rc == 1 and not spawned
-    assert "conflicts" in json.loads(capsys.readouterr().out.strip().splitlines()[-1])["message"]
+    assert "conflicts with dispatch.type='GreedyNearest'" in json.loads(
+        capsys.readouterr().out.strip().splitlines()[-1])["message"]
 
 
 def test_run_simulation_command_ships_validated_overrides(tmp_path, monkeypatch, capsys):
@@ -275,10 +353,11 @@ def test_run_simulation_command_ships_validated_overrides(tmp_path, monkeypatch,
     monkeypatch.setattr(ServiceManager, "run_simulation_background", _fake)
     slug = _compiled_smoke_scenario(tmp_path, monkeypatch)
     rc = command._run(["run-simulation", "--scenario", slug,
-                       "--policy-param", "dispatch.candidates=sampled", "--solver", "GreedyNearest"])
+                       "--policy-param", "dispatch.inner.candidates=sampled", "--solver", "RandomAssignment"])
     assert rc == 0, capsys.readouterr().out
-    assert seen["policy_overrides"] == {"dispatch": {"type": "GreedyNearest",
-                                                     "params": {"candidates": "sampled"}}}
+    # Round 2 (C4): --solver travels separately (ORSIM_SOLVER), never folded into the overrides.
+    assert seen["policy_overrides"] == {"dispatch": {"params": {"inner": {"params": {"candidates": "sampled"}}}}}
+    assert seen["solver"] == "RandomAssignment"
 
 
 def test_validation_dry_runs_against_the_scenario_bundle_including_old_bundles(tmp_path, monkeypatch):
@@ -315,38 +394,52 @@ def test_validation_dry_runs_against_the_scenario_bundle_including_old_bundles(t
         behavior["profile"]["use_spatial_matching"] = False
     bundle_path.write_text(json.dumps(bundle))
     before = bundle_path.read_text()
-    assert validate_run_policy_args(spec["slug"], "RandomAssignment", [], []) == {
-        "dispatch": {"type": "RandomAssignment"}}
+    # --solver alone ships no overrides (it is ORSIM_SOLVER) but is still dry-run.
+    assert validate_run_policy_args(spec["slug"], "RandomAssignment", [], []) == {}
     assert bundle_path.read_text() == before, "the dry run must never write the bundle"
 
 
-def test_cli_solver_is_sugar_for_policy_dispatch_and_edit_rebases():
-    """``--solver X`` becomes ``policies.dispatch.type`` (never the legacy key); an edit
-    keeps the current params unless the type changes.
+def test_cli_solver_writes_the_innermost_solver_never_a_flat_leaf():
+    """``scenario new --solver X`` writes ``Partitioned{inner: X}`` (a flat ``{type: X}``
+    now means a CENTRAL X); ``edit --solver X`` sets the innermost solver of the current
+    selection; ``--policy-param`` alone rebases nested over the current block.
 
-    Verified to have teeth: keeping params across a type change in
-    ``_rebase_policies`` carried Greedy's bonus onto RandomAssignment.
+    Verified to have teeth: restoring the round-1 ``dispatch["type"] = solver`` in
+    ``_policies_from_flags`` failed the first assertion; resetting the carried inner on a
+    top-type change in ``_rebase_policies`` failed the PooledMarket assertion.
     """
     import argparse
 
     from openride import scenario_cmd as S
 
-    args = argparse.Namespace(solver="GreedyNearest", policy=[],
-                              policy_param=["dispatch.dual_cycle_bonus_km=0"])
-    spec = S._spec_from_flags(args)
+    def flags(solver=None, policy=(), param=()):
+        return argparse.Namespace(solver=solver, policy=list(policy), policy_param=list(param))
+
+    spec = S._spec_from_flags(flags("GreedyNearest", param=["dispatch.inner.dual_cycle_bonus_km=0"]))
     assert "solver" not in spec
-    assert spec["policies"] == {"dispatch": {"type": "GreedyNearest",
-                                             "params": {"dual_cycle_bonus_km": 0}}}
-    current = {"dispatch": {"type": "GreedyNearest", "timing": "online",
-                            "params": {"dual_cycle_bonus_km": 2.0, "candidates": "sampled"}}}
-    only_param = {"dispatch": {"params": {"dual_cycle_radius_km": 1}}}
-    assert S._rebase_policies(only_param, current)["dispatch"] == {
-        "type": "GreedyNearest", "timing": "online",
-        "params": {"dual_cycle_bonus_km": 2.0, "candidates": "sampled", "dual_cycle_radius_km": 1}}
-    assert S._rebase_policies({"dispatch": {"type": "RandomAssignment"}}, current)["dispatch"] == {
-        "type": "RandomAssignment", "timing": "online", "params": {}}
+    assert spec["policies"] == {"dispatch": {"type": "Partitioned", "params": {
+        "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}}}
+    current = {"dispatch": {"type": "PooledMarket", "timing": "online", "params": {
+        "max_rounds": 5, "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2.0}}}}}
+    edited = S._policies_from_flags(flags("RandomAssignment"), current)
+    assert edited["dispatch"] == {"type": "PooledMarket", "timing": "online", "params": {
+        "max_rounds": 5, "inner": {"type": "RandomAssignment"}}}, "edit sets the innermost solver"
+    kept = S._policies_from_flags(flags("GreedyNearest"), current)
+    assert kept == current, "the same solver keeps its params"
+    only_param = S._policies_from_flags(flags(param=["dispatch.inner.dual_cycle_radius_km=1"]), current)
+    assert only_param["dispatch"]["params"]["inner"] == {
+        "type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2.0, "dual_cycle_radius_km": 1}}
+    to_part = S._policies_from_flags(flags(policy=["dispatch=Partitioned"]), current)
+    assert to_part["dispatch"]["params"] == {"inner": current["dispatch"]["params"]["inner"]}, (
+        "changing the decomposition keeps the per-scope solver")
+    central = S._policies_from_flags(flags("RandomAssignment"), {"dispatch": {"type": "GreedyNearest"}})
+    assert central == {"dispatch": {"type": "RandomAssignment"}}, "a central leaf top is replaced"
+    with pytest.raises(ValueError, match="names a decomposition"):
+        S._policies_from_flags(flags("PooledMarket"), None)
+    with pytest.raises(ValueError, match=r"conflicts with dispatch\.inner\.type='GreedyNearest'"):
+        S._policies_from_flags(flags("RandomAssignment", param=["dispatch.inner=GreedyNearest"]), None)
     with pytest.raises(ValueError, match="needs a policy"):
-        S._rebase_policies(only_param, None)
+        S._rebase_policies({"dispatch": {"params": {"k": 1}}}, None)
 
 
 def test_openride_run_accepts_policy_flags():
@@ -360,3 +453,28 @@ def test_openride_run_accepts_policy_flags():
                               "--policy-param", "dispatch.dual_cycle_bonus_km=0"])
     assert args.policy == ["dispatch=GreedyNearest"]
     assert args.policy_param == ["dispatch.dual_cycle_bonus_km=0"]
+    solver_help = next(a.help for a in parser._subparsers._group_actions[0].choices["run"]._actions
+                       if "--solver" in a.option_strings)
+    assert "innermost per-scope solver" in solver_help.lower(), solver_help
+
+
+def test_stamp_candidate_settings_names_the_sample_scope():
+    """``candidate_settings.sample_scope`` says where ``max_trucks_per_scope`` applies:
+    per haulier on a central leaf's tick scope, per cooperation group under Partitioned,
+    per company under PooledMarket (C3 deviation 6; a central arm can see MORE
+    candidates than the same leaf per group on a cooperating structure).
+
+    Verified to have teeth: stamping a constant ``"per_scope"`` in
+    ``_stamp_effective_policies`` failed every case; mapping by the top NAME instead of
+    its information model is invisible here (equivalent for the built-ins)."""
+    import types
+
+    import apps.simulation.run_container_logistics_simulation as launcher
+
+    for overrides, want in (({}, "per_group"), ({"dispatch": {"type": "PooledMarket"}}, "per_company"),
+                            ({"dispatch": {"type": "GreedyNearest"}}, "per_haulier")):
+        coll = _collection({"strategy": "GreedyNearest"})
+        run_dispatch_overrides(coll, overrides=overrides, solver="GreedyNearest" if not overrides else None)
+        sm = types.SimpleNamespace(orsim_settings={}, get_agent_collection=lambda role, c=coll: c)
+        launcher._stamp_effective_policies(sm, True)
+        assert sm.orsim_settings["POLICIES"]["dispatch"]["candidate_settings"]["sample_scope"] == want, overrides

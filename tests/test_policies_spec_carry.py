@@ -112,3 +112,38 @@ def test_edit_with_policies_patch_over_legacy_spec_compiles(tmp_path, monkeypatc
     bundle = json.loads((target / "scenario.json").read_text())
     prof = next(iter(bundle["agents"]["assignment"].values()))["profile"]
     assert prof["policies"]["dispatch"]["params"]["dual_cycle_bonus_km"] == 0.0
+
+
+def test_body_with_policies_drops_carried_topology_and_market(tmp_path, monkeypatch):
+    """Round 2 (§3.6, §5 C4): next to a ``policies`` body the carried ``planner.topology``
+    and ``planner.market`` (the legacy spellings of the decomposition) are dropped like
+    ``planner.deployment``; the rest of the carried planner stays. So a dashboard save of
+    a PooledMarket (or central) selection over a legacy ``partitioned`` spec compiles
+    instead of tripping message 7, end to end through ``edit_scenario``.
+
+    Verified to have teeth: removing ``"topology"`` from
+    ``frontend_scenario_spec._PLANNER_DISPATCH_SPELLINGS`` failed the helper assertion
+    and the edit raised message 7; removing ``"market"`` failed the helper assertion.
+    """
+    prev = {**_legacy_previous(), "planner": {
+        "topology": "partitioned", "timing": {"mode": "online"}, "rebate_aware": False,
+        "deployment": {"type": "GreedyNearest", "params": {}},
+        "market": {"offer": {"type": "OfferSpare", "params": {}}, "max_rounds": 3}}}
+    pooled = {"dispatch": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
+    out = F.drop_dispatch_dials_superseded_by({"policies": pooled}, prev)
+    assert out["planner"] == {"timing": {"mode": "online"}, "rebate_aware": False}
+    assert prev["planner"]["topology"] == "partitioned", "the carried spec is never mutated"
+    spec = F.assemble_spec({"name": "n", "slug": "prev", "policies": pooled}, DOMAIN, previous=prev)
+    assert "topology" not in spec["planner"] and "market" not in spec["planner"]
+    Preprocessor.compile(spec, domain=DOMAIN)
+
+    root = tmp_path / "root"
+    monkeypatch.setenv("ORSIM_SCENARIOS_DIR", str(root))
+    smoke = json.loads(SMOKE_SPEC.read_text())  # legacy: planner.topology=partitioned + market
+    F.generate_scenario(str(tmp_path / "datahub"), DOMAIN, smoke)
+    F.edit_scenario(str(tmp_path / "datahub"), DOMAIN, smoke["slug"], {"policies": deepcopy(pooled)})
+    target = Path(F.scenario_dir(str(tmp_path / "datahub"), DOMAIN, smoke["slug"]))
+    bundle = json.loads((target / "scenario.json").read_text())
+    prof = next(iter(bundle["agents"]["assignment"].values()))["profile"]
+    assert prof["policies"]["dispatch"]["type"] == "PooledMarket"
+    assert prof["planner"]["topology"] == "pooled", "the compiled mirror follows the selection"

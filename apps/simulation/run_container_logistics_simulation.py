@@ -7,10 +7,10 @@ from apps.container_logistics.scenario.scenario_config import default_scenario_n
 from apps.container_logistics.scenario.scenario_manager import ScenarioManager
 from apps.container_logistics.scenario.scenario_overrides import (
     apply_cooperation_override,
-    apply_market_override,
-    apply_planner_topology_override,
-    apply_policy_overrides,
+    assert_policies_format,
     current_policies_for_profile,
+    dispatch_override_label,  # noqa: F401 - re-exported (the run-name label format lives there)
+    run_dispatch_overrides,
 )
 from apps.simulation.container_logistics_wiring import (
     build_agent_source,
@@ -52,13 +52,14 @@ def _refuse_invalid_policy_config(error: PolicyError) -> None:
 def _assert_policies_resolvable_or_exit(assignment_collection) -> None:
     """Exit 2 (via :func:`_refuse_invalid_policy_config`) on an unresolvable dispatch policy."""
     try:
+        assert_policies_format(assignment_collection)
         assert_assignment_profiles_resolvable(assignment_collection)
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
 
 
 def _resolve_solver() -> str | None:
-    # Per-run assignment-solver override (set by the control layer / frontend). Applied to
+    # Per-run per-scope solver override (set by the control layer / frontend). Applied to
     # the loaded assignment behavior in-memory before agents spawn — no scenario regen, no
     # celery restart (the solver registry already lives in the worker). See CLAUDE.md.
     value = os.environ.get("ORSIM_SOLVER", "").strip()
@@ -66,110 +67,50 @@ def _resolve_solver() -> str | None:
 
 
 def _resolve_policy_overrides() -> dict:
-    """Per-run policy overrides: ``ORSIM_POLICY_OVERRIDES`` (JSON) plus ``ORSIM_SOLVER``.
+    """Per-run policy overrides: ``ORSIM_POLICY_OVERRIDES`` (JSON), ``{}`` when unset.
 
-    ``ORSIM_SOLVER=X`` is sugar for ``{"dispatch": {"type": "X"}}``. Raises
-    ``PolicyError`` for malformed JSON or when both name a different dispatch type.
+    ``ORSIM_SOLVER`` travels separately (the innermost per-scope solver, round-2 §3.3);
+    :func:`_apply_dispatch_overrides_or_exit` combines the two. Raises ``PolicyError``
+    for malformed JSON.
     """
     import json
 
     raw = os.environ.get("ORSIM_POLICY_OVERRIDES", "").strip()
-    overrides: dict = {}
-    if raw:
-        try:
-            overrides = json.loads(raw)
-        except ValueError as exc:
-            raise PolicyError(f"ORSIM_POLICY_OVERRIDES is not valid JSON ({exc}): {raw!r}") from exc
-        if not isinstance(overrides, dict):
-            raise PolicyError(f"ORSIM_POLICY_OVERRIDES must be a JSON object of slot -> entry (got {raw!r}).")
-    solver = _resolve_solver()
-    if solver:
-        dispatch = overrides.get("dispatch") or {}
-        if not isinstance(dispatch, dict):
-            raise PolicyError(f"ORSIM_POLICY_OVERRIDES dispatch must be an object (got {dispatch!r}).")
-        if dispatch.get("type") not in (None, solver):
-            raise PolicyError(
-                f"ORSIM_SOLVER={solver!r} conflicts with ORSIM_POLICY_OVERRIDES "
-                f"dispatch.type={dispatch['type']!r}"
-            )
-        overrides = {**overrides, "dispatch": {**dispatch, "type": solver}}
+    if not raw:
+        return {}
+    try:
+        overrides = json.loads(raw)
+    except ValueError as exc:
+        raise PolicyError(f"ORSIM_POLICY_OVERRIDES is not valid JSON ({exc}): {raw!r}") from exc
+    if not isinstance(overrides, dict):
+        raise PolicyError(f"ORSIM_POLICY_OVERRIDES must be a JSON object of slot -> entry (got {raw!r}).")
     return overrides
 
 
-def _apply_policy_overrides_or_exit(assignment_collection) -> tuple[str | None, bool]:
-    """Apply the per-run policy overrides; exit 2 on any ``PolicyError``.
+def _apply_dispatch_overrides_or_exit(assignment_collection) -> tuple[dict, dict]:
+    """Apply every per-run dispatch input in one place; exit 2 on any ``PolicyError``.
 
-    Returns ``(run-name label or None, any override applied)``; the label is
-    :func:`dispatch_override_label`'s.
+    ``ORSIM_POLICY_OVERRIDES``, ``ORSIM_PLANNER_TOPOLOGY``, ``ORSIM_OFFER_POLICY`` /
+    ``ORSIM_CLAIM_POLICY`` / ``ORSIM_ARBITRATION_RULE`` / ``ORSIM_MARKET_MAX_ROUNDS``
+    and ``ORSIM_SOLVER``, in that order, through
+    ``scenario_overrides.run_dispatch_overrides`` (the function the control plane's
+    dry run calls too). Returns ``(merged_overrides, labels)``: ``labels`` holds the
+    ``dispatch`` and ``topology`` run-name segments (or ``None``).
     """
+    env = {key: os.environ.get(name, "").strip() or None for key, name in (
+        ("topology", "ORSIM_PLANNER_TOPOLOGY"), ("offer", "ORSIM_OFFER_POLICY"),
+        ("claim", "ORSIM_CLAIM_POLICY"), ("arbitration", "ORSIM_ARBITRATION_RULE"),
+        ("max_rounds", "ORSIM_MARKET_MAX_ROUNDS"),
+    )}
     try:
-        overrides = _resolve_policy_overrides()
-        resolved = apply_policy_overrides(assignment_collection, overrides)
+        return run_dispatch_overrides(
+            assignment_collection,
+            overrides=_resolve_policy_overrides(),
+            solver=_resolve_solver(),
+            **env,
+        )
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
-    if not resolved:
-        return None, False
-    return dispatch_override_label(overrides, resolved), True
-
-
-def dispatch_override_label(overrides: dict, resolved: dict) -> str | None:
-    """The ``· <label>`` segment a dispatch override appends to the run name, or ``None``.
-
-    Format (the frontend's run-name parser recognises ``^Name\\(...\\)$`` segments):
-
-    - a TYPE-only override: ``<DispatchName>`` (unchanged from the old ``--solver``);
-    - an override that sets params (with or without a type):
-      ``<DispatchName>(k=v,k=v)`` with ONLY the overridden params, keys sorted, each
-      value the validated value as compact JSON (``json.dumps``, separators
-      ``,``/``:``), e.g. ``GreedyNearest(dual_cycle_bonus_km=0.0)``;
-    - no dispatch type or params override (e.g. timing only): ``None``.
-
-    ``overrides`` is the raw ``{slot: entry}`` request; ``resolved`` the merged
-    ``{slot: ResolvedPolicy}`` it produced.
-    """
-    import json
-
-    entry = overrides.get("dispatch") if isinstance(overrides, dict) else None
-    if not isinstance(entry, dict):
-        return None
-    name, params, entry = _overridden_node(resolved["dispatch"], entry)
-    keys = sorted((entry.get("params") or {}).keys())
-    if keys:
-        args = ",".join(
-            f"{k}={json.dumps(params[k], separators=(',', ':'), sort_keys=True)}" for k in keys
-        )
-        return f"{name}({args})"
-    return name if entry.get("type") else None
-
-
-def _overridden_node(dispatch, entry) -> tuple[str, dict, dict]:
-    """``(name, params, entry)`` of the selection node a dispatch override is about.
-
-    The top node, unless the override reaches into the innermost per-scope solver of
-    a decomposition: a ``type`` naming that solver (``scenario_overrides
-    .leaf_retargeted``), or params that only set the ``inner`` ref
-    (``--policy-param dispatch.inner.k=v``). Then that node and its part of the
-    override, so a solver override keeps its pre-v2 run-name segment (``· X``,
-    ``· X(k=v)``).
-    """
-    from apps.container_logistics.policies.framework import get_policy_spec
-
-    name, params = dispatch.name, dispatch.params
-    wanted = entry.get("type").strip() if isinstance(entry.get("type"), str) else None
-    while True:
-        descend = get_policy_spec("dispatch", name).inner_param
-        if descend is None or not isinstance(params.get(descend), dict):
-            return name, params, entry
-        inner_only = wanted is None and set(entry.get("params") or {}) == {descend} \
-            and isinstance(entry["params"][descend], dict)
-        if wanted is not None and name != wanted:
-            entry = {"type": wanted, "params": entry.get("params")} if entry.get("params") else {"type": wanted}
-        elif inner_only:
-            entry = entry["params"][descend]
-            wanted = entry.get("type").strip() if isinstance(entry.get("type"), str) else None
-        else:
-            return name, params, entry
-        name, params = params[descend]["type"], params[descend].get("params") or {}
 
 
 def _apply_capture_env_or_exit(assignment_collection, datahub_dir: str, run_id: str) -> str | None:
@@ -221,7 +162,13 @@ def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
         _refuse_invalid_policy_config(exc)
     stamp = policies_stamp(
         resolved,
-        candidate_settings=CandidateSettings.from_profile(profile).to_dict(),
+        candidate_settings={
+            **CandidateSettings.from_profile(profile).to_dict(),
+            # Where the max_trucks_per_scope cap applies: per haulier on a central
+            # leaf's tick scope, per cooperation group / per company under the
+            # decompositions (so a central arm can see more candidates; C3 deviation 6).
+            "sample_scope": sample_scope_for(resolved["dispatch"].information_model),
+        },
         # What AssignmentApp._solver_params will cost with (same ``or {}`` read).
         accounting_params=profile.get("solver_params") or {},
         source="override" if overridden else source,
@@ -229,10 +176,24 @@ def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
     scenario_manager.orsim_settings["POLICIES"] = stamp
     d = stamp["dispatch"]
     print(
-        f"Policies effective: dispatch={d['name']} v{d['version']} timing={d['timing']} "
+        f"Policies effective: dispatch={d['label']} v{d['version']} timing={d['timing']} "
+        f"information_model={d['information_model']} "
         f"params={json.dumps(d['params'], sort_keys=True)} "
         f"accounting_params={json.dumps(d['accounting_params'], sort_keys=True)}"
     )
+
+
+def sample_scope_for(information_model: str | None) -> str | None:
+    """The stamped ``candidate_settings.sample_scope`` of a dispatch information model.
+
+    ``central`` decides the tick scope, whose cap applies per haulier
+    (``context.TICK_SAMPLE_SCOPE``); ``per_group`` / ``per_company`` cap each
+    decomposition scope as a whole. ``None`` for an undeclared model.
+    """
+    from apps.container_logistics.policies.dispatch.context import TICK_SAMPLE_SCOPE  # local: agent-side
+
+    return {"central": TICK_SAMPLE_SCOPE, "per_group": "per_group",
+            "per_company": "per_company"}.get(information_model)
 
 
 def _resolve_order_lifecycle_mode() -> str:
@@ -382,13 +343,17 @@ def main():
         scenario_manager.orsim_settings
     )
 
-    # Per-run policy overrides (ORSIM_POLICY_OVERRIDES; ORSIM_SOLVER is dispatch.type
-    # sugar): patch the loaded assignment behaviors in place so this run uses the
-    # requested policy/params on the identical (unchanged) scenario data — enabling
-    # apples-to-apples comparisons on one scenario dir.
-    dispatch_label, policies_overridden = _apply_policy_overrides_or_exit(
+    # Per-run dispatch selection (ORSIM_POLICY_OVERRIDES, ORSIM_PLANNER_TOPOLOGY, the
+    # ORSIM_* market variables and ORSIM_SOLVER = the innermost per-scope solver):
+    # patch the loaded assignment behaviors in place so this run uses the requested
+    # policy/params on the identical (unchanged) scenario data — enabling
+    # apples-to-apples comparisons on one scenario dir. ONE application point; the
+    # topology segment is appended at its old place below.
+    dispatch_overrides, dispatch_labels = _apply_dispatch_overrides_or_exit(
         scenario_manager.get_agent_collection("assignment")
     )
+    policies_overridden = bool(dispatch_overrides)
+    dispatch_label = dispatch_labels["dispatch"]
     if dispatch_label:
         print(f"Assignment dispatch override: {dispatch_label}")
         # Surface the chosen policy (and overridden params) in run lists with zero
@@ -419,38 +384,21 @@ def main():
         if coop_sharing:
             print(f"Sharing algorithm override requested: {coop_sharing}")
 
-    # Per-run PLANNER TOPOLOGY + pooled-market overrides (shared-pool plan §6.12).
-    # Same data-at-spawn mechanism as the solver/cooperation overrides above, so the
-    # identical compiled scenario can be run 'partitioned' or 'pooled' with no file
-    # edits. The DEFAULT TOPOLOGY IS NOT FLIPPED — selection is per run, on purpose:
-    # pooled and partitioned produce different numbers and their runs are NOT
-    # comparable (plan §8).
-    planner_topology = os.environ.get("ORSIM_PLANNER_TOPOLOGY", "").strip() or None
-    market_offer = os.environ.get("ORSIM_OFFER_POLICY", "").strip() or None
-    market_claim = os.environ.get("ORSIM_CLAIM_POLICY", "").strip() or None
-    market_arbitration = os.environ.get("ORSIM_ARBITRATION_RULE", "").strip() or None
-    market_max_rounds = os.environ.get("ORSIM_MARKET_MAX_ROUNDS", "").strip() or None
-    if planner_topology:
-        applied_topology = apply_planner_topology_override(
-            scenario_manager.get_agent_collection("assignment"), planner_topology
+    # Per-run PLANNER TOPOLOGY (shared-pool plan §6.12), applied above with the other
+    # dispatch inputs (ORSIM_PLANNER_TOPOLOGY is translated into --policy
+    # dispatch=PooledMarket / Partitioned, keeping the per-scope solver; the ORSIM_*
+    # market variables into its params). The DEFAULT TOPOLOGY IS NOT FLIPPED —
+    # selection is per run, on purpose: pooled and partitioned produce different
+    # numbers and their runs are NOT comparable (plan §8). The segment stays here so
+    # run names keep their pre-v2 order (solver · structure · topology).
+    applied_topology = dispatch_labels["topology"]
+    if applied_topology:
+        print(f"Planner topology override: {applied_topology}")
+        # Surface the topology in run lists (same trick as the solver override)
+        # so runs are self-describing in the picker.
+        run_name = (
+            f"{run_name} · {applied_topology}" if run_name else applied_topology
         )
-        if applied_topology:
-            print(f"Planner topology override: {applied_topology}")
-            # Surface the topology in run lists (same trick as the solver override)
-            # so runs are self-describing in the picker.
-            run_name = (
-                f"{run_name} · {applied_topology}" if run_name else applied_topology
-            )
-    if market_offer or market_claim or market_arbitration or market_max_rounds:
-        applied_market = apply_market_override(
-            scenario_manager.get_agent_collection("assignment"),
-            offer=market_offer,
-            claim=market_claim,
-            arbitration=market_arbitration,
-            max_rounds=market_max_rounds,
-        )
-        if applied_market:
-            print(f"Pooled market override: {applied_market}")
 
     # Fail loud before any agent spawns: an unknown dispatch policy would otherwise
     # only surface agent-side, in the celery journal.
