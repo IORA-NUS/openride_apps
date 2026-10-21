@@ -210,6 +210,7 @@ def _groups_composite(name: str, *, declare: bool, own_draw: bool):
             if own_draw:
                 random.random()
             self.inner.set_rng(ctx.rng)
+            self.inner.set_tiebreak(ctx.tick_seed)  # the full recipe (verification review MINOR-B)
             chains = {}
             for group in compose.cooperation_groups(ctx):
                 sub = scopes.partition_context(
@@ -256,7 +257,7 @@ def test_control_payload_carries_status_and_counts_skips(monkeypatch):
     assert payload["ok"] is True and payload["skipped"] == 1
     assert [r["status"] for r in payload["results"]] == ["SKIP", "PASS"]
     assert payload["results"][0]["ok"] is True and payload["results"][0]["skipped"] is True
-    assert payload["message"] == "all 2 checks passed (1 skipped)"
+    assert payload["message"] == "1 passed, 1 skipped"
 
 
 def test_cli_renders_skip_and_exits_0(monkeypatch, capsys):
@@ -269,7 +270,7 @@ def test_cli_renders_skip_and_exits_0(monkeypatch, capsys):
                 "detail": "skipped: module_rng declared", "ms": 0.1},
                {"id": "structure.returns_plan", "ok": True, "status": "PASS", "detail": "fine", "ms": 1.0}]
     monkeypatch.setattr(control, "policy_validate", lambda slot, name: {
-        "ok": True, "results": results, "skipped": 1, "message": "all 2 checks passed (1 skipped)"})
+        "ok": True, "results": results, "skipped": 1, "message": "1 passed, 1 skipped"})
     assert cli.main(["policy", "validate", "dispatch", "Alpha"]) == 0
     text = capsys.readouterr().out
     row = next(line for line in text.splitlines() if "determinism.no_module_rng[inner=GreedyNearest]" in line)

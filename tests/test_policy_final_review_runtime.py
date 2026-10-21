@@ -67,6 +67,7 @@ def group_composite():
 
             def decide(self, ctx):
                 self.inner.set_rng(ctx.rng)
+                self.inner.set_tiebreak(ctx.tick_seed)  # the full recipe (verification review MINOR-B)
                 sample_rng = ctx.rng if GroupsVia.sample_with == "decision" else random
                 chains = {}
                 for group in compose.cooperation_groups(ctx):

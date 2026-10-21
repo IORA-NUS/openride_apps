@@ -4,8 +4,9 @@ The dispatch selection has ONE application point, :func:`run_dispatch_overrides`
 (``ORSIM_POLICY_OVERRIDES``, ``ORSIM_PLANNER_TOPOLOGY``, the ``ORSIM_*`` market
 variables and ``ORSIM_SOLVER``), shared by the sim main and the control-plane dry run
 (``docs/plans/policy_slots_round2_whole_tick.md`` §3.6, §5 C4); the older entry
-points (:func:`apply_solver_override`, :func:`apply_planner_topology_override`,
-:func:`apply_market_override`) are loud wrappers of it. Everything here patches the
+points (:func:`apply_policy_overrides`, :func:`apply_solver_override`,
+:func:`apply_planner_topology_override`, :func:`apply_market_override`,
+:func:`known_planner_topologies`) are compatibility shims with no run-path caller. Everything here patches the
 loaded behaviors in memory; the on-disk bundle is never written.
 """
 
@@ -65,6 +66,10 @@ def apply_policy_overrides(assignment_collection, overrides):
     runtime resolver refuses it next to ``policies``. Every behavior is validated
     before any is mutated. Returns the first behavior's resolved policies, or
     ``None`` for empty ``overrides``. Raises ``PolicyError``.
+
+    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
+    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
+    Kept for tests and external callers.
     """
     if not overrides:
         return None
@@ -142,23 +147,6 @@ def precheck_override_names(overrides, solver=None):
 
     check_named_overrides(overrides or {})
     _checked_solver(solver)
-
-
-def assert_policies_format(assignment_collection):
-    """Run-start check: every compiled ``profile.policies`` carries the round-2 format marker.
-
-    ``legacy.check_policies_format`` per behavior, the agent id prefixed (the shape of
-    ``assert_assignment_profiles_resolvable``). Raises ``PolicyError``.
-    """
-    from apps.container_logistics.policies.dispatch import legacy
-    from apps.container_logistics.policies.framework import PolicyError
-
-    for agent_id, behavior in (assignment_collection or {}).items():
-        profile = behavior.get("profile") if isinstance(behavior, dict) else None
-        try:
-            legacy.check_policies_format(profile or {})
-        except PolicyError as exc:
-            raise type(exc)(f"assignment agent {agent_id!r}: {exc}") from exc
 
 
 #: The ``PooledMarket`` params each legacy market variable sets, in the message order.
@@ -552,6 +540,10 @@ def apply_solver_override(assignment_collection, strategy):
     registered name, or ``None`` if ``strategy`` is falsy (nothing changed). Raises
     ``UnknownPolicyError`` for an unregistered name and ``PolicyError`` (message 11)
     for a decomposition, before anything is mutated.
+
+    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
+    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
+    Kept for tests and external callers.
     """
     if not strategy:
         return None
@@ -622,7 +614,12 @@ def apply_cooperation_override(assignment_collection, structure=None, sharing=No
 def known_planner_topologies():
     """Planner topologies accepted by ``apply_planner_topology_override`` — sourced
     from the same constant ``Preprocessor._normalize_planner`` validates against, so
-    CLI/override validation and the compiler can never drift (plan §6.11/§7)."""
+    CLI/override validation and the compiler can never drift (plan §6.11/§7).
+
+    Compatibility shim (verification review MINOR-11): no run path calls it (the
+    topology request is validated by :func:`legacy_topology_name`). Kept for tests
+    and external callers.
+    """
     from apps.container_logistics.datagen.preprocess import PLANNER_TOPOLOGIES
 
     return tuple(PLANNER_TOPOLOGIES)
@@ -638,6 +635,10 @@ def apply_planner_topology_override(assignment_collection, topology):
     loaded behaviors only; the on-disk bundle is never touched. Returns the canonical
     topology, or ``None`` for a falsy value (nothing changed). Raises ``PolicyError``
     for an unknown topology (it used to be ignored with a warning).
+
+    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
+    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
+    Kept for tests and external callers.
     """
     _merged_overrides, labels = run_dispatch_overrides(assignment_collection, topology=topology)
     return labels["topology"]
@@ -657,6 +658,10 @@ def apply_market_override(
     ``max_rounds`` outside 1..100 or when the dispatch is not ``PooledMarket``
     (message 9). All used to be ignored or deferred to the runtime's fail-soft
     registries.
+
+    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
+    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
+    Kept for tests and external callers.
     """
     patch = _market_request(offer=offer, claim=claim, arbitration=arbitration, max_rounds=max_rounds)
     if not patch:

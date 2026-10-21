@@ -181,7 +181,6 @@ def validate_run_policy_args(
     )
     from apps.container_logistics.policies.framework import PolicyError
     from apps.container_logistics.scenario.scenario_overrides import (
-        assert_policies_format,
         precheck_override_names,
         run_dispatch_overrides,
     )
@@ -196,7 +195,6 @@ def validate_run_policy_args(
             return _missing_bundle_message(scenario)
         collection = copy.deepcopy(collection)
         run_dispatch_overrides(collection, overrides=overrides, solver=solver)
-        assert_policies_format(collection)
         assert_assignment_profiles_resolvable(collection)
     except PolicyError as exc:
         return str(exc)
@@ -325,7 +323,8 @@ def cmd_policy_validate(slot: str, name: str) -> dict[str, Any]:
         "skipped": skipped,
         "results": [_check_dict(r) for r in results],
         "message": (f"{len(failed)} check(s) failed: {', '.join(failed)}{skip_note}" if failed
-                    else f"all {len(results)} checks passed{skip_note}"),
+                    else f"{len(results) - skipped} passed, {skipped} skipped" if skipped
+                    else f"all {len(results)} checks passed"),
     }
 
 

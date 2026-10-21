@@ -54,6 +54,17 @@ class DispatchPolicy(ABC):
 
     A policy must never assign the same truck or the same order twice; the runner
     checks this (``invariants.check_plan``) and discards a violating plan.
+
+    **The documents are READ-ONLY.** ``ctx.raw_trucks`` / ``ctx.raw_orders`` (and every
+    pair ``candidate_pairs`` yields) are the tick's own dicts, shared by every scope of
+    the tick. A policy must not mutate them, not even temporarily ("move" a truck for a
+    sub-solve and restore it afterwards): the tick check trusts a sub-scope's physical
+    verdict for the heads it already proved (``DispatchWorld.tick_allowed``, keyed on
+    document identity) and re-checks only who may serve whom, so a head proved against
+    a mutated document is committed as proved. Build a modified COPY instead and map
+    its ids back. The cost of verifying this per head (a fingerprint at record and at
+    check, ~0.9 ms per 400-head tick) exceeds what the shortcut saves, so it is a
+    contract, not a check (round-2 Deviations, "Verification review fixes").
     """
 
     def __init__(self, params: Optional[Dict[str, Any]] = None):

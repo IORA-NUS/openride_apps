@@ -2193,3 +2193,121 @@ ba74fbe (round-2 C2), not against the spec's 277e67b, and is superseded by this 
      - `RandomAssignment`: `PASS all 47 checks passed (2 skipped)`, `order_independent`
        on both arms;
    - the reviewer's `fin/netflow_sketch.py`: green for both composites (item 1).
+
+### Verification review fixes
+
+Source: `review_r2_verify.md` (MINOR-A, MINOR-B, MINOR-C, NITs) and MINOR-11 of the
+final review. New test file `tests/test_policy_verification_review_fixes.py`, 19 tests.
+
+1. **MINOR-A (`verified_heads`): a documented read-only contract, not a fingerprint.**
+   - Measured on golden tick A (405 heads for `Partitioned[inner=GreedyNearest]`, 408
+     for `PooledMarket[inner=GreedyNearest]`), per tick, n=200 repetitions:
+
+     | per-head work over every head of the tick | Partitioned | PooledMarket |
+     |---|---|---|
+     | full physical check (`pair_allowed_ignoring_haulier`), what the shortcut saves | 1.31 ms | 1.32 ms |
+     | one fingerprint of exactly the fields feasibility reads | 0.48 ms | 0.51 ms |
+     | fingerprint at record + at check + compare (what a keyed shortcut costs) | 0.89 ms | 0.94 ms |
+
+     The fingerprint covers truck `profile.{current_loc, last_known_loc, init_loc,
+     home_facility_name, truck_size, restricted_areas}` and order `pickup_loc`,
+     `profile.{pickup_loc, order_size, pickup_facility_name, dropoff_facility_name}`,
+     `order_size`. At ~0.9 ms per tick it is over the ~0.5 ms threshold and would give
+     back most of what the C3 #2 shortcut saved (the tick `check_plan` is 0.2-0.5 ms with
+     it). It would also duplicate, in a second place, the list of fields feasibility
+     reads, which silently goes stale when that list grows.
+   - So the contract is documented instead: `DispatchPolicy`'s docstring says the
+     documents (`ctx.raw_trucks`/`raw_orders`, and the pairs `candidate_pairs` yields)
+     are read-only, not even mutated temporarily, and why. `DispatchWorld.tick_allowed`'s
+     "Pure" claim is qualified the same way.
+   - Tests: the three shipped selections leave every tick document byte-equal across a
+     decision; and the boundary is pinned (a composite that moves trucks to their
+     pickups for a sub-solve and restores them commits physically infeasible heads with
+     a 300 s pickup limit; read-only, it commits none). If the shortcut ever gains a
+     fingerprint, that second test is inverted and the contract text dropped.
+2. **MINOR-B: correction to "Final review fixes (runtime)" #1.** The composite recipe
+   there is incomplete. The full recipe is: pass `sample_rng=ctx.rng` to
+   `partition_context`, and call BOTH `inner.set_rng(ctx.rng)` and
+   `inner.set_tiebreak(ctx.tick_seed)` once per tick (as `PooledMarket` does,
+   `pooled_market.py:135-136`). Without the tiebreak a `GreedyNearest` inner falls back
+   to its `self.rng.shuffle` tiebreak and the composite fails
+   `determinism.order_independent[inner=GreedyNearest]`. The `scopes.partition_context`
+   docstring and both test composites that model the recipe
+   (`test_policy_final_review_runtime.py`, `test_policy_final_review_battery.py`) now
+   include the call; the new test shows the recipe passing `order_independent` and
+   `no_module_rng` (undeclared), and failing `order_independent` without the tiebreak.
+3. **MINOR-C: `no_module_rng` attribution.**
+   - The owner of a draw is the nearest frame whose FIRST PARAMETER is one of the
+     selection's built policies, by identity (`_attribute_frame`). Not a local named
+     `self` (so `def decide(me, ctx)` is attributed), and not any local (a composite's
+     frame that merely holds its inner in a local is never credited with the inner's
+     draws, which an `isinstance` scan over all locals would do).
+   - A non-tick `DispatchContext` on the way is a scope cap SAMPLE only when that context
+     was handed to the node: it is a parameter of the node's entry frame (the outermost
+     frame with the node as first parameter, below its parent's: `decide_in_scope` /
+     `decide`). A scope a node builds for itself with `sample_rng=random` is now its own
+     direct draw, so `Partitioned[inner=X]` FAILS such an X (it was a SKIP credited to
+     Partitioned). Not asked for by the lead, but it was the same misleading-detail class.
+   - Threads: the probe also wraps `threading.Thread.start`, so a thread STARTED during
+     the decision (a `ThreadPoolExecutor` a node submits to included) inherits the
+     attribution of the frame that started it. A declaring node drawing in its own
+     thread is now SKIP (was a false FAIL "`<no policy frame>`"); an undeclared one FAILS
+     by name. A draw with no policy frame and no spawner (a thread that existed before
+     the decision) goes to the "provenance cannot be separated" SKIP bucket with its own
+     detail, never a FAIL and never a PASS; X's own battery still FAILS an undeclared X.
+   - Reviewer's 16 probe leaves re-run (`ver/rng/attr.py`): every row is unchanged except
+     renamed-self (SKIP -> FAIL), own-scope sample (SKIP -> FAIL), the declaring thread
+     (FAIL -> SKIP), and the undeclared thread, which now FAILS naming the leaf instead of
+     `<no policy frame>`. Still no false PASS. The built-ins' rows are unchanged
+     (`Partitioned` default SKIP, `[inner=GreedyNearest]` PASS).
+4. **NITs.**
+   - `legacy.check_policies_format`: the marker must be `type(marker) is int` and 2.
+     `2.0`, `"2"`, `True`, `3` and any other present value are refused as "unknown
+     format" (recompile with this build); only an ABSENT marker still says "compiled
+     before round 2". The reviewer's MAJOR-1 matrix (`ver/m1/m1.py`) re-run against an
+     archive of `f8b91b9`: the only change is that `marker-2.0` is now REFUSED on all 11
+     paths in the sim and the control (it was accepted on 10). The control's no-flag
+     dry run still returns `{}` without reading the bundle (NIT 5, by design; the sim
+     main refuses at start).
+   - MINOR-11 dead code removed: `profile._DECOMPOSITIONS` (no reader) and
+     `scenario_overrides.assert_policies_format` with its two callers (sim main
+     `_assert_policies_resolvable_or_exit`, control `validate_run_policy_args`).
+     `assert_assignment_profiles_resolvable` already runs `check_policies_format` first,
+     with the same `assignment agent '<id>': ` prefix and message, at the same point in
+     both flows, so run start is unchanged. The refusal BEFORE overrides is the separate
+     source check in `run_dispatch_overrides` -> `_profiles_with_current` (MAJOR-1), which
+     is untouched. One contrived difference: a collection holding a non-mapping behavior
+     AND a round-1 profile is now refused for the non-mapping first (both refuse, exit 2).
+     `test_policies_spec_block::test_compiled_profile_carries_the_round2_format_marker`
+     is retargeted at `assert_assignment_profiles_resolvable`.
+   - The five test-only `scenario_overrides` entry points (`apply_policy_overrides`,
+     `apply_solver_override`, `apply_planner_topology_override`, `apply_market_override`,
+     `known_planner_topologies`) are kept and marked "Compatibility shim" in their
+     docstrings and the module docstring; no run path calls them.
+   - The control message for a green battery with skips is `N passed, k skipped` (N
+     excludes the skips); without skips it stays `all N checks passed`. The CLI prints
+     the payload message, so it follows. The failure message is unchanged.
+   - Depth-2 offload (NIT 3): documentation only. A composite whose `inner` param is NOT
+     `leaf_only` and that is given another composite (`Partitioned`) offloads at depth 2
+     under `solve_in_thread`: the outer per-scope `ctx.execute` runs the inner composite,
+     whose own per-group `ctx.execute` nests. Real `eventlet.tpool.execute` called from a
+     pool thread runs the function directly, so this does not deadlock, and the reviewer
+     measured identical pairs and RNG state flag on/off. It is not a supported shape for
+     performance reasoning; declare `leaf_only=True` on an `inner` param unless the
+     composite really composes composites.
+5. **Mutation checks** (`scratchpad/vfix/mut.py`, PYTHONDONTWRITEBYTECODE=1, each restored
+   and confirmed by sha1), all CAUGHT: attribution by `self` name; no handed-to test;
+   no `Thread.start` wrapper; unattributed draws back to rogue; `tick_allowed` shortcut
+   off (the boundary test); `GreedyNearest` writing to a truck doc (3 selections); the
+   old marker predicate (6 marker cases); the old control message. Also: dropping
+   `check_policies_format` from `assert_assignment_profiles_resolvable` fails the
+   retargeted spec-block test.
+6. **Gates** (2026-10-22): golden 94 passed; `tests/test_policy_*.py tests/test_dispatch_*.py
+   tests/test_whole_tick_dispatch.py tests/test_cli_*.py tests/test_scenario_*.py
+   tests/test_policies_*.py tests/test_legacy_run_env_overrides.py
+   tests/test_validate_run_policies_order.py tests/test_assignment_*.py`: 1273 passed,
+   2 failed, both baseline (`test_rules_baseline_does_not_recompile`,
+   `test_rebate_aware_flag_defaults_false_in_every_shipped_scenario`);
+   `openride policy validate dispatch X`, exit 0 each: `Partitioned` `PASS 44 passed, 3
+   skipped`; `PooledMarket` `PASS 179 passed, 8 skipped`; `GreedyNearest` `PASS all 47
+   checks passed`; `RandomAssignment` `PASS 45 passed, 2 skipped`.

@@ -194,28 +194,29 @@ def test_compiled_profile_carries_the_round2_format_marker(tmp_path, monkeypatch
 
     Verified to have teeth: dropping the marker write in
     ``spec_compile._patch_assignment_profiles`` failed the first assertion; dropping the
-    ``assert_policies_format`` call in the sim main's run-start check let the round-1
-    profile through (exit code assertion)."""
+    ``check_policies_format`` call in ``assert_assignment_profiles_resolvable`` (the sim
+    main's run-start check; the separate ``assert_policies_format`` wrapper was dead and
+    is gone, verification review MINOR-11) let the round-1 profile through (exit code
+    assertion)."""
     import apps.simulation.run_container_logistics_simulation as launcher
-    from apps.container_logistics.scenario.scenario_overrides import (
-        apply_policy_overrides,
-        assert_policies_format,
-    )
+    from apps.container_logistics.policies.dispatch.legacy import check_policies_format
+    from apps.container_logistics.policies.dispatch.profile import assert_assignment_profiles_resolvable
+    from apps.container_logistics.scenario.scenario_overrides import apply_policy_overrides
 
     prof = _assignment_profile(_bundle(tmp_path, monkeypatch, _spec(solver="GreedyNearest")))
     assert prof["policies_format"] == 2
-    assert_policies_format({"a0": {"profile": prof}})
+    assert_assignment_profiles_resolvable({"a0": {"profile": prof}})
     round1 = {k: v for k, v in prof.items() if k != "policies_format"}
     round1["policies"] = {"dispatch": {"type": "GreedyNearest", "version": "1", "kind": "operator",
                                        "timing": "online", "params": {}}}
     round1.pop("planner", None)  # the hand-deleted topology echo C2 review #7 describes
     with pytest.raises(Exception, match="policies_format=None, not 2: it was compiled before round 2"):
-        assert_policies_format({"a0": {"profile": round1}})
+        assert_assignment_profiles_resolvable({"a0": {"profile": round1}})
     with pytest.raises(SystemExit) as stop:
         launcher._assert_policies_resolvable_or_exit({"a0": {"profile": round1}})
     assert stop.value.code == 2
     coll = {"a0": {"profile": {"strategy": "GreedyNearest"}}}
-    assert_policies_format(coll)  # legacy: translated, no marker needed
+    check_policies_format(coll["a0"]["profile"])  # legacy: translated, no marker needed
     apply_policy_overrides(coll, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 1.0}}}}})
     assert coll["a0"]["profile"]["policies_format"] == 2
 

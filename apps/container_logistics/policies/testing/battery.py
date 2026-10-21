@@ -710,33 +710,95 @@ def _selection_instances(runner: DispatchRunner) -> list[tuple[Any, Any]]:
     return out
 
 
+def _frame_arguments(frame: Any) -> list[Any]:
+    """The values of ``frame``'s declared parameters, in order (``self`` first for a method, whatever its name)."""
+    code = frame.f_code
+    count = code.co_argcount + code.co_kwonlyargcount
+    local = frame.f_locals
+    return [local[n] for n in code.co_varnames[:count] if n in local]
+
+
+def _first_argument(frame: Any) -> Any:
+    """``frame``'s first parameter (a method's instance), or ``None`` when it takes none."""
+    code = frame.f_code
+    if not code.co_argcount:
+        return None
+    return frame.f_locals.get(code.co_varnames[0])
+
+
+def _attribute_frame(frame: Any, ids: Mapping[int, str]) -> tuple[str, str] | None:
+    """``(channel, node name)`` of a module draw whose innermost caller frame is ``frame``; ``None``: no policy frame.
+
+    The owner is the NEAREST frame whose first parameter is one of the selection's
+    built policies (``ids``: ``id(instance) -> name``). Matching the first parameter
+    by identity, not a local called ``self``, attributes ``def decide(me, ctx)``
+    correctly, and never credits a composite's frame that merely holds its inner in a
+    local. ``channel`` is ``"sample"`` only for the cap sample of a scope HANDED to
+    that node: a non-tick ``DispatchContext`` method on the way, whose context is a
+    parameter of the node's entry frame (the outermost frame with that node as first
+    parameter below its parent's: ``compose.decide_in_scope`` / ``decide``). A scope
+    the node built for itself (``partition_context(sample_rng=random)`` inside its own
+    ``decide``) is the node's own ``"direct"`` draw.
+    """
+    sample_ctx = None
+    while frame is not None:
+        owner = _first_argument(frame)
+        if owner is not None and id(owner) in ids:
+            if sample_ctx is not None and not _handed_to(owner, frame, sample_ctx, ids):
+                sample_ctx = None
+            return ("sample" if sample_ctx is not None else "direct"), ids[id(owner)]
+        if sample_ctx is None and isinstance(owner, DispatchContext) and owner.scope.kind != "tick":
+            sample_ctx = owner
+        frame = frame.f_back
+    return None
+
+
+def _handed_to(owner: Any, frame: Any, sample_ctx: Any, ids: Mapping[int, str]) -> bool:
+    """Whether ``sample_ctx`` is a parameter of ``owner``'s entry frame (see :func:`_attribute_frame`)."""
+    entry = frame
+    frame = frame.f_back
+    while frame is not None:
+        first = _first_argument(frame)
+        if first is owner:
+            entry = frame
+        elif first is not None and id(first) in ids:
+            break
+        frame = frame.f_back
+    return any(arg is sample_ctx for arg in _frame_arguments(entry))
+
+
 @contextmanager
 def _attributed_module_draws(nodes: list[tuple[Any, Any]], record: list[tuple[str, str]]) -> Iterator[None]:
     """Wrap the ``random`` module's draw functions for the block; append ``(channel, node name)`` per call.
 
-    Attribution walks the caller's frames to the NEAREST frame whose ``self`` is one of
-    the selection's built policies (``nodes``). ``channel`` is ``"sample"`` when a
-    non-tick ``DispatchContext`` method sits between the draw and that policy (the cap
-    sample of a scope a composite built with ``sample_rng=<the module>``), else
-    ``"direct"``. No policy frame at all is ``("direct", "")``.
+    Attribution is :func:`_attribute_frame` over the drawing thread's stack. A thread
+    STARTED inside the block (``threading.Thread.start`` is wrapped too, so a
+    ``ThreadPoolExecutor`` a node submits to counts) inherits the attribution of the
+    frame that started it, so a node's draws in its own thread are its own. A draw
+    with no policy frame and no such spawner (a thread that existed before the probe)
+    is ``("direct", "")``: provenance cannot be separated.
     """
     import sys
+    import threading
 
     ids = {id(inst): node.name for inst, node in nodes}
     saved = {name: getattr(random, name) for name in _module_draw_names()}
+    spawned: dict[int, tuple[str, str]] = {}
+    real_start = threading.Thread.start
+
+    def start(thread: threading.Thread) -> None:
+        who = _attribute_frame(sys._getframe(1), ids)
+        if who is None:
+            who = spawned.get(id(threading.current_thread()))
+        if who is not None:
+            spawned[id(thread)] = who
+        real_start(thread)
 
     def attribute() -> tuple[str, str]:
-        frame = sys._getframe(2)
-        channel = "direct"
-        while frame is not None:
-            owner = frame.f_locals.get("self")
-            if owner is not None:
-                if id(owner) in ids:
-                    return channel, ids[id(owner)]
-                if isinstance(owner, DispatchContext) and owner.scope.kind != "tick":
-                    channel = "sample"
-            frame = frame.f_back
-        return "direct", ""
+        who = _attribute_frame(sys._getframe(2), ids)
+        if who is None:
+            who = spawned.get(id(threading.current_thread()), ("direct", ""))
+        return who
 
     def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
         def drawn(*args: Any, **kwargs: Any) -> Any:
@@ -746,9 +808,11 @@ def _attributed_module_draws(nodes: list[tuple[Any, Any]], record: list[tuple[st
 
     for name, fn in saved.items():
         setattr(random, name, wrap(fn))
+    threading.Thread.start = start  # type: ignore[method-assign]
     try:
         yield
     finally:
+        threading.Thread.start = real_start  # type: ignore[method-assign]
         for name, fn in saved.items():
             setattr(random, name, fn)
 
@@ -795,7 +859,10 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
       nothing and still reaches the module FAILS, whatever its parent declared
       (``Partitioned[inner=X]`` fails when X draws from the module);
     - provenance that cannot be separated is a SKIP, not a pass: the module changed
-      but no wrapped draw was recorded (a function bound at import, ``random._inst``).
+      but no wrapped draw was recorded (a function bound at import, ``random._inst``),
+      or a draw came from a thread no node of the selection started (no policy frame,
+      no spawner: :func:`_attributed_module_draws`). A thread a node starts during the
+      decision is that node's.
 
     Verdicts: any undeclared draw FAILS; else any declared draw (or an unseparable
     change) is SKIP; else (the module untouched with the channels redirected) PASS.
@@ -806,6 +873,7 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
     rogue: dict[str, list[str]] = {}
     declared_draws = {"direct": 0, "sample": 0}
     unseparable: list[str] = []
+    unattributed: list[str] = []
     checked = []
     for make in fx.ROBUSTNESS_FIXTURES:
         if outcomes.get(make).error is not None:
@@ -814,13 +882,16 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
         checked.append(fixture.id)
         record, touched = _probe_module_draws(outcomes.spec, outcomes.arm, fixture)
         for channel, who in record:
+            if not who:
+                unattributed.append(fixture.id)
+                continue
             covered = who in declaring or (
                 channel == "sample" and who in names
                 and any(n in declaring for n in names[:names.index(who) + 1]))
             if covered:
                 declared_draws[channel] += 1
             else:
-                rogue.setdefault(who or "<no policy frame>", []).append(fixture.id)
+                rogue.setdefault(who, []).append(fixture.id)
         if touched and not record:
             unseparable.append(fixture.id)
     if rogue:
@@ -830,7 +901,7 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
                        "it routes to the module, not a node that declared nothing; draw only from ctx.rng / "
                        "self.rng, or declare module_rng= on that node")
     note = _own_battery_note(outcomes.spec, outcomes.arm)
-    if any(declared_draws.values()) or unseparable:
+    if any(declared_draws.values()) or unseparable or unattributed:
         parts = []
         if declared_draws["direct"]:
             parts.append(f"{declared_draws['direct']} direct draw(s) by the declaring node(s) "
@@ -839,6 +910,10 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
             parts.append(f"{declared_draws['sample']} scope cap sample(s) a declaring composite routes to the module")
         if unseparable:
             parts.append(f"the module changed with no attributable draw on {', '.join(unseparable)}: "
+                         "provenance cannot be separated")
+        if unattributed:
+            parts.append(f"{len(unattributed)} draw(s) with no policy frame on the stack and no spawning node "
+                         f"(a thread that existed before the decision) on {', '.join(sorted(set(unattributed)))}: "
                          "provenance cannot be separated")
         return _skip(f"module_rng declared by {declared}; {'; '.join(parts)}; no undeclared node drew from it "
                      f"on {len(checked)} whole tick(s), each inner's own RNG redirected{note}")

@@ -165,8 +165,11 @@ def partition_context(
     fallback called ``random.sample``, and the dispatch golden locks module-RNG
     consumption); a composite that wants to pass the battery's
     ``determinism.no_module_rng`` without declaring ``module_rng`` passes its decision
-    RNG (``ctx.rng``, the tick ``Random``) and injects the same into its inner
-    (``inner.set_rng(ctx.rng)``). ``None`` means "draw from this context's ``rng``"
+    RNG (``ctx.rng``, the tick ``Random``), injects the same into its inner
+    (``inner.set_rng(ctx.rng)``) and the tick's tiebreak seed with it
+    (``inner.set_tiebreak(ctx.tick_seed)``; without it ``GreedyNearest`` falls back to
+    a ``self.rng.shuffle`` tiebreak and the composite fails
+    ``determinism.order_independent``, the way ``PooledMarket`` injects both). ``None`` means "draw from this context's ``rng``"
     (``policy.rng``), as on the tick scope.
     """
     bucket_trucks = list(trucks)

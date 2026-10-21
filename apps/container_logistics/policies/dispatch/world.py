@@ -139,7 +139,10 @@ class DispatchWorld:
         the full :meth:`allowed`. The framework's tick check therefore stays
         authoritative for every solver (a central or custom solver's heads are never
         in ``verified``) while a decomposition's heads skip the duplicate physical
-        check (review C3 #2). Pure: the verdict equals :meth:`allowed` for every pair.
+        check (review C3 #2). Pure: the verdict equals :meth:`allowed` for every pair,
+        provided the documents are not mutated between the sub-scope check and the tick
+        check. That is the read-only contract on ``DispatchPolicy``; a policy that moves
+        a truck for a sub-solve and restores it gets the sub-scope's verdict.
         """
         world_allowed = self.allowed
         structure_allows = self.structure_allows

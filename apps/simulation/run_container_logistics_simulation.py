@@ -7,7 +7,6 @@ from apps.container_logistics.scenario.scenario_config import default_scenario_n
 from apps.container_logistics.scenario.scenario_manager import ScenarioManager
 from apps.container_logistics.scenario.scenario_overrides import (
     apply_cooperation_override,
-    assert_policies_format,
     current_policies_for_profile,
     dispatch_override_label,  # noqa: F401 - re-exported (the run-name label format lives there)
     run_dispatch_overrides,
@@ -52,7 +51,6 @@ def _refuse_invalid_policy_config(error: PolicyError) -> None:
 def _assert_policies_resolvable_or_exit(assignment_collection) -> None:
     """Exit 2 (via :func:`_refuse_invalid_policy_config`) on an unresolvable dispatch policy."""
     try:
-        assert_policies_format(assignment_collection)
         assert_assignment_profiles_resolvable(assignment_collection)
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)

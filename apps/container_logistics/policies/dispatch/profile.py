@@ -86,7 +86,6 @@ __all__ = [
 #: The keys of a compiled ``profile.policies.<slot>`` entry (``ResolvedPolicy.to_profile``).
 COMPILED_ENTRY_KEYS = ("type", "version", "kind", "timing", "params")
 
-_DECOMPOSITIONS = (PARTITIONED, POOLED_MARKET)
 _LEGACY_SOURCE_NOTE = (
     "(This profile has no 'policies' block: its selection is translated from the legacy keys "
     "strategy, solver_params, use_spatial_matching and planner.topology/planner.market; "

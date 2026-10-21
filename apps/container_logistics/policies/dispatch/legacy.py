@@ -338,16 +338,26 @@ def check_policies_format(profile: Mapping[str, Any]) -> None:
     """Refuse a ``profile.policies`` block that is not the round-2 format.
 
     A profile without ``policies`` is a legacy profile (translated, always accepted).
-    Next to ``policies`` the marker must be exactly :data:`POLICIES_FORMAT` (an int,
-    not a bool). Raises ``PolicyError`` naming the fix (recompile).
+    Next to ``policies`` the marker must be exactly the int :data:`POLICIES_FORMAT`
+    (not a bool, not a float such as ``2.0``, not a string). An absent marker is a
+    round-1 bundle; any other value is an unknown format. Raises ``PolicyError``
+    naming the fix (recompile).
     """
     if not isinstance(profile, Mapping) or profile.get("policies") is None:
         return
     marker = profile.get(POLICIES_FORMAT_KEY)
-    if isinstance(marker, bool) or marker != POLICIES_FORMAT:
+    if type(marker) is int and marker == POLICIES_FORMAT:
+        return
+    if marker is None:
         raise PolicyError(
             f"profile.policies has {POLICIES_FORMAT_KEY}={marker!r}, not {POLICIES_FORMAT}: it was "
             "compiled before round 2, when a flat policies.dispatch {type: X} meant the per-scope "
             "solver X under planner.topology; it now means a CENTRAL X. Recompile the scenario "
             "(openride scenario compile <slug>); never hand-patch the bundle."
         )
+    raise PolicyError(
+        f"profile.policies has {POLICIES_FORMAT_KEY}={marker!r}: unknown format. This build reads "
+        f"exactly the integer {POLICIES_FORMAT} (compile never writes a bool, a float or a string). "
+        "Recompile the scenario with this build (openride scenario compile <slug>); never "
+        "hand-patch the bundle."
+    )
