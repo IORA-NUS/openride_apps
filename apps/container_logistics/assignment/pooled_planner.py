@@ -1,21 +1,22 @@
 """
-Shared-pool cooperation — the pooled planner HOST (framework side).
+Shared-pool cooperation: the pooled market ENGINE (solver side).
 
 Implements steps 4-6 of ``docs/shared_pool_cooperation_plan.md`` §4.1: contribution,
-bounded bidding rounds, arbitration, commit, and the ``benefit_km`` accounting. Kept
-in its own module so ``app.py`` stays thin and the pooled market never touches the
-legacy ``partitioned`` code path (which remains byte-for-byte untouched as the
-regression guard for I-P7).
+bounded bidding rounds, arbitration and commit. It is run by the ``PooledMarket``
+dispatch solver (``policies/dispatch/library/pooled_market.py``, round-2 §2.3); the
+share ACCOUNTING (owner reserve, ``benefit_km``) is no longer here: the framework
+computes it for every solver in ``assignment/accounting.py``, and step 6 only returns
+the awarded pairs plus their market provenance (``pair_notes``).
 
 **The boundary** (plan §1) is load-bearing in this file:
 
-- Everything here is a WORLD decision — who wins a contested order, how many rounds
+- Everything here is a MARKET decision -- who wins a contested order, how many rounds
   happen, what is visible to whom, what is committed. It must never depend on dict
   iteration order: companies are always iterated ``sorted()``, and the arbitration
   rule is required to be order-independent.
 - Every COMPANY decision is delegated: what to contribute (``ctx.offer``), what to
   bid on (``ctx.claim``), and which truck serves which job (``ctx.dispatch``, the
-  dispatch-slot runner; this module never imports ``policies`` itself).
+  ``compose.ScopeDecider`` adapter; this module never imports ``policies`` itself).
 
 ``PoolMarket`` is the only object allowed to mutate allocation state; this module
 asks it to ``commit`` and never bookkeeps allocation on the side.
@@ -24,9 +25,8 @@ asks it to ``commit`` and never bookkeeps allocation on the side.
 from __future__ import annotations
 
 import logging
-import math
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from . import constraints as assign_constraints
 from . import spatial
@@ -35,6 +35,17 @@ from .policy.claim import DEFAULT_CLAIM_POLICY, BaseClaimPolicy
 from .policy.offer import DEFAULT_OFFER_POLICY, BaseOfferPolicy
 from .pools import Award, PoolMarket
 from .solver.base import Cost, Order, PairAllowed, Truck
+
+__all__ = [
+    "DEFAULT_MAX_ROUNDS",
+    "MAX_ROUNDS_CEILING",
+    "PooledMarketResult",
+    "PooledPlannerContext",
+    "build_round_candidates",
+    "effective_cooperation_stamp",
+    "resolve_market_config",
+    "run_pooled_market",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -133,27 +144,31 @@ class PooledMarketResult:
     ``rounds_used`` / ``converged`` exist so the run can describe its own
     truncation. ``converged is False`` means the safety backstop bound before the
     auction stopped allocating — the tick under-served, and any throughput or
-    deadhead number derived from it is suspect (plan §13.4 FIX-1).
+    deadhead number derived from it is suspect (plan §13.4 FIX-1). ``pair_notes``
+    carries each cross-company award's market provenance (``pool_id``,
+    ``market_round``) for the framework's audited share tags.
     """
 
     assignment: List[Tuple[Truck, Order]]
-    share_tags: Dict[Tuple[str, str], Dict[str, Any]]
     rounds_used: int
     converged: bool
     #: Candidate pairs built in round 1 (the figure that must equal partitioned's
     #: total) and across all rounds of this tick (the inherent, inert excess).
     candidate_pairs_round1: int = 0
     candidate_pairs_total: int = 0
+    pair_notes: Dict[Tuple[str, str], Dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass
 class PooledPlannerContext:
-    """Everything the host needs for one tick, injected by ``AssignmentApp``.
+    """Everything the engine needs for one tick, injected by the ``PooledMarket`` solver.
 
-    ``dispatch`` is the ``DispatchRunner`` (``policies/dispatch/runner.py``); it is
-    typed ``Any`` so this module keeps no import of the policies package.
+    ``dispatch`` is the ``compose.ScopeDecider`` (``candidate_kind``,
+    ``company_rule``, ``company_context``, ``run``, ``report_crash``); it is typed
+    ``Any`` so this module keeps no import of the policies package.
     ``candidate_settings`` is its ``CandidateSettings``; ``clock`` its
-    ``DispatchClock``.
+    ``DispatchClock``. ``cost`` is the framework's accounting cost (bids are priced
+    with it, and every award's ``cost_km`` equals it).
     """
 
     dispatch: Any
@@ -161,8 +176,6 @@ class PooledPlannerContext:
     claim: BaseClaimPolicy
     arbitration: BaseArbitrationRule
     max_rounds: int
-    pair_allowed_own: PairAllowed
-    pair_allowed_pooled: PairAllowed
     cost: Cost
     rng: Any
     tick_seed: int
@@ -171,64 +184,8 @@ class PooledPlannerContext:
     clock: Any = None
 
 
-def owner_reserve_km(
-    order: Order,
-    owner_trucks: Sequence[Truck],
-    committed_truck_ids: Set[str],
-    *,
-    pair_allowed: PairAllowed,
-    cost: Cost,
-) -> Optional[float]:
-    """The owner's cheapest OWN truck still free after this tick's final commit.
-
-    This is the *shadow price* half of ``benefit_km`` (plan §D6) and deliberately
-    keeps the pre-pool definition so the metric stays comparable across policies and
-    across pre-pool runs: it is the realizable alternative the owner still had, NOT
-    the owner's declared bid (which would be policy-dependent — a company running
-    ``ClaimNone`` would report zero benefit for jobs that genuinely saved it
-    distance).
-
-    Scans the owner's FULL fleet, not the capped spatial candidate list, so a truck
-    crowded out of the candidate cap cannot fabricate a phantom "unserveable"
-    (regression F2). ``None`` means the owner truly had no free feasible truck.
-    """
-    best: Optional[float] = None
-    for truck in owner_trucks:
-        if str(truck.get("_id")) in committed_truck_ids:
-            continue
-        if not pair_allowed(truck, order):
-            continue
-        c = cost(truck, order)
-        try:
-            c = float(c)
-        except (TypeError, ValueError):
-            continue
-        if c == float("inf") or c != c:  # inf / nan
-            continue
-        if best is None or c < best:
-            best = c
-    return best
-
-
 def _entity_id(entity: Dict[str, Any]) -> str:
     return str(entity.get("_id"))
-
-
-def _finite_or_none(value: Any) -> Optional[float]:
-    """A real number, or ``None``. THE rule at the tag boundary (plan §13.4 FIX-5).
-
-    ``GreedyNearestSolver`` deliberately assigns unknown-cost pairs rather than
-    crashing, so ``inf`` reaching an award is designed behaviour — but
-    ``json.dumps`` renders it as the bare token ``Infinity``, which is not valid
-    RFC 8259 and is a ``SyntaxError`` for every JS consumer (the KafkaJS consumer
-    and the Next.js SSE hub). Python's ``json.loads`` tolerates it, so the truck
-    agent survived and the defect was invisible from the Python side (review F6).
-    """
-    try:
-        f = float(value)
-    except (TypeError, ValueError):
-        return None
-    return f if math.isfinite(f) else None
 
 
 def build_round_candidates(
@@ -375,8 +332,8 @@ def run_pooled_market(
 
     Terminates on CONVERGENCE — when a round commits no award — with
     ``ctx.max_rounds`` as a safety backstop only (plan §13.4 FIX-1). Returns a
-    :class:`PooledMarketResult` carrying the assignment and share tags plus the
-    round provenance needed to tell whether the backstop bound.
+    :class:`PooledMarketResult` carrying the assignment, each share's market
+    provenance and the round provenance needed to tell whether the backstop bound.
     """
     # Company iteration is ALWAYS sorted: I-P5 forbids any dependence on dict order.
     company_ids = sorted(
@@ -540,7 +497,9 @@ def run_pooled_market(
                     prebuilt_pairs=candidates_by_haulier.get(hid),
                 )
             except Exception:
-                logger.exception("Deployment solve failed for haulier %r — skipping.", hid)
+                # Message 20 with the traceback: that company commits nothing this
+                # round (pre-v2 behaviour), counted in the runner's stats.
+                ctx.dispatch.report_crash(haulier_id=hid, round=rnd)
                 continue
 
             # THREE buckets, because "is this pair contested?" and "is this pair my
@@ -642,12 +601,12 @@ def run_pooled_market(
             converged = True
             break
 
-    # --- step 6: accounting ---------------------------------------------------
+    # --- step 6: the awarded pairs and their market provenance ---------------
+    # The share ACCOUNTING is the framework's (assignment/accounting.py, round-2
+    # §2.5): it is computed for every solver from the committed pairs alone.
     awards = market.awards
-    committed_truck_ids = {a.truck_id for a in awards}
     assignment: List[Tuple[Truck, Order]] = []
-    share_tags: Dict[Tuple[str, str], Dict[str, Any]] = {}
-
+    pair_notes: Dict[Tuple[str, str], Dict[str, Any]] = {}
     for award in awards:
         truck = trucks_by_id.get(award.truck_id)
         order = orders_by_id.get(award.order_id)
@@ -655,37 +614,11 @@ def run_pooled_market(
             logger.error("Award references unknown truck/order: %r", award)
             continue
         assignment.append((truck, order))
-
-        # A SELF-CLAIM (owner wins its own contributed order) is NOT a share:
-        # no tag, keeping the gains ledger identical to today (plan §D6).
-        if award.carrier_haulier_id == award.owner_haulier_id:
-            continue
-
-        reserve = owner_reserve_km(
-            order,
-            list(trucks_by_haulier.get(award.owner_haulier_id) or ()),
-            committed_truck_ids,
-            pair_allowed=ctx.pair_allowed_own,
-            cost=ctx.cost,
-        )
-        awarded_cost = _finite_or_none(award.cost_km)
-        benefit = None
-        if reserve is not None and awarded_cost is not None:
-            benefit = _finite_or_none(reserve - awarded_cost)
-        share_tags[(award.truck_id, award.order_id)] = {
-            "shared": True,
-            "owner_haulier_id": award.owner_haulier_id,
-            "carrier_haulier_id": award.carrier_haulier_id,
-            # SIGNED on purpose (F3): a cost-blind or cap-limited solver can
-            # genuinely pick a worse-than-own partner truck. None = the owner had
-            # no free feasible truck after the final commit.
-            "benefit_km": (round(benefit, 3) if benefit is not None else None),
-            "pool_id": award.pool_id,
-            # NO non-finite number crosses this boundary (plan §13.4 FIX-5).
-            "awarded_cost_km": (round(awarded_cost, 3) if awarded_cost is not None else None),
-            "owner_reserve_km": (round(reserve, 3) if reserve is not None else None),
-            "market_round": award.round,
-        }
+        # A SELF-CLAIM (owner wins its own contributed order) is NOT a share (§D6).
+        if award.carrier_haulier_id != award.owner_haulier_id:
+            pair_notes[(award.truck_id, award.order_id)] = {
+                "pool_id": award.pool_id, "market_round": award.round,
+            }
 
     # --- step 7: invariants (plan §5) ----------------------------------------
     awarded_order_ids = [a.order_id for a in awards]
@@ -717,9 +650,9 @@ def run_pooled_market(
 
     return PooledMarketResult(
         assignment=assignment,
-        share_tags=share_tags,
         rounds_used=rounds_used,
         converged=converged,
         candidate_pairs_round1=candidate_pairs_round1,
         candidate_pairs_total=candidate_pairs_total,
+        pair_notes=pair_notes,
     )

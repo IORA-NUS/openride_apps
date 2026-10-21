@@ -87,7 +87,8 @@ def legacy_topology(planner: Any, *, where: str = "assignment profile") -> str:
     pre-v2 default); ``two-stage`` is ``pooled``. ``where`` prefixes the message.
     Raises ``PolicyError`` (message 6) for any other value.
     """
-    topology = planner.get("topology") if isinstance(planner, Mapping) else None
+    _check_planner(planner, where)
+    topology = planner.get("topology") if planner is not None else None
     if topology is None:
         return "partitioned"
     canonical = LEGACY_TOPOLOGIES.get(topology) if isinstance(topology, str) else None
@@ -100,18 +101,28 @@ def legacy_topology(planner: Any, *, where: str = "assignment profile") -> str:
     return canonical
 
 
+def _check_planner(planner: Any, where: str) -> None:
+    """A legacy ``planner`` is absent (``None``) or an object; anything else is loud (never "partitioned")."""
+    if planner is not None and not isinstance(planner, Mapping):
+        raise PolicyParamsError(
+            f"{where} planner must be an object {{topology?, market?, ...}} (got {planner!r}). "
+            "Fix the profile or recompile the scenario."
+        )
+
+
 def legacy_market_params(planner: Any) -> dict[str, Any]:
     """``planner.market`` as ``PooledMarket`` params (``inner`` excluded), strictly.
 
     Returns ``{"max_rounds": int, "offer": {type, params}, "claim": ..., "arbitration":
     ...}``; an absent role is its component kind's default with ``{}`` params, an
-    absent ``max_rounds`` is 20. Params are returned as authored minus the keys the
+    absent (or ``null``) ``max_rounds`` is 20. Params are returned as authored minus the keys the
     component does not declare (dropped at WARNING); defaults are NOT filled in (the
     resolver does that). Raises ``UnknownPolicyError`` for an unknown component name
-    and ``PolicyParamsError`` for a malformed block or a ``max_rounds`` that is not an
-    int in 1..100.
+    and ``PolicyParamsError`` for a malformed block (a non-object ``planner``, a padded
+    component name) or a ``max_rounds`` that is not an int in 1..100.
     """
-    market = planner.get("market") if isinstance(planner, Mapping) else None
+    _check_planner(planner, "assignment profile")
+    market = planner.get("market") if planner is not None else None
     if market is None:
         market = {}
     if not isinstance(market, Mapping):
@@ -119,7 +130,9 @@ def legacy_market_params(planner: Any) -> dict[str, Any]:
             f"planner.market must be an object {{offer?, claim?, arbitration?, max_rounds?}} "
             f"(got {market!r})."
         )
-    out: dict[str, Any] = {"max_rounds": _max_rounds(market.get("max_rounds", LEGACY_MAX_ROUNDS_DEFAULT))}
+    # ``null`` means "the default", as an absent key does (and as preprocess reads it).
+    rounds = market.get("max_rounds")
+    out: dict[str, Any] = {"max_rounds": _max_rounds(LEGACY_MAX_ROUNDS_DEFAULT if rounds is None else rounds)}
     for role, kind in MARKET_ROLES.items():
         out[role] = _market_role(role, kind, market.get(role))
     return out
@@ -162,7 +175,12 @@ def _market_role(role: str, kind: str, raw: Any) -> dict[str, Any]:
         params = {}
     if not isinstance(params, Mapping):
         raise PolicyParamsError(f"{where}.params must be an object (got {params!r}).")
-    target = ref_target(kind, name.strip(), where=where)
+    if name != name.strip():
+        raise PolicyParamsError(
+            f"{where}.type {name!r} has leading/trailing whitespace; write {name.strip()!r} "
+            "(component names are matched exactly)."
+        )
+    target = ref_target(kind, name, where=where)
     declared = {info.name for info in declared_params(target.params_cls)}
     dropped = sorted(str(k) for k in params if k not in declared)
     if dropped:

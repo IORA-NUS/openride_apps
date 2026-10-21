@@ -1,11 +1,12 @@
 """Test stand-ins for the two decomposition solvers, registered only inside a test.
 
 Responsibility: let round-2 C2 tests exercise the selection TREE (legacy translation
-through the resolver, nested params, binding, mirrors) before work item C3 registers
+through the resolver, nested params, binding, mirrors) before work item C3 registered
 the real ``Partitioned`` and ``PooledMarket``. :func:`decompositions` registers a
-stand-in under the real name ONLY when that name is not registered yet, inside
-``isolated_registry()``, so the same tests run unchanged against the real classes
-once C3 lands. The params mirror the round-2 spec exactly (§3.1, §5 C3): ``Partitioned``
+stand-in under the real name ONLY when that name is not registered, inside
+``isolated_registry()``; since C3 the real classes are always registered, so the
+tests run against them (the stand-ins only matter in an isolated registry that lost
+the built-ins). The params mirror the round-2 spec exactly (§3.1, §5 C3): ``Partitioned``
 declares only ``inner``; ``PooledMarket`` declares ``max_rounds, offer, claim,
 arbitration, inner`` in that order.
 

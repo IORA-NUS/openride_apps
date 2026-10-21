@@ -20,6 +20,7 @@ import random
 import pytest
 
 from apps.container_logistics.assignment import constraints as assign_constraints
+from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.context import DispatchClock
@@ -64,7 +65,10 @@ def _world():
 
 
 def _ctx(runner, trucks, orders, rule=None):
-    return runner.partition_context(
+    # Round 2 C3: contexts are built by dispatch/scopes.py only (the runner lost its
+    # partition_context method); a parent-less partition scope, as offline fixtures use.
+    return scopes.partition_context(
+        policy=runner.policy, params=runner.resolved.params, candidate_kind=runner.candidate_kind,
         trucks=trucks, orders=orders, partition_key=("haulier", "acme"),
         rule=rule or PartitionRule(max_travel_time_pickup=None, adjacency={}),
         settings=CandidateSettings.from_profile({}),
@@ -163,13 +167,14 @@ def test_runner_discards_violating_plan_and_logs_error(caplog):
     trucks, orders = _world()
     runner = DispatchRunner(policy=_Scripted(Plan(chains={"t1": ("o1",), "t2": ("o1",)})),
                             resolved=_resolved(name="Dup"))
-    with caplog.at_level(logging.ERROR, logger="apps.container_logistics.policies.dispatch.runner"):
-        assert runner.run(_ctx(runner, trucks, orders)) == []
+    with caplog.at_level(logging.ERROR, logger="apps.container_logistics.policies.dispatch.compose"):
+        assert runner.run(_ctx(runner, trucks, orders)).pairs == []
     [rec] = [r for r in caplog.records if r.levelno == logging.ERROR]
     msg = rec.getMessage()
+    # A sub-scope context: message 19 (round 2 §3.7), logged by dispatch/compose.py.
     assert msg.startswith(
-        "DISPATCH POLICY CONTRACT VIOLATION: Dup v1 in scope partition:haulier:acme at step 42 "
-        "returned an invalid plan: order 'o1' appears twice in the plan. The plan was DISCARDED"
+        "DISPATCH POLICY CONTRACT VIOLATION: inner Dup v1 in scope partition:haulier:acme at step 42 "
+        "returned an invalid plan: order 'o1' appears twice in the plan. The scope's plan was DISCARDED"
     ), msg
     assert msg.endswith("run `openride policy validate dispatch Dup`."), msg
 
@@ -184,9 +189,9 @@ def test_runner_counts_violations():
     runner = DispatchRunner(policy=_Scripted(None), resolved=_resolved())
     for result in bad:
         runner.policy.result = result
-        assert runner.run(_ctx(runner, trucks, orders)) == []
+        assert runner.run(_ctx(runner, trucks, orders)).pairs == []
     runner.policy.result = Plan(chains={"t1": ("o1",)})
-    assert len(runner.run(_ctx(runner, trucks, orders))) == 1
+    assert len(runner.run(_ctx(runner, trucks, orders)).pairs) == 1
     assert runner.stats["calls"] == 4 and runner.stats["violations"] == 3
     assert runner.stats["total_ms"] >= runner.stats["max_ms"] >= 0.0
 
@@ -195,12 +200,12 @@ def test_runner_online_timing_commits_heads_only():
     """Heads, in chain-insertion order, as the SAME raw document objects.
 
     Verified to have teeth: committing every chain element (tails included) in
-    ``_commit_heads`` failed this test.
+    ``compose.heads_to_pairs`` (``DispatchRunner._commit_heads`` before round 2) failed this test.
     """
     trucks, orders = _world()
     runner = DispatchRunner(policy=_Scripted(Plan(chains={"t2": ("o3", "o1"), "t1": ("o2",)})),
                             resolved=_resolved())
-    got = runner.run(_ctx(runner, trucks, orders))
+    got = runner.run(_ctx(runner, trucks, orders)).pairs
     assert [(t["_id"], o["_id"]) for t, o in got] == [("t2", "o3"), ("t1", "o2")]
     assert got[0][0] is trucks[1] and got[0][1] is orders[2]
     with pytest.raises(PolicyTimingError):
@@ -259,7 +264,7 @@ def test_pair_solver_default_decide_reproduces_the_legacy_call(kind):
     runner = DispatchRunner(policy=policy, resolved=_resolved(kind=kind))
     rule = PartitionRule(max_travel_time_pickup=None, adjacency={})
     random.seed(3)
-    got = runner.run(_ctx(runner, trucks, orders, rule))
+    got = runner.run(_ctx(runner, trucks, orders, rule)).pairs
     if kind == "sampled":
         want = policy.solve(trucks, orders, pair_allowed=rule.allowed, cost=assign_constraints.assignment_cost)
     else:

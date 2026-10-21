@@ -47,19 +47,21 @@ class RandomAssignmentSolver(BaseAssignmentSolver):
         """``solve`` over the sampled trucks (default), or ``solve_pairs`` on spatial pairs.
 
         Both ignore cost; the accounting cost is passed only to honour the signatures.
+        Runs under ``decision_rng``: the shuffles draw from the scope's RNG.
         """
-        if ctx.params.candidates == "spatial":
+        with self.decision_rng(ctx):
+            if ctx.params.candidates == "spatial":
+                return Plan.from_pairs(
+                    self.solve_pairs(ctx.candidate_pairs("spatial"), cost=ctx.accounting_cost)
+                )
             return Plan.from_pairs(
-                self.solve_pairs(ctx.candidate_pairs("spatial"), cost=ctx.accounting_cost)
+                self.solve(
+                    ctx.sampled_trucks(),
+                    list(ctx.raw_orders),
+                    pair_allowed=ctx.allowed_raw,
+                    cost=ctx.accounting_cost,
+                )
             )
-        return Plan.from_pairs(
-            self.solve(
-                ctx.sampled_trucks(),
-                list(ctx.raw_orders),
-                pair_allowed=ctx.allowed_raw,
-                cost=ctx.accounting_cost,
-            )
-        )
 
     def solve(
         self,

@@ -61,17 +61,19 @@ class PairSolver(DispatchPolicy):
         ``ctx.default_candidate_kind == "spatial"`` is only ever set for a policy
         that has ``solve_pairs`` (the legacy ``hasattr`` rule, applied once when the
         runner is built). ``sampled_trucks()`` is called only on the non-spatial
-        branch because it consumes RNG (plan §7 risk 1).
+        branch because it consumes RNG (plan §7 risk 1). Runs under
+        :meth:`decision_rng`, so ``self.rng`` is the scope's RNG.
         """
-        if ctx.default_candidate_kind == "spatial":
+        with self.decision_rng(ctx):
+            if ctx.default_candidate_kind == "spatial":
+                return Plan.from_pairs(
+                    self.solve_pairs(ctx.candidate_pairs("spatial"), cost=ctx.accounting_cost)
+                )
             return Plan.from_pairs(
-                self.solve_pairs(ctx.candidate_pairs("spatial"), cost=ctx.accounting_cost)
+                self.solve(
+                    ctx.sampled_trucks(),
+                    list(ctx.raw_orders),
+                    pair_allowed=ctx.allowed_raw,
+                    cost=ctx.accounting_cost,
+                )
             )
-        return Plan.from_pairs(
-            self.solve(
-                ctx.sampled_trucks(),
-                list(ctx.raw_orders),
-                pair_allowed=ctx.allowed_raw,
-                cost=ctx.accounting_cost,
-            )
-        )

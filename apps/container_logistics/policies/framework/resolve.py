@@ -18,8 +18,8 @@ tolerated lossy step is dropping undeclared params of a slot translated from the
 LEGACY keys (``solver``/``solverParams``/``planner.deployment``), which were never
 validated; it is logged at WARNING.
 
-Leaf module (plan §2.7): imports only sibling framework modules and the leaf
-``policies.dispatch.legacy``, never ``apps.container_logistics.assignment.*``. Missing
+Leaf module (plan §2.7): imports only sibling framework modules, never
+``policies.dispatch.*`` or ``apps.container_logistics.assignment.*``. Missing
 dependencies are reported via ``PolicySpec.missing_requirements`` (``find_spec``), so
 nothing heavy is imported.
 """
@@ -28,15 +28,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Collection, Mapping, Sequence
-
-from dataclasses import field
-
-# Module import, not ``from ... import NAME``: ``dispatch.legacy`` imports
-# ``framework.errors``, so when it is imported first it is still initialising here;
-# its attributes are read at call time only.
-from apps.container_logistics.policies.dispatch import legacy as _legacy
 
 from .components import ref_target
 from .errors import (
@@ -45,11 +38,10 @@ from .errors import (
     PolicyParamsError,
     PolicyTimingError,
     SlotNotImplementedError,
-    UnknownPolicyError,
     UnknownSlotError,
 )
 from .params import PolicyParams, declared_params
-from .registry import PolicySpec, default_policy_name, get_policy_spec
+from .registry import INNER_PARAM, PolicySpec, default_policy_name, get_policy_spec
 from .slots import SLOTS
 
 logger = logging.getLogger(__name__)
@@ -70,10 +62,6 @@ __all__ = [
 
 #: The keys a ``policies.<slot>`` entry may carry (authored, override and CLI forms).
 ENTRY_KEYS = ("type", "timing", "params")
-
-#: The dispatch-ref param a composite delegates each scope to; the ``label``/``leaf``
-#: chain and ``--solver`` (the innermost leaf) follow it.
-INNER_PARAM = "inner"
 
 # Why a declared-but-not-executable timing cannot run yet, per (slot, timing).
 _TIMING_NOT_EXECUTABLE_REASON = {
@@ -145,46 +133,20 @@ def _check_selectable_slot(slot: Any, where: str) -> None:
         )
 
 
-def _unnamed_type(slot: str) -> str:
-    """The policy a block that does not name ``slot`` resolves to: the slot default.
-
-    TEMPORARY (round-2 C2 -> C3; C3 deletes the branch): until work item C3 registers
-    the slot default ``Partitioned``, an unnamed dispatch resolves to the legacy leaf
-    default (``legacy.LEGACY_LEAF_DEFAULT``), which is exactly what
-    ``Partitioned{inner=RandomAssignment}`` runs on today's partitioned runtime. Once
-    ``Partitioned`` is registered this returns the slot default, strictly.
-    """
-    if slot == "dispatch" and not _registered(slot, SLOTS[slot].default):
-        return _legacy.LEGACY_LEAF_DEFAULT
-    return default_policy_name(slot)
-
-
-def _registered(slot: str, name: str | None) -> bool:
-    try:
-        get_policy_spec(slot, name)
-    except UnknownPolicyError:
-        return False
-    return True
-
-
 def selection_chain(slot: str, name: str, typed: PolicyParams | None) -> list[str]:
-    """``[name, inner name, inner's inner name, ...]`` following :data:`INNER_PARAM`.
+    """``[name, inner name, inner's inner name, ...]`` following ``PolicySpec.inner_param``.
 
-    Only a ref param named ``inner`` of kind ``dispatch`` is followed (the composite
-    contract, ``dispatch/composite.py``); ``typed`` is the resolved ``Params`` of
-    ``name`` (``None``: a leaf with nothing to follow).
+    Only the declared descent param is followed (the composite contract,
+    ``dispatch/composite.py``); ``typed`` is the resolved ``Params`` of ``name``
+    (``None``: a leaf with nothing to follow).
     """
     chain = [name]
     spec = get_policy_spec(slot, name)
-    while typed is not None and _inner_ref(spec) is not None:
-        inner = getattr(typed, INNER_PARAM)
+    while typed is not None and spec.inner_param is not None:
+        inner = getattr(typed, spec.inner_param)
         chain.append(inner.type)
         spec, typed = get_policy_spec("dispatch", inner.type), inner.params
     return chain
-
-
-def _inner_ref(spec: PolicySpec) -> tuple[str, str, bool] | None:
-    return next((r for r in spec.refs if r[0] == INNER_PARAM and r[1] == "dispatch"), None)
 
 
 def _check_entry_shape(entry: Any, label: str, *, require_type: bool) -> None:
@@ -298,22 +260,22 @@ def _inner_key_hint(slot: str, spec: PolicySpec, raw: Mapping[str, Any]) -> str:
     undeclared key the error being decorated IS the unknown-key error. Returns ``""``
     when no unknown key is an inner param (or the inner cannot be named).
     """
-    ref = _inner_ref(spec)
+    inner_param = spec.inner_param
     declared = {info.name for info in declared_params(spec.params_cls)}
     unknown = sorted(k for k in raw if isinstance(k, str) and k not in declared)
-    if ref is None or not unknown:
+    if inner_param is None or not unknown:
         return ""
-    value = raw.get(INNER_PARAM)
+    value = raw.get(inner_param)
     inner_name = value.get("type") if isinstance(value, Mapping) else None
     if not isinstance(inner_name, str):
-        inner_name = getattr(spec.params_cls, "__dataclass_fields__")[INNER_PARAM].default.type
+        inner_name = getattr(spec.params_cls, "__dataclass_fields__")[inner_param].default.type
     try:
         inner_spec = get_policy_spec("dispatch", inner_name.strip())
     except PolicyError:
         return ""
     inner_declared = {info.name for info in declared_params(inner_spec.params_cls)}
     return " ".join(
-        f"{k!r} is a param of the inner {inner_spec.name}: use {slot}.{INNER_PARAM}.{k}."
+        f"{k!r} is a param of the inner {inner_spec.name}: use {slot}.{inner_param}.{k}."
         for k in unknown if k in inner_declared
     )
 
@@ -328,7 +290,7 @@ def resolve_policies_block(
 
     Every implemented slot is present in the result, in ``SLOTS`` order; a slot the
     block does not name gets its default (``{}`` means "all defaults"; see
-    :func:`_unnamed_type` for dispatch).
+    :func:`default_policy_name`).
     ``legacy_slots`` names slots whose entry was translated from the legacy keys:
     their undeclared params are dropped with a WARNING instead of rejected.
     Raises ``PolicyError`` subclasses (unknown/planned slot, unknown entry key,
@@ -346,7 +308,7 @@ def resolve_policies_block(
             continue
         entry = block.get(slot)
         if entry is None:
-            entry = {"type": _unnamed_type(slot)}
+            entry = {"type": default_policy_name(slot)}
         out[slot] = _resolve_entry(slot, entry, where=where, legacy=slot in legacy_slots)
     return out
 
@@ -359,19 +321,35 @@ def authored_after_resolution(
     """The block to echo back as authored (recipe / ``spec.json``), NOT the resolved form.
 
     A copy of ``block`` with, for each slot in ``legacy_slots``, the params the resolved
-    policy does not declare removed (the WARNING was logged by
-    :func:`resolve_policies_block`) and the type set to the registered spelling.
-    Authored slots are returned exactly as written: defaults are not filled in.
+    policies do not declare removed at every level of the selection tree (the WARNING
+    was logged by :func:`resolve_policies_block`) and each type set to the registered
+    spelling. Authored slots are returned exactly as written: defaults are not filled in.
     """
     out = json.loads(json.dumps(dict(block or {})))
     for slot in legacy_slots:
         entry = out.get(slot)
         if not isinstance(entry, dict) or slot not in resolved:
             continue
-        declared = set(resolved[slot].params)
         entry["type"] = resolved[slot].name
         if isinstance(entry.get("params"), dict):
-            entry["params"] = {k: v for k, v in entry["params"].items() if k in declared}
+            entry["params"] = _keep_declared(entry["params"], resolved[slot].params)
+    return out
+
+
+def _keep_declared(authored: Mapping[str, Any], resolved: Mapping[str, Any]) -> dict[str, Any]:
+    """``authored`` params minus the keys ``resolved`` lacks, recursing into ref values."""
+    out: dict[str, Any] = {}
+    for key, value in authored.items():
+        if key not in resolved:
+            continue
+        target = resolved[key]
+        if isinstance(value, Mapping) and isinstance(target, Mapping) and "type" in target:
+            ref = dict(value)
+            ref["type"] = target["type"]
+            if isinstance(value.get("params"), Mapping):
+                ref["params"] = _keep_declared(value["params"], target.get("params") or {})
+            value = ref
+        out[key] = value
     return out
 
 
@@ -382,7 +360,9 @@ def merge_policy_overrides(
     """Apply per-run ``overrides`` (``{slot: {type?, timing?, params?}}``) to ``current``.
 
     Per slot: a CHANGED type resets params to the new policy's defaults plus the
-    override params; the same (or an omitted) type merges the override params over the
+    override params, except that a decomposition keeps the current per-scope solver
+    as its ``inner`` unless the override names one (:func:`_carried_inner`); the same
+    (or an omitted) type merges the override params over the
     current ones, NESTED (:func:`merge_params`): a ref param merges into the current
     ref's params unless the override changes the ref's type, which resets that ref's
     params. An omitted timing keeps the current timing. The result is re-validated in
@@ -399,12 +379,12 @@ def merge_policy_overrides(
         cur = current.get(slot)
         requested = entry.get("type")
         name = requested.strip() if isinstance(requested, str) else (
-            cur.name if cur is not None else _unnamed_type(slot)
+            cur.name if cur is not None else default_policy_name(slot)
         )
         spec = get_policy_spec(slot, name)
         same_type = cur is not None and spec.name == cur.name
-        params = merge_params(spec, cur.params if same_type else {},
-                              dict(entry.get("params") or {}), path=f"{label}.params")
+        base = cur.params if same_type else _carried_inner(spec, cur, entry)
+        params = merge_params(spec, base, dict(entry.get("params") or {}), path=f"{label}.params")
         timing = entry.get("timing") if entry.get("timing") is not None else (
             cur.timing if cur is not None else None
         )
@@ -413,6 +393,25 @@ def merge_policy_overrides(
             merged_entry["timing"] = timing
         out[slot] = _resolve_entry(slot, merged_entry, where="policy overrides", legacy=False)
     return out
+
+
+def _carried_inner(spec: PolicySpec, current: ResolvedPolicy | None, entry: Mapping[str, Any]) -> dict[str, Any]:
+    """The params a CHANGED top type starts from: ``{}``, plus the current per-scope solver.
+
+    When the new type delegates through ``inner_param`` and the override does not set
+    it, the current selection's per-scope solver (its inner, or the current top itself
+    when that is a leaf) is carried over with its params, so changing the
+    decomposition (``--policy dispatch=PooledMarket``) never silently swaps the
+    solver: the same rule ``ORSIM_PLANNER_TOPOLOGY`` follows (round-2 §3.6, review C2
+    finding 2). Every other param resets to the new type's defaults.
+    """
+    descend = spec.inner_param
+    if current is None or descend is None or descend in (entry.get("params") or {}):
+        return {}
+    current_spec = get_policy_spec(spec.slot, current.name)
+    if current_spec.inner_param is not None:
+        return {descend: current.params[current_spec.inner_param]}
+    return {descend: {"type": current.name, "params": dict(current.params)}}
 
 
 def merge_params(
@@ -462,14 +461,18 @@ def _cli_value(raw: str) -> Any:
 
 
 def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dict[str, Any]:
-    """Parse ``--policy slot=name`` and ``--policy-param slot.key=value`` into overrides.
+    """Parse ``--policy slot=name`` and ``--policy-param slot.path=value`` into overrides.
 
-    Returns ``{slot: {"type"?: name, "params"?: {key: value}}}`` for
-    :func:`merge_policy_overrides`. A value is ``json.loads(value)`` when that parses
-    (``5`` -> int, ``true`` -> bool, ``"5"`` -> str), else the raw string. Slot names
-    may contain dots (``world.shedding``), so a param spec splits on the LAST ``.``
-    before the ``=``. Shape only: names and values are validated by the merge.
-    Raises ``PolicyError`` for a malformed or contradictory argument.
+    Returns ``{slot: {"type"?: name, "params"?: {...}}}`` for
+    :func:`merge_policy_overrides`. The slot is the longest dotted prefix that names a
+    known slot (slot names may contain dots, ``world.shedding``); every further
+    non-final segment is a policy reference (``dispatch.inner.k=v`` ->
+    ``{"dispatch": {"params": {"inner": {"params": {"k": v}}}}}``) and a value given
+    to a reference itself sets its type (``dispatch.inner=RandomAssignment``). A value
+    is ``json.loads(value)`` when that parses (``5`` -> int, ``true`` -> bool, ``"5"``
+    -> str), else the raw string. Shape only: names and values are validated by the
+    merge. Raises ``PolicyError`` for a malformed or contradictory argument (message 21
+    for an unknown slot prefix or an empty path).
     """
     out: dict[str, dict[str, Any]] = {}
     for arg in policies or ():
@@ -485,16 +488,49 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
         entry["type"] = name
     for arg in params or ():
         key_part, sep, value = str(arg).partition("=")
-        slot, dot, key = key_part.strip().rpartition(".")
-        if not sep or not dot or not slot or not key:
-            raise PolicyError(
-                f"--policy-param {arg!r} must be SLOT.KEY=VALUE, e.g. dispatch.dual_cycle_bonus_km=0."
-            )
+        slot, path = _split_param_path(key_part.strip(), arg, sep)
         bucket = out.setdefault(slot, {}).setdefault("params", {})
+        for ref_name in path[:-1]:  # every non-final segment is a policy reference
+            ref_value = bucket.setdefault(ref_name, {})
+            if isinstance(ref_value, str):  # an earlier `slot.ref=Name` set the ref's type
+                ref_value = bucket[ref_name] = {"type": ref_value}
+            bucket = ref_value.setdefault("params", {})
+        key, parsed = path[-1], _cli_value(value)
+        existing = bucket.get(key)
+        if isinstance(existing, dict) and isinstance(parsed, str) and "type" not in existing:
+            existing["type"] = parsed  # `slot.ref=Name` after `slot.ref.k=v`: the ref's type
+            continue
         if key in bucket:
-            raise PolicyError(f"--policy-param sets {slot}.{key} twice; pass it once.")
-        bucket[key] = _cli_value(value)
+            raise PolicyError(f"--policy-param sets {slot}.{'.'.join(path)} twice; pass it once.")
+        bucket[key] = parsed
     return out
+
+
+def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]]:
+    """``"dispatch.inner.k"`` -> ``("dispatch", ["inner", "k"])``: the slot is the longest known prefix.
+
+    Slot names may contain dots (``world.shedding``). Raises ``PolicyError`` (message
+    21) for a missing ``=``/path, or when no known slot is a prefix.
+    """
+    if not sep or not key_part:
+        raise PolicyError(
+            f"--policy-param {arg!r} must be SLOT.PATH=VALUE with a non-empty path, e.g. "
+            "dispatch.inner.dual_cycle_bonus_km=0."
+        )
+    segments = key_part.split(".")
+    for cut in range(len(segments) - 1, 0, -1):
+        slot = ".".join(segments[:cut])
+        if slot in SLOTS:
+            return slot, segments[cut:]
+    if key_part in SLOTS:
+        raise PolicyError(
+            f"--policy-param {arg!r} must be SLOT.PATH=VALUE with a non-empty path, e.g. "
+            "dispatch.inner.dual_cycle_bonus_km=0."
+        )
+    known = ", ".join(name for name, spec in SLOTS.items() if spec.status == "implemented")
+    raise PolicyError(
+        f"--policy-param {arg!r}: no known slot is a prefix of {key_part!r}. Known slots: {known}."
+    )
 
 
 def policies_stamp(

@@ -1,7 +1,8 @@
 """Import-cycle guard for the policy framework (plan docs/plans/policy_slots_p0_p3.md §2.7, §7 risk 2).
 
 What is locked: every module under ``apps.container_logistics.policies``, plus
-``assignment.app``, ``assignment.solver`` and ``assignment.pooled_planner``, imports
+``assignment.app``, ``assignment.solver``, ``assignment.pooled_planner`` and
+``assignment.accounting``, imports
 cleanly as the FIRST import of a fresh interpreter; and the rule-7 leaf modules pull
 no ``apps.container_logistics.assignment`` module into ``sys.modules``.
 
@@ -92,3 +93,24 @@ def test_the_walk_found_the_dispatch_modules():
     mods = set(_policy_modules())
     assert "apps.container_logistics.policies.dispatch.runner" in mods
     assert "apps.container_logistics.policies.dispatch.helpers.candidates" in mods
+    # Round 2 C3: the whole-tick runtime's new modules are walked too.
+    assert {"apps.container_logistics.policies.dispatch.compose",
+            "apps.container_logistics.policies.dispatch.library.partitioned",
+            "apps.container_logistics.policies.dispatch.library.pooled_market"} <= mods
+
+
+def test_app_imports_the_dispatch_package_only_locally():
+    """Round-2 §4: ``assignment/app.py`` may import ``assignment.accounting`` at top, but
+    ``policies.dispatch`` only inside functions (it reaches back into ``assignment``).
+
+    Verified to have teeth: moving ``app._dispatch_world``'s ``DispatchWorld`` import to the
+    module top failed this test.
+    """
+    import ast
+
+    tree = ast.parse((REPO_ROOT / "apps" / "container_logistics" / "assignment" / "app.py").read_text())
+    top = [n for n in tree.body if isinstance(n, ast.ImportFrom)]
+    leaks = [n.module for n in top if (n.module or "").startswith("apps.container_logistics.policies.dispatch")]
+    assert leaks == [], f"app.py imports the dispatch package at module top: {leaks}"
+    assert any(n.level == 1 and n.module is None and any(a.name == "accounting" for a in n.names)
+               for n in top), "app.py imports assignment.accounting at top (the framework's accounting)"

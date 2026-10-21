@@ -1,15 +1,35 @@
-"""``DispatchContext``: everything one dispatch decision may read, for one scope.
+"""``DispatchContext``: everything one dispatch decision may read, for one scope of a tick.
 
-A context is built only by ``dispatch/scopes.py`` (``partition_context`` /
-``company_context``) and handed to ``policy.decide(ctx)``. It carries the raw
-documents, the framework's feasibility (``allowed_raw``) and accounting cost, the
-injected RNG / tiebreak seed / rebate book, and lazily-computed candidates.
+One class for every scope (round 2, ``docs/plans/policy_slots_round2_whole_tick.md``
+§2.1). A context is built only by ``dispatch/scopes.py``:
 
-Laziness is load-bearing, not an optimisation: :meth:`DispatchContext.sampled_trucks`
-consumes RNG, so it runs at most once per context and only when a policy asks.
-Today's code sampled exactly once and only on the non-spatial branch; any extra or
-earlier draw would shift every later draw in the worker (plan
-``docs/plans/policy_slots_p0_p3.md`` §7 risk 1).
+- ``tick`` -- the WHOLE tick (``scopes.tick_context``): every candidate truck and
+  unassigned order, the framework's world rule as feasibility, the tick seed. This is
+  what ``DispatchRunner.run`` hands the selected (top-level) policy.
+- ``partition`` / ``company`` -- one cooperation group or one pooled-market company
+  (``scopes.partition_context`` / ``scopes.company_context``), built by a
+  decomposition solver from its parent; they inherit the parent's ``world``,
+  ``tick_seed``, ``execute``, ``stats``, ``scope_log`` and ``capture``.
+
+It carries the raw documents, the framework's feasibility (``allowed_raw``) and
+accounting cost, the RNG / tiebreak seed / rebate book a decision may read, and
+lazily-computed candidates.
+
+Laziness is load-bearing, not an optimisation:
+
+- :meth:`DispatchContext.sampled_trucks` consumes RNG, so it runs at most once per
+  context and only when a policy asks (plan ``docs/plans/policy_slots_p0_p3.md`` §7
+  risk 1).
+- On the tick scope :attr:`DispatchContext.rng` is ``random.Random(tick_seed)``,
+  CREATED the first time it is read. ``Partitioned`` never reads it, so the
+  partitioned default constructs no tick ``Random`` (byte identity, round-2 §5 C3).
+
+Tick-scope sampling cap (round-2 C3 deviation): on the tick scope the
+``max_trucks_per_scope`` cap applies PER HAULIER (:data:`TICK_SAMPLE_SCOPE`): each
+haulier's trucks are capped independently, concatenated in first-seen haulier order,
+drawing from ``ctx.rng``. A central leaf therefore gets the same per-company
+candidate coverage as the same leaf per group under ``Partitioned``; partition and
+company scopes sample their whole slice as before.
 
 Not yet here (P4): ``ctx.travel`` (a run-scoped travel-time table),
 ``ctx.facilities``, ``ctx.state`` and ``held`` plan tails.
@@ -22,6 +42,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import random
 from dataclasses import dataclass
 from typing import Any, Callable, Literal
 
@@ -34,21 +55,31 @@ from .views import OrderView, TruckView, order_view, truck_view
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DispatchContext", "DispatchClock", "Scope"]
+__all__ = ["DispatchContext", "DispatchClock", "Scope", "TICK_SCOPE_KEY", "TICK_SAMPLE_SCOPE", "direct_execute"]
 
 Pair = tuple[dict[str, Any], dict[str, Any]]
+
+#: The scope key of the whole-tick context.
+TICK_SCOPE_KEY = "tick"
+#: How ``sampled_trucks`` applies the cap on the tick scope (documented, see module doc).
+TICK_SAMPLE_SCOPE = "per_haulier"
+
+
+def direct_execute(fn: Callable[..., Any], *args: Any) -> Any:
+    """``ctx.execute`` without ``solve_in_thread``: a plain call."""
+    return fn(*args)
 
 
 @dataclass(frozen=True)
 class Scope:
     """Which slice of the tick a context covers.
 
-    ``key`` is ``partition:haulier:<id>``, ``partition:component:<n>`` or
-    ``company:<haulier_id>``; ``round`` is the pooled bidding round (``None`` on the
-    partitioned path).
+    ``key`` is ``tick``, ``partition:haulier:<id>``, ``partition:component:<n>`` or
+    ``company:<haulier_id>``; ``round`` is the pooled bidding round (``None``
+    elsewhere).
     """
 
-    kind: Literal["partition", "company"]
+    kind: Literal["tick", "partition", "company"]
     key: str
     round: int | None = None
 
@@ -91,19 +122,27 @@ class DispatchContext:
         spatial_source: Callable[[], list[Pair]],
         sample_rng: Any,
         rule: Any = None,
+        world: Any = None,
+        tick_seed: int | None = None,
+        execute: Callable[..., Any] = direct_execute,
+        stats: dict[str, Any] | None = None,
+        scope_log: list[dict[str, Any]] | None = None,
+        capture: Any = None,
     ) -> None:
         """``spatial_source`` and ``sample_rng`` are supplied by ``scopes.py`` only.
 
-        ``rng`` is ``policy.rng`` (the ``random`` module on the partitioned path, the
-        tick ``Random`` on the pooled path); ``sample_rng`` is what
-        :meth:`sampled_trucks` draws from, chosen per scope kind to match today.
-        ``rule`` is the ``PartitionRule``/``CompanyRule`` behind ``allowed_raw``,
-        kept for capture.
+        ``rng`` is the value a decision reads as ``ctx.rng``; ``None`` on the tick
+        scope means "``random.Random(tick_seed)``, created on first read". A
+        ``sample_rng`` of ``None`` means "draw from ``ctx.rng``". ``rule`` is the
+        feasibility rule behind ``allowed_raw`` (kept for capture). ``stats`` is the
+        runner's dict (shared by every scope of the tick); ``scope_log`` is ``None``
+        unless an audit records the scopes built; ``capture`` is the runner's capture
+        hook (``None``: off).
         """
         self.scope = scope
         self.params = params
         self.clock = clock
-        self.rng = rng
+        self._rng = rng
         self.tiebreak_seed = tiebreak_seed
         self.rebates = rebates
         self.candidate_settings = candidate_settings
@@ -113,10 +152,23 @@ class DispatchContext:
         self.allowed_raw = allowed_raw
         self.accounting_cost = accounting_cost
         self.rule = rule
+        self.world = world
+        self.tick_seed = tick_seed
+        self.execute = execute
+        self.stats = stats if stats is not None else {}
+        self.scope_log = scope_log
+        self.capture = capture
         self._spatial_source = spatial_source
         self._sample_rng = sample_rng
         self._pairs_cache: dict[str, list[Pair]] = {}
         self._sampled: list[dict[str, Any]] | None = None
+
+    @property
+    def rng(self) -> Any:
+        """The decision RNG; on the tick scope ``random.Random(tick_seed)``, built on first read."""
+        if self._rng is None and self.scope.kind == "tick":
+            self._rng = random.Random(self.tick_seed)
+        return self._rng
 
     @functools.cached_property
     def trucks(self) -> tuple[TruckView, ...]:
@@ -128,6 +180,17 @@ class DispatchContext:
         """Typed views of ``raw_orders``, built on first access."""
         return tuple(order_view(o) for o in self.raw_orders)
 
+    @functools.cached_property
+    def id_index(self) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """``(trucks_by_id, orders_by_id)``, the FIRST document per id (``check_plan`` and commit share it)."""
+        trucks: dict[str, dict[str, Any]] = {}
+        for t in self.raw_trucks:
+            trucks.setdefault(str(t.get("_id")), t)
+        orders: dict[str, dict[str, Any]] = {}
+        for o in self.raw_orders:
+            orders.setdefault(str(o.get("_id")), o)
+        return trucks, orders
+
     def allowed(self, truck: Any, order: Any) -> bool:
         """Framework feasibility; accepts views or raw documents."""
         return self.allowed_raw(_unwrap(truck), _unwrap(order))
@@ -135,14 +198,18 @@ class DispatchContext:
     def sampled_trucks(self) -> list[dict[str, Any]]:
         """The scope's trucks, randomly capped at ``max_trucks_per_scope``.
 
-        Draws from ``sample_rng`` at most once per context, on the first call only.
+        Draws at most once per context, on the first call only: from ``sample_rng``
+        on a partition/company scope; per haulier from ``ctx.rng`` on the tick scope
+        (:data:`TICK_SAMPLE_SCOPE`).
         """
         if self._sampled is None:
-            self._sampled = _candidates.sampled_trucks(
-                list(self.raw_trucks),
-                cap=self.candidate_settings.max_trucks_per_scope,
-                rng=self._sample_rng,
-            )
+            cap = self.candidate_settings.max_trucks_per_scope
+            if self.scope.kind == "tick":
+                self._sampled = _candidates.sampled_trucks_per_haulier(
+                    list(self.raw_trucks), cap=cap, rng=self.rng)
+            else:
+                rng = self.rng if self._sample_rng is None else self._sample_rng
+                self._sampled = _candidates.sampled_trucks(list(self.raw_trucks), cap=cap, rng=rng)
         return list(self._sampled)
 
     def candidate_pairs(self, kind: str | None = None) -> list[Pair]:
@@ -152,8 +219,8 @@ class DispatchContext:
         :meth:`sampled_trucks`; ``full``: every allowed pair. Cached per kind.
         Raises ``ValueError`` for an unknown kind, and ``DispatchContractViolation``
         for ``spatial`` on a company scope whose resolved kind is not ``spatial``
-        (no pairs were prebuilt; the runner logs it and discards the plan). A
-        spatial-kind company scope with an empty prebuilt slice returns ``[]``.
+        (no pairs were prebuilt; the plan is discarded). A spatial-kind company scope
+        with an empty prebuilt slice returns ``[]``.
         """
         kind = self.default_candidate_kind if kind is None else kind
         if kind not in self._pairs_cache:

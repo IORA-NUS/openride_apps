@@ -72,6 +72,8 @@ def _policy_entry(spec: PolicySpec) -> dict[str, Any]:
         "available": not missing,
         "information_model": spec.information_model,
         "composite": spec.is_composite,
+        # The dispatch ref --solver descends (None for a leaf): read from the spec, the one source.
+        "inner_param": spec.inner_param,
         "share_tag_format": spec.share_tag_format,
         "module_rng": spec.module_rng,
         "order_sensitive": spec.order_sensitive,

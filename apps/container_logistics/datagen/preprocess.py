@@ -37,6 +37,9 @@ from . import hauliers as H
 from .distributions import ProbabilityMatrix, load_records_file
 from .distributions.sources import load_curve_file, load_matrix_file
 from .agents.registry import POLICY_REGISTRY, canonical_policy_type, default_policy_name
+# The one policies import datagen makes (round-2 §4): the legacy translation leaf
+# (stdlib + framework errors; component names are checked through it lazily).
+from apps.container_logistics.policies.dispatch import legacy as _legacy_dispatch
 from .spec import GenerationSpec
 
 MAX_TRUCKS = 1_000_000
@@ -279,10 +282,13 @@ class Preprocessor:
         slot to ``"authored"`` or ``"legacy"``. SHAPE ONLY (no registry): slot names,
         policy names and params are validated by ``spec_compile`` via
         ``policies.framework.resolve``. Without ``policies.dispatch`` the legacy dial is
-        translated: ``type = solver or planner.deployment.type or default``,
-        ``params = {**deployment.params, **solverParams}``, ``timing = "online"``.
-        With it, a ``solver`` naming another type, or ``solverParams`` that disagree
-        with ``policies.dispatch.params``, are refused (they are its legacy spellings).
+        translated: the per-scope solver ``type = solver or planner.deployment.type or
+        default``, ``params = {**deployment.params, **solverParams}``, wrapped in the
+        decomposition ``planner.topology`` names (``legacy.wrap_legacy_leaf``:
+        ``Partitioned``, or ``PooledMarket`` with ``planner.market``), ``timing =
+        "online"``. With it, a ``solver`` naming another solver than the innermost one,
+        or ``solverParams`` that disagree with its params, are refused (they are its
+        legacy spellings).
         Raises ``SpecValidationError``.
         """
         block = raw.get("policies")
@@ -310,20 +316,26 @@ class Preprocessor:
         solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
         if "dispatch" not in block:
             dp = deployment.get("params") if isinstance(deployment.get("params"), dict) else {}
-            authored["dispatch"] = {
+            leaf = {
                 "type": str(solver or deployment.get("type")
                             or D.ASSIGNMENT_SETTINGS["profile"]["strategy"]),
                 "timing": "online",
                 "params": {**deepcopy(dp), **deepcopy(solver_params or {})},
             }
+            # The legacy dial names the per-scope solver; planner.topology names the
+            # decomposition around it (round-2 §3.6): Partitioned or PooledMarket.
+            try:
+                authored["dispatch"] = _legacy_dispatch.wrap_legacy_leaf(leaf, planner_cfg)
+            except ValueError as exc:  # PolicyError: an unknown market component / bad rounds
+                raise SpecValidationError(str(exc)) from exc
             provenance["dispatch"] = "legacy"
             return authored, provenance
-        dispatch = authored["dispatch"]
+        dispatch, path = Preprocessor._dispatch_leaf_and_path(authored["dispatch"])
         if solver not in (None, "") and str(solver) != dispatch["type"]:
             raise SpecValidationError(
-                f"spec sets solver={solver!r} but policies.dispatch.type={dispatch['type']!r}. "
-                "'solver' is the legacy spelling of policies.dispatch.type; send only "
-                "policies.dispatch (the dashboard and CLI do)."
+                f"spec sets solver={solver!r} but {path}.type={dispatch['type']!r}. "
+                f"'solver' is the legacy spelling of {path}.type (the innermost per-scope "
+                "solver); send only policies.dispatch (the dashboard and CLI do)."
             )
         if solver_params:
             params = dispatch.get("params") or {}
@@ -339,6 +351,31 @@ class Preprocessor:
                     "drop solverParams."
                 )
         return authored, provenance
+
+    @staticmethod
+    def dispatch_leaf_entry(entry: dict) -> dict:
+        """The innermost per-scope solver of a ``policies.dispatch`` entry, SHAPE ONLY.
+
+        Descends ``params.inner`` (the composite contract) while it is an object with a
+        ``type``. A built-in decomposition (``Partitioned``/``PooledMarket``) without an
+        ``inner`` has the legacy leaf default. Returns ``{type, params}``; the registry
+        validates it later (``spec_compile`` mirrors the resolved leaf and asserts it).
+        """
+        return Preprocessor._dispatch_leaf_and_path(entry)[0]
+
+    @staticmethod
+    def _dispatch_leaf_and_path(entry: dict) -> tuple[dict, str]:
+        """:meth:`dispatch_leaf_entry` and its spec path (``policies.dispatch[.params.inner]``)."""
+        node, path = entry, "policies.dispatch"
+        while True:
+            params = node.get("params") if isinstance(node.get("params"), dict) else {}
+            inner = params.get("inner")
+            if isinstance(inner, dict) and isinstance(inner.get("type"), str):
+                node, path = inner, f"{path}.params.inner"
+                continue
+            if node.get("type") in (_legacy_dispatch.PARTITIONED, _legacy_dispatch.POOLED_MARKET):
+                return {"type": _legacy_dispatch.LEGACY_LEAF_DEFAULT, "params": {}}, f"{path}.params.inner"
+            return {"type": str(node.get("type")).strip(), "params": dict(params)}, path
 
     @staticmethod
     def _check_policy_entry_shape(slot: Any, entry: Any) -> None:
@@ -699,7 +736,9 @@ class Preprocessor:
         # solver_params keeps the one-dial rule (defaults <- deployment.params <-
         # dispatch params) because it also drives the framework's accounting (F6).
         policies_authored, policies_provenance = cls._normalize_policies(raw, planner_cfg)
-        dispatch_entry = policies_authored["dispatch"]
+        # The mirrors carry the innermost per-scope solver (round-2 §3.6); spec_compile
+        # re-mirrors from the resolved tree and asserts strategy == leaf.
+        dispatch_entry = cls.dispatch_leaf_entry(policies_authored["dispatch"])
         strategy = dispatch_entry["type"]
         settings["assignment"]["profile"]["strategy"] = strategy
         authored_deployment = deepcopy(planner_cfg.get("deployment") or {})

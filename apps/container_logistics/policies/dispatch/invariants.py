@@ -6,7 +6,10 @@ result discards the plan for that scope and tick (plan
 arrives with plan timing in P4.
 
 Framework side of the boundary. Pure: reads the plan and the context's raw documents
-and ``allowed_raw``; imports nothing from ``assignment``.
+(through ``ctx.id_index``) and ``allowed_raw``; draws no RNG; imports nothing from
+``assignment``. On the tick scope ``allowed_raw`` is ``world.allowed``, so a
+cross-company head the cooperation structure does not permit is a violation whatever
+solver produced it.
 """
 
 from __future__ import annotations
@@ -24,13 +27,6 @@ logger = logging.getLogger(__name__)
 __all__ = ["check_plan"]
 
 
-def _docs_by_id(docs: tuple[dict[str, Any], ...]) -> dict[str, dict[str, Any]]:
-    by_id: dict[str, dict[str, Any]] = {}
-    for doc in docs:
-        by_id.setdefault(str(doc.get("_id")), doc)
-    return by_id
-
-
 def check_plan(plan: Any, ctx: "DispatchContext") -> list[str]:
     """Every way ``plan`` breaks the contract for ``ctx``; ``[]`` when it is valid.
 
@@ -40,8 +36,7 @@ def check_plan(plan: Any, ctx: "DispatchContext") -> list[str]:
     """
     if not isinstance(plan, Plan):
         return [f"decide() returned {type(plan).__name__}, expected Plan"]
-    trucks = _docs_by_id(ctx.raw_trucks)
-    orders = _docs_by_id(ctx.raw_orders)
+    trucks, orders = ctx.id_index  # first document per id, shared with the commit
     problems: list[str] = []
     seen_orders: set[str] = set()
     for tid, chain in plan.chains.items():

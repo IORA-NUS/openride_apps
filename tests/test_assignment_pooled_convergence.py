@@ -25,6 +25,11 @@ from apps.container_logistics.datagen.preprocess import (
     MARKET_MAX_ROUNDS_MIN,
 )
 
+from apps.container_logistics.assignment.arbitration import ARBITRATION_REGISTRY
+from apps.container_logistics.assignment.policy.claim import CLAIM_REGISTRY
+from apps.container_logistics.assignment.policy.offer import OFFER_REGISTRY
+from apps.container_logistics.policies.dispatch.legacy import market_echo
+from apps.container_logistics.policies.dispatch.profile import resolve_dispatch_for_profile
 from tests.test_assignment_cooperation import _coop, _order, _truck
 from tests.test_assignment_pooled import _app, _ids
 
@@ -230,13 +235,20 @@ def test_run_stamp_reflects_an_override_rather_than_the_compiled_default():
 def test_stamp_market_matches_what_the_app_actually_instantiates():
     """The stamp and the runtime resolve through the SAME function, so they cannot
     disagree. This asserts the wiring, not just the helper."""
-    profile = {"planner": {"topology": "pooled",
+    profile = {"strategy": "GreedyNearest",
+               "planner": {"topology": "pooled",
                            "market": {"offer": {"type": "OfferNone"}, "max_rounds": 6}}}
     app = _app([], [], cooperation=_coop([]))
-    offer, _claim, _arb, max_rounds = app._market_components(profile)
+    # Round 2: the runtime is the PooledMarket selection the profile resolves to.
     stamp = effective_cooperation_stamp(profile, {"id": "x"})
-    assert max_rounds == stamp["market"]["max_rounds"] == 6
-    assert type(offer).__name__.startswith("OfferNone")
+    assert stamp["market"] == market_echo(resolve_dispatch_for_profile(profile).params)
+    offer, claim, arbitration = app._dispatch_runner(profile).policy.components()
+    assert stamp["market"]["max_rounds"] == 6
+    assert [type(c) for c in (offer, claim, arbitration)] == [
+        OFFER_REGISTRY[stamp["market"]["offer"]["type"]],
+        CLAIM_REGISTRY[stamp["market"]["claim"]["type"]],
+        ARBITRATION_REGISTRY[stamp["market"]["arbitration"]["type"]],
+    ]
     assert stamp["market"]["offer"]["type"] == "OfferNone"
 
 

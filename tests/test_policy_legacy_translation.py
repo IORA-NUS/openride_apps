@@ -29,6 +29,7 @@ import logging
 
 import pytest
 
+from apps.container_logistics.datagen.preprocess import Preprocessor
 from apps.container_logistics.assignment import pooled_planner
 from apps.container_logistics.policies.dispatch import legacy
 from apps.container_logistics.policies.dispatch.profile import (
@@ -129,8 +130,12 @@ def test_unknown_topology_is_loud():
             legacy.legacy_topology({"topology": bad})
     with decompositions(), pytest.raises(PolicyError, match="planner.topology='nonsense'"):
         resolve_dispatch_for_profile({"planner": {"topology": "nonsense"}})
-    for planner in (None, {}, {"topology": None}, {"topology": "partitioned"}, "not-a-mapping"):
+    for planner in (None, {}, {"topology": None}, {"topology": "partitioned"}):
         assert legacy.legacy_topology(planner) == "partitioned", planner
+    # C3 (C2 review finding 6): a non-object planner is loud, never a silent "partitioned".
+    for planner in ("not-a-mapping", [], 3):
+        with pytest.raises(PolicyParamsError, match=r"^assignment profile planner must be an object"):
+            legacy.legacy_topology(planner)
 
 
 def test_two_stage_is_pooled_market():
@@ -167,12 +172,30 @@ def test_unknown_market_component_is_loud():
             legacy.legacy_market_params({"market": bad_market})
 
 
-@pytest.mark.parametrize("value", [0, 101, -1, True, "5", 2.0, None])
+@pytest.mark.parametrize("value", [0, 101, -1, True, "5", 2.0])
 def test_max_rounds_must_be_an_int_in_range(value):
     """Verified to have teeth: removing the ``isinstance(value, bool)`` guard let ``True``
     through as 1 and failed the ``True`` case."""
     with pytest.raises(PolicyParamsError, match=r"planner.market.max_rounds must be an integer in 1..100"):
         legacy.legacy_market_params({"market": {"max_rounds": value}})
+
+
+def test_max_rounds_null_is_the_default_like_preprocess():
+    """C3 (C2 review NIT): ``null`` means the default (20) here as in ``Preprocessor._normalize_market``.
+
+    Verified to have teeth: passing ``None`` to ``_max_rounds`` (the C2 behaviour) failed this test.
+    """
+    assert legacy.legacy_market_params({"market": {"max_rounds": None}})["max_rounds"] == 20
+    assert Preprocessor._normalize_market({"max_rounds": None})["max_rounds"] == 20
+
+
+def test_padded_component_names_are_refused():
+    """C3 (C2 review NIT): a padded name is loud, not silently stripped (component names match exactly).
+
+    Verified to have teeth: removing the ``name != name.strip()`` check let ``' OfferSpare '`` resolve.
+    """
+    with pytest.raises(PolicyParamsError, match=r"planner.market.offer.type ' OfferSpare ' has leading/trailing"):
+        legacy.legacy_market_params({"market": {"offer": {"type": " OfferSpare "}}})
 
 
 def test_undeclared_component_params_dropped_with_warning(caplog):

@@ -72,7 +72,8 @@ def _awards(bonus_km, monkeypatch):
     collection = {"a0": {"profile": {"strategy": "GreedyNearest",
                                      "respect_truck_online_state": True,
                                      "reject_if_active_haul_trip": True}}}
-    apply_policy_overrides(collection, {"dispatch": {"params": {"dual_cycle_bonus_km": bonus_km}}})
+    # Round 2: the legacy profile is Partitioned/GreedyNearest; the dial is the inner's.
+    apply_policy_overrides(collection, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": bonus_km}}}}})
     behavior = deepcopy(collection["a0"])
 
     def _stub(self, **kwargs):

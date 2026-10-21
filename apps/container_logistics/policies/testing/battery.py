@@ -34,7 +34,10 @@ decide timer is the performance measurement. The runner's CONTRACT VIOLATION log
 line is silenced while the battery runs (the battery reports it as a FAIL instead).
 
 The global ``random`` state is seeded per decide and restored afterwards, because
-the partition scope samples from the module (``scopes.partition_context``).
+the partition scope samples from the module (``scopes.partition_context``). A fixture
+context is a partition scope under a tick context (``fixtures.Fixture.context``), so a
+decomposition solver (``Partitioned``, ``PooledMarket``) is exercised too; round-2 C5
+replaces this with whole-tick fixtures and per-arm budgets.
 
 Testing side: reads the registry and the dispatch framework; registers nothing.
 """
@@ -50,6 +53,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping
 
+from apps.container_logistics.policies.dispatch import compose as _compose_module
 from apps.container_logistics.policies.dispatch import runner as _runner_module
 from apps.container_logistics.policies.dispatch.context import DispatchContext
 from apps.container_logistics.policies.dispatch.invariants import check_plan
@@ -294,13 +298,20 @@ class _ViolationFilter(logging.Filter):
 
 @contextmanager
 def _quiet_runner_violations() -> Iterator[None]:
-    """Drop the runner's CONTRACT VIOLATION ERROR line for the block (the battery reports it)."""
+    """Drop the CONTRACT VIOLATION ERROR lines for the block (the battery reports them).
+
+    The runner logs a tick violation (message 18); a scope violation (message 19) is
+    logged by ``compose``, which the runner also uses for a sub-scope context.
+    """
     flt = _ViolationFilter()
-    _runner_module.logger.addFilter(flt)
+    loggers = (_runner_module.logger, _compose_module.logger)
+    for lg in loggers:
+        lg.addFilter(flt)
     try:
         yield
     finally:
-        _runner_module.logger.removeFilter(flt)
+        for lg in loggers:
+            lg.removeFilter(flt)
 
 
 class _PlanRecorder:
@@ -471,8 +482,9 @@ def _order_independent(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str
     scope_note = ("holds only while the spatial per-order candidate cap (spatial_candidates_per_order, "
                   "default 40) does not bind: spatial.iter_candidate_pairs truncates in input order, so on "
                   "dense real ticks the candidate set itself depends on input order")
-    if spec.order_sensitive is not None:
-        return True, f"order_sensitive: {spec.order_sensitive}"
+    declared = _declared_on_selection(spec, arm, "order_sensitive")
+    if declared:
+        return True, f"order_sensitive: {declared}"
     for fixture in _determinism_fixtures():
         want = _plan_mapping(_decide_via_runner(spec, arm, fixture, seed=_SEED, tiebreak=_TIEBREAK))
         for i in range(_SHUFFLES):
@@ -488,6 +500,22 @@ def _order_independent(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str
     return True, f"one plan over {_SHUFFLES} shuffles on {names}; {scope_note}"
 
 
+def _declared_on_selection(spec: PolicySpec, arm: Mapping[str, Any], attr: str) -> str:
+    """``"<name>: <reason>"`` for every node of the arm's selection tree declaring ``attr``; "" if none.
+
+    A composite's declaration composes with its inner's (round-2 §5 C5): the default
+    ``PooledMarket`` is order-sensitive because its default inner ``RandomAssignment`` is.
+    """
+    node = build_runner_for_policy(spec.name, dict(arm)).resolved
+    reasons = []
+    while node is not None:
+        reason = getattr(get_policy_spec("dispatch", node.name), attr)
+        if reason is not None:
+            reasons.append(f"{node.name}: {reason}")
+        node = node.inner
+    return "; ".join(reasons)
+
+
 def _no_module_rng(outcomes: _Outcomes) -> tuple[bool, str]:
     """With ``Random(seed)`` injected, ``DispatchRunner.run`` leaves ``random.getstate()`` alone.
 
@@ -497,6 +525,9 @@ def _no_module_rng(outcomes: _Outcomes) -> tuple[bool, str]:
     fixture (1000 trucks > 500) is excluded. Any module draw on the others is the
     policy's own.
     """
+    declared = _declared_on_selection(outcomes._spec, outcomes._arm, "module_rng")
+    if declared:
+        return True, f"module_rng: {declared}"
     checked, excluded, touched = [], [], []
     for d in outcomes.all():
         if d.cap_binds:
@@ -534,7 +565,7 @@ def _performance_scale(spec: PolicySpec) -> tuple[bool, str]:
 def _defaults_validate(spec: PolicySpec) -> tuple[bool, str]:
     defaults = spec.params_cls.from_mapping(None, where=f"defaults of {spec.name}")
     spec.params_cls.json_schema()
-    spec.cls(params=defaults.to_dict())
+    build_runner_for_policy(spec.name)  # instantiates the whole default tree (a composite's inner too)
     return True, f"defaults {defaults.to_dict()}"
 
 

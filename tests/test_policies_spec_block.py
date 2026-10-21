@@ -73,11 +73,14 @@ def test_policy_entry_keys_match_the_framework():
     assert P.POLICY_ENTRY_KEYS == R.ENTRY_KEYS
 
 
-def test_legacy_solver_translates_to_policies_dispatch():
+def test_legacy_solver_translates_to_partitioned_inner():
+    """Round 2 (§3.6): the legacy solver is the per-scope solver of the decomposition
+    ``planner.topology`` names (absent: ``Partitioned``)."""
     compiled = _compile(_spec(solver="GreedyNearest", solverParams={"dual_cycle_bonus_km": 3.0}))
     assert compiled.policies_provenance == {"dispatch": "legacy"}
     assert compiled.recipe["policies"] == {"dispatch": {
-        "type": "GreedyNearest", "timing": "online", "params": {"dual_cycle_bonus_km": 3.0}}}
+        "type": "Partitioned", "timing": "online",
+        "params": {"inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 3.0}}}}}
     assert _profile(compiled)["strategy"] == "GreedyNearest"
     assert _profile(compiled)["solver_params"]["dual_cycle_bonus_km"] == 3.0
 
@@ -86,10 +89,11 @@ def test_planner_deployment_translates_when_no_solver():
     compiled = _compile(_spec(planner={"deployment": {
         "type": "GreedyNearest", "params": {"dual_cycle_radius_km": 0.9}}}))
     entry = compiled.recipe["policies"]["dispatch"]
-    assert entry["type"] == "GreedyNearest"
-    assert entry["params"] == {"dual_cycle_radius_km": 0.9}
-    # And with neither, the slot default (the defaults.py strategy).
-    assert _compile(_spec()).recipe["policies"]["dispatch"]["type"] == "RandomAssignment"
+    assert entry["type"] == "Partitioned"  # round 2: the leaf is wrapped (§3.6)
+    assert entry["params"]["inner"] == {"type": "GreedyNearest", "params": {"dual_cycle_radius_km": 0.9}}
+    # And with neither, the slot default (the defaults.py strategy) as the inner.
+    default = _compile(_spec()).recipe["policies"]["dispatch"]
+    assert (default["type"], default["params"]["inner"]["type"]) == ("Partitioned", "RandomAssignment")
 
 
 def test_policies_block_wins_and_is_mirrored_into_strategy_and_deployment():
@@ -197,9 +201,10 @@ def test_undeclared_param_dropped_with_warning_in_legacy_translation(tmp_path, m
         bundle = _bundle(tmp_path, monkeypatch, _spec(
             solver="RandomAssignment", solverParams={"dual_cycle_bonus_km": 7.0}))
     assert any("not declared by dispatch RandomAssignment" in r.getMessage() for r in caplog.records)
-    assert bundle["recipe"]["policies"]["dispatch"]["params"] == {}
+    # Round 2: the legacy solver is Partitioned's inner; its undeclared params are dropped there.
+    assert bundle["recipe"]["policies"]["dispatch"]["params"] == {"inner": {"type": "RandomAssignment", "params": {}}}
     prof = _assignment_profile(bundle)
-    assert prof["policies"]["dispatch"]["params"] == {"candidates": "sampled"}
+    assert prof["policies"]["dispatch"]["params"]["inner"]["params"] == {"candidates": "sampled"}
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 7.0, "accounting keeps the legacy value"
 
 
@@ -308,11 +313,12 @@ def test_policies_block_never_perturbs_generated_agents(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("path", sorted(glob.glob(str(REPO_ROOT / "scenarios" / "*" / "spec.json"))))
-def test_every_shipped_spec_translates_to_its_current_solver(path):
-    """Shape-only: each shipped spec's dispatch translation names its old solver."""
+def test_every_shipped_spec_translates_to_partitioned_with_its_solver(path):
+    """Shape-only: each shipped spec's dispatch translation is Partitioned around its old solver."""
     raw = json.loads(Path(path).read_text())
     planner_cfg = Preprocessor._normalize_planner(raw.get("planner"))
     expected = raw.get("solver") or (planner_cfg.get("deployment") or {}).get("type") or "RandomAssignment"
     authored, provenance = Preprocessor._normalize_policies(raw, planner_cfg)
     assert provenance["dispatch"] == ("authored" if "policies" in raw else "legacy")
-    assert authored["dispatch"]["type"] == expected
+    assert authored["dispatch"]["type"] == "Partitioned"
+    assert authored["dispatch"]["params"]["inner"]["type"] == expected

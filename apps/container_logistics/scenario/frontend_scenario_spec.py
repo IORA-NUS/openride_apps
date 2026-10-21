@@ -36,7 +36,8 @@ def normalize_solver(raw: Any) -> str:
     from the policy registry at call time, never frozen at import.
     """
     name = str(raw or "").strip()
-    known = {spec.name for spec in list_policies("dispatch")}
+    # A strategy is a per-scope (leaf) solver: a decomposition is never one.
+    known = {spec.name for spec in list_policies("dispatch") if not spec.is_composite}
     return name if name in known else LEGACY_LEAF_DEFAULT
 
 
@@ -871,8 +872,12 @@ def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
     policies = raw.get("policies") if isinstance(raw.get("policies"), dict) else None
     dispatch = (policies or {}).get("dispatch")
     if isinstance(dispatch, dict):
-        solver = normalize_solver(dispatch.get("type"))
-        params = dispatch.get("params")
+        # The per-scope solver is the innermost one (round 2: dispatch may be a tree).
+        from apps.container_logistics.datagen.preprocess import Preprocessor
+
+        leaf = Preprocessor.dispatch_leaf_entry(dispatch)
+        solver = normalize_solver(leaf.get("type"))
+        params = leaf.get("params")
         solver_params = params if isinstance(params, dict) and params else None
     else:
         solver = normalize_solver(raw.get("solver"))
@@ -1551,6 +1556,16 @@ def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
         return {"dispatch": {"type": str(raw_solver).strip() if raw_solver else LEGACY_LEAF_DEFAULT}}
 
 
+def _edit_form_solver(policy_slots: dict[str, Any]) -> Any:
+    """The editForm ``solver``: the raw innermost solver name of ``policySlots.dispatch`` (or ``None``)."""
+    from apps.container_logistics.datagen.preprocess import Preprocessor
+
+    dispatch = policy_slots.get("dispatch")
+    if not isinstance(dispatch, dict) or dispatch.get("type") is None:
+        return None
+    return Preprocessor.dispatch_leaf_entry(dispatch)["type"]
+
+
 def scenario_edit_form_from_detail(
     entry: dict[str, Any],
     generation_spec: dict[str, Any] | None,
@@ -1622,7 +1637,8 @@ def scenario_edit_form_from_detail(
         ),
         # Raw text, never coerced: the dashboard shows the registered name or the
         # error, not a silently substituted default.
-        "solver": (policy_slots.get("dispatch") or {}).get("type"),
+        # The innermost per-scope solver of the (possibly nested) dispatch selection.
+        "solver": _edit_form_solver(policy_slots),
         "policySlots": policy_slots,
         "solverParams": (
             generation_spec.get("solverParams")

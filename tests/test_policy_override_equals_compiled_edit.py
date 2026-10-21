@@ -4,7 +4,7 @@ What is locked (review F1, plan ``docs/plans/policy_slots_p0_p3.md`` deviation 1
 the fix-round deviations):
 - ``apply_policy_overrides`` re-mirrors the resolved dispatch params into the
   accounting copies (``solver_params``, ``planner.deployment.params``) exactly as
-  compile does, through the ONE helper ``dispatch/profile.py::mirror_dispatch_params``.
+  compile does, through the ONE helper ``dispatch/profile.py::mirror_dispatch_selection``.
   So pairs, share tags (``benefit_km``), published strings and pooled round stats of
   a per-run override equal those of the compiled edit, on both topologies.
 - The run stamp records the accounting params (``dispatch.accounting_params``).
@@ -32,6 +32,7 @@ import pytest
 
 from apps.container_logistics.datagen.preprocess import SpecValidationError
 from apps.container_logistics.scenario.scenario_overrides import (
+    apply_planner_topology_override,
     apply_policy_overrides,
     current_policies_for_profile,
 )
@@ -40,7 +41,8 @@ from tests.golden.harness import run_case
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOMAIN = "container-logistics-sim"
 WORLD = "collab_scale_500t_v2"  # tick states A and B of the golden fixture come from it
-BONUS_0 = {"dispatch": {"params": {"dual_cycle_bonus_km": 0.0}}}
+# Round 2: the per-scope solver is the selection's inner (the decomposition is the top).
+BONUS_0 = {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0.0}}}}}
 
 
 def _spec(slug: str = WORLD) -> dict:
@@ -82,8 +84,8 @@ def profiles(tmp_path_factory):
     mp.setenv("ORSIM_SCENARIOS_DIR", str(root))
     try:
         spec = _spec()
-        edit = _with_policies(spec, {"dispatch": {"type": "GreedyNearest",
-                                                  "params": {"dual_cycle_bonus_km": 0.0}}})
+        edit = _with_policies(spec, {"dispatch": {"type": "Partitioned", "params": {"inner": {
+            "type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0.0}}}}})
         return {"base": _profile(_compile(spec, root)),
                 "compiled_edit": _profile(_compile(edit, root))}
     finally:
@@ -97,8 +99,11 @@ def _overridden(profile: dict, overrides: dict) -> dict:
 
 
 def _case(profile: dict, topology: str, state: str = "A") -> dict:
-    prof = copy.deepcopy(profile)
-    prof["planner"]["topology"] = topology
+    # The decomposition is the compiled policies block: the topology arm goes through
+    # the per-run topology override (the ORSIM_PLANNER_TOPOLOGY path), not a key edit.
+    coll = {"a0": {"profile": copy.deepcopy(profile)}}
+    apply_planner_topology_override(coll, topology)
+    prof = coll["a0"]["profile"]
     prof["cooperation"]["active"] = "chain"  # share tags carry benefit_km
     return json.loads(json.dumps({"profile": prof, "strategy": prof["strategy"], "tick_state": state},
                                  sort_keys=True))
@@ -111,8 +116,8 @@ def _benefits(out: dict) -> list:
 
 @pytest.mark.parametrize("topology", ["partitioned", "pooled"])
 def test_per_run_override_equals_the_compiled_edit(profiles, tick_states, topology):
-    """Verified to have teeth: removing the ``mirror_dispatch_params`` call in
-    ``apply_policy_overrides`` failed both topologies (partitioned on share tags /
+    """Verified to have teeth: removing the ``mirror_dispatch_params`` (now
+    ``mirror_dispatch_selection``) call in ``apply_policy_overrides`` failed both topologies (partitioned on share tags /
     published strings via ``benefit_km`` 7.765 vs 7.356; pooled on the award set)."""
     override = _overridden(profiles["base"], BONUS_0)
     assert override["solver_params"]["dual_cycle_bonus_km"] == 0.0
@@ -141,7 +146,7 @@ def test_stamp_records_accounting_params_equal_to_the_policy(profiles):
                            accounting_params=override["solver_params"], source="override")
     d = stamp["dispatch"]
     assert d["accounting_params"] == {"dual_cycle_bonus_km": 0.0, "dual_cycle_radius_km": 0.5}
-    shared = {k: d["params"][k] for k in d["accounting_params"]}
+    shared = {k: d["params"]["inner"]["params"][k] for k in d["accounting_params"]}
     assert shared == d["accounting_params"], "accounting must equal what the policy ranks with"
 
 
@@ -172,7 +177,8 @@ def test_type_change_resets_policy_params_and_mirrors_only_declared_keys():
                      "planner": {"deployment": {"type": "RandomAssignment",
                                                 "params": {"dual_cycle_bonus_km": 3.0}}}}
     to_greedy = _overridden(random_bundle, {"dispatch": {"type": "GreedyNearest"}})
-    assert to_greedy["policies"]["dispatch"]["params"]["dual_cycle_bonus_km"] == 5.0
+    # Round 2: a leaf type over the legacy Partitioned selection sets its inner.
+    assert to_greedy["policies"]["dispatch"]["params"]["inner"]["params"]["dual_cycle_bonus_km"] == 5.0
     assert to_greedy["solver_params"] == {"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5}
     assert to_greedy["planner"]["deployment"]["params"] == {"dual_cycle_bonus_km": 5.0}
 

@@ -4,8 +4,11 @@ Single responsibility: build the inputs of one dispatch scope from a fixed recip
 (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.1). A :class:`Fixture` is the
 recipe (raw truck/order documents shaped like ``AssignmentApp.assign`` reads them,
 the feasibility rule, candidate settings, clock); :meth:`Fixture.context` turns it
-into a ``DispatchContext`` ONLY through ``DispatchRunner.partition_context``, so a
-fixture context is built exactly like a live one.
+into a ``DispatchContext`` ONLY through ``dispatch/scopes.py`` (a partition scope
+whose parent is the runner's tick context over the same documents), so a fixture
+context is built exactly like a live group context, and a decomposition solver can
+decide it too (it reads the parent's world: no structure, the fixture's rule).
+Round-2 C5 replaces these one-scope fixtures with whole-tick ones.
 
 Every fixture has an ``id`` and a ``seed``; nothing here reads global state or
 draws from the ``random`` module (``scale`` uses its own ``random.Random(seed)``).
@@ -19,12 +22,19 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any, Callable
 
+from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 from apps.container_logistics.policies.dispatch.context import DispatchClock, DispatchContext
 from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
-from apps.container_logistics.policies.dispatch.runner import DispatchRunner, framework_accounting_cost
+from apps.container_logistics.policies.dispatch.runner import (
+    DispatchRunner,
+    accounting_params_for,
+    framework_accounting_cost,
+)
+from apps.container_logistics.policies.dispatch.world import DispatchWorld, tick_seed
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +75,23 @@ class Fixture:
     time_step: int = 0
     tiebreak_seed: int | None = None
 
+    def world(self, runner: DispatchRunner) -> DispatchWorld:
+        """The fixture's world: no structure, the fixture's rule, the runner's accounting dials.
+
+        A ``("component", n)`` fixture maps every haulier of its rule's adjacency to
+        component ``n``, so a group-splitting solver keeps the fixture's one scope.
+        """
+        component_of = {}
+        if self.partition_key[0] == "component":
+            component_of = {str(h): self.partition_key[1] for h in self.rule.adjacency}
+        return DispatchWorld(
+            structure=None,
+            rule=self.rule,
+            component_of=MappingProxyType(component_of),
+            max_travel_time_pickup=self.rule.max_travel_time_pickup,
+            accounting_params=MappingProxyType(accounting_params_for(runner.resolved)),
+        )
+
     def context(
         self,
         runner: DispatchRunner,
@@ -72,15 +99,26 @@ class Fixture:
         trucks: list[dict[str, Any]] | None = None,
         orders: list[dict[str, Any]] | None = None,
     ) -> DispatchContext:
-        """A fresh context for ``runner``'s policy; ``trucks``/``orders`` override the order only."""
-        return runner.partition_context(
-            trucks=list(self.trucks if trucks is None else trucks),
-            orders=list(self.orders if orders is None else orders),
+        """A fresh partition-scope context for ``runner``'s top policy; ``trucks``/``orders`` override the order only."""
+        trucks = list(self.trucks if trucks is None else trucks)
+        orders = list(self.orders if orders is None else orders)
+        clock = DispatchClock(sim_clock=SIM_CLOCK, time_step=self.time_step)
+        parent = runner.tick_context(
+            candidates=trucks, orders=orders, world=self.world(runner), settings=self.settings,
+            clock=clock, tick_seed=tick_seed(f"fixture:{self.id}", self.time_step),
+        )
+        return scopes.partition_context(
+            policy=runner.policy,
+            params=runner.resolved.params,
+            candidate_kind=runner.candidate_kind,
+            trucks=trucks,
+            orders=orders,
             partition_key=self.partition_key,
             rule=self.rule,
             settings=self.settings,
-            accounting_cost=framework_accounting_cost(runner.resolved.params),
-            clock=DispatchClock(sim_clock=SIM_CLOCK, time_step=self.time_step),
+            accounting_cost=framework_accounting_cost(runner.resolved),
+            clock=clock,
+            parent=parent,
         )
 
 

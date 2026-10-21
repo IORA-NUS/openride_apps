@@ -12,9 +12,10 @@ A composite is built by ``dispatch/profile.build_policy_tree`` as
 ``cls(params=<dict>, inner=<policy>, inner_node=<ResolvedDispatch>)``; its own
 ``decide(ctx)`` stays abstract.
 
-Leaf module (plan §2.7, round-2 §4): imports only ``dispatch/base.py`` and
-``dispatch/resolved.py``; never ``apps.container_logistics.assignment.*``. Policy side
-of the boundary.
+Leaf module (plan §2.7, round-2 §4): imports only ``dispatch/base.py``,
+``dispatch/resolved.py`` and the stdlib-only ``apps.container_logistics.rebate`` (for
+the type of the forwarded book); never ``apps.container_logistics.assignment.*``.
+Policy side of the boundary.
 """
 
 from __future__ import annotations
@@ -38,7 +39,11 @@ class CompositePolicy(DispatchPolicy):
 
     ``inner`` is a built leaf policy; ``inner_node`` its resolved selection (name,
     params, candidate kind) for the runner and the stamp. The three injections are
-    recorded here (so ``self.rng`` etc. agree) AND forwarded to ``inner``.
+    recorded here (so ``self.rng`` etc. agree) AND forwarded to ``inner`` by default.
+    A composite whose scopes must keep the inner's OWN randomness (``Partitioned``:
+    the pre-v2 partitioned path never injected one, its groups draw from the
+    ``random`` module) overrides ``set_rng``/``set_tiebreak`` not to forward; one
+    that wants per-scope RNGs builds them itself.
     """
 
     def __init__(

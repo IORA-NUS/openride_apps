@@ -40,6 +40,7 @@ __all__ = [
     "CandidateSettings",
     "spatial_pairs_for_partition",
     "sampled_trucks",
+    "sampled_trucks_per_haulier",
     "full_pairs",
 ]
 
@@ -149,6 +150,26 @@ def sampled_trucks(trucks: list[dict[str, Any]], *, cap: int, rng: Any) -> list[
     if len(bt) > cap:
         bt = rng.sample(bt, cap)
     return bt
+
+
+def sampled_trucks_per_haulier(trucks: list[dict[str, Any]], *, cap: int, rng: Any) -> list[dict[str, Any]]:
+    """The tick-scope sample: :func:`sampled_trucks` applied to each haulier's trucks.
+
+    Trucks are grouped by ``haulier_of`` in first-seen order (a haulier-less truck
+    forms its own group; it can never match anyway), each group is capped
+    independently, and the groups are concatenated in that order. ``rng`` draws once
+    per group that exceeds ``cap`` and never otherwise, so a tick under the cap
+    consumes nothing. Why per haulier: a whole-tick cap would give a central solver
+    far less candidate coverage than the same solver per group under ``Partitioned``
+    (round-2 C3 deviation).
+    """
+    groups: dict[Any, list[dict[str, Any]]] = {}
+    for truck in trucks:
+        groups.setdefault(assign_constraints.haulier_of(truck), []).append(truck)
+    out: list[dict[str, Any]] = []
+    for group in groups.values():
+        out.extend(sampled_trucks(group, cap=cap, rng=rng))
+    return out
 
 
 def full_pairs(

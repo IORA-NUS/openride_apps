@@ -118,7 +118,8 @@ def test_catalog_is_json_serialisable_and_has_schema_per_dispatch_policy():
     assert a == {
         "name": "TestCatalogA", "version": "3", "description": "Dummy A.",
         "requires": [], "missing": [], "available": True,
-        "information_model": "central", "composite": False, "share_tag_format": "audited",
+        "information_model": "central", "composite": False, "inner_param": None,
+        "share_tag_format": "audited",
         "module_rng": None, "order_sensitive": "shuffles on purpose",
         "arm_budgets_ms": {"candidates=sampled": 900},
         "params_schema": a["params_schema"],

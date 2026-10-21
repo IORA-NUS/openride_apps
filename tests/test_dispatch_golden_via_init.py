@@ -5,7 +5,8 @@ topologies x spatial on/off x truck cap 40/500, plus the all-ties world T), an a
 built by ``AssignmentApp.__init__`` -- so the dispatch policy comes from
 ``_build_dispatch_policy(profile)`` (resolve the profile, instantiate the policy) --
 reproduces the stored pairs, share tags, published MQTT strings, pooled round stats
-and module-RNG probe exactly, and its ``_solver`` is the class the case names.
+and module-RNG probe exactly, and the innermost solver of its ``_solver`` tree
+(``composite.innermost_policy``) is the class the case names.
 
 Why: ``tests/test_dispatch_golden_identity.py`` builds the app with ``__new__`` and
 injects ``get_solver(strategy, solver_params)``, so it never exercises the profile
@@ -35,6 +36,7 @@ from orsim.lifecycle import ORSimApp
 
 from apps.container_logistics.assignment.app import AssignmentApp
 from apps.container_logistics.assignment.solver import GreedyNearestSolver, RandomAssignmentSolver
+from apps.container_logistics.policies.dispatch.composite import innermost_policy
 from tests import test_dispatch_golden_identity as _golden
 from tests.golden.compare import published_mismatch
 from tests.golden.harness import MODULE_SEED, RUN_ID, TIME_STEP, StubManager, StubMessenger
@@ -131,9 +133,10 @@ def test_golden_case_via_init(case_id, monkeypatch):
     actual, app = _run_case_via_init(case)
 
     expected_cls = _SOLVER_CLASS[case["strategy"]]
-    assert type(app._solver) is expected_cls, (
-        f"{case_id}: AssignmentApp.__init__ built a {type(app._solver).__name__} from a "
-        f"profile whose strategy is {case['strategy']!r}"
+    leaf = innermost_policy(app._solver)
+    assert type(leaf) is expected_cls, (
+        f"{case_id}: AssignmentApp.__init__ built a {type(app._solver).__name__} whose innermost "
+        f"solver is a {type(leaf).__name__} from a profile whose strategy is {case['strategy']!r}"
     )
 
     # JSON round trip so tuples/lists and float reprs compare like the stored form.

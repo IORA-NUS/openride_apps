@@ -49,19 +49,31 @@ def _greedy(**params):
 
 
 def test_parse_policy_cli_args_json_coercion():
-    """Verified to have teeth: splitting the param spec on the FIRST '.' put
-    'market' as the slot and 'offer.x' as the key."""
+    """Round 2 (§3.3): the slot is the longest known prefix; every further non-final
+    segment is a policy reference.
+
+    Verified to have teeth: treating every segment after the slot as one dotted key
+    (no nesting) failed the ``offer``/``inner`` assertions; matching the SHORTEST
+    known prefix is untestable with today's one implemented slot, so the dotted
+    planned slot ``world.shedding`` locks it."""
     out = parse_policy_cli_args(
         ["dispatch=GreedyNearest"],
         ["dispatch.dual_cycle_bonus_km=0", "dispatch.candidates=sampled", "dispatch.flag=true",
-         "dispatch.quoted=\"60\"", "market.offer.x=1.5", "dispatch.eq=a=b"],
+         "dispatch.quoted=\"60\"", "dispatch.offer.keep_below_km=1.5", "dispatch.eq=a=b",
+         "dispatch.inner=RandomAssignment", "dispatch.inner.candidates=spatial",
+         "world.shedding.x=1"],
     )
     assert out["dispatch"]["type"] == "GreedyNearest"
     p = out["dispatch"]["params"]
     assert p["dual_cycle_bonus_km"] == 0 and isinstance(p["dual_cycle_bonus_km"], int)
     assert p["candidates"] == "sampled" and p["flag"] is True and p["quoted"] == "60"
     assert p["eq"] == "a=b"
-    assert out["market.offer"] == {"params": {"x": 1.5}}
+    assert p["offer"] == {"params": {"keep_below_km": 1.5}}
+    assert p["inner"] == {"type": "RandomAssignment", "params": {"candidates": "spatial"}}
+    assert out["world.shedding"] == {"params": {"x": 1}}
+    with pytest.raises(PolicyError, match=r"^--policy-param 'dispach.inner=X': no known slot is a prefix "
+                                          r"of 'dispach.inner'. Known slots: dispatch.$"):
+        parse_policy_cli_args([], ["dispach.inner=X"])
     for bad_policy, bad_param in ((["dispatch"], []), ([], ["dispatch=1"]), ([], ["dispatch.k"])):
         with pytest.raises(PolicyError):
             parse_policy_cli_args(bad_policy, bad_param)
@@ -115,8 +127,8 @@ def test_orsim_solver_still_works(monkeypatch):
     # A params-only override labels the policy with exactly the overridden params
     # (review F7; format in ``dispatch_override_label``).
     monkeypatch.delenv("ORSIM_SOLVER")
-    monkeypatch.setenv("ORSIM_POLICY_OVERRIDES",
-                       json.dumps({"dispatch": {"params": {"dual_cycle_bonus_km": 0}}}))
+    monkeypatch.setenv("ORSIM_POLICY_OVERRIDES",  # round 2: the solver's params are the inner's
+                       json.dumps({"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}))
     coll = _collection({"strategy": "GreedyNearest"})
     assert launcher._apply_policy_overrides_or_exit(coll) == (
         "GreedyNearest(dual_cycle_bonus_km=0.0)", True)
@@ -149,11 +161,12 @@ def test_override_patches_profile_policies_and_strategy_mirror():
     legacy = {"strategy": "GreedyNearest", "use_spatial_matching": False,
               "solver_params": {"dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 0.5}}
     coll = _collection(legacy)
-    resolved = apply_policy_overrides(coll, {"dispatch": {"params": {"dual_cycle_radius_km": 1.0}}})
+    inner = {"dispatch": {"params": {"inner": {"params": {"dual_cycle_radius_km": 1.0}}}}}
+    resolved = apply_policy_overrides(coll, inner)  # round 2: Partitioned/GreedyNearest's inner
     prof = coll["assignment_0"]["profile"]
     assert prof["strategy"] == "GreedyNearest"
     assert prof["policies"]["dispatch"] == resolved["dispatch"].to_profile()
-    assert prof["policies"]["dispatch"]["params"] == {
+    assert prof["policies"]["dispatch"]["params"]["inner"]["params"] == {
         "candidates": "sampled", "dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 1.0}
     assert prof["solver_params"] == {"dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 1.0}, (
         "the overridden param must be re-mirrored into the accounting solver_params (F1)")
@@ -162,7 +175,7 @@ def test_override_patches_profile_policies_and_strategy_mirror():
     # Validation happens before mutation.
     coll = _collection(legacy)
     with pytest.raises(PolicyParamsError):
-        apply_policy_overrides(coll, {"dispatch": {"params": {"dual_cycle_radius_km": -1}}})
+        apply_policy_overrides(coll, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_radius_km": -1}}}}})
     assert coll["assignment_0"]["profile"] == legacy
 
 
@@ -204,7 +217,8 @@ def test_run_config_meta_mirrors_policies(capsys):
     stamp = mgr.orsim_settings["POLICIES"]
     assert stamp["dispatch"]["source"] == "legacy-profile"
     assert stamp["dispatch"]["candidate_settings"]["max_trucks_per_scope"] == 40
-    assert "Policies effective: dispatch=GreedyNearest v1 timing=online params=" in capsys.readouterr().out
+    # Round 2: a legacy profile's selection is Partitioned/GreedyNearest (C4 adds the label).
+    assert "Policies effective: dispatch=Partitioned v1 timing=online params=" in capsys.readouterr().out
     assert mgr.get_run_config_meta()["policies"] == stamp
 
 
@@ -289,9 +303,9 @@ def test_validation_dry_runs_against_the_scenario_bundle_including_old_bundles(t
     folder.mkdir(parents=True)
     compile_spec_to_bundle(spec, domain="container-logistics-sim", scenario_dir=str(folder),
                            slug=spec["slug"])
-    ok = validate_run_policy_args(spec["slug"], None, [], ["dispatch.dual_cycle_bonus_km=0"])
-    assert ok == {"dispatch": {"params": {"dual_cycle_bonus_km": 0}}}
-    bad = validate_run_policy_args(spec["slug"], None, [], ["dispatch.candidates=near"])
+    ok = validate_run_policy_args(spec["slug"], None, [], ["dispatch.inner.dual_cycle_bonus_km=0"])
+    assert ok == {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}
+    bad = validate_run_policy_args(spec["slug"], None, [], ["dispatch.inner.candidates=near"])
     assert isinstance(bad, str) and "must be one of ['sampled', 'spatial']" in bad
 
     bundle_path = folder / "scenario.json"

@@ -17,8 +17,9 @@ from __future__ import annotations
 
 import random as _random_module
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from types import ModuleType
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from apps.container_logistics.rebate import RebateBook
 
@@ -125,6 +126,25 @@ class DispatchPolicy(ABC):
     def rebate_book(self) -> Optional[RebateBook]:
         """The injected :class:`RebateBook`, or ``None`` when never injected."""
         return self._rebate_book
+
+    @contextmanager
+    def decision_rng(self, ctx: "DispatchContext") -> Iterator[None]:
+        """Bind ``self.rng`` / ``self.tiebreak_seed`` to ``ctx.rng`` / ``ctx.tiebreak_seed`` for one decision.
+
+        The context is the decision's randomness input (round-2 §2.1): a leaf that
+        draws through ``self.rng`` and breaks ties through ``self._tiebreak_seed``
+        (the pre-v2 solver bodies) then draws from the scope it decides. On a
+        partition scope the context carries exactly this policy's own values (the
+        ``random`` module and ``None`` on the partitioned default), so the bind is an
+        identity there. The previous values are restored in ``finally``, also when
+        ``decide`` raises.
+        """
+        saved = (self._rng, self._tiebreak_seed)
+        self._rng, self._tiebreak_seed = ctx.rng, ctx.tiebreak_seed
+        try:
+            yield
+        finally:
+            self._rng, self._tiebreak_seed = saved
 
     @abstractmethod
     def decide(self, ctx: "DispatchContext") -> "Plan":

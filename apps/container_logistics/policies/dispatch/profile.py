@@ -12,20 +12,14 @@ dispatch slot (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7 and P1.6; roun
 - :func:`resolve_dispatch_for_profile` is its dispatch entry as a typed
   :class:`ResolvedDispatch` tree (:func:`dispatch_node`).
 - :func:`build_policy_tree` instantiates a tree; :func:`bind_instance` fits an
-  already-built policy object (``AssignmentApp._solver``) into a tree, or refuses.
+  already-built policy object (``AssignmentApp._solver``) into a tree, or refuses;
+  :func:`bind_profile_instance` does that for a profile (the runner's entry point).
 - :func:`mirror_dispatch_selection` writes the legacy mirrors (``strategy``,
   ``solver_params``, ``planner.deployment``, ``planner.topology``, ``planner.market``)
   from a selection; :func:`check_mirrors` refuses a profile whose mirrors disagree
   with its compiled ``policies`` (message 13).
 - :func:`assert_assignment_profiles_resolvable` is the run-start check
   ``run_container_logistics_simulation.main`` runs before any agent spawns.
-
-TEMPORARY compatibility (round-2 C2 -> C3, see the plan's Deviations / C2): until
-work item C3 registers the decompositions ``Partitioned`` and ``PooledMarket``
-(:func:`round2_tree_active` is false), a LEGACY profile resolves to its flat leaf
-exactly as round 1 did, the run-start check skips :func:`check_mirrors`, and the
-round-1 runtime entry points :func:`build_dispatch_policy` / :func:`resolve_for_instance`
-/ :func:`mirror_dispatch_params` keep their round-1 behaviour. C3/C4 delete them.
 
 Everything raises ``PolicyError`` subclasses; nothing falls back silently.
 
@@ -73,36 +67,30 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "COMPILED_ENTRY_KEYS",
+    "as_dispatch_node",
     "assert_assignment_profiles_resolvable",
     "bind_instance",
-    "build_dispatch_policy",
+    "bind_profile_instance",
     "build_policy_tree",
     "check_mirrors",
     "dispatch_node",
     "legacy_dispatch_from_profile",
-    "mirror_dispatch_params",
     "mirror_dispatch_selection",
     "resolve_dispatch_for_profile",
-    "resolve_for_instance",
     "resolve_profile_policies",
-    "round2_tree_active",
+    "use_spatial_matching",
 ]
 
 #: The keys of a compiled ``profile.policies.<slot>`` entry (``ResolvedPolicy.to_profile``).
 COMPILED_ENTRY_KEYS = ("type", "version", "kind", "timing", "params")
 
 _DECOMPOSITIONS = (PARTITIONED, POOLED_MARKET)
+_LEGACY_SOURCE_NOTE = (
+    "(This profile has no 'policies' block: its selection is translated from the legacy keys "
+    "strategy, solver_params, use_spatial_matching and planner.topology/planner.market; "
+    "the fix goes there, or recompile the scenario.)"
+)
 _MARKET_KEYS = ("max_rounds", *MARKET_ROLES)
-
-
-def round2_tree_active() -> bool:
-    """Whether the two built-in decompositions are registered (true from work item C3 on).
-
-    TEMPORARY (round-2 C2 -> C3): the one switch of this module's compatibility path.
-    Tests that exercise the tree register stand-ins under ``isolated_registry()``.
-    """
-    names = {spec.name for spec in list_policies("dispatch")}
-    return all(name in names for name in _DECOMPOSITIONS)
 
 
 # --- the run-start check ----------------------------------------------------------
@@ -114,15 +102,13 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
     ``collection`` is the assignment behavior collection, ``{agent_id: behavior}``.
     Each profile goes through :func:`resolve_dispatch_for_profile` (the shared
     framework resolver also refuses a non-executable timing), then
-    :func:`check_mirrors` (message 13; skipped while :func:`round2_tree_active` is
-    false, because a round-1 flat bundle is consistent only with the round-1 runtime)
-    and ``world.validate_cooperation_world`` (message 14). The raised error is the
+    :func:`check_mirrors` (message 13) and ``world.validate_cooperation_world``
+    (message 14). The raised error is the
     original class (e.g. ``UnknownPolicyError``) with the agent id prefixed; a
     behavior that is not a mapping raises plain ``PolicyError``.
     """
     from .world import validate_cooperation_world  # local: world imports assignment.*
 
-    tree_active = round2_tree_active()
     for agent_id, behavior in (collection or {}).items():
         if not isinstance(behavior, Mapping):
             raise PolicyError(
@@ -132,8 +118,7 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
         profile = behavior.get("profile") or {}
         try:
             node = resolve_dispatch_for_profile(profile)
-            if tree_active:
-                check_mirrors(profile, node)
+            check_mirrors(profile, node)
             validate_cooperation_world(profile)
         except PolicyError as exc:
             raise type(exc)(f"assignment agent {agent_id!r}: {exc}") from exc
@@ -146,7 +131,7 @@ def _declares(spec: Any, key: str) -> bool:
     return key in spec.params_cls.__dataclass_fields__
 
 
-def _use_spatial_matching(prof: Mapping[str, Any]) -> bool:
+def use_spatial_matching(prof: Mapping[str, Any]) -> bool:
     """The legacy ``use_spatial_matching`` flag, strictly boolean (absent means true).
 
     The pre-v2 code read it with ``bool(...)``; a non-boolean here is a malformed
@@ -179,7 +164,7 @@ def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
     params = drop_undeclared_legacy_params(
         spec, prof.get("solver_params") or {}, "profile.strategy/solver_params"
     )
-    if not _use_spatial_matching(prof) and _declares(spec, "candidates"):
+    if not use_spatial_matching(prof) and _declares(spec, "candidates"):
         params["candidates"] = "sampled"
     return {"type": name, "timing": "online", "params": params}
 
@@ -207,12 +192,13 @@ def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, Resolve
     """
     block = prof.get("policies")
     if block is None:
-        entry = legacy_dispatch_from_profile(prof)
-        if round2_tree_active():
-            entry = wrap_legacy_leaf(entry, prof.get("planner"))
-        # else TEMPORARY (C2 -> C3): the round-1 flat leaf, what today's runtime runs.
-        resolved = resolve_policies_block({"dispatch": entry}, where="profile.policies",
-                                          legacy_slots=("dispatch",))
+        try:
+            entry = wrap_legacy_leaf(legacy_dispatch_from_profile(prof), prof.get("planner"))
+            resolved = resolve_policies_block({"dispatch": entry}, where="profile.policies",
+                                              legacy_slots=("dispatch",))
+        except PolicyError as exc:
+            # The paths above are the translation's; name the keys the author wrote.
+            raise type(exc)(f"{exc} {_LEGACY_SOURCE_NOTE}") from exc
         return resolved, "legacy-profile"
     if not isinstance(block, Mapping) or not isinstance(block.get("dispatch"), Mapping):
         raise PolicyError(
@@ -261,12 +247,12 @@ def dispatch_node(name: str, params: Any, *, timing: str, source: ResolvedSource
     spec = get_policy_spec("dispatch", name)
     inner = None
     if spec.is_composite:
-        if not any(p == INNER_PARAM and k == "dispatch" for p, k, _leaf in spec.refs):
+        if spec.inner_param is None:
             raise PolicyError(
                 f"dispatch policy {spec.name!r} references a dispatch policy but has no "
                 f"'{INNER_PARAM}' param; a composite delegates each scope through '{INNER_PARAM}'."
             )
-        ref = getattr(params, INNER_PARAM)
+        ref = getattr(params, spec.inner_param)
         inner = dispatch_node(ref.type, ref.params, timing=timing, source=source)
     return ResolvedDispatch(
         name=spec.name,
@@ -303,7 +289,8 @@ def resolve_dispatch_for_profile(prof: Mapping[str, Any]) -> ResolvedDispatch:
                                "policies" if source == "bundle" else "legacy-profile")
 
 
-def _as_node(resolved: ResolvedDispatch | ResolvedPolicy) -> ResolvedDispatch:
+def as_dispatch_node(resolved: ResolvedDispatch | ResolvedPolicy) -> ResolvedDispatch:
+    """The typed :class:`ResolvedDispatch` tree of a resolved dispatch entry (identity for a node)."""
     if isinstance(resolved, ResolvedDispatch):
         return resolved
     return _node_from_resolved(resolved, "policies")
@@ -450,52 +437,14 @@ def _refuse_unregistered_subclass(cls: type) -> None:
             )
 
 
-# --- TEMPORARY round-1 runtime entry points (C3 replaces their callers) -------------
+def bind_profile_instance(prof: Mapping[str, Any], instance: DispatchPolicy) -> tuple[DispatchPolicy, ResolvedDispatch]:
+    """:func:`bind_instance` of ``instance`` into ``prof``'s resolved selection (the runner's entry point).
 
-
-def build_dispatch_policy(resolved: ResolvedDispatch) -> Any:
-    """Instantiate ``resolved`` (= :func:`build_policy_tree`; ``AssignmentApp.__init__``'s call).
-
-    TEMPORARY (C2 -> C3): kept under its round-1 name for ``assignment/app.py``;
-    while :func:`round2_tree_active` is false a legacy profile resolves to its flat
-    leaf, so this builds exactly the round-1 leaf. C3 calls ``build_policy_tree``.
+    Returns ``(top-level policy, bound node)``. Raises ``PolicyError`` when the
+    profile does not resolve or ``instance`` fits neither its top nor its leaf.
     """
-    return build_policy_tree(resolved)
-
-
-def resolve_for_instance(policy: Any, prof: Mapping[str, Any]) -> ResolvedDispatch:
-    """Resolve dispatch for an already-built ``policy`` under profile ``prof`` (round 1).
-
-    TEMPORARY (C2 -> C3; ``runner.build_runner_for_app`` is its caller): returns the
-    bound node of :func:`bind_instance`, so a registered class must be the one the
-    profile resolves to. An unregistered class (a hand-injected test solver) is NOT
-    checked against the profile at all, exactly as in round 1: it gets
-    ``params=None`` and the legacy candidate rule. An unregistered subclass of a
-    registered policy raises: its inherited ``decide`` would read params it lacks.
-    """
-    if spec_for_class(type(policy)) is None:
-        _refuse_unregistered_subclass(type(policy))
-        return _unregistered_node(policy, timing="online",
-                                  use_spatial_matching=_use_spatial_matching(prof))
-    node = resolve_dispatch_for_profile(prof)
-    _policy, bound = bind_instance(node, policy, use_spatial_matching=_use_spatial_matching(prof))
-    return bound
-
-
-def mirror_dispatch_params(profile: Mapping[str, Any], dispatch_params: Mapping[str, Any]) -> None:
-    """Re-mirror resolved LEAF dispatch params into a profile's accounting copies (in place).
-
-    TEMPORARY (C2 -> C4): the round-1 one-dial mirror, still called by compile and
-    the per-run override path until C4 switches them to
-    :func:`mirror_dispatch_selection`. Every key ALREADY PRESENT in
-    ``profile["solver_params"]`` and ``profile["planner"]["deployment"]["params"]`` is
-    set to ``dispatch_params[key]`` when the policy declares it; no key is added.
-    """
-    planner = profile.get("planner") if isinstance(profile.get("planner"), Mapping) else {}
-    deployment = planner.get("deployment") if isinstance(planner.get("deployment"), Mapping) else {}
-    for target in (profile.get("solver_params"), deployment.get("params")):
-        if isinstance(target, dict):
-            target.update({k: v for k, v in dispatch_params.items() if k in target})
+    return bind_instance(resolve_dispatch_for_profile(prof), instance,
+                         use_spatial_matching=use_spatial_matching(prof))
 
 
 # --- the legacy mirrors ---------------------------------------------------------------
@@ -522,7 +471,7 @@ def mirror_dispatch_selection(profile: dict[str, Any], resolved: ResolvedDispatc
     ``legacy.market_echo`` of the params when the top is ``PooledMarket`` (otherwise it
     is inert pooled-arm configuration and left as is). No other key is added.
     """
-    node = _as_node(resolved)
+    node = as_dispatch_node(resolved)
     nodes = list(_preorder(node))
     profile["strategy"] = node.leaf
     planner = profile.get("planner")
@@ -551,26 +500,66 @@ def check_mirrors(profile: Mapping[str, Any], resolved: ResolvedDispatch | Resol
     """Refuse a profile whose legacy mirrors disagree with its selection (message 13).
 
     At run start the compiled ``policies`` block is authoritative and the mirrors are
-    CHECKED, never read: a present ``strategy`` must be the innermost leaf; a present
-    ``planner.topology`` must be a legacy topology whose decomposition is the top
-    (``Partitioned`` <-> partitioned, ``PooledMarket`` <-> pooled; any other top has
-    none); a present ``planner.market`` must agree with ``PooledMarket``'s params when
-    that is the top (it is inert otherwise). Raises ``PolicyError``.
+    CHECKED, never read: a present ``strategy`` must be the innermost leaf; every key
+    of ``solver_params`` and ``planner.deployment.params`` that a node of the tree
+    declares must equal that node's value (the first such node, pre-order: the F1
+    one-dial rule ``mirror_dispatch_selection`` writes, and ``solver_params`` is what
+    the framework's accounting READS); a present ``planner.topology`` must be a legacy
+    topology whose decomposition is the top (``Partitioned`` <-> partitioned,
+    ``PooledMarket`` <-> pooled; any other top has none); a present ``planner.market``
+    must agree with ``PooledMarket``'s params when that is the top (it is inert
+    otherwise). Raises ``PolicyError``.
     """
-    node = _as_node(resolved)
-    strategy = profile.get("strategy")
-    if strategy is not None and strategy != node.leaf:
-        raise PolicyError(
-            f"profile strategy={strategy!r} disagrees with its compiled policies.dispatch "
-            f"({node.label}, whose innermost solver is {node.leaf}). The compiled policies "
-            f"block is authoritative; change a run's solver with --solver {strategy} "
-            "(ORSIM_SOLVER is translated into exactly that). Fix the bundle or recompile."
-        )
+    node = as_dispatch_node(resolved)
+    _check_strategy_mirror(profile.get("strategy"), node)
+    _check_accounting_mirrors(profile, node)
     planner = profile.get("planner") if isinstance(profile.get("planner"), Mapping) else {}
     if planner.get("topology") is not None:
         _check_topology_mirror(planner, node)
     if node.name == POOLED_MARKET and planner.get("market") is not None:
         _check_market_mirror(planner, node)
+
+
+def _check_strategy_mirror(strategy: Any, node: ResolvedDispatch) -> None:
+    if strategy is None or strategy == node.leaf:
+        return
+    # Advise --solver only with a name it accepts (a registered per-scope solver).
+    leaves = {spec.name for spec in list_policies("dispatch") if not spec.is_composite}
+    hint = (f"change a run's solver with --solver {strategy} (ORSIM_SOLVER is translated into "
+            "exactly that). " if strategy in leaves else "")
+    raise PolicyError(
+        f"profile strategy={strategy!r} disagrees with its compiled policies.dispatch "
+        f"({node.label}, whose innermost solver is {node.leaf}). The compiled policies "
+        f"block is authoritative; {hint}Fix the bundle or recompile."
+    )
+
+
+def _same_value(a: Any, b: Any) -> bool:
+    """Equal, and a bool never equals a number (``True == 1`` in Python; plan §2.6)."""
+    return isinstance(a, bool) == isinstance(b, bool) and a == b
+
+
+def _check_accounting_mirrors(profile: Mapping[str, Any], node: ResolvedDispatch) -> None:
+    """Refuse an accounting mirror (``solver_params``, ``planner.deployment.params``) the tree contradicts."""
+    nodes = list(_preorder(node))
+    planner = profile.get("planner") if isinstance(profile.get("planner"), Mapping) else {}
+    deployment = planner.get("deployment") if isinstance(planner.get("deployment"), Mapping) else {}
+    for where, mirror in (("solver_params", profile.get("solver_params")),
+                          ("planner.deployment.params", deployment.get("params"))):
+        if not isinstance(mirror, Mapping):
+            continue
+        diffs = []
+        for key in mirror:
+            found, value = _first_declared(nodes, key)
+            if found and not _same_value(mirror[key], value):
+                diffs.append(f"{key}={mirror[key]!r} vs {value!r}")
+        if diffs:
+            raise PolicyError(
+                f"profile {where} disagrees with its compiled policies.dispatch ({node.label}): "
+                f"{', '.join(diffs)}. The compiled policies block is authoritative and the "
+                f"framework's share accounting costs with solver_params, so the two must be "
+                "equal (one dial). Fix the bundle or recompile."
+            )
 
 
 def _check_topology_mirror(planner: Mapping[str, Any], node: ResolvedDispatch) -> None:
@@ -590,7 +579,7 @@ def _check_market_mirror(planner: Mapping[str, Any], node: ResolvedDispatch) -> 
     spec = get_policy_spec("dispatch", node.name)
     compiled = node.params.to_dict()
     authored = spec.params_cls.from_mapping(
-        {**legacy_market_params(planner), INNER_PARAM: compiled[INNER_PARAM]},
+        {**legacy_market_params(planner), spec.inner_param: compiled[spec.inner_param]},
         where=f"profile planner.market for {node.name}",
     ).to_dict()
     diffs = [f"{k}={authored[k]!r} vs {compiled[k]!r}" for k in _MARKET_KEYS if authored[k] != compiled[k]]

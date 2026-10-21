@@ -1,20 +1,35 @@
-"""``DispatchRunner``: decide, capture, check, commit heads, record stats.
+"""``DispatchRunner``: build the tick's context, decide, check, commit heads, record stats.
 
-The single path from a dispatch policy to committed ``(truck, order)`` pairs on both
-topologies (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P1.8, P3.4):
+The single path from the selected dispatch policy to committed ``(truck, order)``
+pairs (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §2):
 
-1. ``plan = policy.decide(ctx)``. A ``DispatchContractViolation`` raised inside is a
-   violation; any other exception propagates unchanged (today's behaviour).
-   The optional capture hook sees the RAW plan here, before the invariants.
-2. ``invariants.check_plan``. Any problem: log ERROR, count, commit NOTHING for the
-   scope this tick. Violations are not stamped on the run this round (plan §1.2
-   item 7); the log line goes to celery's journal, not ``sim.log``.
-3. Map heads back to the raw documents in chain-insertion order. ``online`` timing
-   commits heads only.
+1. :meth:`DispatchRunner.tick_context` builds the whole-tick context
+   (``scopes.tick_context``).
+2. :meth:`DispatchRunner.run` calls ``plan = policy.decide(ctx)``. A
+   ``DispatchContractViolation`` raised inside is a violation; any other exception
+   propagates unchanged (a crashing top-level solver aborts the tick, as the
+   partitioned path always did).
+3. ``invariants.check_plan`` against the context. On the tick scope its feasibility is
+   ``world.allowed``, so a cross-company head the structure does not permit is
+   discarded whatever solver produced it. Any problem: log ERROR (message 18), count,
+   commit NOTHING this tick.
+4. Map heads back to the raw documents (first document per id) in chain-insertion
+   order: ``online`` timing commits heads only. Returns
+   :class:`TickOutcome` ``(pairs, notes)``; ``notes`` is the plan's (``market`` and
+   ``pair_notes`` are the reserved keys the framework reads).
 
-Stats (``calls``, ``violations``, ``total_ms``, ``max_ms``) are in memory only.
+A decomposition solver decides its sub-scopes through ``compose.decide_in_scope``
+(message 19 per discarded scope). ``run`` also accepts a sub-scope context (the
+offline fixtures decide one partition); a violation there is message 19.
+
+Stats (``calls``, ``violations``, ``total_ms``, ``max_ms``; ``crashes`` once a market
+company crashed) are in memory only and shared with every scope of the tick.
 :func:`build_runner_for_policy` builds a runner from a registered name alone (the
 battery, bench and capture replay share it).
+
+Capture (format ``/1``, one file per decided sub-scope): the hook rides on the tick
+context and is called around every ``decide_in_scope``, and around ``run`` on a
+sub-scope context; a whole-tick decision is not captured until format ``/2`` (C5).
 
 Framework side of the boundary. Not a leaf module (plan §2.7): ``assignment/app.py``
 imports :func:`build_runner_for_app` locally, inside its one accessor.
@@ -24,6 +39,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from apps.container_logistics.policies.framework.errors import (
@@ -33,19 +49,19 @@ from apps.container_logistics.policies.framework.errors import (
 )
 from apps.container_logistics.policies.framework.slots import SLOTS
 
-from . import scopes
-from .allowed import CompanyRule
+from . import compose, scopes
 from .base import DispatchPolicy
-from .context import DispatchContext
+from .context import DispatchClock, DispatchContext, direct_execute
 from .helpers.candidates import CANDIDATE_KINDS, CandidateSettings
 from .invariants import check_plan
-from .plan import Plan
-from .resolved import ResolvedDispatch, candidate_kind_for
+from .resolved import ResolvedDispatch
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "DispatchRunner",
+    "TickOutcome",
+    "accounting_params_for",
     "build_runner_for_app",
     "build_runner_for_policy",
     "framework_accounting_cost",
@@ -59,15 +75,24 @@ EXECUTABLE_TIMINGS: tuple[str, ...] = SLOTS["dispatch"].executable_timings
 Pair = tuple[dict[str, Any], dict[str, Any]]
 
 
-class DispatchRunner:
-    """Runs one resolved dispatch policy for every scope of every tick.
+@dataclass(frozen=True)
+class TickOutcome:
+    """What one tick committed: ``pairs`` (heads, raw documents, commit order) and the plan's ``notes``."""
 
-    ``capture`` is the P3 fixture hook: ``capture(ctx=..., plan=..., problems=...)``,
-    called after ``decide`` and BEFORE ``check_plan`` (``problems`` holds only a
-    violation ``decide`` raised). When the hook also has ``before_decide(ctx)`` it is
-    called first, so it can snapshot RNG state without consuming it. ``None`` costs
-    one ``if`` per scope. Raises ``PolicyTimingError`` for a
-    timing it cannot execute and ``PolicyError`` for an unknown candidate kind.
+    pairs: list[Pair]
+    notes: Mapping[str, Any] = field(default_factory=dict)
+
+
+class DispatchRunner:
+    """Runs one resolved dispatch selection (a tree) for every tick.
+
+    ``policy`` is the built top-level policy and ``resolved`` its ``ResolvedDispatch``
+    tree. ``capture`` is the P3 fixture hook: ``capture(ctx=..., plan=...,
+    problems=...)``, called after a sub-scope's ``decide`` and BEFORE its check
+    (``problems`` holds only a violation ``decide`` raised); with ``before_decide(ctx)``
+    it is called first, so it can snapshot RNG state without consuming it. ``None``
+    costs one ``if`` per scope. Raises ``PolicyTimingError`` for a timing it cannot
+    execute and ``PolicyError`` for an unknown candidate kind.
     """
 
     def __init__(
@@ -90,38 +115,38 @@ class DispatchRunner:
         self.policy = policy
         self.resolved = resolved
         self.candidate_kind = resolved.candidate_kind
+        self.share_tag_format = resolved.share_tag_format
         self._capture = capture
         self.stats: dict[str, Any] = {"calls": 0, "violations": 0, "total_ms": 0.0, "max_ms": 0.0}
 
     @staticmethod
-    def candidate_settings(prof: dict[str, Any]) -> CandidateSettings:
-        """The profile's spatial/sampling knobs (``CandidateSettings.from_profile``).
-
-        Exposed here so ``AssignmentApp`` reaches the dispatch package through the
-        runner it already holds instead of another local import.
-        """
+    def candidate_settings(prof: Mapping[str, Any]) -> CandidateSettings:
+        """The profile's spatial/sampling knobs (``CandidateSettings.from_profile``)."""
         return CandidateSettings.from_profile(prof)
 
-    @staticmethod
-    def company_rule(haulier_id: str, max_travel_time_pickup: Any) -> CompanyRule:
-        """The pooled feasibility rule for ``haulier_id`` (``pooled_planner`` imports no policies)."""
-        return CompanyRule(haulier_id=haulier_id, max_travel_time_pickup=max_travel_time_pickup)
-
-    def partition_context(self, **kw: Any) -> DispatchContext:
-        """``scopes.partition_context`` with this runner's policy, params and kind."""
-        return scopes.partition_context(
-            policy=self.policy, params=self.resolved.params, candidate_kind=self.candidate_kind, **kw
+    def tick_context(
+        self,
+        *,
+        candidates: list[dict[str, Any]],
+        orders: list[dict[str, Any]],
+        world: Any,
+        settings: CandidateSettings,
+        clock: DispatchClock,
+        tick_seed: int,
+        execute: Callable[..., Any] = direct_execute,
+        scope_log: list[dict[str, Any]] | None = None,
+    ) -> DispatchContext:
+        """The whole-tick context for this runner's policy (``scopes.tick_context``)."""
+        return scopes.tick_context(
+            policy=self.policy, params=self.resolved.params, candidate_kind=self.candidate_kind,
+            trucks=candidates, orders=orders, world=world, settings=settings, clock=clock,
+            tick_seed=tick_seed, execute=execute, stats=self.stats, scope_log=scope_log,
+            capture=self._capture,
         )
 
-    def company_context(self, **kw: Any) -> DispatchContext:
-        """``scopes.company_context`` with this runner's policy, params and kind."""
-        return scopes.company_context(
-            policy=self.policy, params=self.resolved.params, candidate_kind=self.candidate_kind, **kw
-        )
-
-    def run(self, ctx: DispatchContext) -> list[Pair]:
-        """Decide for ``ctx`` and return the pairs to commit (``[]`` on a violation)."""
-        capture = self._capture
+    def run(self, ctx: DispatchContext) -> TickOutcome:
+        """Decide for ``ctx`` and return what to commit (no pairs on a violation)."""
+        capture = self._capture if ctx.scope.kind != "tick" else None
         if capture is not None:
             before = getattr(capture, "before_decide", None)
             if before is not None:
@@ -133,10 +158,11 @@ class DispatchRunner:
             problems = check_plan(plan, ctx)
         if problems:
             self._report_violation(ctx, problems)
-            return []
+            return TickOutcome(pairs=[], notes={})
         if plan.notes:
-            logger.debug("dispatch %s notes in scope %s: %r", self.resolved.name, ctx.scope.key, dict(plan.notes))
-        return self._commit_heads(plan, ctx)
+            logger.debug("dispatch %s notes in scope %s: %r", self.resolved.label, ctx.scope.key,
+                         sorted(plan.notes))
+        return TickOutcome(pairs=compose.heads_to_pairs(plan, ctx), notes=dict(plan.notes))
 
     def _decide(self, ctx: DispatchContext) -> tuple[Any, list[str]]:
         start = time.perf_counter()
@@ -153,47 +179,37 @@ class DispatchRunner:
         self.stats["max_ms"] = max(self.stats["max_ms"], ms)
 
     def _report_violation(self, ctx: DispatchContext, problems: list[str]) -> None:
+        if ctx.scope.kind != "tick":
+            compose.report_scope_violation(self.resolved.name, self.resolved.version, ctx, problems,
+                                           stats=self.stats)
+            return
         self.stats["violations"] += 1
         logger.error(
-            "DISPATCH POLICY CONTRACT VIOLATION: %s v%s in scope %s at step %d returned an "
-            "invalid plan: %s. The plan was DISCARDED (nothing committed for this scope this "
-            "tick). This is a policy bug: run `openride policy validate dispatch %s`.",
-            self.resolved.name,
-            self.resolved.version,
-            ctx.scope.key,
-            ctx.clock.time_step,
-            "; ".join(problems),
-            self.resolved.name,
+            "DISPATCH POLICY CONTRACT VIOLATION: %s v%s at step %d returned an invalid tick plan: "
+            "%s. The plan was DISCARDED (nothing committed this tick). This is a policy bug: run "
+            "`openride policy validate dispatch %s`.",
+            self.resolved.label, self.resolved.version, ctx.clock.time_step,
+            "; ".join(problems), self.resolved.name,
         )
 
-    @staticmethod
-    def _commit_heads(plan: Plan, ctx: DispatchContext) -> list[Pair]:
-        # First doc per id, matching check_plan; ids are unique in valid input
-        # (filter_assignable_trucks / the order query), see plan §7 risk 7.
-        trucks: dict[str, dict[str, Any]] = {}
-        for t in ctx.raw_trucks:
-            trucks.setdefault(str(t.get("_id")), t)
-        orders: dict[str, dict[str, Any]] = {}
-        for o in ctx.raw_orders:
-            orders.setdefault(str(o.get("_id")), o)
-        return [(trucks[tid], orders[oid]) for tid, oid in plan.heads()]
 
+def build_runner_for_app(policy: DispatchPolicy, prof: Mapping[str, Any]) -> DispatchRunner:
+    """The runner ``AssignmentApp`` uses for its built ``policy`` under assignment profile ``prof``.
 
-def build_runner_for_app(policy: DispatchPolicy, prof: dict[str, Any]) -> DispatchRunner:
-    """The runner ``AssignmentApp`` uses for ``policy`` under assignment profile ``prof``.
-
-    Raises ``PolicyError`` when the profile resolves dispatch to a different policy
-    than ``policy`` (see ``dispatch.profile.resolve_for_instance``).
+    ``policy`` is fitted into the profile's selection tree
+    (``dispatch.profile.bind_profile_instance``): reused as the top, or wrapped as the
+    innermost leaf. Raises ``PolicyError`` when it fits neither.
     """
     # Local import: dispatch/profile.py resolves through the registry, which
     # discovers assignment.solver; keep that off this module's import path.
     from .capture import CaptureRecorder, CaptureSettings
-    from .profile import resolve_for_instance
+    from .profile import bind_profile_instance
 
-    resolved = resolve_for_instance(policy, prof)
+    top, bound = bind_profile_instance(prof, policy)
     settings = CaptureSettings.from_profile(prof)
-    capture = None if settings is None else CaptureRecorder(settings, resolved=resolved)
-    return DispatchRunner(policy=policy, resolved=resolved, capture=capture)
+    # Capture records the per-scope decisions of the innermost solver (format /1).
+    capture = None if settings is None else CaptureRecorder(settings, resolved=bound.innermost)
+    return DispatchRunner(policy=top, resolved=bound, capture=capture)
 
 
 def build_runner_for_policy(
@@ -202,43 +218,55 @@ def build_runner_for_policy(
     *,
     capture: Callable[..., None] | None = None,
 ) -> DispatchRunner:
-    """A fresh instance of registered dispatch policy ``name`` wrapped in a runner.
+    """A fresh instance of registered dispatch policy ``name`` (a whole tree) wrapped in a runner.
 
-    ``params`` are validated by the policy's ``Params`` (``None``: all defaults). The
-    candidate kind is ``resolved.candidate_kind_for(validated)``, the one rule
-    ``profile.resolve_dispatch_for_profile`` also uses. Raises
-    ``UnknownPolicyError`` / ``PolicyParamsError``.
+    ``params`` are validated by the policy's ``Params`` (``None``: all defaults; refs
+    resolved recursively). Raises ``UnknownPolicyError`` / ``PolicyParamsError``.
     """
     from apps.container_logistics.policies.framework.registry import get_policy_spec
 
+    from .profile import build_policy_tree, dispatch_node
+
     spec = get_policy_spec("dispatch", name)
     validated = spec.params_cls.from_mapping(params, where=f"dispatch params for {name}")
-    resolved = ResolvedDispatch(
-        name=spec.name,
-        version=spec.version,
-        timing="online",
-        params=validated,
-        candidate_kind=candidate_kind_for(validated),
-        source="policies",
-    )
-    return DispatchRunner(policy=spec.cls(params=validated.to_dict()), resolved=resolved, capture=capture)
+    node = dispatch_node(spec.name, validated, timing="online", source="policies")
+    return DispatchRunner(policy=build_policy_tree(node), resolved=node, capture=capture)
 
 
 _ACCOUNTING_KEYS = ("dual_cycle_bonus_km", "dual_cycle_radius_km")
 
 
-def framework_accounting_cost(params: Any) -> Callable[[dict[str, Any], dict[str, Any]], float]:
+def accounting_params_for(selection: Any) -> dict[str, Any]:
+    """The accounting dials a selection implies: the F1 one-dial mirror rule, offline.
+
+    ``selection`` is a ``ResolvedDispatch`` tree (each key from the first node,
+    pre-order, that declares it; normally the leaf), a ``PolicyParams`` or a plain
+    mapping. Keys nobody declares are left out (the constraint defaults apply).
+    """
+    if isinstance(selection, ResolvedDispatch):
+        out: dict[str, Any] = {}
+        node: ResolvedDispatch | None = selection
+        while node is not None:
+            values = node.params.to_dict() if node.params is not None else {}
+            for key in _ACCOUNTING_KEYS:
+                if key in values and key not in out:
+                    out[key] = values[key]
+            node = node.inner
+        return out
+    values = selection.to_dict() if hasattr(selection, "to_dict") else dict(selection or {})
+    return {k: values[k] for k in _ACCOUNTING_KEYS if k in values}
+
+
+def framework_accounting_cost(selection: Any) -> Callable[[dict[str, Any], dict[str, Any]], float]:
     """The accounting cost an offline context uses: ``constraints.assignment_cost``.
 
     The live sim passes ``AssignmentApp._solver_params``, which the one-dial mirror
-    keeps equal to the policy's dual-cycle params; offline we take those two keys
-    from ``params`` (a ``PolicyParams`` or a mapping) and the constraint defaults for
-    any the policy does not declare.
+    keeps equal to the selection's dual-cycle params; offline they come from
+    :func:`accounting_params_for` and the constraint defaults for the rest.
     """
     from apps.container_logistics.assignment import constraints as assign_constraints
 
-    values = params.to_dict() if hasattr(params, "to_dict") else dict(params or {})
-    accounting = {k: values[k] for k in _ACCOUNTING_KEYS if k in values}
+    accounting = accounting_params_for(selection)
 
     def cost(t: dict[str, Any], o: dict[str, Any]) -> float:
         return assign_constraints.assignment_cost(t, o, accounting)

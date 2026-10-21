@@ -1063,3 +1063,188 @@ implemented as written.
     the cache-rebuild test ("a `planner` patch rebuilds the runner") needs the C3 cache key
     in `app._dispatch_runner`; app.py is out of C2's scope. No pre-existing (non-branch)
     test was edited.
+
+### C3
+
+1. **The C2 compatibility path is gone.** `profile.round2_tree_active`,
+   `build_dispatch_policy`, `resolve_for_instance` and `mirror_dispatch_params` are
+   deleted; `framework/resolve._unnamed_type`'s fallback is deleted (an unnamed dispatch
+   is the slot default `Partitioned`, strictly) together with the `framework/resolve.py`
+   → `dispatch.legacy` import (C1 review #5; a test asserts no framework module imports
+   `policies.dispatch`). `assert_assignment_profiles_resolvable` always runs
+   `check_mirrors`. New runtime entry point: `profile.bind_profile_instance(prof,
+   instance) -> (top, bound node)`; `use_spatial_matching` (was `_use_spatial_matching`)
+   and `as_dispatch_node` (was `_as_node`) are public.
+2. **Runner API.** `DispatchRunner.run(ctx) -> TickOutcome(pairs, notes)` accepts any
+   scope: on the tick scope a violation is message 18 (logged by `runner`), on a
+   sub-scope context (only offline fixtures do that) message 19 (logged by `compose`,
+   counted in the runner's stats). `runner.tick_context(...)` builds the tick;
+   `share_tag_format` comes from the bound top node. `partition_context`,
+   `company_context`, `company_rule` are gone from the runner (`compose.ScopeDecider`
+   has the last two). `build_runner_for_policy` builds the whole default tree, so the
+   battery and bench can run the composites; `accounting_params_for(selection)` is the
+   offline F1 rule (first declaring node, pre-order).
+3. **Context additions beyond §2.1:** `ctx.capture` (the runner's capture hook,
+   inherited like `stats`) and `ctx.rule` (kept). `scopes.partition_context` /
+   `company_context` keep their round-1 keyword signatures (`policy=` gives the
+   rng/tiebreak/rebates, exactly the §2.3 values) plus `parent=`; without a parent they
+   build an offline scope (world `None`, fresh stats), which the round-1 unit tests use.
+   `TICK_SCOPE_KEY = "tick"`.
+4. **Capture stays format /1, per decided SUB-scope** (C5 writes /2): the hook rides on
+   the tick context, `decide_in_scope` calls it around every group/company decision,
+   and the recorder names the INNERMOST node (`bound.innermost`), so every live capture
+   replays exactly as before. A whole-tick (central-leaf) decision is not captured until
+   C5; `run()` captures only a non-tick context.
+5. **Battery/fixtures/bench, minimal:** `Fixture.context(runner)` is a partition scope
+   whose parent is the runner's tick context over the same documents (world: no
+   structure, the fixture's rule; a `("component", n)` fixture maps its rule's hauliers
+   to component n), so a composite can decide it. The battery: `params.defaults_validate`
+   builds the default tree; `order_independent` / `no_module_rng` are skipped when ANY
+   node of the arm's selection declares `order_sensitive` / `module_rng` (the C5 rule,
+   needed now because `PooledMarket`'s default inner `RandomAssignment` is
+   order-sensitive); the violation filter also covers `compose`'s logger. Bench reads
+   `.pairs`. `policy_golden.json.gz` gained `Partitioned` and `PooledMarket` entries
+   (generator `--policy`, Greedy/Random entries byte-identical; C5 replaces the file).
+   Per-arm budgets are C5; `perf_budget_ms` measured: Partitioned 520, PooledMarket 540.
+6. **Tick-scope sampling cap (explainer gap 1): per haulier.** On the tick scope
+   `sampled_trucks()` caps each haulier's trucks independently
+   (`helpers.candidates.sampled_trucks_per_haulier`, first-seen haulier order, one
+   `rng.sample` per haulier over the cap, drawing from `ctx.rng`); documented as
+   `context.TICK_SAMPLE_SCOPE = "per_haulier"`, not added to the stamp (that would
+   change the stamp shape C4 owns). Group/company scopes are unchanged (byte identity).
+7. **`Partitioned` does not forward `set_rng`/`set_tiebreak`** (C2 review NIT): it
+   records them on itself only, so its groups always draw from the inner's own RNG (the
+   module on every live path). `set_rebate_book` still forwards. `CompositePolicy`'s
+   docstring says so. `PooledMarket` injects into its inner explicitly
+   (`self.inner.set_rng(ctx.rng)`, `self.inner.set_tiebreak(ctx.tick_seed)`).
+8. **`PooledMarket` company solves are called directly, never through `ctx.execute`**
+   (explainer gap 3 / FIX-12 decision): the pre-v2 pooled path never used the worker
+   thread, so byte identity keeps it; `Partitioned` groups go through `ctx.execute`
+   (one call per group, as before). The market components are built once per instance
+   through `framework.components.instantiate_component` from the typed params (C1
+   review #6); the fail-soft getters stay as library functions, used by no runtime
+   module (AST test).
+9. **Crash containment** (explainer gap 2): a non-contract exception from a top-level
+   solver or a `Partitioned` group propagates out of `assign()` (pre-v2 partitioned
+   behaviour; `_share_tags` stays reset); only a market company crash is contained
+   (message 20 via `ScopeDecider.report_crash`, called inside the engine's `except`,
+   counted as `stats["crashes"]`).
+10. **The haulier-scoping "0 matches" ERROR now also fires on the pooled path** (it used
+    to return before it). It is a framework check over candidates/orders, solver-
+    independent; logged once per app, no RNG, no published-string change.
+11. **Pooled engine:** `PooledMarketResult.share_tags` is replaced by `pair_notes`
+    (cross-company awards only, `{pool_id, market_round}`); `owner_reserve_km` and
+    `_finite_or_none` are deleted from `pooled_planner` (they live in `accounting`);
+    `PooledPlannerContext` lost `pair_allowed_own`/`pair_allowed_pooled`. `max_rounds`
+    in the notes is the validated param (equal to the old clamp on valid configs).
+12. **app.py:** `_dispatch_tick` (new) holds the §2 flow and `_log_cooperation` the two
+    INFO lines; `_tick_seed` and `_dispatch_tick` import `policies.dispatch` locally
+    besides the three accessors (comment and an AST test say so). `_direct_call` is a
+    module helper (`ctx.execute` without tpool).
+13. **Compile switch (C2's ordering hazard), as minimal as consistency allowed:**
+    - `preprocess._normalize_policies` wraps the translated legacy leaf through
+      `legacy.wrap_legacy_leaf(leaf, planner_cfg)` (PolicyError -> SpecValidationError);
+      `Preprocessor.dispatch_leaf_entry` (shape-only descent of `params.inner`; a
+      built-in decomposition without `inner` has `LEGACY_LEAF_DEFAULT`) feeds the
+      `strategy`/`solver_params`/`deployment` mirrors and the recipe `solver`. The
+      authored `solver`/`solverParams` checks compare with the innermost solver and name
+      its path (`policies.dispatch[.params.inner].type`), so the flat-block messages are
+      unchanged. Messages 7/8 (authored topology/market conflicts) are NOT added (C4).
+    - `spec_compile` mirrors AUTHORED blocks with `mirror_dispatch_selection` (legacy
+      translations were built from those keys); `_refuse_deployment_contradicting_policies`
+      compares with the innermost node and names its path; `_patch_assignment_profiles`
+      asserts `strategy == leaf`. `authored_after_resolution` filters a legacy echo's
+      undeclared params at every level of the tree (`_keep_declared`).
+    - `frontend_scenario_spec`: `normalize_solver` accepts leaves only; the editForm
+      `solver` and the legacy synth path read the innermost solver. (The rest of its C4
+      list is not done.)
+14. **Per-run overrides (needed so every override path stays at baseline):**
+    - `apply_policy_overrides` re-mirrors with `mirror_dispatch_selection` (C2 review
+      finding 3); `apply_solver_override` returns the leaf.
+    - TRANSITIONAL `scenario_overrides.leaf_retargeted`: a dispatch override whose `type`
+      names a LEAF while the current top is a decomposition sets the innermost solver
+      (with the entry's params). This keeps `--solver`/`ORSIM_SOLVER` (still folded into
+      `dispatch.type` by the sim main and the control plane) meaning "the per-scope
+      solver" instead of silently becoming a central arm. Consequence until C4 separates
+      the channels: `--policy dispatch=GreedyNearest` over a decomposition also sets the
+      inner, not a central top.
+    - `merge_policy_overrides`: a CHANGED top type keeps the current per-scope solver as
+      the new decomposition's `inner` unless the override names one (`_carried_inner`;
+      C2 review finding 2), so `--policy dispatch=PooledMarket` and
+      `ORSIM_PLANNER_TOPOLOGY=pooled` give the same tree (test).
+    - `parse_policy_cli_args` implements the §3.3 path rule (longest known slot prefix,
+      non-final segments are refs, `slot.ref=Name` sets a ref's type) with both message 21
+      texts ("Known slots" lists implemented slots). `market.offer.x=` is no longer a slot
+      path.
+    - `apply_planner_topology_override` / `apply_market_override` keep their fail-soft
+      returns (C4 makes them loud) and additionally rewrite a COMPILED `policies.dispatch`
+      (`_retarget_compiled_decomposition`, `_patch_compiled_market`) and re-mirror, so the
+      `ORSIM_PLANNER_TOPOLOGY` / `ORSIM_OFFER_*` env path still works on bundles compiled
+      with a `policies` block (legacy bundles keep working through the translation). A
+      market component TYPE change resets that component's params (was: kept).
+    - Sim main: `dispatch_override_label` labels the node the override reaches
+      (`_overridden_node`: a leaf type, or params that only touch `inner`), so `--solver X`
+      keeps `· X` and `dispatch.inner.k=v` gives `· X(k=v)`. The `Policies effective:`
+      line is unchanged (it now prints `dispatch=Partitioned ...`; the label is C4).
+15. **C2 review fixes:** `check_mirrors` also compares every `solver_params` /
+    `planner.deployment.params` key with the first node declaring it (finding 1; message
+    13 variant "profile solver_params disagrees with its compiled policies.dispatch
+    (<label>): k=a vs b. ... one dial ..."); the strategy variant advises `--solver X`
+    only when X is a registered leaf (finding 4); a legacy profile's resolution error
+    gets the suffix naming the legacy keys (`_LEGACY_SOURCE_NOTE`, finding 5); a
+    non-object `planner` is loud (`legacy._check_planner`, finding 6); a padded market
+    component name is loud (preprocess still strips it at compile, the bundle reader
+    does not); `max_rounds: null` is the default in `legacy` as in preprocess; the split
+    `dataclasses` import is merged; `tick_seed` has one source (`world.tick_seed`).
+    **Finding 7 (round-1 flat bundle without a `planner.topology` echo) — decided: not
+    detectable, documented.** A round-2 compile of an authored central leaf writes
+    exactly that shape (`mirror_dispatch_selection` removes the topology echo), so only
+    a bundle-format marker could tell a hand-edited round-1 bundle from it. Every
+    round-1 compile wrote `planner.topology`, so such bundles are refused (message 13);
+    deleting the key by hand is outside what the run-start check can catch. A format
+    marker is left for the user/C4 to decide.
+16. **Catalog:** dispatch entries carry `inner_param` (`PolicySpec.inner_param`, the
+    single descent rule used by `selection_chain`, `dispatch_node`, message 5's hint,
+    `leaf_retargeted`, the label and the topology rewrite; `registry.INNER_PARAM` is
+    the contract constant, re-exported by `resolve`). A test asserts the catalog default
+    is one of its policies (C1 review #4).
+17. **Tests.** New: `tests/test_whole_tick_dispatch.py` (the 9 spec tests plus
+    `test_partitioned_groups_skip_truckless_and_haulierless_orders_like_the_inline_bucketing`
+    (the golden ticks exercise neither skip) and
+    `test_get_solver_harness_still_builds_the_default_tree_around_its_leaf`; 19 cases) and
+    `tests/test_policy_round2_c3_fixes.py` (14: the C1/C2 review and explainer items).
+    Spec-listed pre-existing edits: `test_assignment_pooled.py` (fail-loud market names;
+    topology tests on `legacy.legacy_topology`), `test_pool_housekeeping.py`,
+    `test_assignment_pooled_convergence.py`, the via-`__init__` golden (innermost leaf),
+    the `test_assignment_pooled_benefit.py` docstring. This-branch tests forced by the
+    new contracts: `test_dispatch_plan_and_invariants.py`, `test_random_spatial_candidates.py`,
+    `test_policy_context_company_spatial.py`, `test_dispatch_capture_and_bench.py`
+    (contexts from `scopes`, `run().pairs`, message 19); `test_dispatch_profile_resolution.py`
+    (bind helpers, tree assertions, the cache-rebuild test extended with `planner`, the
+    C2 TEMPORARY assertion removed, Partitioned's non-forwarding); `test_policy_tree_resolution.py`
+    (slot default, carried inner); `test_policy_legacy_translation.py` (non-object
+    planner, `max_rounds: null`, padded names); `test_policy_fail_loud.py`,
+    `test_policy_catalog.py` (`inner_param`); `test_policies_spec_block.py` (legacy
+    translation is `Partitioned{inner}`: the C4-listed names
+    `test_legacy_solver_translates_to_partitioned_inner`,
+    `test_every_shipped_spec_translates_to_partitioned_with_its_solver`);
+    `test_policy_override_equals_compiled_edit.py`, `test_policy_run_overrides.py`,
+    `test_policy_review_fixes.py`, `test_policy_param_changes_behaviour.py` (nested
+    `dispatch.inner.*` paths, the topology arm through the override, the CLI parse);
+    `test_frontend_editform_policy_slots.py` (nested `policySlots`, editForm `solver` is
+    the innermost solver); `test_policy_import_cycles.py` (new modules, app's
+    local-import rule); `tests/policy_tree_standins.py` (docstring only). Every new
+    invariant test was mutation-checked (33 mutations, all caught, files restored by
+    hash).
+18. **Not done here (C4/C5):** authored topology/market conflict messages 7/8 and the
+    `spec` variant of message 6; carry rules; `run_dispatch_overrides` with messages 9-12
+    (the transitional `leaf_retargeted` and compiled topology/market rewrites stand in);
+    loud topology/market env converters (still fail-soft, `max_rounds` still 1..10 on the
+    env path); control `precheck_override_names`; CLI (`openride scenario new --solver X`
+    and the dashboard still author a FLAT `policies.dispatch` block, which now compiles
+    to a CENTRAL leaf: C4/C6 must make them write `{type: Partitioned, params: {inner:
+    X}}` or descend); `policy list` components/info-model columns; the stamp's new
+    fields and the `Policies effective:` label; capture /2, whole-tick fixtures, per-arm
+    budgets, `LeakyMarket`/`scope_log` battery checks (C5; `scope_log` is recorded
+    already). The C2 review's suggestion to move `INNER_PARAM`/`selection_chain` into
+    `dispatch/` and let solvers declare `pair_note_keys` is not done (post-C3 design).

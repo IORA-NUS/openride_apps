@@ -41,13 +41,14 @@ def test_editform_has_policy_slots_from_the_recipe():
 def test_editform_translates_a_legacy_spec():
     """Verified to have teeth: returning ``gs.get("policies") or {}`` (no translation)
     left the legacy form with no dispatch slot at all."""
+    # Round 2 (C3 compile switch): the legacy solver is Partitioned's inner (nested slots).
     form = _form({"solver": "RandomAssignment", "solverParams": {"dual_cycle_bonus_km": 2.0}})
-    assert form["policySlots"] == {"dispatch": {"type": "RandomAssignment", "timing": "online",
-                                                "params": {}}}
+    assert form["policySlots"] == {"dispatch": {"type": "Partitioned", "timing": "online",
+                                                "params": {"inner": {"type": "RandomAssignment", "params": {}}}}}
     form = _form({"planner": {"deployment": {"type": "GreedyNearest",
                                              "params": {"dual_cycle_radius_km": 0.8}}}})
-    assert form["policySlots"]["dispatch"]["params"] == {"dual_cycle_radius_km": 0.8}
-    assert form["solver"] == "GreedyNearest"
+    assert form["policySlots"]["dispatch"]["params"]["inner"]["params"] == {"dual_cycle_radius_km": 0.8}
+    assert form["solver"] == "GreedyNearest", "the editForm solver is the innermost per-scope solver"
 
 
 def test_editform_solver_mirror_is_raw_text_not_coerced():

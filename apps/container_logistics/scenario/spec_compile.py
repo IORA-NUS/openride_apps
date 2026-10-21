@@ -17,7 +17,7 @@ from apps.container_logistics.datagen.overrides import (
     override_sha256,
 )
 from apps.container_logistics.datagen.preprocess import Preprocessor, SpecValidationError
-from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_params
+from apps.container_logistics.policies.dispatch.profile import as_dispatch_node, mirror_dispatch_selection
 from apps.container_logistics.policies.framework import (
     PolicyError,
     ResolvedPolicy,
@@ -75,14 +75,17 @@ def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
     """Resolve the recipe's ``policies`` block against the registry (fail loud).
 
     Replaces ``recipe["policies"]`` with :func:`authored_after_resolution` (legacy
-    translations lose the params their policy does not declare). For an AUTHORED
-    dispatch, refuses a ``planner.deployment`` that contradicts it
-    (:func:`_refuse_deployment_contradicting_policies`), then re-mirrors the
-    resolved params into the profile's ``solver_params`` and ``planner.deployment.params``
-    via ``dispatch/profile.py::mirror_dispatch_params`` -- the same helper
-    the per-run override path uses -- so the framework's accounting (F6) reads
-    exactly what the policy runs with. Raises ``SpecValidationError`` (plan
-    ``docs/plans/policy_slots_p0_p3.md`` §4 P2.3).
+    translations lose the params their policies do not declare, at every level of
+    the tree). For an AUTHORED dispatch, refuses a ``planner.deployment`` that
+    contradicts its innermost solver (:func:`_refuse_deployment_contradicting_policies`),
+    then writes the selection's legacy mirrors into the profile (``strategy`` = the
+    leaf, ``solver_params``/``planner.deployment``, ``planner.topology``,
+    ``planner.market``) via ``dispatch/profile.py::mirror_dispatch_selection`` -- the
+    same helper the per-run override path uses -- so the framework's accounting (F6)
+    reads exactly what the policy runs with and the run-start mirror check passes. A
+    legacy translation was built FROM those keys, so its mirrors already agree.
+    Raises ``SpecValidationError`` (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P2.3,
+    round-2 §3.6).
     """
     legacy = [s for s, p in compiled.policies_provenance.items() if p == "legacy"]
     block = compiled.recipe.get("policies")
@@ -92,12 +95,21 @@ def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
         raise SpecValidationError(str(exc)) from exc
     compiled.recipe["policies"] = authored_after_resolution(block, resolved, legacy)
     if compiled.policies_provenance.get("dispatch") == "authored":
-        dispatch = resolved["dispatch"]
-        _refuse_deployment_contradicting_policies(compiled.authored_deployment, dispatch)
+        node = as_dispatch_node(resolved["dispatch"])
+        _refuse_deployment_contradicting_policies(compiled.authored_deployment, _innermost_with_path(node))
         # The recipe echoes an authored deployment verbatim (preprocess
-        # ``_recipe_planner``), which the check above proved agrees: nothing to mirror.
-        mirror_dispatch_params(compiled.spec.assignment_settings["profile"], dispatch.params)
+        # ``_recipe_planner``), which the check above proved agrees with the leaf.
+        mirror_dispatch_selection(compiled.spec.assignment_settings["profile"], node)
     return resolved
+
+
+def _innermost_with_path(node: Any) -> tuple[Any, str]:
+    """``(innermost node, its spec path)``: ``policies.dispatch`` plus ``.params.<inner>`` per level."""
+    path = "policies.dispatch"
+    while node.inner is not None:
+        path += f".params.{get_policy_spec('dispatch', node.name).inner_param}"
+        node = node.inner
+    return node, path
 
 
 def _same_value(a, b) -> bool:
@@ -105,47 +117,50 @@ def _same_value(a, b) -> bool:
     return isinstance(a, bool) == isinstance(b, bool) and a == b
 
 
-def _refuse_deployment_contradicting_policies(deployment: dict, dispatch: ResolvedPolicy) -> None:
-    """Raise ``SpecValidationError`` if ``planner.deployment`` contradicts ``policies.dispatch``.
+def _refuse_deployment_contradicting_policies(deployment: dict, leaf: tuple[Any, str]) -> None:
+    """Raise ``SpecValidationError`` if ``planner.deployment`` contradicts the innermost solver.
 
-    ``planner.deployment`` is the legacy spelling (and the compiled mirror) of
-    ``policies.dispatch``. Next to an authored block it is tolerated only where it
+    ``planner.deployment`` is the legacy spelling (and the compiled mirror) of the
+    per-scope solver: ``leaf`` is ``(node, path)``, the innermost ``ResolvedDispatch``
+    of ``policies.dispatch`` and its spec path (:func:`_innermost_with_path`). Next to an authored block it is tolerated only where it
     AGREES, symmetric with the ``solver``/``solverParams`` rule (deviation 17), so a
-    recompiled recipe -- whose deployment mirror carries the policy's resolved
+    recompiled recipe -- whose deployment mirror carries the solver's resolved
     params -- still compiles:
 
     - ``type`` must name the same registered policy;
-    - a param the policy DECLARES must equal its resolved value (authored or
+    - a param the solver DECLARES must equal its resolved value (authored or
       default); otherwise the mirror would silently be overwritten;
-    - a param the policy does NOT declare (Random has no dual-cycle params) is an
-      accounting-only dial: the policy never reads it, so there is nothing for it
+    - a param the solver does NOT declare (Random has no dual-cycle params) is an
+      accounting-only dial: the solver never reads it, so there is nothing for it
       to disagree with, and it reaches ``solver_params`` exactly as before.
     """
     if not deployment:
         return
+    leaf, where = leaf
+    leaf_params = leaf.params.to_dict() if leaf.params is not None else {}
     dtype = deployment.get("type")
     if dtype not in (None, ""):
         try:
             canonical = get_policy_spec("dispatch", str(dtype).strip()).name
         except PolicyError:
             canonical = None
-        if canonical != dispatch.name:
+        if canonical != leaf.name:
             raise SpecValidationError(
-                f"spec sets planner.deployment.type={dtype!r} but policies.dispatch.type="
-                f"{dispatch.name!r}. planner.deployment is the legacy spelling of "
-                "policies.dispatch; remove planner.deployment (or make its type agree)."
+                f"spec sets planner.deployment.type={dtype!r} but {where}.type="
+                f"{leaf.name!r}. planner.deployment is the legacy spelling of {where} (the "
+                "innermost per-scope solver); remove planner.deployment (or make its type agree)."
             )
     params = deployment.get("params") if isinstance(deployment.get("params"), dict) else {}
-    conflicts = sorted(k for k, v in params.items() if k in dispatch.params and not _same_value(v, dispatch.params[k]))
+    conflicts = sorted(k for k, v in params.items() if k in leaf_params and not _same_value(v, leaf_params[k]))
     if conflicts:
         detail = ", ".join(
-            f"{k}={params[k]!r} vs policies.dispatch.params.{k}={dispatch.params[k]!r}" for k in conflicts
+            f"{k}={params[k]!r} vs {where}.params.{k}={leaf_params[k]!r}" for k in conflicts
         )
         raise SpecValidationError(
             f"spec sets planner.deployment.params that disagree with policies.dispatch "
-            f"({detail}). planner.deployment.params is the legacy spelling of "
-            "policies.dispatch.params and would otherwise be silently overwritten: move the "
-            "values into policies.dispatch.params and remove planner.deployment."
+            f"({detail}). planner.deployment.params is the legacy spelling of {where}.params "
+            "and would otherwise be silently overwritten: move the values into "
+            f"{where}.params and remove planner.deployment."
         )
 
 
@@ -183,7 +198,7 @@ def _patch_assignment_profiles(assignment: dict, resolved: dict[str, ResolvedPol
 
     Behaviors may share one profile dict (the builder hands out the same object), so
     each profile is patched once. Raises ``SpecValidationError`` if the
-    ``profile.strategy`` mirror disagrees with the resolved dispatch policy.
+    ``profile.strategy`` mirror is not the resolved selection's innermost solver.
     """
     seen: set[int] = set()
     for agent_id, behavior in (assignment or {}).items():
@@ -191,11 +206,12 @@ def _patch_assignment_profiles(assignment: dict, resolved: dict[str, ResolvedPol
         if prof is None or id(prof) in seen:
             continue
         seen.add(id(prof))
-        if prof.get("strategy") != resolved["dispatch"].name:
+        if prof.get("strategy") != resolved["dispatch"].leaf:
             raise SpecValidationError(
                 f"assignment agent {agent_id!r}: profile.strategy={prof.get('strategy')!r} "
-                f"disagrees with the resolved policies.dispatch {resolved['dispatch'].name!r} "
-                "(a scenario_gen.py override must not set strategy; set policies.dispatch)."
+                f"disagrees with the innermost solver {resolved['dispatch'].leaf!r} of the "
+                f"resolved policies.dispatch {resolved['dispatch'].label!r} (a scenario_gen.py "
+                "override must not set strategy; set policies.dispatch)."
             )
         prof["policies"] = _profile_policies(prof, resolved, provenance)
 

@@ -43,14 +43,14 @@ def test_award_owner_haulier_id_is_annotated_optional():
 
 
 def test_market_components_pick_up_a_behavior_patched_after_construction():
-    """F16: ``_resolved_topology`` deliberately re-reads the profile while
-    ``_market_components`` cached forever — two adjacent resolvers arguing opposite
-    staleness positions. Now both follow the profile."""
+    """F16: the topology was re-read from the profile while the market components
+    cached forever — two adjacent resolvers arguing opposite staleness positions.
+    Round 2: both are the dispatch runner's selection, keyed on ``planner``."""
     app = _app([], [], cooperation=_coop([]))
-    profile = {"planner": {"topology": "pooled", "market": {"max_rounds": 3}}}
-    assert app._market_components(profile)[3] == 3
+    profile = {"strategy": "GreedyNearest", "planner": {"topology": "pooled", "market": {"max_rounds": 3}}}
+    assert app._dispatch_runner(profile).resolved.params.max_rounds == 3
     profile["planner"]["market"]["max_rounds"] = 9
-    assert app._market_components(profile)[3] == 9, "stale cache survived a profile patch"
+    assert app._dispatch_runner(profile).resolved.params.max_rounds == 9, "stale cache survived a profile patch"
 
 
 def test_sharing_override_creates_a_planner_block_like_the_topology_override_does():

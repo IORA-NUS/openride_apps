@@ -54,6 +54,7 @@ __all__ = [
     "discover_builtin_policies",
     "isolated_registry",
     "BUILTIN_POLICY_PACKAGES",
+    "INNER_PARAM",
 ]
 
 BUILTIN_POLICY_PACKAGES = (
@@ -73,6 +74,11 @@ INFORMATION_MODELS = ("central", "per_group", "per_company")
 #: the ``Partitioned`` built-in so pre-v2 partitioned runs stay byte-identical.
 SHARE_TAG_FORMATS = ("v1", "audited")
 _V1_OWNER = "Partitioned"
+
+#: The dispatch-ref param a composite delegates each scope to (``dispatch/composite.py``).
+#: ``PolicySpec.inner_param`` is the one place the descent rule is read from: the
+#: ``label``/``leaf`` chain, ``--solver`` (the innermost leaf) and the catalog follow it.
+INNER_PARAM = "inner"
 
 _REGISTRY: dict[tuple[str, str], "PolicySpec"] = {}
 _DISCOVERY = {"done": False, "running": False}
@@ -111,6 +117,16 @@ class PolicySpec:
     def is_composite(self) -> bool:
         """True when the policy references a dispatch policy of its own (an ``inner``)."""
         return any(kind == "dispatch" for _name, kind, _leaf in self.refs)
+
+    @property
+    def inner_param(self) -> str | None:
+        """The dispatch-ref param the selection descends through (``inner``), or ``None`` for a leaf.
+
+        ``None`` too for a composite that does not delegate through :data:`INNER_PARAM`
+        (``dispatch/profile.dispatch_node`` refuses such a composite).
+        """
+        return next((name for name, kind, _leaf in self.refs
+                     if kind == "dispatch" and name == INNER_PARAM), None)
 
     def missing_requirements(self) -> list[str]:
         """Return the ``requires`` modules that cannot be found, in declared order.

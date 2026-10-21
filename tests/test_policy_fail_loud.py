@@ -138,7 +138,9 @@ def test_assignment_app_wraps_unknown_strategy_with_the_celery_restart_hint(monk
     assert isinstance(excinfo.value.__cause__, UnknownPolicyError)
     app = app_module.AssignmentApp(run_id="r", sim_clock="c",
                                    behavior={"profile": {}}, messenger=None)
-    assert type(app._solver).__name__ == "RandomAssignmentSolver"
+    # Round 2: an empty profile is the slot default tree Partitioned/RandomAssignment.
+    assert type(app._solver).__name__ == "Partitioned"
+    assert type(app._solver.inner).__name__ == "RandomAssignmentSolver"
 
 
 def test_profile_module_is_a_leaf():

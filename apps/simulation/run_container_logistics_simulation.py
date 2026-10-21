@@ -132,14 +132,44 @@ def dispatch_override_label(overrides: dict, resolved: dict) -> str | None:
     entry = overrides.get("dispatch") if isinstance(overrides, dict) else None
     if not isinstance(entry, dict):
         return None
-    dispatch = resolved["dispatch"]
+    name, params, entry = _overridden_node(resolved["dispatch"], entry)
     keys = sorted((entry.get("params") or {}).keys())
     if keys:
         args = ",".join(
-            f"{k}={json.dumps(dispatch.params[k], separators=(',', ':'), sort_keys=True)}" for k in keys
+            f"{k}={json.dumps(params[k], separators=(',', ':'), sort_keys=True)}" for k in keys
         )
-        return f"{dispatch.name}({args})"
-    return dispatch.name if entry.get("type") else None
+        return f"{name}({args})"
+    return name if entry.get("type") else None
+
+
+def _overridden_node(dispatch, entry) -> tuple[str, dict, dict]:
+    """``(name, params, entry)`` of the selection node a dispatch override is about.
+
+    The top node, unless the override reaches into the innermost per-scope solver of
+    a decomposition: a ``type`` naming that solver (``scenario_overrides
+    .leaf_retargeted``), or params that only set the ``inner`` ref
+    (``--policy-param dispatch.inner.k=v``). Then that node and its part of the
+    override, so a solver override keeps its pre-v2 run-name segment (``· X``,
+    ``· X(k=v)``).
+    """
+    from apps.container_logistics.policies.framework import get_policy_spec
+
+    name, params = dispatch.name, dispatch.params
+    wanted = entry.get("type").strip() if isinstance(entry.get("type"), str) else None
+    while True:
+        descend = get_policy_spec("dispatch", name).inner_param
+        if descend is None or not isinstance(params.get(descend), dict):
+            return name, params, entry
+        inner_only = wanted is None and set(entry.get("params") or {}) == {descend} \
+            and isinstance(entry["params"][descend], dict)
+        if wanted is not None and name != wanted:
+            entry = {"type": wanted, "params": entry.get("params")} if entry.get("params") else {"type": wanted}
+        elif inner_only:
+            entry = entry["params"][descend]
+            wanted = entry.get("type").strip() if isinstance(entry.get("type"), str) else None
+        else:
+            return name, params, entry
+        name, params = params[descend]["type"], params[descend].get("params") or {}
 
 
 def _apply_capture_env_or_exit(assignment_collection, datahub_dir: str, run_id: str) -> str | None:

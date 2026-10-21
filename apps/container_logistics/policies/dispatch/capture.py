@@ -1,7 +1,9 @@
 """Dispatch-context capture: write one decision's inputs to disk, and replay them.
 
 Single responsibility: the ``openride.dispatch_context/1`` fixture format (plan
-``docs/plans/policy_slots_p0_p3.md`` §4 P3.4).
+``docs/plans/policy_slots_p0_p3.md`` §4 P3.4): one file per decided SUB-scope (a
+partitioned group or a pooled company, decided by the innermost solver). The
+whole-tick format ``/2`` lands with round-2 work item C5.
 
 - :class:`CaptureSettings` comes from ``profile["policy_capture"]``; absent (the
   default) means ``None`` and the runner gets no hook at all.
@@ -39,6 +41,7 @@ from typing import Any, Iterator, Mapping
 
 from apps.container_logistics.policies.framework.errors import PolicyError
 
+from . import scopes
 from .allowed import CompanyRule, PartitionRule
 from .context import DispatchClock, DispatchContext
 from .helpers.candidates import CandidateSettings
@@ -339,13 +342,14 @@ def context_from_fixture(fx: Mapping[str, Any], runner: Any = None, *, rng: Any 
         clock=DispatchClock(sim_clock=fx["sim_clock"], time_step=fx["time_step"],
                             horizon_steps=fx.get("horizon_steps")),
     )
+    common.update(policy=runner.policy, params=runner.resolved.params, candidate_kind=runner.candidate_kind)
     if scope["kind"] == "company":
-        return runner.company_context(
+        return scopes.company_context(
             haulier_id=fx["rule"]["haulier_id"], round=scope["round"],
             rng=runner.policy.rng if rng is None else rng,
             prebuilt_pairs=_pairs_from_ids(fx), **common,
         )
-    return runner.partition_context(partition_key=_partition_key(scope["key"]), **common)
+    return scopes.partition_context(partition_key=_partition_key(scope["key"]), **common)
 
 
 def _restore(entry: Mapping[str, Any]) -> random.Random:

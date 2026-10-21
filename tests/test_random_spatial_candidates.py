@@ -22,6 +22,7 @@ import pytest
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.assignment import spatial
 from apps.container_logistics.assignment.solver import RandomAssignmentSolver
+from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 from apps.container_logistics.policies.dispatch.context import DispatchClock
 from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
@@ -55,7 +56,9 @@ def _spatial_runner(policy=None):
 
 
 def _ctx(runner, trucks, orders):
-    return runner.partition_context(
+    # Round 2 C3: contexts come from dispatch/scopes.py only (no runner.partition_context).
+    return scopes.partition_context(
+        policy=runner.policy, params=runner.resolved.params, candidate_kind=runner.candidate_kind,
         trucks=trucks, orders=orders, partition_key=("haulier", "acme"),
         rule=PartitionRule(max_travel_time_pickup=None, adjacency={}),
         settings=CandidateSettings.from_profile(_SPATIAL_PROFILE),
@@ -79,7 +82,7 @@ def test_random_spatial_uses_only_candidate_pairs():
         ctx = _ctx(runner, trucks, orders)
         candidates = set(_ids(ctx.candidate_pairs("spatial")))
         assert candidates and candidates < full, "the world must make spatial a strict subset"
-        result = _ids(runner.run(ctx))
+        result = _ids(runner.run(ctx).pairs)
         assert result, f"seed {seed}: nothing matched"
         outside = [p for p in result if p not in candidates]
         assert not outside, f"seed {seed}: pairs outside the spatial candidates: {outside}"
@@ -114,7 +117,7 @@ def test_random_spatial_reproducible_under_seeded_rng():
         policy = RandomAssignmentSolver()
         policy.set_rng(random.Random(seed))
         runner = _spatial_runner(policy)
-        return _ids(runner.run(_ctx(runner, trucks, orders)))
+        return _ids(runner.run(_ctx(runner, trucks, orders)).pairs)
 
     random.seed(1234)
     module_state = random.getstate()

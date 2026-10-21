@@ -76,6 +76,7 @@ class GreedyNearestSolver(BaseAssignmentSolver):
 
         With the default/legacy params this equals the framework's accounting cost,
         because both are ``constraints.assignment_cost`` with the same two floats.
+        Runs under ``decision_rng``: the shuffle / tiebreak are the scope's.
         """
         p = ctx.params
 
@@ -84,11 +85,12 @@ class GreedyNearestSolver(BaseAssignmentSolver):
                 t, o, bonus_km=p.dual_cycle_bonus_km, radius_km=p.dual_cycle_radius_km
             )
 
-        if p.candidates == "spatial":
-            return Plan.from_pairs(self.solve_pairs(ctx.candidate_pairs("spatial"), cost=cost))
-        return Plan.from_pairs(
-            self.solve(ctx.sampled_trucks(), list(ctx.raw_orders), pair_allowed=ctx.allowed_raw, cost=cost)
-        )
+        with self.decision_rng(ctx):
+            if p.candidates == "spatial":
+                return Plan.from_pairs(self.solve_pairs(ctx.candidate_pairs("spatial"), cost=cost))
+            return Plan.from_pairs(
+                self.solve(ctx.sampled_trucks(), list(ctx.raw_orders), pair_allowed=ctx.allowed_raw, cost=cost)
+            )
 
     def solve(
         self,

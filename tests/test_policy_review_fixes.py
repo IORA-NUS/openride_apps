@@ -74,7 +74,8 @@ def test_stamp_path_and_agent_share_one_resolver():
     assert (resolved, source) == P.resolve_profile_policies(prof)
     assert source == "bundle" and P.resolve_dispatch_for_profile(prof).source == "policies"
     legacy, legacy_source = SO.current_policies_for_profile({"strategy": "GreedyNearest"})
-    assert legacy_source == "legacy-profile" and legacy["dispatch"].name == "GreedyNearest"
+    # Round 2: a legacy profile resolves to the tree Partitioned/<strategy>.
+    assert legacy_source == "legacy-profile" and legacy["dispatch"].label == "Partitioned/GreedyNearest"
 
 
 def test_compiled_version_and_kind_are_ignored_not_trusted():
@@ -212,14 +213,14 @@ def test_validation_against_a_missing_scenario_says_so(smoke_slug):
     produced "params for RandomAssignment: unknown key" instead."""
     from openride_control.policies import validate_run_policy_args
 
-    flags = ["dispatch.dual_cycle_bonus_km=3"]
+    flags = ["dispatch.inner.dual_cycle_bonus_km=3"]  # round 2: the solver is the inner
     msg = validate_run_policy_args("does_not_exist_xyz", None, [], flags)
     assert msg.startswith("scenario 'does_not_exist_xyz' not found"), msg
     msg = validate_run_policy_args("empty_folder", None, [], flags)
     assert "has no compiled bundle (scenario.json)" in msg and "openride scenario compile empty_folder" in msg
     assert validate_run_policy_args("does_not_exist_xyz", None, [], []) == {}, "no flags: nothing to check"
     assert validate_run_policy_args(smoke_slug, None, [], flags) == {
-        "dispatch": {"params": {"dual_cycle_bonus_km": 3}}}
+        "dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 3}}}}}
 
 
 def test_policy_overrides_json_merges_with_flags_and_conflicts_are_refused():
@@ -267,14 +268,14 @@ def test_run_simulation_policy_overrides_validated_before_spawning(smoke_slug, m
     monkeypatch.setattr(ServiceManager, "run_simulation_background", _fake)
     for bad, needle in [
         ({"dispatch": {"parms": {"dual_cycle_bonus_km": 0}}}, "unknown key(s) 'parms'"),
-        ({"dispatch": {"params": {"dual_cycle_bonus_km": -1}}}, "must be >= 0"),
+        ({"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": -1}}}}}, "must be >= 0"),
         ({"dispach": {"type": "GreedyNearest"}}, "Unknown policy slot 'dispach'"),
     ]:
         rc, payload = _run_command(["run-simulation", "--scenario", smoke_slug,
                                     "--policy-overrides", json.dumps(bad)], capsys)
         assert rc == 1 and not spawned, payload
         assert payload["ok"] is False and needle in payload["message"], payload
-    good = {"dispatch": {"params": {"dual_cycle_bonus_km": 0}}}
+    good = {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}
     rc, payload = _run_command(["run-simulation", "--scenario", smoke_slug,
                                 "--policy-overrides", json.dumps(good)], capsys)
     assert rc == 0 and spawned[-1]["policy_overrides"] == good
@@ -294,7 +295,7 @@ def test_validate_run_policies_command(smoke_slug, monkeypatch, capsys):
     assert rc == 0 and payload["ok"] is True and payload["action"] == "validate_run_policies", payload
     assert payload["overrides"] == {"dispatch": {"params": {"candidates": "spatial"}, "type": "RandomAssignment"}}
     rc, payload = _run_command(["validate-run-policies", "--scenario", smoke_slug,
-                                "--policy-param", "dispatch.candidates=near"], capsys)
+                                "--policy-param", "dispatch.inner.candidates=near"], capsys)
     assert rc == 1 and payload == {**payload, "ok": False, "action": "validate_run_policies"}
     assert "must be one of ['sampled', 'spatial']" in payload["message"]
     rc, payload = _run_command(["validate-run-policies", "--scenario", "nope_xyz",

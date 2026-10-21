@@ -13,9 +13,8 @@ policy is accounted by the same function.
   to ``Partitioned`` at registration) and ``audited`` (the 8-key pooled format whose
   ``benefit_km == owner_reserve_km - awarded_cost_km`` is checkable).
 
-:func:`owner_reserve_km` and :func:`finite_or_none` are moved here from
-``pooled_planner`` (the round-2 move; ``pooled_planner`` keeps its own copies until
-work item C3 switches its callers).
+:func:`owner_reserve_km` and :func:`finite_or_none` were moved here from
+``pooled_planner`` (round 2): the market engine no longer accounts.
 
 Framework side of the boundary. Import contract (round-2 §4): imports only
 ``assignment.constraints``, so ``assignment.app`` may import it at module top.

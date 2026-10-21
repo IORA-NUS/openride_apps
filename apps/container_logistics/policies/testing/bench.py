@@ -102,7 +102,7 @@ def _bench_one(name: str, fixture: Any, params: Mapping[str, Any] | None) -> dic
     runner.policy.set_tiebreak(fixture.tiebreak_seed)
     with seeded_module_random(seed):
         ctx = fixture.context(runner)
-        pairs = runner.run(ctx)
+        pairs = runner.run(ctx).pairs
     km = [objective.deadhead_km(t, o) for t, o in pairs]
     finite = [k for k in km if math.isfinite(k)]
     return {

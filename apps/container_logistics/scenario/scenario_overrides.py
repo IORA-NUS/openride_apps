@@ -34,11 +34,11 @@ def apply_policy_overrides(assignment_collection, overrides):
 
     ``overrides`` is ``{slot: {type?, timing?, params?}}`` (see
     ``framework.resolve.merge_policy_overrides``). Each profile gets
-    ``profile["policies"]`` (resolved, ``to_profile`` form), the
-    ``profile["strategy"]`` mirror, and -- exactly as compile does -- the resolved
-    dispatch params re-mirrored into the keys ``solver_params`` and
-    ``planner.deployment.params`` already carry
-    (``dispatch/profile.py::mirror_dispatch_params``). So a per-run arm equals the
+    ``profile["policies"]`` (resolved, ``to_profile`` form) and -- exactly as compile
+    does -- the selection's legacy mirrors (``strategy`` = the innermost solver, the
+    keys ``solver_params`` and ``planner.deployment.params`` already carry,
+    ``planner.topology``, ``planner.market``;
+    ``dispatch/profile.py::mirror_dispatch_selection``). So a per-run arm equals the
     same edit compiled into ``spec.json``: the framework's accounting
     (``benefit_km``, owner reserve, claims, arbitration) ranks with what the policy
     ranks with (review F1).
@@ -54,7 +54,7 @@ def apply_policy_overrides(assignment_collection, overrides):
     before any is mutated. Returns the first behavior's resolved policies, or
     ``None`` for empty ``overrides``. Raises ``PolicyError``.
     """
-    from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_params
+    from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_selection
     from apps.container_logistics.policies.framework import merge_policy_overrides
 
     if not overrides:
@@ -65,25 +65,58 @@ def apply_policy_overrides(assignment_collection, overrides):
             continue
         profile = behavior.setdefault("profile", {})
         current, _source = current_policies_for_profile(profile)
-        planned.append((profile, merge_policy_overrides(current, overrides)))
+        planned.append((profile, merge_policy_overrides(current, leaf_retargeted(current, overrides))))
     for profile, merged in planned:
         profile["policies"] = {slot: r.to_profile() for slot, r in merged.items()}
-        profile["strategy"] = merged["dispatch"].name
         profile.pop("use_spatial_matching", None)
-        mirror_dispatch_params(profile, merged["dispatch"].params)
+        mirror_dispatch_selection(profile, merged["dispatch"])
     if planned:
         return planned[0][1]
     from apps.container_logistics.policies.framework import resolve_policies_block
 
-    return merge_policy_overrides(resolve_policies_block({}), overrides)
+    current = resolve_policies_block({})
+    return merge_policy_overrides(current, leaf_retargeted(current, overrides))
+
+
+def leaf_retargeted(current, overrides):
+    """``overrides`` with a dispatch TYPE that names a per-scope solver aimed at the innermost solver.
+
+    The per-run override channels (``--solver``, ``ORSIM_SOLVER``, ``--policy
+    dispatch=X``) fold into ``dispatch.type``. When ``X`` is a leaf and the current
+    selection is a decomposition (``Partitioned``/``PooledMarket``), ``X`` sets the
+    decomposition's innermost solver (its ``inner_param``) and the entry's params are
+    that solver's: the pre-v2 meaning of ``--solver`` (round-2 §3.3). Anything else is
+    returned unchanged. ``current`` is the profile's ``{slot: ResolvedPolicy}``.
+    TRANSITIONAL (round-2 C3): work item C4 separates ``--solver`` from ``--policy``
+    (``run_dispatch_overrides``), after which ``--policy dispatch=GreedyNearest``
+    selects a central GreedyNearest.
+    """
+    from apps.container_logistics.policies.framework import get_policy_spec
+
+    entry = overrides.get("dispatch") if isinstance(overrides, dict) else None
+    top = current.get("dispatch")
+    if not isinstance(entry, dict) or not isinstance(entry.get("type"), str) or top is None:
+        return overrides
+    named = get_policy_spec("dispatch", entry["type"].strip())
+    descend = get_policy_spec("dispatch", top.name).inner_param
+    if named.is_composite or descend is None:
+        return overrides
+    inner = {"type": named.name}
+    if entry.get("params") is not None:
+        inner["params"] = entry["params"]
+    retargeted = {k: v for k, v in entry.items() if k not in ("type", "params")}
+    retargeted["params"] = {descend: inner}
+    return {**overrides, "dispatch": retargeted}
 
 
 def apply_solver_override(assignment_collection, strategy):
     """Per-run dispatch policy override by name: ``--solver X`` / ``ORSIM_SOLVER``.
 
     A thin wrapper: ``apply_policy_overrides(coll, {"dispatch": {"type": strategy}})``,
-    so a changed type starts from the new policy's default params. Returns the
-    registered name, or ``None`` if ``strategy`` is falsy (nothing changed). Raises
+    so a changed type starts from the new policy's default params; under a
+    decomposition it is the innermost solver (:func:`leaf_retargeted`). Returns the
+    registered name of the innermost solver, or ``None`` if ``strategy`` is falsy
+    (nothing changed). Raises
     ``UnknownPolicyError`` for an unregistered name, before anything is mutated (an
     intended contract change from the old warn-and-ignore; plan
     ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7 and P2.5).
@@ -91,7 +124,7 @@ def apply_solver_override(assignment_collection, strategy):
     if not strategy:
         return None
     resolved = apply_policy_overrides(assignment_collection, {"dispatch": {"type": strategy}})
-    return resolved["dispatch"].name
+    return resolved["dispatch"].leaf
 
 
 def apply_cooperation_override(assignment_collection, structure=None, sharing=None):
@@ -198,7 +231,44 @@ def apply_planner_topology_override(assignment_collection, topology):
                 planner = {}
                 profile["planner"] = planner
             planner["topology"] = resolved
+            _retarget_compiled_decomposition(profile, resolved)
     return resolved
+
+
+def _rewrite_compiled_dispatch(profile, override_entry):
+    """Merge ``override_entry`` into ``profile``'s compiled dispatch and re-mirror (in place)."""
+    from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_selection
+    from apps.container_logistics.policies.framework import merge_policy_overrides
+
+    current, _source = current_policies_for_profile(profile)
+    merged = merge_policy_overrides(current, {"dispatch": override_entry})
+    profile["policies"] = {slot: r.to_profile() for slot, r in merged.items()}
+    mirror_dispatch_selection(profile, merged["dispatch"])
+
+
+def _retarget_compiled_decomposition(profile, topology):
+    """Make a COMPILED ``policies.dispatch`` follow a ``planner.topology`` override (in place).
+
+    A profile without ``policies`` is a legacy profile: its translation reads
+    ``planner.topology`` itself. With a compiled block (authoritative at run start,
+    round-2 §3.6) the top becomes ``PooledMarket`` (market params from
+    ``profile.planner.market``, strictly) or ``Partitioned``, keeping the current
+    per-scope solver as its inner (a central leaf becomes the inner): exactly what
+    ``--policy dispatch=PooledMarket`` does. TRANSITIONAL:
+    round-2 C4 replaces this with ``run_dispatch_overrides``.
+    """
+    from apps.container_logistics.policies.dispatch import legacy
+
+    if not isinstance(profile.get("policies"), dict):
+        return
+    current, _source = current_policies_for_profile(profile)
+    want = legacy.POOLED_MARKET if topology == "pooled" else legacy.PARTITIONED
+    if current["dispatch"].name == want:
+        return
+    # A changed top keeps the current per-scope solver (merge_policy_overrides), the
+    # same rule as --policy dispatch=<want>; the market comes from planner.market.
+    params = dict(legacy.legacy_market_params(profile.get("planner"))) if want == legacy.POOLED_MARKET else {}
+    _rewrite_compiled_dispatch(profile, {"type": want, "params": params})
 
 
 def apply_market_override(
@@ -258,8 +328,32 @@ def apply_market_override(
                 market[role] = {"type": patch[role], "params": params}
         if "max_rounds" in patch:
             market["max_rounds"] = patch["max_rounds"]
+        _patch_compiled_market(profile, patch)
         applied = dict(patch)
     return applied
+
+
+def _patch_compiled_market(profile, patch):
+    """Apply a market patch to a COMPILED ``PooledMarket`` selection too, and re-mirror (in place).
+
+    A compiled ``policies`` block is authoritative at run start, so ``planner.market``
+    alone would change nothing there. A changed component type resets that
+    component's params to its defaults (the nested-merge rule); the same type keeps
+    them. A compiled top that is not ``PooledMarket`` keeps ``planner.market`` as inert
+    pooled-arm configuration (read by a later topology override). TRANSITIONAL:
+    round-2 C4 replaces this with ``run_dispatch_overrides`` (message 9).
+    """
+    from apps.container_logistics.policies.dispatch import legacy
+
+    if not isinstance(profile.get("policies"), dict):
+        return
+    current, _source = current_policies_for_profile(profile)
+    if current["dispatch"].name != legacy.POOLED_MARKET:
+        return
+    params = {role: {"type": patch[role]} for role in legacy.MARKET_ROLES if role in patch}
+    if "max_rounds" in patch:
+        params["max_rounds"] = patch["max_rounds"]
+    _rewrite_compiled_dispatch(profile, {"params": params})
 
 
 @contextmanager

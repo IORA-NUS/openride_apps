@@ -28,6 +28,8 @@ from dataclasses import dataclass
 
 import pytest
 
+from apps.container_logistics.policies.dispatch import scopes
+from apps.container_logistics.policies.dispatch.allowed import CompanyRule
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.context import DispatchClock
 from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
@@ -62,9 +64,12 @@ def asks_spatial():
 
 def _company_ctx(runner, prebuilt=None):
     f = fx.one_haulier()
-    return runner.company_context(
+    # Round 2 C3: contexts come from dispatch/scopes.py only (the runner lost
+    # company_context / company_rule; compose.ScopeDecider has them for the market).
+    return scopes.company_context(
+        policy=runner.policy, params=runner.resolved.params, candidate_kind=runner.candidate_kind,
         trucks=list(f.trucks), orders=list(f.orders), haulier_id="h_a", round=1,
-        rule=runner.company_rule("h_a", None), rng=random.Random(1),
+        rule=CompanyRule(haulier_id="h_a", max_travel_time_pickup=None), rng=random.Random(1),
         settings=CandidateSettings.from_profile({}),
         accounting_cost=framework_accounting_cost(runner.resolved.params),
         clock=DispatchClock(sim_clock=fx.SIM_CLOCK, time_step=0), prebuilt_pairs=prebuilt,
@@ -81,7 +86,7 @@ def test_spatial_pairs_on_a_sampled_company_scope_raise_naming_the_fix(asks_spat
 def test_the_runner_discards_the_plan_and_logs_the_violation(asks_spatial, caplog):
     runner = build_runner_for_policy(asks_spatial)
     with caplog.at_level(logging.ERROR):
-        committed = runner.run(_company_ctx(runner))
+        committed = runner.run(_company_ctx(runner)).pairs
     assert committed == [] and runner.stats["violations"] == 1
     assert any("DISPATCH POLICY CONTRACT VIOLATION" in r.getMessage()
                and "candidate_pairs('spatial')" in r.getMessage() for r in caplog.records), (
@@ -93,11 +98,11 @@ def test_spatial_company_scope_with_no_prebuilt_pairs_returns_empty(asks_spatial
     runner = build_runner_for_policy(asks_spatial, {"candidates": "spatial"})
     ctx = _company_ctx(runner, prebuilt=[])
     assert ctx.candidate_pairs("spatial") == []
-    assert runner.run(_company_ctx(runner, prebuilt=[])) == [] and runner.stats["violations"] == 0
+    assert runner.run(_company_ctx(runner, prebuilt=[])).pairs == [] and runner.stats["violations"] == 0
 
 
 def test_partition_scope_builds_spatial_pairs_on_demand(asks_spatial):
     runner = build_runner_for_policy(asks_spatial)  # kind 'sampled', partition scope
     ctx = fx.one_haulier().context(runner)
     assert ctx.candidate_pairs("spatial"), "a partition scope builds spatial pairs whatever its kind"
-    assert runner.run(fx.one_haulier().context(runner)) and runner.stats["violations"] == 0
+    assert runner.run(fx.one_haulier().context(runner)).pairs and runner.stats["violations"] == 0

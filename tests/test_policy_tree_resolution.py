@@ -17,7 +17,8 @@ What is locked:
 
 Why: the tree is now the only dial (spec, CLI, stamp, schema, form); a resolver that
 silently flattened or mis-merged it would run a different arm than the one recorded.
-The decompositions are the stand-ins of ``tests/policy_tree_standins.py`` until C3.
+The decompositions are the real ``Partitioned``/``PooledMarket`` (registered since C3;
+``tests/policy_tree_standins.decompositions()`` leaves them in place).
 """
 
 from __future__ import annotations
@@ -97,7 +98,8 @@ def test_inner_param_on_the_composite_is_message_5():
 def test_nested_merge_same_ref_type_merges_changed_type_resets():
     """Verified to have teeth: replacing a ref value wholesale in ``merge_params`` (no
     recursion) dropped ``dual_cycle_bonus_km=2.0`` in the same-type case; never
-    resetting kept GreedyNearest's params on the type change."""
+    resetting kept GreedyNearest's params on the type change; dropping
+    ``_carried_inner`` (C3) reset the top-change's inner to RandomAssignment."""
     with decompositions():
         current = resolve_policies_block(_block("PooledMarket", inner=_GREEDY, max_rounds=5))
         same = merge_policy_overrides(current, {"dispatch": {"params": {
@@ -112,8 +114,10 @@ def test_nested_merge_same_ref_type_merges_changed_type_resets():
         assert changed["dispatch"].params["offer"] == {"type": "OfferSpare", "params": {
             "keep_below_km": None, "only_when_short": True}}
         assert changed["dispatch"].label == "PooledMarket/RandomAssignment"
+        # C3 (C2 review finding 2): a changed decomposition keeps the current solver.
         top = merge_policy_overrides(current, {"dispatch": {"type": "Partitioned"}})
-        assert top["dispatch"].params == {"inner": {"type": "RandomAssignment", "params": {"candidates": "sampled"}}}
+        assert top["dispatch"].params == {"inner": current["dispatch"].params["inner"]}
+        assert top["dispatch"].label == "Partitioned/GreedyNearest"
         with pytest.raises(UnknownPolicyError, match=r"^policy overrides.dispatch.params.inner: unknown dispatch"):
             merge_policy_overrides(current, {"dispatch": {"params": {"inner": "Nope"}}})
 
@@ -172,12 +176,12 @@ def test_legacy_params_are_filtered_recursively(caplog):
     assert "dual_cycle_bonus_km" in messages and "bogus" in messages
 
 
-def test_unnamed_dispatch_is_the_slot_default_once_registered():
-    """TEMPORARY (C2 -> C3): the round-1 leaf default until ``Partitioned`` registers.
+def test_unnamed_dispatch_is_the_slot_default():
+    """A block that does not name dispatch resolves to the slot default ``Partitioned``
+    with its default inner (C3 removed the C2 round-1 fallback; ``Partitioned`` is
+    registered).
 
-    Verified to have teeth: returning the slot default unconditionally made the
-    no-decompositions branch raise ``UnknownPolicyError``.
+    Verified to have teeth: making ``merge_policy_overrides``/``resolve_policies_block``
+    fall back to ``legacy.LEGACY_LEAF_DEFAULT`` (the deleted C2 branch) failed this test.
     """
-    with decompositions():
-        assert resolve_policies_block({})["dispatch"].label == "Partitioned/RandomAssignment"
-    assert resolve_policies_block({})["dispatch"].label == "RandomAssignment"
+    assert resolve_policies_block({})["dispatch"].label == "Partitioned/RandomAssignment"

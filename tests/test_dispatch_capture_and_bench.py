@@ -165,7 +165,7 @@ def test_capture_write_failure_is_logged_and_does_not_block_the_tick(tmp_path, c
     prof = {"strategy": "GreedyNearest", "policy_capture": {"dir": str(blocker), "every_n_ticks": 1, "max_files": 5}}
     runner = build_runner_for_app(build_runner_for_policy("GreedyNearest").policy, prof)
     with caplog.at_level(logging.ERROR):
-        pairs = runner.run(fx.one_haulier().context(runner))
+        pairs = runner.run(fx.one_haulier().context(runner)).pairs
     assert len(pairs) == 6, "a failed capture must not change the committed pairs"
     assert "DISPATCH CAPTURE FAILED" in caplog.text
 
@@ -236,7 +236,7 @@ def test_capture_sees_the_raw_plan_before_the_invariants(tmp_path):
 
         hook.before_decide = recorder.before_decide
         runner = build_runner_for_policy("DoubleBooker2", capture=hook)
-        assert runner.run(fx.one_haulier().context(runner)) == []
+        assert runner.run(fx.one_haulier().context(runner)).pairs == []
     assert seen == [[]], "capture must see the plan before the invariants judged it"
     (path,) = tmp_path.glob("step_*.json.gz")
     assert capture.read_fixture(str(path))["live_heads"] == [["t000", "o000"], ["t001", "o000"]]
