@@ -16,6 +16,12 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     name="GreedyNearest",
     version="1",
     description="Globally greedy nearest-pair sweep, dual-cycle aware.",
+    # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
+    # Measured 2026-10-21, decide() on testing.fixtures.scale() (1000 trucks x 500
+    # orders, spatial), 2 x 5 runs, load avg 4.5 on 32 cores: 108.0-133.4 ms, worst
+    # 133.4 ms -> 3 x 133.4 = 400 -> floor 500. This box varies 1.3-2x on its own
+    # (CLAUDE.md §17), hence the 3x margin and the battery's best-of-3.
+    perf_budget_ms=500,
 )
 class GreedyNearestSolver(BaseAssignmentSolver):
     """Globally greedy nearest-pair matching within a haulier bucket.

@@ -1,10 +1,11 @@
-"""``DispatchRunner``: decide, check, commit heads, record stats, call the capture hook.
+"""``DispatchRunner``: decide, capture, check, commit heads, record stats.
 
 The single path from a dispatch policy to committed ``(truck, order)`` pairs on both
-topologies (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P1.8):
+topologies (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P1.8, P3.4):
 
 1. ``plan = policy.decide(ctx)``. A ``DispatchContractViolation`` raised inside is a
    violation; any other exception propagates unchanged (today's behaviour).
+   The optional capture hook sees the RAW plan here, before the invariants.
 2. ``invariants.check_plan``. Any problem: log ERROR, count, commit NOTHING for the
    scope this tick. Violations are not stamped on the run this round (plan §1.2
    item 7); the log line goes to celery's journal, not ``sim.log``.
@@ -12,6 +13,9 @@ topologies (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P1.8):
    commits heads only.
 
 Stats (``calls``, ``violations``, ``total_ms``, ``max_ms``) are in memory only.
+:func:`build_runner_for_policy` builds a runner from a registered name alone (the
+battery, bench and capture replay share it).
+
 Framework side of the boundary. Not a leaf module (plan §2.7): ``assignment/app.py``
 imports :func:`build_runner_for_app` locally, inside its one accessor.
 """
@@ -20,7 +24,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from apps.container_logistics.policies.framework.errors import (
     DispatchContractViolation,
@@ -39,7 +43,13 @@ from .resolved import ResolvedDispatch
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["DispatchRunner", "build_runner_for_app", "EXECUTABLE_TIMINGS"]
+__all__ = [
+    "DispatchRunner",
+    "build_runner_for_app",
+    "build_runner_for_policy",
+    "framework_accounting_cost",
+    "EXECUTABLE_TIMINGS",
+]
 
 EXECUTABLE_TIMINGS: tuple[str, ...] = ("online",)
 
@@ -50,7 +60,10 @@ class DispatchRunner:
     """Runs one resolved dispatch policy for every scope of every tick.
 
     ``capture`` is the P3 fixture hook: ``capture(ctx=..., plan=..., problems=...)``,
-    called after the check when not ``None``. Raises ``PolicyTimingError`` for a
+    called after ``decide`` and BEFORE ``check_plan`` (``problems`` holds only a
+    violation ``decide`` raised). When the hook also has ``before_decide(ctx)`` it is
+    called first, so it can snapshot RNG state without consuming it. ``None`` costs
+    one ``if`` per scope. Raises ``PolicyTimingError`` for a
     timing it cannot execute and ``PolicyError`` for an unknown candidate kind.
     """
 
@@ -105,11 +118,16 @@ class DispatchRunner:
 
     def run(self, ctx: DispatchContext) -> list[Pair]:
         """Decide for ``ctx`` and return the pairs to commit (``[]`` on a violation)."""
+        capture = self._capture
+        if capture is not None:
+            before = getattr(capture, "before_decide", None)
+            if before is not None:
+                before(ctx)
         plan, problems = self._decide(ctx)
+        if capture is not None:
+            capture(ctx=ctx, plan=plan, problems=list(problems))
         if not problems:
             problems = check_plan(plan, ctx)
-        if self._capture is not None:
-            self._capture(ctx=ctx, plan=plan, problems=problems)
         if problems:
             self._report_violation(ctx, problems)
             return []
@@ -166,6 +184,60 @@ def build_runner_for_app(policy: DispatchPolicy, prof: dict[str, Any]) -> Dispat
     """
     # Local import: dispatch/profile.py resolves through the registry, which
     # discovers assignment.solver; keep that off this module's import path.
+    from .capture import CaptureRecorder, CaptureSettings
     from .profile import resolve_for_instance
 
-    return DispatchRunner(policy=policy, resolved=resolve_for_instance(policy, prof))
+    resolved = resolve_for_instance(policy, prof)
+    settings = CaptureSettings.from_profile(prof)
+    capture = None if settings is None else CaptureRecorder(settings, resolved=resolved)
+    return DispatchRunner(policy=policy, resolved=resolved, capture=capture)
+
+
+def build_runner_for_policy(
+    name: str,
+    params: Mapping[str, Any] | None = None,
+    *,
+    capture: Callable[..., None] | None = None,
+) -> DispatchRunner:
+    """A fresh instance of registered dispatch policy ``name`` wrapped in a runner.
+
+    ``params`` are validated by the policy's ``Params`` (``None``: all defaults). The
+    candidate kind is ``params.candidates`` when the policy declares it, else
+    ``sampled`` (the same rule as ``profile.resolve_dispatch_for_profile``). Raises
+    ``UnknownPolicyError`` / ``PolicyParamsError``.
+    """
+    from apps.container_logistics.policies.framework.registry import get_policy_spec
+
+    spec = get_policy_spec("dispatch", name)
+    validated = spec.params_cls.from_mapping(params, where=f"dispatch params for {name}")
+    resolved = ResolvedDispatch(
+        name=spec.name,
+        version=spec.version,
+        timing="online",
+        params=validated,
+        candidate_kind=getattr(validated, "candidates", "sampled"),
+        source="policies",
+    )
+    return DispatchRunner(policy=spec.cls(params=validated.to_dict()), resolved=resolved, capture=capture)
+
+
+_ACCOUNTING_KEYS = ("dual_cycle_bonus_km", "dual_cycle_radius_km")
+
+
+def framework_accounting_cost(params: Any) -> Callable[[dict[str, Any], dict[str, Any]], float]:
+    """The accounting cost an offline context uses: ``constraints.assignment_cost``.
+
+    The live sim passes ``AssignmentApp._solver_params``, which the one-dial mirror
+    keeps equal to the policy's dual-cycle params; offline we take those two keys
+    from ``params`` (a ``PolicyParams`` or a mapping) and the constraint defaults for
+    any the policy does not declare.
+    """
+    from apps.container_logistics.assignment import constraints as assign_constraints
+
+    values = params.to_dict() if hasattr(params, "to_dict") else dict(params or {})
+    accounting = {k: values[k] for k in _ACCOUNTING_KEYS if k in values}
+
+    def cost(t: dict[str, Any], o: dict[str, Any]) -> float:
+        return assign_constraints.assignment_cost(t, o, accounting)
+
+    return cost

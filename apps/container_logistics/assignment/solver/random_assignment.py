@@ -15,6 +15,12 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     version="1",
     description="Baseline: shuffled orders, each given a random feasible free truck; ignores cost.",
     order_sensitive="byte-identical to the pre-v2 shuffle; order independence would change existing results",
+    # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
+    # Measured 2026-10-21, decide() on testing.fixtures.scale() (1000 trucks x 500
+    # orders, sampled to 500 trucks), 2 x 5 runs, load avg 4.5 on 32 cores:
+    # 169.7-183.2 ms, worst 183.2 ms -> 3 x 183.2 = 549.6 -> 550. This box varies
+    # 1.3-2x on its own (CLAUDE.md §17), hence the 3x margin and the best-of-3.
+    perf_budget_ms=550,
 )
 class RandomAssignmentSolver(BaseAssignmentSolver):
     """Baseline: shuffle orders, give each the first feasible free truck at random.
