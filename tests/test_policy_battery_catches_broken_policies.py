@@ -39,7 +39,7 @@ and ``touched = False`` in ``_decide_via_runner`` failed
 making the tick context's feasibility always true (``allowed_raw=lambda t, o: True``
 in ``scopes.tick_context``, a scratch copy) failed
 ``test_cross_company_central_fails_only_only_allowed_pairs``;
-``_arm_budget`` returning a budget of 10x the default for unmeasured arms failed
+``arm_budget`` returning a budget of 10x the default for unmeasured arms failed
 ``test_slow_undeclared_arm_fails_only_its_performance_scale``.
 """
 

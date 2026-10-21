@@ -41,6 +41,7 @@ from apps.container_logistics.scenario.scenario_overrides import (
     current_policies_for_profile,
     run_dispatch_overrides,
 )
+from tests.policy_registry_names import leaf_names
 
 
 def _collection(profile):
@@ -221,7 +222,7 @@ def test_solver_naming_a_composite_is_rejected():
             run_dispatch_overrides(coll, solver=name)
         assert str(exc.value) == (
             f"--solver {name!r} names a decomposition, not a per-scope solver. --solver sets the inner "
-            f"solver (GreedyNearest, RandomAssignment); select a decomposition with --policy dispatch={name}.")
+            f"solver ({leaf_names()}); select a decomposition with --policy dispatch={name}.")
     assert coll == _collection({"strategy": "GreedyNearest"}), "nothing mutated"
     with pytest.raises(UnknownPolicyError, match="^--solver 'Nope': Unknown dispatch policy 'Nope'"):
         run_dispatch_overrides(coll, solver="Nope")

@@ -250,8 +250,9 @@ def _cmd_validate(args) -> int:
     tbl.add_column("ms", justify="right", no_wrap=True)
     tbl.add_column("Detail")
     for r in payload.get("results") or []:
-        verdict = "[green]PASS[/]" if r.get("ok") else "[bold red]FAIL[/]"
-        tbl.add_row(str(r.get("id")), verdict, f"{float(r.get('ms') or 0):.1f}", escape(str(r.get("detail") or "")))
+        status = r.get("status") or ("PASS" if r.get("ok") else "FAIL")
+        verdict = {"PASS": "[green]PASS[/]", "SKIP": "[yellow]SKIP[/]"}.get(status, "[bold red]FAIL[/]")
+        tbl.add_row(escape(str(r.get("id"))), verdict, f"{float(r.get('ms') or 0):.1f}", escape(str(r.get("detail") or "")))
     console.print(tbl)
     ok = bool(payload.get("ok"))
     style = "bold green" if ok else "bold red"

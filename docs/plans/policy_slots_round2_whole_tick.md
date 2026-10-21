@@ -2022,3 +2022,174 @@ ba74fbe (round-2 C2), not against the spec's 277e67b, and is superseded by this 
       - writing the bare recipe fails the MINOR-6 legacy test;
       - the old message-12 wording fails its test;
       - without the unstated-inner hint branch, the MINOR-10 test fails.
+
+### Final review fixes (battery)
+
+1. **MAJOR-3: an unmeasured composite `inner=X` arm is budgeted from X's own budget.**
+   - `battery.arm_budget(spec, arm)` (public, renamed from `_arm_budget`) is now the one
+     function that decides an arm's `performance.scale` budget. First rule that applies:
+     1. the default arm: `perf_budget_ms`;
+     2. a measured arm: `arm_budgets_ms[<label>]`. An explicit key always wins, so the
+        built-ins' measured `inner=GreedyNearest` budgets are unchanged;
+     3. an unmeasured `dispatch`-kind ref arm (`inner=X`): `arm_budget(X, <X's params in
+        the arm>)` + the composite's `perf_budget_ms`. A ref arm runs X at its defaults,
+        so this is `X.perf_budget_ms + composite default budget`;
+     4. any other unmeasured arm (a str choice, a component ref) still inherits the
+        default arm's budget and fails loudly when slower.
+   - Why the composite's default budget is the overhead: it bounds the composite's own
+     work PLUS one solve of its default inner on the same `scale` tick, so the sum
+     over-covers the overhead by one default-inner solve. On `scale` (one haulier, one
+     company, no pools) `Partitioned` and `PooledMarket` call the inner on one scope.
+     A composite that calls its inner many times on that tick must measure the arm;
+     this is in the docstring.
+   - The detail names the derivation, e.g. `budget 5660 ms (arm not measured: derived =
+     NetFlowSketch perf_budget_ms 5000 ms + Partitioned overhead perf_budget_ms 660 ms)`.
+   - Reviewer's repro, `fin/netflow_sketch.py` unchanged (NetFlowSketch declares 5000 ms):
+     own 27/27, `Partitioned` 67/67 (inner arm best 2571.6 ms, budget 5660),
+     `PooledMarket` 207/207 (best 2452.9 ms, budget 5500). Before: both composites
+     failed `performance.scale[inner=NetFlowSketch]` under 660 / 500 ms.
+   - Same script with the sketch declaring 1000 ms (below its ~2.5 s): it fails its own
+     `performance.scale`, and both composites fail exactly
+     `performance.scale[inner=NetFlowSketch]` (budgets 1660 / 1500 ms).
+2. **MINOR-1: skips are SKIP, and the `module_rng` declaration is scoped.**
+   - `CheckResult` has `skipped: bool = False` and a `status` property
+     (`SKIP`/`PASS`/`FAIL`). A skip keeps `ok: true`, so nothing that counts failures
+     changes and the CLI exits 0. Check ids are unchanged. A check function reports a
+     skip by returning `battery.Skip(True, "skipped: ...")`, a `NamedTuple`, so a caller
+     that unpacks `ok, detail` still works.
+   - The control payload (`cmd_policy_validate`) adds `status` and `skipped` to every
+     row and a top-level `skipped` count; the message reads `all N checks passed (k
+     skipped)`. The CLI table renders `SKIP` in yellow.
+   - Found while checking the table: the CLI printed the check id unescaped, so Rich
+     read an arm suffix such as `[inner=GreedyNearest]` as markup and dropped it. Every
+     arm row looked like a default-arm row. The id is now `escape`d, the same as the
+     detail; the CLI test pins it.
+   - `determinism.order_independent` is still skipped whenever a node of the selection
+     declares `order_sensitive` (the declarations compose), now as SKIP.
+   - On a composite's `inner=X` arm the skip detail (and the PASS detail of the scoped
+     module check) ends with `X itself is checked in X's own battery (openride policy
+     validate dispatch X)`.
+   - **Scoping `module_rng` (decided here).** A blanket skip is no longer used. When a
+     node declares `module_rng`, `_scoped_module_rng` runs one probe decision per
+     robustness fixture:
+     - every built node whose `rng` is the module by default (nothing injected:
+       `Partitioned`'s inner) gets a private `Random(fixture.seed)` through `set_rng`.
+       The inner's sanctioned `self.rng` channel then leaves the module;
+     - the `random` module's draw functions are wrapped for the probe, and each draw is
+       attributed to the NEAREST stack frame whose `self` is one of the selection's built
+       policies. A non-tick `DispatchContext` frame on the way marks the draw as a scope
+       cap sample (`sample_rng` = the module, which after MAJOR-4 only a composite can
+       choose);
+     - a draw is covered when its node declares `module_rng`, or when it is a scope
+       sample and the node or one of its ancestors declares it. `Partitioned`'s
+       declaration therefore covers its own `sample_rng=random`, and nothing its inner
+       does directly.
+   - Verdicts: any uncovered draw FAILS, naming the node. Covered draws, or a module
+     change with no attributable draw (a function bound at import, `random._inst`),
+     give SKIP: provenance cannot be separated there. A module untouched with the
+     channel redirected gives PASS.
+   - Built-ins:
+     - `Partitioned` default arm: SKIP (1 scope cap sample on `scale`);
+     - `Partitioned[inner=GreedyNearest]`: PASS;
+     - `PooledMarket` declares nothing, so it runs the plain check as before.
+   - Reviewer's case: `Partitioned[inner=ModuleRandom]` was "PASS (skipped)" and now
+     FAILS (`ModuleRandom on all_infeasible, ...`), like `PooledMarket[inner=ModuleRandom]`.
+   - Limits:
+     - The attribution sees calls through the `random` module's attributes. A function
+       bound at import still changes the state; when nothing else drew, that is the
+       unseparable SKIP.
+     - Wrapping the module is safe because the battery is single-threaded.
+     - The wrapper is installed only for the probe, never in a run.
+     - The probe adds one decision per fixture, only on arms with a declaration.
+3. **MINOR-7: the exact-message tests build their name lists from the registry.**
+   - New helper module `tests/policy_registry_names.py`: `dispatch_names()` (message 1),
+     `leaf_names()` (messages 2 and 11) and `component_names(kind)` (message 3). Each
+     list is read when the function is called, so it sees the active `isolated_registry`.
+   - The wording stays spec-exact; only the lists come from the helper. Sites:
+     - `test_policy_tree_resolution.py` messages 1 and 2. The asserts move out of the
+       `pytest.raises` block, into the `decompositions()` block;
+     - `test_policy_run_overrides.py` message 11;
+     - `test_policy_framework_params.py` messages 1, 2 and 3.
+   - `test_policy_framework_registry.py:237` is NOT changed: it clears the registry and
+     registers exactly two dummies, so it never depended on the leaves. The
+     `_named_dispatch_registry` tests in `test_policy_framework_params.py` clear it too;
+     they use the helper anyway, for uniformity.
+   - `test_policy_contract_battery._WANT_ARMS` is kept, with its intent stated in a
+     comment: a new arm of a built-in must be acknowledged. It lists each built-in's own
+     str-choice arms and its ref params `(param, kind)` in declared order.
+     - The targets of a ref param are read from the live registry by `expected_arms`, so
+       a new leaf or component adds its arm without an edit.
+     - `_BUILTIN_TARGETS` still pins that every shipped target is an arm.
+   - Not changed: `test_assignment_pooled.py:511` pins the offer component list
+     (`OfferAll, OfferNone, OfferSpare`). It breaks only on a new offer COMPONENT, not on
+     a new leaf.
+   - Verification:
+     - `test_the_exact_message_tests_survive_an_extra_leaf` registers `ExtraLeafZ` under
+       `isolated_registry` and calls the five exact-text tests and the arm-list test for
+       both composites.
+     - A scratch pytest plugin (`scratchpad/bfix_plugin/extra_leaf_plugin.py`) registered
+       a `ZzExtraLeaf` for a whole session. Over `tests/test_policy_*.py
+       tests/test_dispatch_*.py tests/test_cli_*.py tests/test_whole_tick_dispatch.py`
+       the result was 1012 passed, 1 skipped, 2 failed:
+       - `test_policy_golden_versions::test_every_dispatch_policy_has_a_golden_entry`,
+         by design: a new policy must capture its golden entry;
+       - `test_rules_baseline_does_not_recompile`, the known baseline failure.
+     - The six files named in the review alone gave 498 passed with the extra leaf, and
+       the contract battery ran the extra leaf's 68 checks.
+4. **Component names obey the policy-name grammar** (the selection fixes' follow-up).
+   - `components.register_component_kind` runs `registry.check_policy_name` on every
+     name in the registry it is handed.
+   - `_component_target` runs it again on the resolved name, because the live dict can
+     gain a name after the kind was declared (a test or plugin injection).
+   - A bad name raises `PolicyRegistrationError` with the policy-name message. The kind
+     is not declared, and the ref does not resolve.
+   - The three built-in kinds' names all match.
+5. **Tests.** New file `tests/test_policy_final_review_battery.py`, 18 tests:
+   - MAJOR-3 ×3 (derivation and precedence; slow leaf with a declared budget keeps both
+     composite batteries fully green; a leaf slower than its own budget fails both
+     composite arms);
+   - MINOR-1 ×5 (status; Partitioned SKIP/PASS/FAIL and the own-battery note; a
+     declaring third-party composite; control payload; CLI);
+   - MINOR-7 ×2;
+   - component names ×7 + 1.
+
+   The slow leaf sleeps 0.75 s on the 1000-truck tick only. It stands in for the
+   sketch, whose ~2.5 s Hungarian decide would cost minutes in the suite.
+
+   Edits to existing tests:
+   - `test_policy_arm_budgets.py` (`arm_budget` rename, docstring);
+   - the docstring of `test_policy_battery_catches_broken_policies.py`;
+   - the MINOR-7 sites above.
+6. **Mutation checks** (`scratchpad/bfix_mut.py`; each restored and confirmed by sha1):
+   - no derivation in `arm_budget`: the derivation test and the green-composites test fail;
+   - measured key ignored: the derivation test and `test_policy_arm_budgets`' gating
+     test fail;
+   - inner budget ×10: the too-slow test fails;
+   - `skipped` flag dropped in `_timed`: the Partitioned test fails;
+   - every draw covered (the blanket skip): the Partitioned test and the declaring
+     composite test fail;
+   - the inner's RNG not redirected: the Partitioned test fails (the default arm FAILS
+     on RandomAssignment's sanctioned draws);
+   - the order skip returned as a plain tuple: the Partitioned test fails;
+   - `status` dropped from the payload: the control test fails;
+   - the CLI rendering by `ok`: the CLI test fails;
+   - the literal leaf list in `test_policy_tree_resolution`, or the literal
+     `inner=GreedyNearest` in `_WANT_ARMS`: the extra-leaf test fails;
+   - the name check removed from `register_component_kind`, or from
+     `_component_target`: all 7 bad-name cases fail;
+   - the check id unescaped in the CLI table: the CLI test fails.
+7. **Gates** (2026-10-22):
+   - golden 94 passed;
+   - `tests/test_policy_*.py tests/test_dispatch_*.py tests/test_cli_*.py
+     tests/test_whole_tick_dispatch.py`: 945 passed, 1 failed. The one failure is the baseline
+     `test_rules_baseline_does_not_recompile`;
+   - `openride policy validate dispatch X`, each exiting 0:
+     - `Partitioned`: `PASS all 47 checks passed (3 skipped)`. The skips are
+       `order_independent` ×2 and the default `no_module_rng`;
+       `no_module_rng[inner=GreedyNearest]` is now a real PASS;
+     - `PooledMarket`: `PASS all 187 checks passed (8 skipped)`, the `order_independent`
+       of every arm whose inner is RandomAssignment;
+     - `GreedyNearest`: `PASS all 47 checks passed`;
+     - `RandomAssignment`: `PASS all 47 checks passed (2 skipped)`, `order_independent`
+       on both arms;
+   - the reviewer's `fin/netflow_sketch.py`: green for both composites (item 1).

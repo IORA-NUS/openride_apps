@@ -5,8 +5,9 @@ What is locked (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5
 actually runs (``battery.policy_arms``) -- registration validates only str-choice
 keys (message 17), so a ref-arm key such as ``inner=GreedyNeerest`` is caught here;
 GreedyNearest ``candidates=sampled`` and every non-default Partitioned and
-PooledMarket arm carry a measured budget; and the battery gates an arm by
-``arm_budgets_ms.get(arm, perf_budget_ms)``.
+PooledMarket arm carry a measured budget; and the battery gates an arm by its measured
+``arm_budgets_ms`` key when there is one (``battery.arm_budget``; an unmeasured composite
+``inner=X`` arm is derived, see ``test_policy_final_review_battery.py``).
 
 Why: a budget keyed on a typo is silently never applied, so the arm it was measured
 for falls back to the default arm's budget and either fails for no visible reason or,
@@ -15,7 +16,7 @@ worse, a slow arm keeps passing under a stale number.
 Verified to have teeth (each mutation restored after, verified by hash): renaming
 PooledMarket's ``"inner=GreedyNearest"`` key to ``"inner=GreedyNeerest"`` failed
 ``test_arm_budget_keys_name_real_arms`` and
-``test_measured_arms_declare_a_budget[PooledMarket]`` (and the gating test); making ``battery._arm_budget``
+``test_measured_arms_declare_a_budget[PooledMarket]`` (and the gating test); making ``battery.arm_budget``
 ignore ``arm_budgets_ms`` failed ``test_the_battery_gates_an_arm_by_its_own_budget``.
 """
 
@@ -76,8 +77,8 @@ def test_measured_arms_declare_a_budget(name):
 
 def test_the_battery_gates_an_arm_by_its_own_budget():
     spec = get_policy_spec("dispatch", "GreedyNearest")
-    budget, source = battery._arm_budget(spec, {"candidates": "sampled"})
+    budget, source = battery.arm_budget(spec, {"candidates": "sampled"})
     assert (budget, source) == (spec.arm_budgets_ms["candidates=sampled"], "arm_budgets_ms['candidates=sampled']")
-    assert battery._arm_budget(spec, {})[0] == spec.perf_budget_ms
+    assert battery.arm_budget(spec, {})[0] == spec.perf_budget_ms
     pooled = get_policy_spec("dispatch", "PooledMarket")
-    assert battery._arm_budget(pooled, {"inner": {"type": "GreedyNearest"}})[0] == pooled.arm_budgets_ms["inner=GreedyNearest"]
+    assert battery.arm_budget(pooled, {"inner": {"type": "GreedyNearest"}})[0] == pooled.arm_budgets_ms["inner=GreedyNearest"]

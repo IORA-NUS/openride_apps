@@ -291,14 +291,18 @@ def parse_bench_params(names: Sequence[str], args: Sequence[str] = ()) -> dict[s
 
 
 def _check_dict(result: Any) -> dict[str, Any]:
+    """One check row. ``status`` is ``PASS``/``SKIP``/``FAIL``; a SKIP has ``ok: true`` (it is not a failure)."""
     return {"id": result.id, "group": result.group, "check": result.check,
-            "ok": result.ok, "detail": result.detail, "ms": result.ms}
+            "ok": result.ok, "status": result.status, "skipped": result.skipped,
+            "detail": result.detail, "ms": result.ms}
 
 
 def cmd_policy_validate(slot: str, name: str) -> dict[str, Any]:
-    """``{ok, action, slot, name, results:[{id, group, check, ok, detail, ms}, ...]}``.
+    """``{ok, action, slot, name, skipped, results:[{id, group, check, ok, status, skipped, detail, ms}, ...]}``.
 
-    ``ok`` is false when any check failed. A slot or name that cannot be validated
+    ``ok`` is false when any check failed; a skipped check (``status: "SKIP"``, a
+    declaration such as ``module_rng`` exempted it) is not a failure. ``skipped`` is
+    the number of skipped checks. A slot or name that cannot be validated
     (unknown, not implemented) gives ``{ok: false, code: "INVALID", message}`` and no
     ``results``.
     """
@@ -311,14 +315,17 @@ def cmd_policy_validate(slot: str, name: str) -> dict[str, Any]:
     except PolicyError as exc:
         return {"ok": False, "action": action, "code": "INVALID", "message": str(exc)}
     failed = [r.id for r in results if not r.ok]
+    skipped = sum(1 for r in results if r.skipped)
+    skip_note = f" ({skipped} skipped)" if skipped else ""
     return {
         "ok": not failed,
         "action": action,
         "slot": slot,
         "name": name,
+        "skipped": skipped,
         "results": [_check_dict(r) for r in results],
-        "message": (f"{len(failed)} check(s) failed: {', '.join(failed)}" if failed
-                    else f"all {len(results)} checks passed"),
+        "message": (f"{len(failed)} check(s) failed: {', '.join(failed)}{skip_note}" if failed
+                    else f"all {len(results)} checks passed{skip_note}"),
     }
 
 

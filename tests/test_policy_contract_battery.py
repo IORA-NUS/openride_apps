@@ -25,7 +25,9 @@ import time
 
 import pytest
 
-from apps.container_logistics.policies.framework.registry import list_policies
+from apps.container_logistics.policies.framework.components import ref_names
+from apps.container_logistics.policies.framework.params import declared_params
+from apps.container_logistics.policies.framework.registry import get_policy_spec, list_policies
 from apps.container_logistics.policies.testing.battery import (
     ARM_CHECKS,
     DISPATCH_CHECKS,
@@ -60,9 +62,22 @@ def test_battery_returns_exactly_the_listed_ids_in_order(name):
     assert want[: len(DISPATCH_CHECKS)] == list(DISPATCH_CHECKS), "the default arm keeps the stable ids"
 
 
+# What a built-in's arms must be. Intent (final review MINOR-7): a NEW ARM OF A BUILT-IN
+# MUST BE ACKNOWLEDGED HERE -- a new str choice, a new ref param, a reordered param. So
+# each built-in's own str-choice arms and its ref params (in declared order) are
+# written out by hand. The TARGETS of a ref param are NOT: they are every other
+# available target in the live registry (``_ref_targets``), so registering a new leaf
+# (a NetworkFlow solver) or a new component adds its ``inner=X`` / ``offer=X`` arm
+# without editing this table. ``_BUILTIN_TARGETS`` still pins that every shipped
+# target IS an arm, so dropping one is caught.
 _WANT_ARMS = {
     "GreedyNearest": ["candidates=sampled"],
     "RandomAssignment": ["candidates=spatial"],
+    "Partitioned": [("inner", "dispatch")],
+    "PooledMarket": [("offer", "market.offer"), ("claim", "market.claim"),
+                     ("arbitration", "market.arbitration"), ("inner", "dispatch")],
+}
+_BUILTIN_TARGETS = {
     "Partitioned": ["inner=GreedyNearest"],
     "PooledMarket": ["offer=OfferNone", "offer=OfferSpare", "claim=ClaimIfGainExceeds", "claim=ClaimNone",
                      "arbitration=HighestBenefit", "arbitration=OwnerFirst", "arbitration=RandomAward",
@@ -70,12 +85,33 @@ _WANT_ARMS = {
 }
 
 
+def _ref_targets(name: str, param: str, kind: str) -> list[str]:
+    """Every other available target of ``name``'s ref ``param``, sorted, read from the registry."""
+    info = next(i for i in declared_params(get_policy_spec("dispatch", name).params_cls) if i.name == param)
+    if kind == "dispatch":
+        names = [s.name for s in list_policies("dispatch")
+                 if not s.missing_requirements() and not (info.meta.leaf_only and s.is_composite)]
+    else:
+        names = ref_names(kind)
+    return [f"{param}={t}" for t in sorted(names) if t != info.default.type]
+
+
+def expected_arms(name: str) -> list[str]:
+    """``_WANT_ARMS[name]`` with each ``(ref param, kind)`` expanded from the live registry."""
+    out: list[str] = []
+    for entry in _WANT_ARMS[name]:
+        out += _ref_targets(name, *entry) if isinstance(entry, tuple) else [entry]
+    return out
+
+
 @pytest.mark.parametrize("name", BUILTINS)
 def test_builtins_have_their_arms_in_the_battery(name):
-    want = [f"{cid}[{arm}]" for arm in _WANT_ARMS[name] for cid in ARM_CHECKS]
+    want_arms = expected_arms(name)
+    want = [f"{cid}[{arm}]" for arm in want_arms for cid in ARM_CHECKS]
     assert battery_check_ids("dispatch", name)[len(DISPATCH_CHECKS):] == want, (
-        f"{name} must be battery-checked on {_WANT_ARMS[name]}, each arm with every ARM_CHECKS id"
+        f"{name} must be battery-checked on {want_arms}, each arm with every ARM_CHECKS id"
     )
+    assert set(_BUILTIN_TARGETS.get(name, [])) <= set(want_arms), "every shipped target is an arm"
 
 
 @pytest.mark.parametrize(("name", "check"), _CASES, ids=[f"{n}-{c}" for n, c in _CASES])

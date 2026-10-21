@@ -42,7 +42,7 @@ from typing import Any, Callable, Iterator, Mapping
 from . import params as _params
 from .errors import PolicyParamsError, PolicyRegistrationError, UnknownPolicyError
 from .params import PolicyParams, PolicyRef, version_echo, warn_version_drift
-from .registry import get_policy_spec, list_policies
+from .registry import check_policy_name, get_policy_spec, list_policies
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +120,10 @@ def register_component_kind(kind: str, registry_getter: Callable[[], Mapping[str
             f"{where}: default {default!r} is not in the registry the getter returns "
             f"({', '.join(sorted(registry)) if isinstance(registry, Mapping) else registry!r})."
         )
+    for name in registry:
+        # A component name is a node of the selection label and of the run-name
+        # segment exactly like a policy name ('PooledMarket(offer=OfferNone)').
+        check_policy_name(name, f"{where}: component")
     spec = ComponentKind(kind=kind, default=default, description=description,
                          registry_getter=registry_getter, module=module)
     with _LOCK:
@@ -266,6 +270,9 @@ def _component_target(kind: str, name: str, where: str) -> RefTarget:
             f"{where}: unknown {kind} component {name!r}. Registered: "
             f"{', '.join(sorted(registry)) or '(none)'}. (List them: openride policy list {kind})"
         )
+    # The live dict can gain a name after the kind was declared (a test or plugin
+    # injection), so the grammar is enforced again where the name is resolved.
+    check_policy_name(name, f"{where}: {kind} component")
     return RefTarget(kind=kind, name=name, version=getattr(cls, "version", None),
                      description=_first_paragraph(cls), cls=cls,
                      params_cls=getattr(cls, "Params", None) or NoParams)

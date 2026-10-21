@@ -33,6 +33,7 @@ from apps.container_logistics.policies.framework import (
 from apps.container_logistics.policies.framework import registry
 from apps.container_logistics.policies.framework.params import check_defaults
 from apps.container_logistics.policies.framework.registry import isolated_registry
+from tests.policy_registry_names import component_names, dispatch_names, leaf_names
 
 WHERE = "policies.dispatch.params for GreedyNearest"
 
@@ -361,16 +362,17 @@ def test_ref_param_rejects_unknown_target_listing_registered():
     with _named_dispatch_registry():
         with pytest.raises(UnknownPolicyError) as exc:
             _composite_parse({"inner": {"type": "GreedyNeerest"}})
+        names = dispatch_names()  # read inside: the registry the message was built from (MINOR-7)
     assert str(exc.value) == (
         "policies.dispatch.params.inner: unknown dispatch policy 'GreedyNeerest'. Registered "
-        "dispatch policies: GreedyNearest, Partitioned, PooledMarket, RandomAssignment. "
+        f"dispatch policies: {names}. "
         "(List them: openride policy list dispatch)"
     )
     with pytest.raises(UnknownPolicyError) as exc:
         _composite_parse({"offer": {"type": "OfferAl"}})
     assert str(exc.value) == (
         "policies.dispatch.params.offer: unknown market.offer component 'OfferAl'. Registered: "
-        "OfferAll, OfferNone, OfferSpare. (List them: openride policy list market.offer)"
+        f"{component_names('market.offer')}. (List them: openride policy list market.offer)"
     )
 
 
@@ -385,7 +387,7 @@ def test_ref_param_rejects_composite_where_leaf_only():
             _composite_parse({"inner": {"type": "PooledMarket"}})
         assert str(exc.value) == (
             "policies.dispatch.params.inner: 'PooledMarket' decomposes the tick itself (it has an "
-            "'inner' of its own); an inner must be a per-scope solver: GreedyNearest, RandomAssignment."
+            f"'inner' of its own); an inner must be a per-scope solver: {leaf_names()}."
         )
         assert _composite_parse({"inner": {"type": "GreedyNearest"}}).inner.type == "GreedyNearest"
 

@@ -36,6 +36,7 @@ from apps.container_logistics.policies.framework import (
     policies_stamp,
     resolve_policies_block,
 )
+from tests.policy_registry_names import dispatch_names, leaf_names
 from tests.policy_tree_standins import decompositions
 
 _GREEDY = {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2.0}}
@@ -49,22 +50,25 @@ def test_unknown_inner_is_message_1():
     """Verified to have teeth: disabling the unknown-name check of
     ``components._dispatch_target`` (falling through to the registry's generic message)
     failed this test."""
-    with decompositions(), pytest.raises(UnknownPolicyError) as exc:
-        resolve_policies_block(_block("Partitioned", inner={"type": "GreedyNeerest"}))
-    assert str(exc.value) == (
-        "policies.dispatch.params.inner: unknown dispatch policy 'GreedyNeerest'. Registered dispatch "
-        "policies: GreedyNearest, Partitioned, PooledMarket, RandomAssignment. (List them: openride "
-        "policy list dispatch)")
+    with decompositions():
+        with pytest.raises(UnknownPolicyError) as exc:
+            resolve_policies_block(_block("Partitioned", inner={"type": "GreedyNeerest"}))
+        # The list is the registry's (MINOR-7): a new leaf changes it on both sides.
+        assert str(exc.value) == (
+            "policies.dispatch.params.inner: unknown dispatch policy 'GreedyNeerest'. Registered dispatch "
+            f"policies: {dispatch_names()}. (List them: openride "
+            "policy list dispatch)")
 
 
 def test_composite_inner_is_message_2():
     """Verified to have teeth: declaring the stand-in's ``inner`` with ``leaf_only=False``
     let ``PooledMarket`` nest."""
-    with decompositions(), pytest.raises(PolicyParamsError) as exc:
-        resolve_policies_block(_block("Partitioned", inner={"type": "PooledMarket"}))
-    assert str(exc.value) == (
-        "policies.dispatch.params.inner: 'PooledMarket' decomposes the tick itself (it has an "
-        "'inner' of its own); an inner must be a per-scope solver: GreedyNearest, RandomAssignment.")
+    with decompositions():
+        with pytest.raises(PolicyParamsError) as exc:
+            resolve_policies_block(_block("Partitioned", inner={"type": "PooledMarket"}))
+        assert str(exc.value) == (
+            "policies.dispatch.params.inner: 'PooledMarket' decomposes the tick itself (it has an "
+            f"'inner' of its own); an inner must be a per-scope solver: {leaf_names()}.")
 
 
 def test_string_ref_is_message_4():

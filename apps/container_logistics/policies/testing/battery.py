@@ -16,9 +16,12 @@ decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in
   contract violation (reported once, under ``structure``).
 - ``determinism`` -- ``reproducible``: two fresh instances on the same tick give the
   same plan; ``order_independent``: 20 shuffles of trucks and orders give one plan;
-  ``no_module_rng``: ``decide`` leaves the ``random`` module's state untouched. The
-  last two are skipped (ok, with the reason) when ANY node of the arm's selection
-  declares ``order_sensitive`` / ``module_rng``: the declarations compose.
+  ``no_module_rng``: ``decide`` leaves the ``random`` module's state untouched.
+  ``order_independent`` is SKIPPED (``CheckResult.skipped``, status ``SKIP``, ``ok``
+  true) when ANY node of the arm's selection declares ``order_sensitive``: the
+  declarations compose. ``no_module_rng`` under a ``module_rng`` declaration is
+  scoped to the draws the declaration covers (:func:`_scoped_module_rng`): those are
+  SKIP, a draw by a node that declared nothing still FAILS.
 - ``information`` -- ``scopes_respect_model`` (per arm): the sub-scopes the policy
   built (``ctx.scope_log``, recorded only while auditing) respect its declared
   model: ``per_company`` -- every sub-scope's trucks belong to one company and every
@@ -30,9 +33,10 @@ decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in
   never peeks at ``ctx`` beyond them. ``model_declared`` (default arm only): the
   registration's model is one of the three and is what the resolved selection carries.
 - ``performance`` -- ``scale`` (per arm): best of 3 decide times on the 1000 x 500
-  ``scale`` tick under ``spec.arm_budgets_ms.get(arm, spec.perf_budget_ms)``. A
-  budget is a MEASURED property of an arm (``max(3 x worst of 2 x 5 runs, 500)``,
-  numbers at the decorator). An unmeasured arm inherits the default arm's budget,
+  ``scale`` tick under :func:`arm_budget`. A budget is a MEASURED property of an
+  arm (``max(3 x worst of 2 x 5 runs, 500)``, numbers at the decorator). An
+  unmeasured composite ``inner=X`` arm is held to X's own declared budget plus the
+  composite's overhead; any other unmeasured arm inherits the default arm's budget,
   so it fails loudly when slower, which forces a measurement. NOTE: a budget above
   ``STEP_SETTLE_SECONDS`` (2000 ms; ``scenario/runtime_settings.py``
   ``LONG_RUN_STEP_SETTLE_SECONDS``) means
@@ -70,7 +74,7 @@ import re
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Any, Callable, Iterator, Mapping
+from typing import Any, Callable, Iterator, Mapping, NamedTuple
 
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.dispatch import compose as _compose_module
@@ -91,10 +95,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "CheckResult",
+    "Skip",
     "DISPATCH_CHECKS",
     "ARM_CHECKS",
     "STRUCTURE_CHECKS",
     "INFORMATION_MODELS",
+    "arm_budget",
     "arm_label",
     "battery_check_ids",
     "policy_arms",
@@ -161,6 +167,10 @@ class CheckResult:
 
     ``arm`` is ``""`` for the default params, else ``"<param>=<value>"`` (a ref arm
     names the target: ``inner=GreedyNearest``), and then ``check`` ends in ``[<arm>]``.
+    ``skipped`` marks a check that did not run (or could not decide) because of a
+    declaration (``order_sensitive`` / ``module_rng``); a skip is not a failure, so
+    ``ok`` stays true, but it is reported as ``SKIP``, never as ``PASS``
+    (:attr:`status`; final review MINOR-1). The ids are the same either way.
     """
 
     group: str
@@ -169,10 +179,32 @@ class CheckResult:
     detail: str
     ms: float
     arm: str = ""
+    skipped: bool = False
 
     @property
     def id(self) -> str:
         return f"{self.group}.{self.check}"
+
+    @property
+    def status(self) -> str:
+        """``"SKIP"``, ``"PASS"`` or ``"FAIL"``."""
+        if self.skipped:
+            return "SKIP"
+        return "PASS" if self.ok else "FAIL"
+
+
+class Skip(NamedTuple):
+    """What a check function returns to report a SKIP (``ok`` true): ``(True, detail)``.
+
+    A ``NamedTuple``, so a caller that unpacks ``ok, detail = check(...)`` still works.
+    """
+
+    ok: bool
+    detail: str
+
+
+def _skip(detail: str) -> Skip:
+    return Skip(True, f"skipped: {detail}")
 
 
 def decide_seeded(
@@ -234,14 +266,57 @@ def _arm_suffix(arm: Mapping[str, Any]) -> str:
     return f"[{arm_label(arm)}]" if arm else ""
 
 
-def _arm_budget(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[int, str]:
-    """The arm's budget and where it comes from (measured key, or the default arm's)."""
+def arm_budget(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[int, str]:
+    """The ``performance.scale`` budget of ``spec`` on ``arm``, and where it comes from.
+
+    The ONE place an arm's budget is decided (final review MAJOR-3), first rule that applies:
+
+    1. the default arm: ``perf_budget_ms``;
+    2. a MEASURED arm: ``arm_budgets_ms[<arm label>]`` (an explicit key always wins);
+    3. an unmeasured ``dispatch`` ref arm (a composite's ``inner=X``): X's own budget at
+       the arm it runs at (X at its defaults, so ``arm_budget(X, {})`` =
+       ``X.perf_budget_ms``) PLUS the composite's overhead, taken as the composite's
+       default-arm budget. That default budget bounds the composite's own work plus one
+       solve of its default inner on the same ``scale`` tick, so the sum over-covers the
+       overhead by one default-inner solve. On ``scale`` (one haulier, one company, no
+       pools) ``Partitioned`` and ``PooledMarket`` call the inner on exactly one scope,
+       which is what makes "inner's budget + overhead" the right shape; a composite that
+       calls its inner many times on that tick must measure the arm;
+    4. any other unmeasured arm (a str choice, a component ref) inherits the default
+       arm's budget, so it fails loudly when slower, which forces a measurement.
+
+    Rule 3 is why registering a correct but slow-by-nature leaf (a NetworkFlow solver
+    with a large declared budget) does not turn every composite's battery red: the
+    composite is held to the leaf's own declared cost, not to a number measured with a
+    different inner. A leaf slower than even its own budget still fails, here and in
+    its own battery.
+    """
     label = arm_label(arm)
     if not label:
         return spec.perf_budget_ms, "perf_budget_ms"
     if label in spec.arm_budgets_ms:
         return spec.arm_budgets_ms[label], f"arm_budgets_ms[{label!r}]"
+    inner = _dispatch_ref_target(spec, arm)
+    if inner is not None:
+        target, target_params = inner
+        inner_ms, inner_source = arm_budget(target, target_params)
+        total = inner_ms + spec.perf_budget_ms
+        return total, (f"arm not measured: derived = {target.name} {inner_source} {inner_ms} ms "
+                       f"+ {spec.name} overhead perf_budget_ms {spec.perf_budget_ms} ms")
     return spec.perf_budget_ms, "perf_budget_ms (arm not measured: it inherits the default arm's budget)"
+
+
+def _dispatch_ref_target(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[PolicySpec, dict[str, Any]] | None:
+    """``(target spec, its params)`` when ``arm`` is one ``dispatch``-kind ref param set to a target; else ``None``."""
+    if len(arm) != 1:
+        return None
+    (key, value), = arm.items()
+    if not isinstance(value, Mapping):
+        return None
+    info = next((i for i in declared_params(spec.params_cls) if i.name == key), None)
+    if info is None or not info.is_ref or info.meta.kind != "dispatch":
+        return None
+    return get_policy_spec("dispatch", value["type"]), dict(value.get("params") or {})
 
 
 def battery_check_ids(slot: str, name: str) -> list[str]:
@@ -327,12 +402,16 @@ def _bind(fn: Callable[..., tuple[bool, str]], *args: Any) -> Callable[[], tuple
 def _timed(check_id: str, fn: Callable[[], tuple[bool, str]], arm: Mapping[str, Any]) -> CheckResult:
     group, _, check = check_id.partition(".")
     start = time.perf_counter()
+    skipped = False
     try:
-        ok, detail = fn()
+        outcome = fn()
+        ok, detail = outcome
+        skipped = isinstance(outcome, Skip)
     except Exception as exc:  # noqa: BLE001 - a crashing check is a FAIL, never a crash of the battery
         ok, detail = False, f"raised {type(exc).__name__}: {exc}"
     return CheckResult(group=group, check=f"{check}{_arm_suffix(arm)}", ok=ok, detail=detail,
-                       ms=round((time.perf_counter() - start) * 1000.0, 3), arm=arm_label(arm))
+                       ms=round((time.perf_counter() - start) * 1000.0, 3), arm=arm_label(arm),
+                       skipped=skipped)
 
 
 # --- the runner path ---------------------------------------------------------
@@ -542,7 +621,7 @@ def _order_independent(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str
                   "dense real ticks the candidate set itself depends on input order")
     declared = _declared_on_selection(spec, arm, "order_sensitive")
     if declared:
-        return True, f"skipped: order_sensitive declared by {declared}"
+        return _skip(f"order_sensitive declared by {declared}{_own_battery_note(spec, arm)}")
     for fixture in _determinism_fixtures():
         want = _plan_mapping(_decide_via_runner(spec, arm, fixture))
         for i in range(_SHUFFLES):
@@ -573,17 +652,30 @@ def _declared_on_selection(spec: PolicySpec, arm: Mapping[str, Any], attr: str) 
     return "; ".join(reasons)
 
 
+def _own_battery_note(spec: PolicySpec, arm: Mapping[str, Any]) -> str:
+    """For a composite's ``inner=X`` arm: where X's own randomness/order use is certified."""
+    target = _dispatch_ref_target(spec, arm)
+    if target is None:
+        return ""
+    name = target[0].name
+    return f"; {name} itself is checked in {name}'s own battery (openride policy validate dispatch {name})"
+
+
 def _no_module_rng(outcomes: _Outcomes) -> tuple[bool, str]:
     """``DispatchRunner.run`` leaves ``random.getstate()`` alone on every whole tick.
 
     Nothing is injected: the tick context's ``ctx.rng`` (``Random(tick_seed)``) is the
     only sanctioned randomness, and tick-scope sampling draws from it, so every
-    fixture (``scale`` included) is checked. Skipped when a node of the selection
-    declares ``module_rng`` (``Partitioned``: the pre-v2 groups draw from the module).
+    fixture (``scale`` included) is checked.
+
+    When a node of the selection declares ``module_rng`` the declaration is SCOPED
+    (final review MINOR-1), not a blanket exemption for the tree: see
+    :func:`_scoped_module_rng`. A declared draw is reported as SKIP, a draw by a node
+    that declared nothing still FAILS.
     """
     declared = _declared_on_selection(outcomes.spec, outcomes.arm, "module_rng")
     if declared:
-        return True, f"skipped: module_rng declared by {declared}"
+        return _scoped_module_rng(outcomes, declared)
     checked, touched = [], []
     for d in outcomes.all():
         if d.error is None:
@@ -594,6 +686,164 @@ def _no_module_rng(outcomes: _Outcomes) -> tuple[bool, str]:
         return False, (f"decide drew from the random MODULE on {', '.join(touched)}; draw only from ctx.rng, "
                        "or declare module_rng= at @policy")
     return True, f"random module state unchanged on {len(checked)} whole tick(s)"
+
+
+# The random module's draw functions: the module-level bound methods of its hidden
+# instance (random.random, random.shuffle, random.sample, ..., random.seed).
+def _module_draw_names() -> tuple[str, ...]:
+    inst = getattr(random, "_inst", None)
+    return tuple(sorted(name for name, value in vars(random).items()
+                        if not name.startswith("_") and name not in ("getstate", "setstate")
+                        and getattr(value, "__self__", None) is inst and callable(value)))
+
+
+def _selection_instances(runner: DispatchRunner) -> list[tuple[Any, Any]]:
+    """``[(built policy, its ResolvedDispatch), ...]`` from the top down the ``inner`` chain."""
+    from apps.container_logistics.policies.dispatch.composite import CompositePolicy
+
+    out, inst, node = [], runner.policy, runner.resolved
+    while inst is not None and node is not None:
+        out.append((inst, node))
+        if not isinstance(inst, CompositePolicy):
+            break
+        inst, node = inst.inner, node.inner
+    return out
+
+
+@contextmanager
+def _attributed_module_draws(nodes: list[tuple[Any, Any]], record: list[tuple[str, str]]) -> Iterator[None]:
+    """Wrap the ``random`` module's draw functions for the block; append ``(channel, node name)`` per call.
+
+    Attribution walks the caller's frames to the NEAREST frame whose ``self`` is one of
+    the selection's built policies (``nodes``). ``channel`` is ``"sample"`` when a
+    non-tick ``DispatchContext`` method sits between the draw and that policy (the cap
+    sample of a scope a composite built with ``sample_rng=<the module>``), else
+    ``"direct"``. No policy frame at all is ``("direct", "")``.
+    """
+    import sys
+
+    ids = {id(inst): node.name for inst, node in nodes}
+    saved = {name: getattr(random, name) for name in _module_draw_names()}
+
+    def attribute() -> tuple[str, str]:
+        frame = sys._getframe(2)
+        channel = "direct"
+        while frame is not None:
+            owner = frame.f_locals.get("self")
+            if owner is not None:
+                if id(owner) in ids:
+                    return channel, ids[id(owner)]
+                if isinstance(owner, DispatchContext) and owner.scope.kind != "tick":
+                    channel = "sample"
+            frame = frame.f_back
+        return "direct", ""
+
+    def wrap(fn: Callable[..., Any]) -> Callable[..., Any]:
+        def drawn(*args: Any, **kwargs: Any) -> Any:
+            record.append(attribute())
+            return fn(*args, **kwargs)
+        return drawn
+
+    for name, fn in saved.items():
+        setattr(random, name, wrap(fn))
+    try:
+        yield
+    finally:
+        for name, fn in saved.items():
+            setattr(random, name, fn)
+
+
+def _probe_module_draws(spec: PolicySpec, arm: Mapping[str, Any], fixture: Any) -> tuple[list[tuple[str, str]], bool]:
+    """One runner decision with the sanctioned per-node RNG channel redirected; the module draws left.
+
+    Every built node whose ``rng`` is the random MODULE by default (nothing injected:
+    ``Partitioned``'s inner) gets a private ``Random(fixture.seed)`` through
+    ``set_rng``, so the inner's sanctioned ``self.rng`` draws leave the module. What
+    still reaches the module is either a scope's cap sample (``sample_rng``) or a
+    direct draw, each attributed to a node. Returns the draws and whether the module
+    state changed; an exception is left to ``robustness``.
+    """
+    runner = build_runner_for_policy(spec.name, _arm_params(arm))
+    nodes = _selection_instances(runner)
+    for inst, _node in nodes:
+        if getattr(inst, "_rng", object()) is None:
+            inst.set_rng(random.Random(fixture.seed))
+    record: list[tuple[str, str]] = []
+    with fixture.module_random():
+        before = random.getstate()
+        ctx = fixture.context(runner)
+        with _attributed_module_draws(nodes, record):
+            try:
+                runner.run(ctx)
+            except Exception:  # noqa: BLE001 - reported by robustness
+                pass
+        touched = random.getstate() != before
+    return record, touched
+
+
+def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
+    """``no_module_rng`` on a selection with a ``module_rng`` declaration: each DRAW is judged by its node.
+
+    The provenance rule (final review MINOR-1, after MAJOR-4):
+
+    - a node's ``module_rng`` covers its OWN code's direct draws, and the cap sample of a
+      scope built under it (a ``DispatchContext`` whose ``sample_rng`` the composite set
+      to the module: ``Partitioned``'s ``sample_rng=random``) when the node or an
+      ancestor of the drawing node declares it;
+    - the inner's ``self.rng`` channel is not exempt: it is redirected to a private
+      ``Random`` for the probe (:func:`_probe_module_draws`), so a node that declared
+      nothing and still reaches the module FAILS, whatever its parent declared
+      (``Partitioned[inner=X]`` fails when X draws from the module);
+    - provenance that cannot be separated is a SKIP, not a pass: the module changed
+      but no wrapped draw was recorded (a function bound at import, ``random._inst``).
+
+    Verdicts: any undeclared draw FAILS; else any declared draw (or an unseparable
+    change) is SKIP; else (the module untouched with the channels redirected) PASS.
+    """
+    names = [node.name for _inst, node in _selection_instances(build_runner_for_policy(
+        outcomes.spec.name, _arm_params(outcomes.arm)))]
+    declaring = {n for n in names if get_policy_spec("dispatch", n).module_rng is not None}
+    rogue: dict[str, list[str]] = {}
+    declared_draws = {"direct": 0, "sample": 0}
+    unseparable: list[str] = []
+    checked = []
+    for make in fx.ROBUSTNESS_FIXTURES:
+        if outcomes.get(make).error is not None:
+            continue
+        fixture = make()
+        checked.append(fixture.id)
+        record, touched = _probe_module_draws(outcomes.spec, outcomes.arm, fixture)
+        for channel, who in record:
+            covered = who in declaring or (
+                channel == "sample" and who in names
+                and any(n in declaring for n in names[:names.index(who) + 1]))
+            if covered:
+                declared_draws[channel] += 1
+            else:
+                rogue.setdefault(who or "<no policy frame>", []).append(fixture.id)
+        if touched and not record:
+            unseparable.append(fixture.id)
+    if rogue:
+        shown = "; ".join(f"{who} on {', '.join(sorted(set(fids)))}" for who, fids in sorted(rogue.items()))
+        return False, (f"decide drew from the random MODULE outside the module_rng declaration ({declared}): "
+                       f"{shown}. A declaration covers the declaring node's own draws and the scope samples "
+                       "it routes to the module, not a node that declared nothing; draw only from ctx.rng / "
+                       "self.rng, or declare module_rng= on that node")
+    note = _own_battery_note(outcomes.spec, outcomes.arm)
+    if any(declared_draws.values()) or unseparable:
+        parts = []
+        if declared_draws["direct"]:
+            parts.append(f"{declared_draws['direct']} direct draw(s) by the declaring node(s) "
+                         f"{', '.join(sorted(declaring))}")
+        if declared_draws["sample"]:
+            parts.append(f"{declared_draws['sample']} scope cap sample(s) a declaring composite routes to the module")
+        if unseparable:
+            parts.append(f"the module changed with no attributable draw on {', '.join(unseparable)}: "
+                         "provenance cannot be separated")
+        return _skip(f"module_rng declared by {declared}; {'; '.join(parts)}; no undeclared node drew from it "
+                     f"on {len(checked)} whole tick(s), each inner's own RNG redirected{note}")
+    return True, (f"random module untouched on {len(checked)} whole tick(s) with each inner's own RNG redirected "
+                  f"(module_rng declared by {declared}, but nothing drew on it here){note}")
 
 
 # --- information -------------------------------------------------------------
@@ -666,7 +916,7 @@ def _scopes_respect_model(outcomes: _Outcomes) -> tuple[bool, str]:
 
 def _performance_scale(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str]:
     fixture = fx.scale()
-    budget, source = _arm_budget(spec, arm)
+    budget, source = arm_budget(spec, arm)
     times = []
     for _ in range(_PERF_REPEATS):
         d = _decide_via_runner(spec, arm, fixture)
