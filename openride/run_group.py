@@ -121,14 +121,26 @@ def _cmd_run(args) -> int:
         return 2
 
     solver = args.solver
-    if solver is None and not args.scenario:
+    if solver is None and not args.scenario and not getattr(args, "policy", None):
         solver = _pick_solver()
+
+    # --solver X is sugar for --policy dispatch=X; validated against the scenario now,
+    # not after the sim has spawned.
+    try:
+        policy_overrides = control.validate_run_policies(
+            scenario, solver, getattr(args, "policy", None), getattr(args, "policy_param", None)
+        )
+    except control.ControlError as exc:
+        console.print(f"[red]Invalid policy override:[/] {exc}")
+        return 2
+    solver = (policy_overrides.get("dispatch") or {}).get("type") or solver
 
     headless = not args.no_headless
     runner = SimulationRunner(
-        scenario=scenario, solver=solver, run_name=args.run_name, headless=headless,
+        scenario=scenario, run_name=args.run_name, headless=headless,
         cooperation_structure=getattr(args, "structure", None),
         sharing_policy=getattr(args, "sharing_policy", None),
+        policy_overrides=policy_overrides,
     )
 
     if runner.another_run_active():
@@ -179,6 +191,13 @@ def register(sub) -> None:
     p.add_argument("--solver",
                    help="Assignment solver override: a registered dispatch policy name, validated "
                         "by the engine; list: openride policy list dispatch")
+    p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME",
+                   help="Per-run policy override, repeatable (e.g. dispatch=GreedyNearest); "
+                        "--solver X is the same as --policy dispatch=X")
+    p.add_argument("--policy-param", dest="policy_param", action="append", default=[],
+                   metavar="SLOT.KEY=VALUE",
+                   help="Per-run policy param override, repeatable (e.g. "
+                        "dispatch.dual_cycle_bonus_km=0); VALUE is JSON when it parses")
     p.add_argument("--structure", help="Cooperation structure id override (declared in the scenario's spec.json)")
     p.add_argument("--sharing-policy", dest="sharing_policy",
                    help="Sharing algorithm override for two-stage planners")

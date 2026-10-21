@@ -128,8 +128,9 @@ def _spec_from_flags(args) -> dict[str, Any]:
         spec["orderCountUnit"] = args.order_unit
     if getattr(args, "early_orders", None) is not None:
         spec["earlyOrderCount"] = args.early_orders
-    if getattr(args, "solver", None):
-        spec["solver"] = args.solver
+    policies = _policies_from_flags(args)
+    if policies:
+        spec["policies"] = policies
     if getattr(args, "haulier", None):
         spec["hauliers"] = [_parse_haulier(h) for h in args.haulier]
     # Matrix / curve files (JSON, CSV, or .xlsx) are parsed server-side at spec creation.
@@ -148,6 +149,48 @@ def _spec_from_flags(args) -> dict[str, Any]:
         key, value = item.split("=", 1)
         spec[key.strip()] = _coerce(value)
     return spec
+
+
+def _policies_from_flags(args) -> Optional[dict[str, Any]]:
+    """``spec["policies"]`` from ``--solver`` / ``--policy`` / ``--policy-param`` (None if unset).
+
+    ``--solver X`` is ``--policy dispatch=X``: the CLI sends only ``policies``, never
+    the legacy ``solver`` key. Shape only; the compile validates names and values.
+    Raises ``ValueError`` (``PolicyError``) for a malformed or contradictory flag.
+    """
+    from apps.container_logistics.policies.framework import parse_policy_cli_args
+
+    parsed = parse_policy_cli_args(getattr(args, "policy", None) or [],
+                                   getattr(args, "policy_param", None) or [])
+    solver = (getattr(args, "solver", None) or "").strip()
+    if solver:
+        dispatch = parsed.setdefault("dispatch", {})
+        if dispatch.get("type") not in (None, solver):
+            raise ValueError(f"--solver {solver!r} conflicts with --policy dispatch={dispatch['type']!r}; pass one.")
+        dispatch["type"] = solver
+    return parsed or None
+
+
+def _rebase_policies(flags: dict[str, Any], current: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """Merge flag-built ``policies`` over the scenario's ``current`` block (a whole block out).
+
+    Per slot: a CHANGED type starts from the new policy's defaults (only the flag
+    params); the same or an omitted type keeps the current params and timing and
+    overlays the flag params. Raises ``ValueError`` for params with no type to attach to.
+    """
+    out = {k: dict(v) for k, v in (current or {}).items() if isinstance(v, dict)}
+    for slot, entry in flags.items():
+        cur = out.get(slot) or {}
+        name = entry.get("type") or cur.get("type")
+        if not name:
+            raise ValueError(f"--policy-param {slot}.* needs a policy: pass --policy {slot}=NAME.")
+        same = name == cur.get("type")
+        merged: dict[str, Any] = {"type": name}
+        if cur.get("timing") is not None:
+            merged["timing"] = cur["timing"]
+        merged["params"] = {**((cur.get("params") or {}) if same else {}), **(entry.get("params") or {})}
+        out[slot] = merged
+    return out
 
 
 def _deep_merge(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
@@ -243,7 +286,11 @@ def _cmd_new(args) -> int:
         if not isinstance(spec, dict):
             console.print("[red]--spec-file must contain a JSON object.[/]")
             return 2
-    spec = _deep_merge(spec, _spec_from_flags(args))
+    flags = _spec_from_flags(args)
+    if "policies" in flags:
+        flags["policies"] = _rebase_policies(flags["policies"], spec.get("policies"))
+    spec = _deep_merge({k: v for k, v in spec.items() if k != "policies"}, flags) \
+        if "policies" in flags else _deep_merge(spec, flags)
     _maybe_prompt_for_input_files(spec)
     if not spec.get("name"):
         console.print("[red]A scenario needs a --name (or a name in --spec-file).[/]")
@@ -268,6 +315,12 @@ def _cmd_edit(args) -> int:
         return interactive_edit(args.domain, slug=args.slug)
 
     flag_patch = _spec_from_flags(args)
+    if "policies" in flag_patch:
+        # Rebased on the scenario's CURRENT selection (editForm.policySlots, which
+        # translates legacy specs), so `--policy-param` alone keeps the policy and
+        # its other params, and `--solver` with the same name keeps its params.
+        form = control.get_scenario(args.slug, args.domain).get("editForm") or {}
+        flag_patch["policies"] = _rebase_policies(flag_patch["policies"], form.get("policySlots"))
     file_patch: dict[str, Any] = {}
     if args.spec_file:
         loaded = _load_data_file(args.spec_file)
@@ -690,7 +743,8 @@ def _spec_defaults(src: Optional[dict[str, Any]]) -> dict[str, Any]:
         "facilities": _count("facility") or 20,
         "days": src.get("simulationDays") or 1,
         "unit": src.get("orderCountUnit") or "per_day",
-        "solver": src.get("solver"),
+        "solver": ((src.get("policies") or {}).get("dispatch") or {}).get("type") or src.get("solver"),
+        "policies": src.get("policies"),
         "hauliers": src.get("hauliers"),
         "seed": src.get("seed"),
         "truck_policy": _policy("truck"),
@@ -706,7 +760,7 @@ def _preview_spec(spec: dict[str, Any], gen_file, inputs) -> None:
         f"days={spec.get('simulationDays')}  trucks={agents.get('truck', {}).get('count')}  "
         f"orders={agents.get('order', {}).get('count')} ({spec.get('orderCountUnit', 'per_day')})  "
         f"facilities={agents.get('facility', {}).get('count')}",
-        f"solver={spec.get('solver') or 'engine default'}  hauliers={len(spec.get('hauliers') or []) or 'default'}",
+        f"policies.dispatch={((spec.get('policies') or {}).get('dispatch') or {}).get('type') or spec.get('solver') or 'engine default'}  hauliers={len(spec.get('hauliers') or []) or 'default'}",
     ]
 
     def _pol(role):
@@ -801,7 +855,9 @@ def interactive_build_spec(domain: Optional[str], *, defaults: Optional[dict[str
             "order": order_agent,
             "facility": {"count": facilities, "policy": {"type": facility_policy}},
         },
-        "solver": solver,
+        # Sent as policies.dispatch, never the legacy `solver` key: a scenario that
+        # already carries `policies` would refuse a solver naming another type.
+        "policies": _rebase_policies({"dispatch": {"type": solver}}, d.get("policies")),
     }
     if seed_raw and seed_raw.strip():
         try:
@@ -940,7 +996,7 @@ def interactive_delete(domain: Optional[str] = None) -> int:
 def _has_authoring_flags(args) -> bool:
     return any(
         getattr(args, name, None) not in (None, [], False)
-        for name in ("name", "trucks", "orders", "facilities", "days", "solver",
+        for name in ("name", "trucks", "orders", "facilities", "days", "solver", "policy", "policy_param",
                      "haulier", "early_orders", "order_unit", "gen_file", "input",
                      "truck_policy", "order_policy", "facility_policy", "order_source", "seed")
     )
@@ -959,6 +1015,13 @@ def _add_authoring_flags(p, *, require_name: bool) -> None:
     p.add_argument("--solver",
                    help="Default assignment solver: a registered dispatch policy name, validated "
                         "by the engine; list: openride policy list dispatch")
+    p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME",
+                   help="Policy selection, repeatable (e.g. dispatch=GreedyNearest); --solver X "
+                        "is the same as --policy dispatch=X")
+    p.add_argument("--policy-param", dest="policy_param", action="append", default=[],
+                   metavar="SLOT.KEY=VALUE",
+                   help="Policy param, repeatable (e.g. dispatch.dual_cycle_bonus_km=0); VALUE "
+                        "is JSON when it parses; on edit, merged over the scenario's current params")
     p.add_argument("--haulier", action="append",
                    help="Haulier 'Name:fleet%%:order%%' (repeatable; shares must total 100)")
     p.add_argument("--demand-curve-file",

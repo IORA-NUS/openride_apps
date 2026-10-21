@@ -28,10 +28,9 @@ from .order_demand import (
 def normalize_solver(raw: Any) -> str:
     """Coerce a requested solver name to a registered dispatch policy, else the default.
 
-    Legacy-only: serves the editForm (``scenario_edit_form_from_detail``) and the
-    legacy synth paths (``normalize_generate_spec``,
+    Legacy-only: serves the legacy synth paths (``normalize_generate_spec``,
     ``frontend_scenario_config_override``), which read old or foreign recipes and must
-    still produce a form/config. The strict surface is compile time
+    still produce a config. The editForm no longer coerces (``policy_slots_from_spec``). The strict surface is compile time
     (``spec_compile``) and run start, which raise on an unknown name. Names are read
     from the policy registry at call time, never frozen at import.
     """
@@ -475,6 +474,9 @@ SPEC_KEYS: dict[str, Carry] = {
     "planner": Carry.CARRY_IF_ABSENT,
     "solver": Carry.CARRY_IF_ABSENT,
     "solverParams": Carry.CARRY_IF_ABSENT,
+    # The policy-slot selection (plan docs/plans/policy_slots_p0_p3.md §4 P2.4). It
+    # supersedes `solver`/`solverParams`: see drop_dispatch_dials_superseded_by.
+    "policies": Carry.CARRY_IF_ABSENT,
     "roleSettings": Carry.CARRY_IF_ABSENT,
     "overrides": Carry.CARRY_IF_ABSENT,
     # --- per-facility rules (facility rules plan §9) -------------------------
@@ -583,9 +585,14 @@ SPEC_KEY_NULL_POLICY: dict[str, NullPolicy] = {
     "solverParams": NullPolicy.CLEARS,
     "overrides": NullPolicy.CLEARS,
     # CLEARS: solver and planner.deployment.type are ONE dial and `solver` wins when
-    # both are given, so null is how an author says "defer to the planner". No other
-    # spelling expresses that.
+    # both are given, so null is how an author says "defer to the planner" (and, next
+    # to a `policies` block, "defer to policies.dispatch", which supersedes both).
+    # No other spelling expresses that.
     "solver": NullPolicy.CLEARS,
+    # UNSUPPLIED: a clear is `{}`, meaning all slot defaults; null is what a form
+    # serialiser emits for an untouched field, and honouring it would silently revert
+    # the scenario's dispatch policy and params to the legacy translation.
+    "policies": NullPolicy.UNSUPPLIED,
     # CLEARS: the legacy sibling of `overrides`; same semantics, same reasoning.
     "roleSettings": NullPolicy.CLEARS,
     # --- per-facility rules ----------------------------------------------------------
@@ -659,6 +666,25 @@ def _key_supplied(raw: dict[str, Any], key: str) -> bool:
         if value is None or (isinstance(value, str) and not value.strip()):
             return False
     return supplied
+
+
+def drop_dispatch_dials_superseded_by(
+    incoming: dict[str, Any], carried: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """``carried`` without ``solver``/``solverParams`` when ``incoming`` supplies ``policies``.
+
+    A body that speaks ``policies`` (non-null) is authoritative about dispatch, so the
+    legacy spellings it superseded must not be inherited back next to it (the compile
+    would refuse the pair). Asymmetric on purpose: a stale legacy client that sends
+    only ``solver`` over a carried ``policies`` is NOT reconciled here and gets the
+    compile's loud "solver disagrees with policies.dispatch" error instead of being
+    silently ignored. Returns ``carried`` unchanged (same object) otherwise.
+    """
+    if not isinstance(carried, dict) or not isinstance(incoming, dict):
+        return carried
+    if incoming.get("policies") is None:
+        return carried
+    return {k: v for k, v in carried.items() if k not in ("solver", "solverParams")}
 
 
 def assemble_spec(
@@ -741,6 +767,7 @@ def assemble_spec(
         "planner": deepcopy(raw.get("planner")),
         "solver": raw.get("solver"),
         "solverParams": deepcopy(solver_params) if solver_params else None,
+        "policies": deepcopy(raw.get("policies")),
         "roleSettings": deepcopy(role_settings) if role_settings else None,
         "overrides": deepcopy(overrides) if overrides else None,
         # Echoed verbatim — never normalised here. ``Preprocessor`` is the single
@@ -755,7 +782,7 @@ def assemble_spec(
     if missing:
         raise RuntimeError(f"assemble_spec: SPEC_KEYS without a value builder: {missing}")
 
-    prev = previous if isinstance(previous, dict) else None
+    prev = drop_dispatch_dials_superseded_by(raw, previous if isinstance(previous, dict) else None)
     out: dict[str, Any] = {}
     for key, policy in SPEC_KEYS.items():
         if policy is Carry.CARRY_IF_ABSENT and not _key_supplied(raw, key) and prev and key in prev:
@@ -1469,6 +1496,36 @@ def _cooperation_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
     return {"active": coop.get("active"), "structures": structures}
 
 
+def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, Any]:
+    """The editForm ``policySlots``: the recipe's ``policies``, or the legacy translation.
+
+    A spec without ``policies`` (compiled before policy slots) is translated exactly as
+    the compiler would (``solver`` > ``planner.deployment.type`` > default, params from
+    ``deployment.params`` and ``solverParams``), minus params the policy does not
+    declare. A spec the compiler would refuse still yields a form: its authored block,
+    or ``{"dispatch": {"type": <raw solver>}}``, so the editor can show the error.
+    """
+    from apps.container_logistics.datagen.preprocess import Preprocessor
+    from apps.container_logistics.policies.framework import (
+        PolicyError,
+        authored_after_resolution,
+        resolve_policies_block,
+    )
+
+    gs = generation_spec if isinstance(generation_spec, dict) else {}
+    try:
+        planner_cfg = Preprocessor._normalize_planner(gs.get("planner"))
+        authored, provenance = Preprocessor._normalize_policies(gs, planner_cfg)
+        legacy = [s for s, p in provenance.items() if p == "legacy"]
+        resolved = resolve_policies_block(authored, legacy_slots=legacy)
+        return authored_after_resolution(authored, resolved, legacy)
+    except (PolicyError, ValueError):
+        if isinstance(gs.get("policies"), dict) and gs["policies"]:
+            return deepcopy(gs["policies"])
+        raw_solver = gs.get("solver")
+        return {"dispatch": {"type": str(raw_solver).strip() if raw_solver else default_policy_name("dispatch")}}
+
+
 def scenario_edit_form_from_detail(
     entry: dict[str, Any],
     generation_spec: dict[str, Any] | None,
@@ -1525,6 +1582,7 @@ def scenario_edit_form_from_detail(
         if order_patch.get("early_order_count") is not None:
             early_order_count = int(order_patch["early_order_count"])
 
+    policy_slots = policy_slots_from_spec(generation_spec)
     form: dict[str, Any] = {
         "name": entry.get("name") or entry.get("slug") or "",
         "slug": entry.get("slug") or "",
@@ -1537,9 +1595,10 @@ def scenario_edit_form_from_detail(
         "hauliers": scenario_config.normalize_hauliers(
             generation_spec.get("hauliers") if isinstance(generation_spec, dict) else None
         ),
-        "solver": normalize_solver(
-            generation_spec.get("solver") if isinstance(generation_spec, dict) else None
-        ),
+        # Raw text, never coerced: the dashboard shows the registered name or the
+        # error, not a silently substituted default.
+        "solver": (policy_slots.get("dispatch") or {}).get("type"),
+        "policySlots": policy_slots,
         "solverParams": (
             generation_spec.get("solverParams")
             if isinstance(generation_spec, dict) and isinstance(generation_spec.get("solverParams"), dict)
@@ -2055,6 +2114,9 @@ def edit_scenario(
     base = read_spec(target) or _load_generation_spec_from_disk(target) or {}
     if not isinstance(base, dict):
         base = {}
+    # Before the shallow merge, or the base's legacy solver/solverParams would ride
+    # into `merged` as if the patch had supplied them next to its `policies`.
+    base = drop_dispatch_dials_superseded_by(patch or {}, base)
     merged = {**base, **(patch or {}), "slug": slug, "domain": domain}
     _guard_cooperation_not_emptied(
         base, merged.get("cooperation"), slug, allow_reset=allow_cooperation_reset

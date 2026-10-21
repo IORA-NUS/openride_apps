@@ -8,6 +8,7 @@ visual geo/loc streaming) and that we keep stdout to stream a live view.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -83,9 +84,12 @@ class SimulationRunner:
         headless: bool = True,
         cooperation_structure: Optional[str] = None,
         sharing_policy: Optional[str] = None,
+        policy_overrides: Optional[dict] = None,
     ) -> None:
         self.scenario = scenario
         self.solver = solver
+        # Already validated (openride_control.policies); ships as ORSIM_POLICY_OVERRIDES.
+        self.policy_overrides = policy_overrides or None
         self.cooperation_structure = cooperation_structure
         self.sharing_policy = sharing_policy
         self.run_name = run_name
@@ -125,6 +129,8 @@ class SimulationRunner:
             env["ORSIM_RUN_NAME"] = self.run_name
         if self.solver:
             env["ORSIM_SOLVER"] = self.solver
+        if self.policy_overrides:
+            env["ORSIM_POLICY_OVERRIDES"] = json.dumps(self.policy_overrides, sort_keys=True)
         if self.cooperation_structure:
             env["ORSIM_COOP_STRUCTURE"] = self.cooperation_structure
         if self.sharing_policy:

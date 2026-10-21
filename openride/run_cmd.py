@@ -70,13 +70,24 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
     if args.scenario not in valid_slugs:
         _log(f"error: unknown scenario slug: {args.scenario}")
         return EXIT_BAD_ARGS
-    # Not checked here: the engine validates the name at run start (exit 2); None = scenario default.
-    solver = args.solver
+    # --solver X is sugar for --policy dispatch=X. Validated against the scenario's
+    # compiled assignment profile before anything spawns; None = scenario default.
+    from . import control
+
+    try:
+        policy_overrides = control.validate_run_policies(
+            args.scenario, args.solver, getattr(args, "policy", None),
+            getattr(args, "policy_param", None),
+        )
+    except control.ControlError as exc:
+        _log(f"error: invalid policy override: {exc}")
+        return EXIT_BAD_ARGS
+    solver = (policy_overrides.get("dispatch") or {}).get("type") or args.solver
     headless = not args.no_headless
 
     runner = SimulationRunner(
         scenario=args.scenario,
-        solver=solver,
+        policy_overrides=policy_overrides,
         run_name=args.run_name,
         headless=headless,
         cooperation_structure=getattr(args, "structure", None),
@@ -229,6 +240,7 @@ def _result_doc(
         "run_name": runner.run_name,
         "scenario": scenario,
         "solver": solver or "scenario-default",
+        "policy_overrides": runner.policy_overrides,
         "headless": headless,
         "status": status,
         "ok": status == "completed",

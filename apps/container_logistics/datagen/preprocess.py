@@ -18,7 +18,7 @@ import os
 import re
 from copy import deepcopy
 from datetime import datetime
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from apps.container_logistics.rebate import (
@@ -72,6 +72,11 @@ DEFAULT_MARKET = {
     "max_rounds": 20,
 }
 MARKET_ROLES = ("offer", "claim", "arbitration")
+# The keys a ``policies.<slot>`` entry may carry. Shape only: the registry check
+# (slot status, names, params) is ``policies.framework.resolve``'s, run by
+# ``spec_compile`` -- datagen never imports the policy registry. Must match
+# ``policies.framework.resolve.ENTRY_KEYS`` (a test asserts it).
+POLICY_ENTRY_KEYS = ("type", "timing", "params")
 MARKET_MAX_ROUNDS_MIN = 1
 # Ceiling raised from 10: the old ceiling sat AT the observed convergence point,
 # so an operator who noticed the truncation could not configure their way out.
@@ -87,6 +92,9 @@ class Compiled:
     spec: GenerationSpec
     orsim_settings: dict
     recipe: dict
+    #: slot -> "legacy" (translated from solver/solverParams/planner.deployment) or
+    #: "authored" (written in the spec's ``policies`` block). See ``_normalize_policies``.
+    policies_provenance: dict = field(default_factory=dict)
 
 
 def _slugify(name: str) -> str:
@@ -235,6 +243,102 @@ class Preprocessor:
             f"{type(value).__name__}). Strings are refused rather than coerced: "
             f"bool(\"false\") is True, which would silently ENABLE the flag."
         )
+
+    @staticmethod
+    def _normalize_policies(raw: dict, planner_cfg: dict) -> tuple[dict, dict]:
+        """Shape-check the ``policies`` block; translate the legacy dispatch keys.
+
+        Returns ``(authored, provenance)``: ``authored`` is the block as it will be
+        echoed into the recipe, always carrying ``dispatch``; ``provenance`` maps each
+        slot to ``"authored"`` or ``"legacy"``. SHAPE ONLY (no registry): slot names,
+        policy names and params are validated by ``spec_compile`` via
+        ``policies.framework.resolve``. Without ``policies.dispatch`` the legacy dial is
+        translated: ``type = solver or planner.deployment.type or default``,
+        ``params = {**deployment.params, **solverParams}``, ``timing = "online"``.
+        With it, a ``solver`` naming another type, or ``solverParams`` that disagree
+        with ``policies.dispatch.params``, are refused (they are its legacy spellings).
+        Raises ``SpecValidationError``.
+        """
+        block = raw.get("policies")
+        if block is None:
+            block = {}
+        if not isinstance(block, dict):
+            raise SpecValidationError(
+                f"spec: 'policies' must be an object of slot -> {{type, timing?, params?}} "
+                f"(got {block!r}). An empty object means every slot at its default."
+            )
+        for slot, entry in block.items():
+            Preprocessor._check_policy_entry_shape(slot, entry)
+        authored = deepcopy(block)
+        for entry in authored.values():
+            entry["type"] = entry["type"].strip()
+        provenance = {slot: "authored" for slot in block}
+        mode = (planner_cfg.get("timing") or {}).get("mode", "online")
+        if mode != "online":
+            raise SpecValidationError(
+                f"planner.timing.mode={mode!r} has never had a runtime reader; dispatch "
+                f"timing is now policies.dispatch.timing ('online'; 'plan' lands with P4)."
+            )
+        deployment = planner_cfg.get("deployment") or {}
+        solver = raw.get("solver")
+        solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
+        if "dispatch" not in block:
+            dp = deployment.get("params") if isinstance(deployment.get("params"), dict) else {}
+            authored["dispatch"] = {
+                "type": str(solver or deployment.get("type")
+                            or D.ASSIGNMENT_SETTINGS["profile"]["strategy"]),
+                "timing": "online",
+                "params": {**deepcopy(dp), **deepcopy(solver_params or {})},
+            }
+            provenance["dispatch"] = "legacy"
+            return authored, provenance
+        dispatch = authored["dispatch"]
+        if solver not in (None, "") and str(solver) != dispatch["type"]:
+            raise SpecValidationError(
+                f"spec sets solver={solver!r} but policies.dispatch.type={dispatch['type']!r}. "
+                "'solver' is the legacy spelling of policies.dispatch.type; send only "
+                "policies.dispatch (the dashboard and CLI do)."
+            )
+        if solver_params:
+            params = dispatch.get("params") or {}
+            disagree = sorted(k for k, v in solver_params.items() if k not in params or params[k] != v)
+            if disagree:
+                # Agreeing solverParams are tolerated, symmetric with the solver rule
+                # above: a saved spec carried across a save can hold both spellings.
+                raise SpecValidationError(
+                    f"spec sets solverParams={solver_params!r} next to a policies block "
+                    f"(disagreeing keys: {', '.join(disagree)}). solverParams is the legacy "
+                    "spelling of policies.dispatch.params; it cannot be combined with a "
+                    "policies block. Move the values into policies.dispatch.params and "
+                    "drop solverParams."
+                )
+        return authored, provenance
+
+    @staticmethod
+    def _check_policy_entry_shape(slot: Any, entry: Any) -> None:
+        """Raise ``SpecValidationError`` unless ``entry`` is ``{type, timing?, params?}``."""
+        if not isinstance(slot, str) or not slot:
+            raise SpecValidationError(f"policies: slot names must be non-empty strings (got {slot!r}).")
+        where = f"policies.{slot}"
+        if not isinstance(entry, dict):
+            raise SpecValidationError(
+                f"{where} must be an object {{type, timing?, params?}} (got {entry!r})."
+            )
+        unknown = sorted(str(k) for k in entry if k not in POLICY_ENTRY_KEYS)
+        if unknown:
+            raise SpecValidationError(
+                f"{where}: unknown key(s) {', '.join(repr(k) for k in unknown)}. "
+                f"Allowed keys: {', '.join(POLICY_ENTRY_KEYS)}."
+            )
+        if not isinstance(entry.get("type"), str) or not entry["type"].strip():
+            raise SpecValidationError(
+                f"{where}.type must name a registered policy (got {entry.get('type')!r}). "
+                f"List them: openride policy list {slot}."
+            )
+        if "timing" in entry and not isinstance(entry["timing"], str):
+            raise SpecValidationError(f"{where}.timing must be a string (got {entry['timing']!r}).")
+        if entry.get("params") is not None and not isinstance(entry["params"], dict):
+            raise SpecValidationError(f"{where}.params must be an object (got {entry['params']!r}).")
 
     @staticmethod
     def _normalize_market(raw_market) -> dict:
@@ -563,26 +667,20 @@ class Preprocessor:
             slug=slug, reference_time=reference_time,
         )
         fac_profile["facilities"] = sites
-        # Solver selection. The planner's deployment algorithm and the legacy
-        # 'solver' knob are ONE dial: 'solver' wins if both are given, and the
-        # resolved strategy is mirrored into planner.deployment.type so runtime,
-        # recipe, and UI can never drift.
-        strategy = str(
-            raw.get("solver")
-            or (planner_cfg.get("deployment") or {}).get("type")
-            or settings["assignment"]["profile"]["strategy"]
-        )
+        # Dispatch selection: ``policies.dispatch`` (or its legacy translation) is the
+        # ONE dial; ``profile.strategy``, ``profile.solver_params`` and
+        # ``planner.deployment`` are mirrors, so runtime, recipe and UI never drift.
+        # solver_params keeps the one-dial rule (defaults <- deployment.params <-
+        # dispatch params) because it also drives the framework's accounting (F6).
+        policies_authored, policies_provenance = cls._normalize_policies(raw, planner_cfg)
+        dispatch_entry = policies_authored["dispatch"]
+        strategy = dispatch_entry["type"]
         settings["assignment"]["profile"]["strategy"] = strategy
-        # Solver params: defaults <- planner.deployment.params <- top-level solverParams
-        # (most-specific last). Authored deployment params must never be silently
-        # dropped (F4) — the recipe echoes exactly what runs.
         base = dict(settings["assignment"]["profile"].get("solver_params") or {})
         dp = (planner_cfg.get("deployment") or {}).get("params")
         if isinstance(dp, dict):
             base.update(dp)
-        sp = raw.get("solverParams")
-        if isinstance(sp, dict):
-            base.update(sp)
+        base.update(dispatch_entry.get("params") or {})
         settings["assignment"]["profile"]["solver_params"] = base
         planner_cfg["deployment"] = {
             "type": strategy,
@@ -660,8 +758,12 @@ class Preprocessor:
                 ],
             },
             "planner": deepcopy(planner_cfg),
+            # The authored block (legacy translations included) is the round-trip
+            # source; ``solver`` is a read-only mirror of policies.dispatch.type and
+            # ``solverParams`` is retired (its values now live in policies.dispatch.params).
+            "policies": deepcopy(policies_authored),
             "solver": strategy,
-            "solverParams": deepcopy(sp) if isinstance(sp, dict) else None,
+            "solverParams": None,
             "overrides": deepcopy(overrides) if overrides else None,
             # Echoed VERBATIM (facility rules plan §9, literal 2). scenario.json's
             # $.recipe is the round-trip source for _load_generation_spec_from_disk,
@@ -704,7 +806,8 @@ class Preprocessor:
             seed=seed,
             role_policies=role_policies,
         )
-        return Compiled(spec=spec, orsim_settings=orsim, recipe=recipe)
+        return Compiled(spec=spec, orsim_settings=orsim, recipe=recipe,
+                        policies_provenance=policies_provenance)
 
     # ---- pieces -----------------------------------------------------------
 

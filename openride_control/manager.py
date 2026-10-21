@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
@@ -460,8 +461,13 @@ class ServiceManager:
         cooperation_structure: str | None = None,
         sharing_policy: str | None = None,
         order_lifecycle: str | None = None,
+        policy_overrides: dict | None = None,
     ) -> ActionResult:
-        """Start backend deps + simulation detached; logs to simulation_log.txt."""
+        """Start backend deps + simulation detached; logs to simulation_log.txt.
+
+        ``policy_overrides`` (``{slot: {type?, timing?, params?}}``, already validated by
+        ``openride_control.policies``) ships as ``ORSIM_POLICY_OVERRIDES`` JSON.
+        """
         with self._lock:
             if self.is_simulation_running():
                 return ActionResult(
@@ -496,6 +502,8 @@ class ServiceManager:
                     extra_env["ORSIM_SHARING_POLICY"] = sharing_policy.strip()
                 if order_lifecycle and order_lifecycle.strip():
                     extra_env["ORSIM_ORDER_LIFECYCLE"] = order_lifecycle.strip()
+                if policy_overrides:
+                    extra_env["ORSIM_POLICY_OVERRIDES"] = json.dumps(policy_overrides, sort_keys=True)
                 proc = spawn_simulation_process(extra_env=extra_env or None, background=True)
                 self.processes[SIMULATION_PROCESS_KEY] = proc
                 time.sleep(2)

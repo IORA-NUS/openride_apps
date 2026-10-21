@@ -17,7 +17,12 @@ from apps.container_logistics.datagen.overrides import (
     override_sha256,
 )
 from apps.container_logistics.datagen.preprocess import Preprocessor, SpecValidationError
-from apps.container_logistics.policies.framework import PolicyError, get_policy_spec
+from apps.container_logistics.policies.framework import (
+    PolicyError,
+    ResolvedPolicy,
+    authored_after_resolution,
+    resolve_policies_block,
+)
 
 from .scenario_bundle import compile_bundle, write_bundle
 
@@ -64,16 +69,84 @@ def _assert_generation_consistent(result, compiled, has_gen_override: bool) -> N
                 )
 
 
-def _assert_dispatch_policy_registered(strategy: str) -> None:
-    """Raise ``SpecValidationError`` unless ``strategy`` names a registered dispatch policy.
+def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
+    """Resolve the recipe's ``policies`` block against the registry (fail loud).
 
-    Fail loud at compile time (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.6): a
-    typo'd ``solver`` must never reach a bundle, since the runtime no longer falls back.
+    Replaces ``recipe["policies"]`` with :func:`authored_after_resolution` (legacy
+    translations lose the params their policy does not declare) and, for authored
+    dispatch params, re-mirrors the resolved values into ``solver_params`` and
+    ``planner.deployment.params`` wherever those already carry the key, so the
+    framework's accounting (F6) reads exactly what the policy runs with. Raises
+    ``SpecValidationError`` (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P2.3).
     """
+    legacy = [s for s, p in compiled.policies_provenance.items() if p == "legacy"]
+    block = compiled.recipe.get("policies")
     try:
-        get_policy_spec("dispatch", strategy)
+        resolved = resolve_policies_block(block, legacy_slots=legacy)
     except PolicyError as exc:
         raise SpecValidationError(str(exc)) from exc
+    compiled.recipe["policies"] = authored_after_resolution(block, resolved, legacy)
+    if compiled.policies_provenance.get("dispatch") == "authored":
+        prof = compiled.spec.assignment_settings["profile"]
+        for params in (
+            prof.get("solver_params"),
+            ((prof.get("planner") or {}).get("deployment") or {}).get("params"),
+            ((compiled.recipe.get("planner") or {}).get("deployment") or {}).get("params"),
+        ):
+            if isinstance(params, dict):
+                params.update({k: v for k, v in resolved["dispatch"].params.items() if k in params})
+    return resolved
+
+
+def _profile_policies(prof: dict, resolved: dict[str, ResolvedPolicy], provenance: str) -> dict:
+    """The ``profile.policies`` block for one assignment profile; consumes ``use_spatial_matching``.
+
+    The legacy key cannot sit next to a ``policies`` block (the runtime resolver refuses
+    it). Under legacy provenance ``false`` is folded into ``candidates="sampled"``
+    where the policy declares ``candidates`` (the legacy translation's rule); under an
+    authored block anything but ``true`` is refused. Raises ``SpecValidationError``.
+    """
+    block = {slot: r.to_profile() for slot, r in resolved.items()}
+    if "use_spatial_matching" not in prof:
+        return block
+    value = prof.pop("use_spatial_matching")
+    if not isinstance(value, bool):
+        raise SpecValidationError(
+            f"assignment profile use_spatial_matching must be true/false (got {value!r})."
+        )
+    if value is True:
+        return block
+    if provenance != "legacy":
+        raise SpecValidationError(
+            "assignment profile sets use_spatial_matching=false next to policies.dispatch; "
+            "it is superseded. Set policies.dispatch.params.candidates='sampled' instead "
+            "and remove use_spatial_matching."
+        )
+    if "candidates" in block["dispatch"]["params"]:
+        block["dispatch"]["params"]["candidates"] = "sampled"
+    return block
+
+
+def _patch_assignment_profiles(assignment: dict, resolved: dict[str, ResolvedPolicy], provenance: str) -> None:
+    """Write ``profile.policies`` onto every generated assignment behavior (in place).
+
+    Behaviors may share one profile dict (the builder hands out the same object), so
+    each profile is patched once. Raises ``SpecValidationError`` if the
+    ``profile.strategy`` mirror disagrees with the resolved dispatch policy.
+    """
+    seen: set[int] = set()
+    for agent_id, behavior in (assignment or {}).items():
+        prof = behavior.setdefault("profile", {}) if isinstance(behavior, dict) else None
+        if prof is None or id(prof) in seen:
+            continue
+        seen.add(id(prof))
+        if prof.get("strategy") != resolved["dispatch"].name:
+            raise SpecValidationError(
+                f"assignment agent {agent_id!r}: profile.strategy={prof.get('strategy')!r} "
+                f"disagrees with the resolved policies.dispatch {resolved['dispatch'].name!r} "
+                "(a scenario_gen.py override must not set strategy; set policies.dispatch)."
+            )
+        prof["policies"] = _profile_policies(prof, resolved, provenance)
 
 
 def _stagger_early_orders(order_collection: dict, orsim_settings: dict, early_n: int, truck_n: int) -> None:
@@ -119,7 +192,7 @@ def compile_spec_to_bundle(
         spec_json, domain=domain, scenario_dir=scenario_dir, reference_time=reference_time
     )
     spec = compiled.spec
-    _assert_dispatch_policy_registered(spec.assignment_settings["profile"]["strategy"])
+    resolved_policies = _resolve_compiled_policies(compiled)
     # Optional per-scenario Tier-2 override (scenario_gen.py in the folder). Absent
     # => pure shared-engine generation. Kept for back-compat (customize_spec /
     # customize_catalog / post_generate still fire).
@@ -131,6 +204,9 @@ def compile_spec_to_bundle(
     ).generate()
 
     _assert_generation_consistent(result, compiled, has_gen_override=overrides is not None)
+    _patch_assignment_profiles(
+        result.assignment, resolved_policies, compiled.policies_provenance.get("dispatch", "legacy")
+    )
 
     orsim_settings = dict(compiled.orsim_settings)
     orsim_settings["BEHAVIOR_REVISION"] = spec.behavior_revision

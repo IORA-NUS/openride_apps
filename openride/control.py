@@ -377,6 +377,28 @@ def known_solvers() -> dict[str, Any]:
     return {"solvers": payload.get("solvers") or [], "default": payload.get("default")}
 
 
+def validate_run_policies(
+    scenario: Optional[str],
+    solver: Optional[str],
+    policies: Optional[list[str]] = None,
+    params: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Dry-run a run's ``--solver``/``--policy``/``--policy-param`` against the scenario.
+
+    In-process, like ``runner.py``'s ``ServiceManager`` use: the same check
+    ``run-simulation`` runs before it spawns. Returns the ``ORSIM_POLICY_OVERRIDES``
+    object (``{}`` when no flag was given); raises ``ControlError`` with the message.
+    """
+    from openride_control.policies import validate_run_policy_args
+
+    result = validate_run_policy_args(scenario, solver, policies or [], params or [])
+    if isinstance(result, str):
+        err = ControlError(result)
+        err.code = "INVALID"
+        raise err
+    return result
+
+
 def known_policies() -> dict[str, Any]:
     """Return ``{policies: {role: [...]}, defaults: {role: str}}`` from the POLICY_REGISTRY."""
     payload = _ok(_run_command(["known-policies"]))

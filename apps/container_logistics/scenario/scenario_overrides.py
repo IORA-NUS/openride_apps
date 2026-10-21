@@ -15,27 +15,88 @@ def known_solvers():
     return tuple(spec.name for spec in list_policies("dispatch"))
 
 
-def apply_solver_override(assignment_collection, strategy):
-    """Set ``profile.strategy`` on every assignment behavior in ``assignment_collection``
-    (a ``{agent_id: behavior}`` dict) so a run uses ``strategy`` without regenerating the
-    scenario or touching the on-disk behavior files.
+def current_policies_for_profile(profile):
+    """The resolved policies of one assignment ``profile``: ``{slot: ResolvedPolicy}``.
 
-    Mutates the behaviors in place (same objects the agent source ships to the workers).
-    Returns the applied strategy, or ``None`` if ``strategy`` is falsy (nothing changed;
-    the scenario's own solver stands). Raises ``UnknownPolicyError`` for a name that is
-    not a registered dispatch policy, before anything is mutated. This replaced the old
-    warn-and-ignore behaviour: an intended contract change (plan
-    ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7; doc 11 is updated out-of-repo).
+    Reads the compiled ``profile.policies`` block (its ``version``/``kind`` are
+    re-derived from the registry), or, for a bundle compiled before policy slots, the
+    legacy translation of ``strategy``/``solver_params``/``use_spatial_matching``
+    (``dispatch/profile.py::legacy_dispatch_from_profile``). Raises ``PolicyError``.
+    Returns ``(resolved, source)`` with ``source`` ``"bundle"`` or ``"legacy-profile"``.
     """
-    from apps.container_logistics.policies.framework import get_policy_spec
+    from apps.container_logistics.policies.dispatch.profile import legacy_dispatch_from_profile
+    from apps.container_logistics.policies.framework import PolicyError, resolve_policies_block
 
+    block = profile.get("policies")
+    if block is None:
+        entry = legacy_dispatch_from_profile(profile)
+        return resolve_policies_block({"dispatch": entry}, where="profile.policies",
+                                      legacy_slots=("dispatch",)), "legacy-profile"
+    if not isinstance(block, dict):
+        raise PolicyError(f"assignment profile 'policies' must be an object (got {block!r}). Recompile the scenario.")
+    if profile.get("use_spatial_matching", True) is not True:
+        raise PolicyError(
+            "assignment profile sets use_spatial_matching="
+            f"{profile['use_spatial_matching']!r} next to a 'policies' block; it is superseded "
+            "by policies.dispatch.params.candidates. Remove use_spatial_matching."
+        )
+    authored = {
+        slot: {k: v for k, v in entry.items() if k in ("type", "timing", "params")}
+        if isinstance(entry, dict) else entry
+        for slot, entry in block.items()
+    }
+    return resolve_policies_block(authored, where="profile.policies"), "bundle"
+
+
+def apply_policy_overrides(assignment_collection, overrides):
+    """Apply per-run policy ``overrides`` to every assignment behavior, in memory.
+
+    ``overrides`` is ``{slot: {type?, timing?, params?}}`` (see
+    ``framework.resolve.merge_policy_overrides``: a changed type resets params to the
+    new policy's defaults). Each profile gets ``profile["policies"]`` (resolved,
+    ``to_profile`` form) and the ``profile["strategy"]`` mirror; ``solver_params`` is
+    NOT touched (it is the framework's accounting dial). A legacy profile's
+    ``use_spatial_matching`` is removed once folded into the block, because the
+    runtime resolver refuses it next to ``policies``. Every behavior is validated
+    before any is mutated. Returns the first behavior's resolved policies, or ``None``
+    for empty ``overrides``. Raises ``PolicyError``.
+    """
+    from apps.container_logistics.policies.framework import merge_policy_overrides
+
+    if not overrides:
+        return None
+    planned = []
+    for behavior in (assignment_collection or {}).values():
+        if not isinstance(behavior, dict):
+            continue
+        profile = behavior.setdefault("profile", {})
+        current, _source = current_policies_for_profile(profile)
+        planned.append((profile, merge_policy_overrides(current, overrides)))
+    for profile, merged in planned:
+        profile["policies"] = {slot: r.to_profile() for slot, r in merged.items()}
+        profile["strategy"] = merged["dispatch"].name
+        profile.pop("use_spatial_matching", None)
+    if planned:
+        return planned[0][1]
+    from apps.container_logistics.policies.framework import resolve_policies_block
+
+    return merge_policy_overrides(resolve_policies_block({}), overrides)
+
+
+def apply_solver_override(assignment_collection, strategy):
+    """Per-run dispatch policy override by name: ``--solver X`` / ``ORSIM_SOLVER``.
+
+    A thin wrapper: ``apply_policy_overrides(coll, {"dispatch": {"type": strategy}})``,
+    so a changed type starts from the new policy's default params. Returns the
+    registered name, or ``None`` if ``strategy`` is falsy (nothing changed). Raises
+    ``UnknownPolicyError`` for an unregistered name, before anything is mutated (an
+    intended contract change from the old warn-and-ignore; plan
+    ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7 and P2.5).
+    """
     if not strategy:
         return None
-    get_policy_spec("dispatch", strategy)
-    for behavior in (assignment_collection or {}).values():
-        if isinstance(behavior, dict):
-            behavior.setdefault("profile", {})["strategy"] = strategy
-    return strategy
+    resolved = apply_policy_overrides(assignment_collection, {"dispatch": {"type": strategy}})
+    return resolved["dispatch"].name
 
 
 def apply_cooperation_override(assignment_collection, structure=None, sharing=None):

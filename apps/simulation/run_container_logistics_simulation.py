@@ -9,7 +9,8 @@ from apps.container_logistics.scenario.scenario_overrides import (
     apply_cooperation_override,
     apply_market_override,
     apply_planner_topology_override,
-    apply_solver_override,
+    apply_policy_overrides,
+    current_policies_for_profile,
 )
 from apps.simulation.container_logistics_wiring import (
     build_agent_source,
@@ -62,6 +63,87 @@ def _resolve_solver() -> str | None:
     # celery restart (the solver registry already lives in the worker). See CLAUDE.md.
     value = os.environ.get("ORSIM_SOLVER", "").strip()
     return value or None
+
+
+def _resolve_policy_overrides() -> dict:
+    """Per-run policy overrides: ``ORSIM_POLICY_OVERRIDES`` (JSON) plus ``ORSIM_SOLVER``.
+
+    ``ORSIM_SOLVER=X`` is sugar for ``{"dispatch": {"type": "X"}}``. Raises
+    ``PolicyError`` for malformed JSON or when both name a different dispatch type.
+    """
+    import json
+
+    raw = os.environ.get("ORSIM_POLICY_OVERRIDES", "").strip()
+    overrides: dict = {}
+    if raw:
+        try:
+            overrides = json.loads(raw)
+        except ValueError as exc:
+            raise PolicyError(f"ORSIM_POLICY_OVERRIDES is not valid JSON ({exc}): {raw!r}") from exc
+        if not isinstance(overrides, dict):
+            raise PolicyError(f"ORSIM_POLICY_OVERRIDES must be a JSON object of slot -> entry (got {raw!r}).")
+    solver = _resolve_solver()
+    if solver:
+        dispatch = overrides.get("dispatch") or {}
+        if not isinstance(dispatch, dict):
+            raise PolicyError(f"ORSIM_POLICY_OVERRIDES dispatch must be an object (got {dispatch!r}).")
+        if dispatch.get("type") not in (None, solver):
+            raise PolicyError(
+                f"ORSIM_SOLVER={solver!r} conflicts with ORSIM_POLICY_OVERRIDES "
+                f"dispatch.type={dispatch['type']!r}"
+            )
+        overrides = {**overrides, "dispatch": {**dispatch, "type": solver}}
+    return overrides
+
+
+def _apply_policy_overrides_or_exit(assignment_collection) -> tuple[str | None, bool]:
+    """Apply the per-run policy overrides; exit 2 on any ``PolicyError``.
+
+    Returns ``(dispatch name if its TYPE was overridden else None, any override applied)``.
+    """
+    try:
+        overrides = _resolve_policy_overrides()
+        resolved = apply_policy_overrides(assignment_collection, overrides)
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
+    if not resolved:
+        return None, False
+    typed = isinstance(overrides.get("dispatch"), dict) and overrides["dispatch"].get("type")
+    return (resolved["dispatch"].name if typed else None), True
+
+
+def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
+    """Stamp ``orsim_settings["POLICIES"]`` (-> ``run_config.meta.policies``) and print it.
+
+    Built from the EFFECTIVE first assignment profile (post-override). Exits 2 on a
+    ``PolicyError``.
+    """
+    from apps.container_logistics.policies.dispatch.helpers.candidates import (  # local: agent-side module
+        CandidateSettings,
+    )
+    import json
+
+    from apps.container_logistics.policies.framework import policies_stamp
+
+    collection = scenario_manager.get_agent_collection("assignment") or {}
+    if not collection:
+        return
+    profile = next(iter(collection.values())).get("profile") or {}
+    try:
+        resolved, source = current_policies_for_profile(profile)
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
+    stamp = policies_stamp(
+        resolved,
+        candidate_settings=CandidateSettings.from_profile(profile).to_dict(),
+        source="override" if overridden else source,
+    )
+    scenario_manager.orsim_settings["POLICIES"] = stamp
+    d = stamp["dispatch"]
+    print(
+        f"Policies effective: dispatch={d['name']} v{d['version']} timing={d['timing']} "
+        f"params={json.dumps(d['params'], sort_keys=True)}"
+    )
 
 
 def _resolve_order_lifecycle_mode() -> str:
@@ -211,16 +293,13 @@ def main():
         scenario_manager.orsim_settings
     )
 
-    # Per-run solver override: patch the loaded assignment behavior in place so this run uses
-    # the requested strategy while reusing the identical (unchanged) scenario data — enabling
-    # apples-to-apples solver comparisons on one scenario dir.
-    solver = _resolve_solver()
-    try:
-        applied_solver = apply_solver_override(
-            scenario_manager.get_agent_collection("assignment"), solver
-        )
-    except PolicyError as exc:
-        _refuse_invalid_policy_config(exc)
+    # Per-run policy overrides (ORSIM_POLICY_OVERRIDES; ORSIM_SOLVER is dispatch.type
+    # sugar): patch the loaded assignment behaviors in place so this run uses the
+    # requested policy/params on the identical (unchanged) scenario data — enabling
+    # apples-to-apples comparisons on one scenario dir.
+    applied_solver, policies_overridden = _apply_policy_overrides_or_exit(
+        scenario_manager.get_agent_collection("assignment")
+    )
     if applied_solver:
         print(f"Assignment solver override: {applied_solver}")
         # Surface the chosen solver in run lists with zero kafka/schema changes.
@@ -281,6 +360,7 @@ def main():
     # Fail loud before any agent spawns: an unknown dispatch policy would otherwise
     # only surface agent-side, in the celery journal.
     _assert_policies_resolvable_or_exit(scenario_manager.get_agent_collection("assignment"))
+    _stamp_effective_policies(scenario_manager, policies_overridden)
 
     # Ship the EFFECTIVE cooperation structure (post-override) to the analytics
     # agent via orsim_settings (the STREAM_GEO pattern: validated allow_unknown,

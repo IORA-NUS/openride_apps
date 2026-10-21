@@ -1,4 +1,4 @@
-"""Public API of the policy framework: slots, ``@policy``, typed params, lookups.
+"""Public API of the policy framework: slots, ``@policy``, typed params, lookups, resolution.
 
 Authors import from here::
 
@@ -32,6 +32,14 @@ from .registry import (
     policy,
     spec_for_class,
 )
+from .resolve import (
+    ResolvedPolicy,
+    authored_after_resolution,
+    merge_policy_overrides,
+    parse_policy_cli_args,
+    policies_stamp,
+    resolve_policies_block,
+)
 from .slots import SLOTS, SlotSpec, slot_spec
 
 __all__ = [
@@ -47,6 +55,12 @@ __all__ = [
     "SLOTS",
     "SlotSpec",
     "slot_spec",
+    "ResolvedPolicy",
+    "resolve_policies_block",
+    "authored_after_resolution",
+    "merge_policy_overrides",
+    "parse_policy_cli_args",
+    "policies_stamp",
     "PolicyError",
     "UnknownSlotError",
     "SlotNotImplementedError",

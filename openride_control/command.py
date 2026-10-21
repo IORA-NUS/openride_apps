@@ -86,6 +86,22 @@ def _run(argv: list[str] | None = None) -> int:
         "policy name (list: openride policy list dispatch)",
     )
     run_p.add_argument(
+        "--policy",
+        action="append",
+        default=[],
+        metavar="SLOT=NAME",
+        help="Per-run policy override, repeatable (e.g. dispatch=GreedyNearest); "
+        "--solver X is the same as --policy dispatch=X. Validated before spawning.",
+    )
+    run_p.add_argument(
+        "--policy-param",
+        action="append",
+        default=[],
+        metavar="SLOT.KEY=VALUE",
+        help="Per-run policy param override, repeatable (e.g. "
+        "dispatch.dual_cycle_bonus_km=0); VALUE is JSON when it parses, else a string.",
+    )
+    run_p.add_argument(
         "--cooperation-structure",
         default=None,
         help="Cooperation structure id override (ORSIM_COOP_STRUCTURE): a structure "
@@ -225,11 +241,23 @@ def _run(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     if args.cmd == "run-simulation":
+        from openride_control.policies import validate_run_policy_args
+
+        # Validate BEFORE spawning: the dashboard spawns this command detached, so an
+        # error raised by the sim itself would only reach its log.
+        policy_overrides = validate_run_policy_args(
+            args.scenario, args.solver, args.policy, args.policy_param
+        )
+        if isinstance(policy_overrides, str):
+            _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
+                   "message": policy_overrides})
+            return 1
         result = mgr.run_simulation_background(
             scenario=args.scenario,
             run_name=args.run_name,
             run_id=args.run_id,
             solver=args.solver,
+            policy_overrides=policy_overrides or None,
             cooperation_structure=args.cooperation_structure,
             sharing_policy=args.sharing_policy,
             order_lifecycle=args.order_lifecycle,
