@@ -174,6 +174,8 @@ def test_stamp_shape():
                            accounting_params={"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5})
     assert stamp == {"dispatch": {
         "name": "GreedyNearest", "version": "1", "kind": "operator", "timing": "online",
+        "label": "GreedyNearest", "leaf": "GreedyNearest", "information_model": "central",
+        "share_tag_format": "audited",
         "params": {"candidates": "spatial", "dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5},
         "source": "bundle",
         "candidate_settings": {"cell_deg": 0.02, "per_order": 40, "max_rings": 8,

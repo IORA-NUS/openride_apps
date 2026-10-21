@@ -26,10 +26,12 @@ _EXTRA = [
     "apps.container_logistics.assignment.app",
     "apps.container_logistics.assignment.solver",
     "apps.container_logistics.assignment.pooled_planner",
+    "apps.container_logistics.assignment.accounting",
 ]
 # Plan §2.7 leaf list, plus dispatch/resolved.py (a value module the runner and
 # dispatch/profile.py both import), and the round-2 leaves framework/components.py
-# (registries imported locally) and dispatch/legacy.py (round-2 §4).
+# (registries imported locally) and dispatch/legacy.py (round-2 §4), plus
+# dispatch/composite.py (it imports only base and resolved).
 _LEAVES = [
     "apps.container_logistics.policies",
     "apps.container_logistics.policies.framework",
@@ -44,6 +46,7 @@ _LEAVES = [
     "apps.container_logistics.policies.dispatch.pair_solver",
     "apps.container_logistics.policies.dispatch.resolved",
     "apps.container_logistics.policies.dispatch.legacy",
+    "apps.container_logistics.policies.dispatch.composite",
 ]
 
 

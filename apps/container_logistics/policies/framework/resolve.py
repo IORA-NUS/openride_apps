@@ -5,6 +5,13 @@ timing?, params?}}``) into registry-validated values, merge per-run overrides in
 them, parse the CLI spelling of overrides, and build the run stamp
 (``run_config.meta.policies``). Plan ``docs/plans/policy_slots_p0_p3.md`` §4 P2.2.
 
+Round 2 (``docs/plans/policy_slots_round2_whole_tick.md`` §3.2, §3.5): a selection is
+a TREE. A ``PolicyRef`` param (e.g. ``Partitioned.inner``, ``PooledMarket.offer``)
+holds ``{type, params?}`` and is resolved recursively by ``PolicyParams.from_mapping``;
+:func:`merge_policy_overrides` merges nested params ref by ref (a changed ref type
+resets that ref's params); a :class:`ResolvedPolicy` carries its ``label``
+(``"PooledMarket/GreedyNearest"``: the type plus its ``inner`` chain) and ``leaf``.
+
 Every failure is a :class:`PolicyError` subclass whose message names the offending
 key and value, the allowed set and the fix. Nothing falls back silently: the one
 tolerated lossy step is dropping undeclared params of a slot translated from the
@@ -24,35 +31,49 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Collection, Mapping, Sequence
 
+from dataclasses import field
+
+# Module import, not ``from ... import NAME``: ``dispatch.legacy`` imports
+# ``framework.errors``, so when it is imported first it is still initialising here;
+# its attributes are read at call time only.
+from apps.container_logistics.policies.dispatch import legacy as _legacy
+
+from .components import ref_target
 from .errors import (
     PolicyDependencyError,
     PolicyError,
     PolicyParamsError,
     PolicyTimingError,
     SlotNotImplementedError,
+    UnknownPolicyError,
     UnknownSlotError,
 )
-from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
-
-from .params import declared_params
-from .registry import default_policy_name, get_policy_spec
+from .params import PolicyParams, declared_params
+from .registry import PolicySpec, default_policy_name, get_policy_spec
 from .slots import SLOTS
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "ENTRY_KEYS",
+    "INNER_PARAM",
+    "selection_chain",
     "drop_undeclared_legacy_params",
     "ResolvedPolicy",
     "resolve_policies_block",
     "authored_after_resolution",
     "merge_policy_overrides",
+    "merge_params",
     "parse_policy_cli_args",
     "policies_stamp",
 ]
 
 #: The keys a ``policies.<slot>`` entry may carry (authored, override and CLI forms).
 ENTRY_KEYS = ("type", "timing", "params")
+
+#: The dispatch-ref param a composite delegates each scope to; the ``label``/``leaf``
+#: chain and ``--solver`` (the innermost leaf) follow it.
+INNER_PARAM = "inner"
 
 # Why a declared-but-not-executable timing cannot run yet, per (slot, timing).
 _TIMING_NOT_EXECUTABLE_REASON = {
@@ -64,7 +85,12 @@ _TIMING_NOT_EXECUTABLE_REASON = {
 class ResolvedPolicy:
     """One slot's validated selection: registered name and version, timing, params.
 
-    ``params`` is the full validated dict (declared defaults filled in), in field order.
+    ``params`` is the full validated dict (declared defaults filled in), in field order;
+    a ref param is nested as ``{type, params}``. ``typed`` is the same value as the
+    policy's ``Params`` instance (refs carry their versions). ``label`` is the name plus
+    the ``inner`` chain (:func:`selection_chain`), ``leaf`` its last name;
+    ``information_model``/``share_tag_format`` are the registration's. All four
+    default to the plain-name / unset forms for a hand-built value.
     """
 
     slot: str
@@ -73,19 +99,35 @@ class ResolvedPolicy:
     kind: str
     timing: str | None
     params: dict[str, Any]
+    label: str = ""
+    leaf: str = ""
+    information_model: str | None = None
+    share_tag_format: str | None = None
+    typed: PolicyParams | None = field(default=None, compare=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if not self.label:
+            object.__setattr__(self, "label", self.name)
+        if not self.leaf:
+            object.__setattr__(self, "leaf", self.label.rpartition("/")[2])
+
+    def profile_params(self) -> dict[str, Any]:
+        """``params`` with every ref also carrying its ``version`` (compiled/stamp form)."""
+        return self.typed.to_profile_dict() if self.typed is not None else dict(self.params)
 
     def to_profile(self) -> dict[str, Any]:
         """The compiled-profile form ``{"type","version","kind","timing","params"}``.
 
         This is what ``profile.policies.<slot>`` carries in a bundle, and what
-        ``dispatch/profile.py::resolve_dispatch_for_profile`` reads back.
+        ``dispatch/profile.py::resolve_dispatch_for_profile`` reads back. Nested refs
+        are ``{type, version, params}``; the ``version`` is an echo, ignored on read.
         """
         return {
             "type": self.name,
             "version": self.version,
             "kind": self.kind,
             "timing": self.timing,
-            "params": dict(self.params),
+            "params": self.profile_params(),
         }
 
 
@@ -104,14 +146,45 @@ def _check_selectable_slot(slot: Any, where: str) -> None:
 
 
 def _unnamed_type(slot: str) -> str:
-    """The policy a block that does not name ``slot`` resolves to.
+    """The policy a block that does not name ``slot`` resolves to: the slot default.
 
-    This (round-1, flat) resolver selects leaves only, so an unnamed dispatch is the
-    legacy leaf default: exactly what the slot default ``Partitioned`` (inner
-    ``RandomAssignment``) runs. Round-2 C2's nested resolver replaces this with the
-    slot default itself.
+    TEMPORARY (round-2 C2 -> C3; C3 deletes the branch): until work item C3 registers
+    the slot default ``Partitioned``, an unnamed dispatch resolves to the legacy leaf
+    default (``legacy.LEGACY_LEAF_DEFAULT``), which is exactly what
+    ``Partitioned{inner=RandomAssignment}`` runs on today's partitioned runtime. Once
+    ``Partitioned`` is registered this returns the slot default, strictly.
     """
-    return LEGACY_LEAF_DEFAULT if slot == "dispatch" else default_policy_name(slot)
+    if slot == "dispatch" and not _registered(slot, SLOTS[slot].default):
+        return _legacy.LEGACY_LEAF_DEFAULT
+    return default_policy_name(slot)
+
+
+def _registered(slot: str, name: str | None) -> bool:
+    try:
+        get_policy_spec(slot, name)
+    except UnknownPolicyError:
+        return False
+    return True
+
+
+def selection_chain(slot: str, name: str, typed: PolicyParams | None) -> list[str]:
+    """``[name, inner name, inner's inner name, ...]`` following :data:`INNER_PARAM`.
+
+    Only a ref param named ``inner`` of kind ``dispatch`` is followed (the composite
+    contract, ``dispatch/composite.py``); ``typed`` is the resolved ``Params`` of
+    ``name`` (``None``: a leaf with nothing to follow).
+    """
+    chain = [name]
+    spec = get_policy_spec(slot, name)
+    while typed is not None and _inner_ref(spec) is not None:
+        inner = getattr(typed, INNER_PARAM)
+        chain.append(inner.type)
+        spec, typed = get_policy_spec("dispatch", inner.type), inner.params
+    return chain
+
+
+def _inner_ref(spec: PolicySpec) -> tuple[str, str, bool] | None:
+    return next((r for r in spec.refs if r[0] == INNER_PARAM and r[1] == "dispatch"), None)
 
 
 def _check_entry_shape(entry: Any, label: str, *, require_type: bool) -> None:
@@ -162,17 +235,30 @@ def drop_undeclared_legacy_params(spec, params: Mapping[str, Any], label: str) -
     The ONE implementation of the legacy drop rule (review F4): used by the legacy
     profile translation (``dispatch/profile.py``) and by legacy-provenance slots in
     :func:`resolve_policies_block`. Legacy keys were never validated, and dropped
-    keys still feed the framework's accounting via ``solver_params``.
+    keys still feed the framework's accounting via ``solver_params``. Applied to a
+    TREE, a ref value ``{type, params}`` is filtered against its own target,
+    recursively (``spec`` may be a ``PolicySpec`` or a component ``RefTarget``).
     """
-    declared = {info.name for info in declared_params(spec.params_cls)}
-    dropped = sorted(k for k in params if k not in declared)
+    infos = {info.name: info for info in declared_params(spec.params_cls)}
+    dropped = sorted(k for k in params if k not in infos)
     if dropped:
         logger.warning(
             "%s: legacy params %s are not declared by %s %s and are not passed to it "
             "(they still feed the framework's accounting via solver_params).",
-            label, dropped, spec.slot, spec.name,
+            label, dropped, getattr(spec, "slot", None) or getattr(spec, "kind", ""), spec.name,
         )
-    return {k: v for k, v in params.items() if k in declared}
+    out: dict[str, Any] = {}
+    for key, value in params.items():
+        if key not in infos:
+            continue
+        info = infos[key]
+        if info.is_ref and isinstance(value, Mapping) and isinstance(value.get("type"), str) \
+                and isinstance(value.get("params"), Mapping):
+            target = ref_target(info.meta.kind, value["type"].strip(), where=f"{label}.params.{key}")
+            value = {**value, "params": drop_undeclared_legacy_params(
+                target, value["params"], f"{label}.params.{key}")}
+        out[key] = value
+    return out
 
 
 def _resolve_entry(slot: str, entry: Mapping[str, Any], *, where: str, legacy: bool) -> ResolvedPolicy:
@@ -189,9 +275,47 @@ def _resolve_entry(slot: str, entry: Mapping[str, Any], *, where: str, legacy: b
     raw_params = dict(entry.get("params") or {})
     if legacy:
         raw_params = drop_undeclared_legacy_params(spec, raw_params, label)
-    params = spec.params_cls.from_mapping(raw_params, where=f"{label}.params for {spec.name}")
+    where_params = f"{label}.params for {spec.name}"
+    try:
+        params = spec.params_cls.from_mapping(raw_params, where=where_params)
+    except PolicyParamsError as exc:
+        hint = _inner_key_hint(slot, spec, raw_params)
+        if not hint:
+            raise
+        raise PolicyParamsError(f"{exc} {hint}") from exc
     return ResolvedPolicy(slot=slot, name=spec.name, version=spec.version, kind=spec.kind(),
-                          timing=timing, params=params.to_dict())
+                          timing=timing, params=params.to_dict(),
+                          label="/".join(selection_chain(slot, spec.name, params)),
+                          information_model=spec.information_model,
+                          share_tag_format=spec.share_tag_format if slot == "dispatch" else None,
+                          typed=params)
+
+
+def _inner_key_hint(slot: str, spec: PolicySpec, raw: Mapping[str, Any]) -> str:
+    """Message 5's hint: an unknown key that the ``inner`` solver declares.
+
+    ``from_mapping`` checks unknown keys before any value, so when ``raw`` has an
+    undeclared key the error being decorated IS the unknown-key error. Returns ``""``
+    when no unknown key is an inner param (or the inner cannot be named).
+    """
+    ref = _inner_ref(spec)
+    declared = {info.name for info in declared_params(spec.params_cls)}
+    unknown = sorted(k for k in raw if isinstance(k, str) and k not in declared)
+    if ref is None or not unknown:
+        return ""
+    value = raw.get(INNER_PARAM)
+    inner_name = value.get("type") if isinstance(value, Mapping) else None
+    if not isinstance(inner_name, str):
+        inner_name = getattr(spec.params_cls, "__dataclass_fields__")[INNER_PARAM].default.type
+    try:
+        inner_spec = get_policy_spec("dispatch", inner_name.strip())
+    except PolicyError:
+        return ""
+    inner_declared = {info.name for info in declared_params(inner_spec.params_cls)}
+    return " ".join(
+        f"{k!r} is a param of the inner {inner_spec.name}: use {slot}.{INNER_PARAM}.{k}."
+        for k in unknown if k in inner_declared
+    )
 
 
 def resolve_policies_block(
@@ -259,9 +383,11 @@ def merge_policy_overrides(
 
     Per slot: a CHANGED type resets params to the new policy's defaults plus the
     override params; the same (or an omitted) type merges the override params over the
-    current ones. An omitted timing keeps the current timing. The result is
-    re-validated in full; slots not named by ``overrides`` are carried unchanged.
-    Raises ``PolicyError`` subclasses.
+    current ones, NESTED (:func:`merge_params`): a ref param merges into the current
+    ref's params unless the override changes the ref's type, which resets that ref's
+    params. An omitted timing keeps the current timing. The result is re-validated in
+    full; slots not named by ``overrides`` are carried unchanged. Raises
+    ``PolicyError`` subclasses.
     """
     if not isinstance(overrides, Mapping):
         raise PolicyError(f"policy overrides must be an object of slot -> entry (got {overrides!r}).")
@@ -275,8 +401,10 @@ def merge_policy_overrides(
         name = requested.strip() if isinstance(requested, str) else (
             cur.name if cur is not None else _unnamed_type(slot)
         )
-        same_type = cur is not None and get_policy_spec(slot, name).name == cur.name
-        params = {**(cur.params if same_type else {}), **dict(entry.get("params") or {})}
+        spec = get_policy_spec(slot, name)
+        same_type = cur is not None and spec.name == cur.name
+        params = merge_params(spec, cur.params if same_type else {},
+                              dict(entry.get("params") or {}), path=f"{label}.params")
         timing = entry.get("timing") if entry.get("timing") is not None else (
             cur.timing if cur is not None else None
         )
@@ -285,6 +413,45 @@ def merge_policy_overrides(
             merged_entry["timing"] = timing
         out[slot] = _resolve_entry(slot, merged_entry, where="policy overrides", legacy=False)
     return out
+
+
+def merge_params(
+    spec: Any, current: Mapping[str, Any], override: Mapping[str, Any], *, path: str
+) -> dict[str, Any]:
+    """``override`` merged over ``current`` for the params of ``spec``, ref by ref.
+
+    ``spec`` is a ``PolicySpec`` or a component ``RefTarget`` (anything with
+    ``params_cls``). A non-ref key is replaced. A ref key takes a mapping ``{type?,
+    params?, version?}`` or a bare string (the CLI's ``dispatch.inner=X``, meaning
+    ``{type: X}``): a type that differs from the current ref's resets the ref's params
+    to the override's; otherwise the override's params merge into the current ref's,
+    recursively. Keys the policy does not declare pass through for the resolver to
+    refuse. Raises ``UnknownPolicyError`` for an unknown ref type (with its path).
+    """
+    infos = {info.name: info for info in declared_params(spec.params_cls)}
+    out = dict(current)
+    for key, value in override.items():
+        info = infos.get(key)
+        out[key] = (_merge_ref(info, current.get(key), value, path=f"{path}.{key}")
+                    if info is not None and info.is_ref else value)
+    return out
+
+
+def _merge_ref(info: Any, current: Any, value: Any, *, path: str) -> Any:
+    if isinstance(value, str):
+        value = {"type": value}
+    if not isinstance(value, Mapping):
+        return value  # malformed: the resolver refuses it with message 4
+    cur = current if isinstance(current, Mapping) else {}
+    cur_type = cur.get("type") or getattr(info.default, "type", None)
+    new_type = value.get("type") if value.get("type") is not None else cur_type
+    if not isinstance(new_type, str):
+        return dict(value)  # malformed type: the resolver names it
+    target = ref_target(info.meta.kind, new_type.strip(), where=path, leaf_only=info.meta.leaf_only)
+    same = isinstance(cur_type, str) and target.name == cur_type.strip()
+    params = merge_params(target, (cur.get("params") or {}) if same else {},
+                          dict(value.get("params") or {}), path=f"{path}.params")
+    return {"type": target.name, "params": params}
 
 
 def _cli_value(raw: str) -> Any:
@@ -339,8 +506,11 @@ def policies_stamp(
 ) -> dict[str, Any]:
     """The run-provenance stamp ``run_config.meta.policies``.
 
-    ``{slot: {name, version, kind, timing, params, source}}``; the dispatch entry also
-    carries ``candidate_settings`` (the spatial knobs, plan §5) and
+    ``{slot: {name, version, kind, timing, label, leaf, information_model, params,
+    source}}``: ``label`` is the selection (``"PooledMarket/GreedyNearest"``), ``leaf``
+    its innermost solver, ``params`` nested with each ref as ``{type, version,
+    params}``. The dispatch entry also carries ``share_tag_format``,
+    ``candidate_settings`` (the spatial knobs, plan §5) and
     ``accounting_params``: the effective ``profile.solver_params`` the framework's
     accounting (``benefit_km``, owner reserve, claims, arbitration) costs with
     (review F1). It equals the shared keys of ``params`` whenever the policy
@@ -350,8 +520,10 @@ def policies_stamp(
     stamp: dict[str, Any] = {}
     for slot, r in resolved.items():
         entry = {"name": r.name, "version": r.version, "kind": r.kind, "timing": r.timing,
-                 "params": dict(r.params), "source": source}
+                 "label": r.label, "leaf": r.leaf, "information_model": r.information_model,
+                 "params": r.profile_params(), "source": source}
         if slot == "dispatch":
+            entry["share_tag_format"] = r.share_tag_format
             entry["candidate_settings"] = dict(candidate_settings)
             entry["accounting_params"] = dict(accounting_params)
         stamp[slot] = entry

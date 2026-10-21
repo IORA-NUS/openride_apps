@@ -13,7 +13,11 @@ What is locked:
 - the harness profile of ``tests/test_container_logistics_hauliers.py`` (no
   ``strategy``) resolves to the slot default, RandomAssignment;
 - ``AssignmentApp._dispatch_runner`` caches on its inputs and rebuilds when any of
-  them changes.
+  them changes;
+- round 2 (C2): ``bind_instance`` fits a built policy into the selection tree (leaf at
+  the innermost, composite at the top, an unregistered leaf under the legacy kind
+  rule) or names both trees; ``mirror_dispatch_selection`` writes the legacy mirrors
+  and ``check_mirrors`` refuses a profile whose mirrors drifted (message 13).
 
 Why: this is the one place a profile becomes the policy that decides every tick.
 A silent fallback here (wrong class, dropped params, wrong candidate kind) would
@@ -23,6 +27,7 @@ change results without any error, and runs would stop being comparable.
 from __future__ import annotations
 
 import logging
+import random
 
 import pytest
 
@@ -35,9 +40,14 @@ from apps.container_logistics.assignment.solver import (
 from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 from apps.container_logistics.policies.dispatch.context import DispatchClock
 from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.dispatch.composite import CompositePolicy, innermost_policy
 from apps.container_logistics.policies.dispatch.pair_solver import PairSolver
 from apps.container_logistics.policies.dispatch.profile import (
     assert_assignment_profiles_resolvable,
+    bind_instance,
+    build_policy_tree,
+    check_mirrors,
+    mirror_dispatch_selection,
     legacy_dispatch_from_profile,
     resolve_dispatch_for_profile,
     resolve_for_instance,
@@ -49,6 +59,7 @@ from apps.container_logistics.policies.framework import (
     PolicyTimingError,
     UnknownPolicyError,
 )
+from tests.policy_tree_standins import decompositions
 from tests.test_assignment_cooperation import _app, _order, _truck
 
 _CLOCK = DispatchClock(sim_clock="Wed, 01 Jan 2020 08:00:00 GMT", time_step=42)
@@ -367,3 +378,149 @@ def test_unknown_dispatch_timing_is_named_as_such(timing):
     prof = {"policies": {"dispatch": {"type": "GreedyNearest", "timing": timing, "params": {}}}}
     with pytest.raises(PolicyTimingError, match="is not a dispatch timing. Allowed: online, plan"):
         resolve_dispatch_for_profile(prof)
+
+
+# --- round 2 (C2): the selection tree, binding and mirrors ---------------------------
+#
+# These run against the stand-in decompositions of ``tests/policy_tree_standins.py``
+# until work item C3 registers the real ``Partitioned``/``PooledMarket``.
+
+_GREEDY_PARTITIONED = {"strategy": "GreedyNearest", "solver_params": dict(_LEGACY_DC)}
+
+
+def test_bind_leaf_instance_at_innermost():
+    """A registered LEAF instance becomes the innermost leaf; the wrappers are built.
+
+    Verified to have teeth: returning the instance unwrapped when it names the innermost
+    leaf failed the composite assertions; not forwarding ``set_rng`` in
+    ``CompositePolicy`` failed the injection assertion.
+    """
+    with decompositions():
+        node = resolve_dispatch_for_profile(_GREEDY_PARTITIONED)
+        leaf = GreedyNearestSolver({"dual_cycle_bonus_km": 2.5})
+        policy, bound = bind_instance(node, leaf)
+    assert node.label == "Partitioned/GreedyNearest"
+    assert isinstance(policy, CompositePolicy) and policy.inner is leaf and innermost_policy(policy) is leaf
+    assert bound is node and policy.inner_node is node.inner
+    assert policy.params == {"inner": {"type": "GreedyNearest", "params": node.inner.params.to_dict()}}
+    rng = random.Random(3)
+    policy.set_rng(rng)
+    policy.set_tiebreak(17)
+    assert leaf.rng is rng and leaf.tiebreak_seed == 17, "the composite must forward injections"
+
+
+def test_bind_composite_instance_at_top():
+    """A built tree is reused as is when its names match the profile's tree.
+
+    Verified to have teeth: rebuilding the tree in ``bind_instance`` (instead of reusing
+    the top instance) failed the identity assertion.
+    """
+    with decompositions():
+        node = resolve_dispatch_for_profile({**_GREEDY_PARTITIONED, "planner": {"topology": "pooled"}})
+        built = build_policy_tree(node)
+        policy, bound = bind_instance(node, built)
+    assert policy is built and bound is node
+    assert node.label == "PooledMarket/GreedyNearest" and type(built.inner) is GreedyNearestSolver
+
+
+def test_bind_mismatch_names_the_tree():
+    """Verified to have teeth: skipping the recursive inner-name check in
+    ``_bound_reused_tree`` let the Partitioned/RandomAssignment tree bind."""
+    with decompositions():
+        node = resolve_dispatch_for_profile(_GREEDY_PARTITIONED)
+        with pytest.raises(PolicyError) as exc:
+            bind_instance(node, RandomAssignmentSolver())
+        assert str(exc.value) == ("AssignmentApp._solver is a RandomAssignment but the profile "
+                                  "resolves dispatch to Partitioned/GreedyNearest.")
+        wrong_inner = build_policy_tree(resolve_dispatch_for_profile({}))
+        with pytest.raises(PolicyError) as exc:
+            bind_instance(node, wrong_inner)
+        assert str(exc.value) == ("AssignmentApp._solver is a Partitioned/RandomAssignment but the "
+                                  "profile resolves dispatch to Partitioned/GreedyNearest.")
+        pooled = build_policy_tree(resolve_dispatch_for_profile({**_GREEDY_PARTITIONED,
+                                                                  "planner": {"topology": "pooled"}}))
+        with pytest.raises(PolicyError, match="is a PooledMarket/GreedyNearest but .* Partitioned/GreedyNearest"):
+            bind_instance(node, pooled)
+
+
+def test_unregistered_leaf_uses_legacy_kind_rule():
+    """Verified to have teeth: replacing ``hasattr(policy, 'solve_pairs')`` with ``True``
+    in ``_unregistered_node`` failed the plain-solver row."""
+    with decompositions():
+        node = resolve_dispatch_for_profile(_GREEDY_PARTITIONED)
+        for instance, flag, kind in ((_FirstFreeWithPairs(), True, "spatial"),
+                                     (_FirstFreeWithPairs(), False, "sampled"),
+                                     (_FirstFree(), True, "sampled")):
+            policy, bound = bind_instance(node, instance, use_spatial_matching=flag)
+            assert innermost_policy(policy) is instance and isinstance(policy, CompositePolicy)
+            assert (bound.inner.source, bound.inner.params, bound.inner.candidate_kind) == (
+                "unregistered", None, kind), bound.inner
+            assert bound.label == f"Partitioned/{type(instance).__name__}" and bound.leaf == type(instance).__name__
+            assert node.inner.name == "GreedyNearest", "the profile's node must not be mutated"
+            # Re-binding the built tree accepts its unregistered innermost leaf.
+            again, rebound = bind_instance(node, policy, use_spatial_matching=flag)
+            assert again is policy and rebound.inner.candidate_kind == kind
+
+        class _TweakedGreedy(GreedyNearestSolver):
+            pass
+
+        with pytest.raises(PolicyError, match="_TweakedGreedy subclasses the registered dispatch policy"):
+            bind_instance(node, _TweakedGreedy())
+
+
+def test_mirrors_written_and_checked():
+    """``mirror_dispatch_selection`` writes the legacy keys; ``check_mirrors`` refuses drift.
+
+    Verified to have teeth: skipping the ``planner.topology`` comparison in
+    ``check_mirrors`` let the round-1 flat bundle through; mirroring
+    ``solver_params`` from the TOP node only (which declares no dual-cycle keys) left
+    ``dual_cycle_bonus_km`` at 9.0; running ``check_mirrors`` in the run-start check
+    without the decompositions failed the final (TEMPORARY, round-1) assertion.
+    """
+    with decompositions():
+        node = resolve_dispatch_for_profile({"strategy": "GreedyNearest",
+                                             "solver_params": {"dual_cycle_bonus_km": 2.0},
+                                             "planner": {"topology": "pooled", "market": {"max_rounds": 6}}})
+        profile = {"strategy": "RandomAssignment",
+                   "solver_params": {"dual_cycle_bonus_km": 9.0, "dual_cycle_radius_km": 9.0},
+                   "planner": {"topology": "partitioned",
+                               "deployment": {"type": "RandomAssignment", "params": {"dual_cycle_bonus_km": 9.0}}}}
+        mirror_dispatch_selection(profile, node)
+        assert profile["strategy"] == "GreedyNearest"
+        assert profile["solver_params"] == {"dual_cycle_bonus_km": 2.0, "dual_cycle_radius_km": 0.5}
+        assert profile["planner"]["deployment"] == {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2.0}}
+        assert profile["planner"]["topology"] == "pooled"
+        assert profile["planner"]["market"] == {
+            "offer": {"type": "OfferAll", "params": {}}, "claim": {"type": "ClaimAllPlanned", "params": {}},
+            "arbitration": {"type": "LowestCost", "params": {}}, "max_rounds": 6}
+        check_mirrors(profile, node)
+
+        for key, value, match in (
+            ("strategy", "RandomAssignment", "profile strategy='RandomAssignment' disagrees"),
+            ("planner", {**profile["planner"], "market": {"max_rounds": 7}}, r"max_rounds=7 vs 6"),
+            ("planner", {**profile["planner"], "topology": "nonsense"}, "is not a legacy topology"),
+        ):
+            with pytest.raises(PolicyError, match=match):
+                check_mirrors({**profile, key: value}, node)
+        with pytest.raises(PolicyError) as exc:
+            check_mirrors({**profile, "planner": {**profile["planner"], "topology": "partitioned"}}, node)
+        assert str(exc.value) == (
+            "profile planner.topology='partitioned' disagrees with its compiled policies.dispatch "
+            "(PooledMarket). The compiled policies block is authoritative; change a run's "
+            "decomposition with --policy dispatch=Partitioned (ORSIM_PLANNER_TOPOLOGY is translated "
+            "into exactly that). Fix the bundle or recompile.")
+
+        # A central top has no legacy topology: the mirror removes the key ...
+        central = resolve_dispatch_for_profile(_policies("GreedyNearest"))
+        flat = {"strategy": "GreedyNearest", "planner": {"topology": "partitioned", "market": {"max_rounds": 3}},
+                **_policies("GreedyNearest")}
+        mirrored = {**flat, "planner": dict(flat["planner"])}
+        mirror_dispatch_selection(mirrored, central)
+        assert "topology" not in mirrored["planner"] and mirrored["planner"]["market"] == {"max_rounds": 3}
+        check_mirrors(mirrored, central)
+        # ... and a round-1 flat bundle (central leaf + topology) is refused at run start.
+        with pytest.raises(PolicyError, match=r"^assignment agent 'a0': profile planner.topology='partitioned' "
+                                              r"disagrees with its compiled policies.dispatch \(GreedyNearest\)"):
+            assert_assignment_profiles_resolvable({"a0": {"profile": flat}})
+    # TEMPORARY (C2 -> C3): without the decompositions the run-start check stays round 1.
+    assert_assignment_profiles_resolvable({"a0": {"profile": flat}})

@@ -932,3 +932,134 @@ implemented as written.
 13. `openride/policy_cmd.py` still has its `legacy`-status rendering branch; no real
     catalog produces that status any more, and `tests/test_cli_policy_group.py` feeds it
     a fake catalog. Left for C4, which rewrites `policy list` (components, info-model column).
+
+### C2
+
+1. **One TEMPORARY compatibility switch, `dispatch/profile.round2_tree_active()`** (true
+   once BOTH `Partitioned` and `PooledMarket` are registered, i.e. from C3 on). Until then
+   the current runtime stays round 1, byte-identical (golden 93 green):
+   - `resolve_profile_policies`: a LEGACY profile resolves to its flat leaf (no
+     `wrap_legacy_leaf`), so the legacy strictness flips (unknown topology / market
+     component / `max_rounds`) are not yet visible to the runtime, and the pre-existing
+     fail-soft tests that C3 edits still pass unedited;
+   - `framework/resolve._unnamed_type`: the slot default `Partitioned` when registered,
+     else `legacy.LEGACY_LEAF_DEFAULT` (the round-1 behaviour);
+   - `assert_assignment_profiles_resolvable` runs `check_mirrors` only when the switch is
+     on (`validate_cooperation_world` always runs);
+   - kept round-1 entry points: `build_dispatch_policy` (now `= build_policy_tree`, called
+     by `app.__init__`), `resolve_for_instance` (now via `bind_instance`; an unregistered
+     instance is still NOT checked against the profile, as in round 1; called by
+     `runner.build_runner_for_app`), and `mirror_dispatch_params` (called by
+     `spec_compile` and `scenario_overrides` until C4 switches them to
+     `mirror_dispatch_selection`).
+   **C3 must delete** the switch's three branches and the two runtime entry points in the
+   same commit that registers `Partitioned`/`PooledMarket`: the moment both register,
+   every legacy profile resolves to the tree (today's `app.py` would then build the
+   composite), and `check_mirrors` refuses every bundle compiled by today's compile
+   (flat `policies.dispatch` + `planner.topology: "partitioned"`, message 13). So either
+   C4's compile change (nested block, `mirror_dispatch_selection`) lands together with
+   C3's registration, or the bundles C3's tests load are recompiled first. Tests exercise
+   the tree now through stand-ins (`tests/policy_tree_standins.py`, registered under the
+   real names only when those are absent, inside `isolated_registry()`), so they run
+   unchanged against the real classes after C3.
+2. **Name validation choice (legacy leaf):** `legacy_market_params` validates component
+   names itself (`framework.components.ref_target`, imported inside the function), so
+   the error names the legacy key: `planner.market.offer: unknown market.offer component
+   'OfferAl'. Registered: OfferAll, OfferNone, OfferSpare. (List them: openride policy list
+   market.offer)`. `wrap_legacy_leaf` does NOT validate the leaf entry (its caller already
+   translated it; the resolver validates). Beyond the spec, `legacy_market_params` also
+   refuses a malformed block (non-object market/role/params, a role key other than
+   `type`/`params`/`version`, a non-string type) that `resolve_market_config` silently
+   tolerated; a missing/empty role type is still the kind's default. `planner.topology`
+   `""` is now loud (it used to mean partitioned); `None`/absent is partitioned.
+3. `legacy_topology(planner, *, where="assignment profile")`: `where` is message 6's
+   prefix, so C4's preprocess can say `spec`. Extra exports: `PARTITIONED`,
+   `POOLED_MARKET`, `MARKET_ROLES`, `LEGACY_MAX_ROUNDS_DEFAULT` (20) and
+   `LEGACY_MAX_ROUNDS_RANGE` ((1, 100)); a test pins them to `pooled_planner`'s constants
+   (this leaf cannot import them).
+4. `market_echo(params)` takes the typed params or their `to_dict()`, keeps
+   `resolve_market_config`'s key order (offer, claim, arbitration, max_rounds) and DROPS
+   `None` params (an unset nullable such as `OfferSpare.keep_below_km`), so a legacy
+   component reader keeps its own default and the echo reads back to the same params.
+5. **`bind_instance(node, instance, *, use_spatial_matching=True) -> (policy,
+   bound_node)`**: it also returns the bound node, because an unregistered leaf replaces
+   the profile's leaf node (the runner must run with it), and the legacy candidate rule
+   needs the profile's `use_spatial_matching`. Re-binding a built tree whose innermost
+   instance is unregistered is accepted under the same rule; an unregistered
+   `CompositePolicy` is refused. Mismatches name both trees by label (`AssignmentApp._solver
+   is a Partitioned/RandomAssignment but the profile resolves dispatch to
+   Partitioned/GreedyNearest.`; a leaf-vs-leaf mismatch reads exactly as in round 1).
+6. **Composite contract:** a composite is a dispatch policy whose dispatch ref is named
+   `inner` (`framework.resolve.INNER_PARAM`); `label`/`leaf` and the tree follow only that
+   param. `dispatch_node` refuses a composite without an `inner` param and
+   `build_policy_tree` refuses a composite class that is not a `CompositePolicy` (checked
+   at build, not at registration: the registry is a leaf and C1's registration is
+   unchanged). `CompositePolicy(params=None, *, inner, inner_node)` records each injection
+   on itself AND forwards it to `inner`.
+7. `ResolvedDispatch` new fields (all defaulted, so hand-built nodes keep working):
+   `information_model`, `share_tag_format`, `label`, `leaf`, `inner`; `label`/`leaf` are
+   derived in `__post_init__` when not given; property `innermost`. `dispatch_node(name,
+   params, *, timing, source)` (exported) builds the typed tree; an inner node carries the
+   slot's timing and the top's source. A composite node's `candidate_kind` is
+   `candidate_kind_for(its params)` (= `sampled`; the inner node carries the leaf's).
+8. `ResolvedPolicy` new fields: `label`, `leaf`, `information_model`, `share_tag_format`
+   (dispatch only) and `typed` (the `Params` instance, `compare=False`), plus
+   `profile_params()`. `params` stays the plain dict (refs as `{type, params}`);
+   `to_profile()` and the stamp emit refs as `{type, version, params}`. The stamp entry
+   gains `label`, `leaf`, `information_model` (every slot) and `share_tag_format`
+   (dispatch). The `Policies effective:` console line is unchanged (sim main is C4).
+9. Nested merge is `framework.resolve.merge_params(spec, current, override, *, path)`
+   (exported): a bare string on a ref means `{type: X}` (the CLI form), a changed ref type
+   resets that ref's params, the same type merges recursively; undeclared keys pass
+   through to the resolver. `parse_policy_cli_args` is untouched (nested CLI parse is C4).
+   Message 5's hint is appended to `from_mapping`'s unknown-key error for every unknown
+   key the inner declares (inner type from the raw value, else the ref default).
+10. `drop_undeclared_legacy_params` now filters recursively into ref values (the inner and
+    the components, each against its own target), for C4's legacy spec path; the profile
+    path already filtered both, so it drops nothing twice.
+11. `mirror_dispatch_selection` also sets an EXISTING `planner.deployment.type` to the leaf
+    (it is a mirror of the leaf), and creates `planner` only when the echo is not `None`.
+    `check_mirrors` checks `strategy`, `planner.topology` and (PooledMarket top only)
+    `planner.market`; not `planner.deployment`. Texts of the strategy and market variants
+    of message 13 (the spec gives only "the same shape"):
+    `profile strategy='X' disagrees with its compiled policies.dispatch (<label>, whose
+    innermost solver is <leaf>). The compiled policies block is authoritative; change a
+    run's solver with --solver X (ORSIM_SOLVER is translated into exactly that). Fix the
+    bundle or recompile.` and `profile planner.market disagrees with its compiled
+    policies.dispatch (<label>): <k>=<a> vs <b>, …. The compiled policies block is
+    authoritative; change a run's market with --policy-param dispatch.<key>=<value>
+    (ORSIM_OFFER_POLICY, ORSIM_CLAIM_POLICY, ORSIM_ARBITRATION_RULE and
+    ORSIM_MARKET_MAX_ROUNDS are translated into exactly that). Fix the bundle or
+    recompile.` The topology variant names the top (`(Partitioned)`), as in message 13.
+12. `DispatchWorld` is `@dataclass(frozen=True, eq=False)` with fields `structure`, `rule`,
+    `component_of`, `max_travel_time_pickup`, `accounting_params` (a read-only snapshot;
+    `assignment_cost` reads it identically); `allowed`, `own_allowed`,
+    `accounting_cost`, `partners`, `may_serve`, `cooperation_pairs` are methods.
+    `validate_cooperation_world` checks the ACTIVE structure only (the one the run
+    executes, post-override), both adjacency directions, over
+    `pools.pools_from_structure` (authored pools, else one per edge).
+13. **v1 accounting equivalence (documented, and proved by the golden replay test):** the
+    old partitioned scan priced `bucket_trucks` of the owner that were not in THIS
+    bucket's result and passed `rule.allowed`. For an owner truck on an owner order
+    `haulier_matches` holds, so `rule.allowed == pair_allowed(mtt) == world.own_allowed`;
+    all of the owner's trucks sit in the owner's bucket (a cross pair is only allowed
+    along an edge, inside one component), so the tick-wide committed set restricted to
+    them equals the bucket's used set; `assignment_cost` returns a float >= 0 (never NaN),
+    so `min` over raw costs equals `owner_reserve_km`'s float scan. The one difference:
+    a RAISING cost propagated in v1 and is now accounted as `inf` (logged with
+    `logger.exception`), as the claim path always did.
+14. `assignment/accounting.py` is also listed in `test_policy_import_cycles._EXTRA`, and
+    `dispatch/composite.py` in its `_LEAVES`.
+15. **Tests.** New: `tests/test_policy_legacy_translation.py` (25),
+    `tests/test_share_accounting.py` (8), `tests/test_dispatch_world.py` (10),
+    `tests/test_policy_tree_resolution.py` (10; messages 1, 2, 4, 5, nested merge, compiled
+    round trip, stamp, recursive legacy filter, the unnamed-dispatch compat) and the helper
+    `tests/policy_tree_standins.py`. This-branch edits: `test_dispatch_profile_resolution.py`
+    (+5: `test_bind_leaf_instance_at_innermost`, `test_bind_composite_instance_at_top`,
+    `test_bind_mismatch_names_the_tree`, `test_unregistered_leaf_uses_legacy_kind_rule`,
+    `test_mirrors_written_and_checked`), `test_policy_run_overrides.py::test_stamp_shape`
+    (the stamp gains `label`, `leaf`, `information_model`, `share_tag_format`),
+    `test_policy_import_cycles.py` (item 14). **Not done here:** the spec's extension of
+    the cache-rebuild test ("a `planner` patch rebuilds the runner") needs the C3 cache key
+    in `app._dispatch_runner`; app.py is out of C2's scope. No pre-existing (non-branch)
+    test was edited.
