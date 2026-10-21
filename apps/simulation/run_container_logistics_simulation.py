@@ -112,6 +112,32 @@ def _apply_policy_overrides_or_exit(assignment_collection) -> tuple[str | None, 
     return (resolved["dispatch"].name if typed else None), True
 
 
+def _apply_capture_env_or_exit(assignment_collection, datahub_dir: str, run_id: str) -> str | None:
+    """Map ``ORSIM_CAPTURE_DISPATCH="every=N,max=M"`` onto every assignment profile.
+
+    Sets ``profile["policy_capture"] = {dir, every_n_ticks, max_files, run_id}`` with
+    ``dir = <datahub>/fixtures/dispatch/<run_id>`` (read by ``dispatch.capture``).
+    Returns that directory, or ``None`` when the variable is unset. Exits 2 on a
+    malformed value.
+    """
+    from apps.container_logistics.policies.dispatch.capture import parse_capture_spec
+
+    raw = os.environ.get("ORSIM_CAPTURE_DISPATCH", "").strip()
+    if not raw:
+        return None
+    try:
+        spec = parse_capture_spec(raw)
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
+    directory = os.path.join(datahub_dir, "fixtures", "dispatch", run_id)
+    for behavior in (assignment_collection or {}).values():
+        if isinstance(behavior, dict):
+            behavior.setdefault("profile", {})["policy_capture"] = {
+                "dir": directory, **spec, "run_id": run_id,
+            }
+    return directory
+
+
 def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
     """Stamp ``orsim_settings["POLICIES"]`` (-> ``run_config.meta.policies``) and print it.
 
@@ -304,6 +330,11 @@ def main():
         print(f"Assignment solver override: {applied_solver}")
         # Surface the chosen solver in run lists with zero kafka/schema changes.
         run_name = f"{run_name} · {applied_solver}" if run_name else applied_solver
+    capture_dir = _apply_capture_env_or_exit(
+        scenario_manager.get_agent_collection("assignment"), datahub_dir, run_id
+    )
+    if capture_dir:
+        print(f"Dispatch context capture: {capture_dir}")
 
     # Per-run cooperation-structure / sharing-algorithm override (collaboration plan
     # §7): same mechanism as the solver override — pure data patched onto the loaded

@@ -1,5 +1,7 @@
 """``openride services ...`` and ``openride solver list`` — host services + solver discovery.
 
+``solver list`` is an alias for ``openride policy list dispatch`` (``policy_cmd``).
+
 Thin, friendly wrappers over the same control-plane the dashboard's Services page uses.
 """
 
@@ -58,22 +60,10 @@ def _cmd_services_stop(args) -> int:
 
 
 def _cmd_solver_list(args) -> int:
-    info = control.known_solvers()
-    if args.json:
-        json.dump(info, sys.stdout, indent=2)
-        sys.stdout.write("\n")
-        return 0
-    tbl = Table(title="Assignment solvers", header_style="bold cyan")
-    tbl.add_column("Strategy")
-    tbl.add_column("Default", justify="center")
-    for s in info.get("solvers", []):
-        tbl.add_row(s, "✓" if s == info.get("default") else "")
-    console.print(tbl)
-    console.print(
-        "[dim]Select one per run with[/] [bold]openride run <slug> --solver <strategy>[/] "
-        "[dim](same scenario, different matcher).[/]"
-    )
-    return 0
+    # Alias: `solver list` is `policy list dispatch` (one renderer, one catalog).
+    from .policy_cmd import render_policy_list
+
+    return render_policy_list("dispatch", as_json=args.json)
 
 
 def register(sub) -> None:
@@ -97,6 +87,6 @@ def register(sub) -> None:
 
     sol = sub.add_parser("solver", help="Assignment solver strategies")
     solsub = sol.add_subparsers(dest="solver_cmd", required=True)
-    sl = solsub.add_parser("list", help="List runtime-selectable solver strategies")
-    sl.add_argument("--json", action="store_true", help="Emit raw JSON")
+    sl = solsub.add_parser("list", help="Alias for `openride policy list dispatch`")
+    sl.add_argument("--json", action="store_true", help="Emit the dispatch slot's catalog JSON")
     sl.set_defaults(func=_cmd_solver_list)

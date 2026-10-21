@@ -82,12 +82,18 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
     except control.ControlError as exc:
         _log(f"error: invalid policy override: {exc}")
         return EXIT_BAD_ARGS
+    try:
+        capture_dispatch = control.validate_capture_dispatch(getattr(args, "capture_dispatch", None))
+    except control.ControlError as exc:
+        _log(f"error: {exc}")
+        return EXIT_BAD_ARGS
     solver = (policy_overrides.get("dispatch") or {}).get("type") or args.solver
     headless = not args.no_headless
 
     runner = SimulationRunner(
         scenario=args.scenario,
         policy_overrides=policy_overrides,
+        capture_dispatch=capture_dispatch,
         run_name=args.run_name,
         headless=headless,
         cooperation_structure=getattr(args, "structure", None),
@@ -241,6 +247,7 @@ def _result_doc(
         "scenario": scenario,
         "solver": solver or "scenario-default",
         "policy_overrides": runner.policy_overrides,
+        "capture_dispatch": runner.capture_dispatch,
         "headless": headless,
         "status": status,
         "ok": status == "completed",

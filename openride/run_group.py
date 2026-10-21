@@ -134,6 +134,11 @@ def _cmd_run(args) -> int:
         console.print(f"[red]Invalid policy override:[/] {exc}")
         return 2
     solver = (policy_overrides.get("dispatch") or {}).get("type") or solver
+    try:
+        capture_dispatch = control.validate_capture_dispatch(getattr(args, "capture_dispatch", None))
+    except control.ControlError as exc:
+        console.print(f"[red]Invalid --capture-dispatch:[/] {exc}")
+        return 2
 
     headless = not args.no_headless
     runner = SimulationRunner(
@@ -141,6 +146,7 @@ def _cmd_run(args) -> int:
         cooperation_structure=getattr(args, "structure", None),
         sharing_policy=getattr(args, "sharing_policy", None),
         policy_overrides=policy_overrides,
+        capture_dispatch=capture_dispatch,
     )
 
     if runner.another_run_active():
@@ -198,6 +204,9 @@ def register(sub) -> None:
                    metavar="SLOT.KEY=VALUE",
                    help="Per-run policy param override, repeatable (e.g. "
                         "dispatch.dual_cycle_bonus_km=0); VALUE is JSON when it parses")
+    p.add_argument("--capture-dispatch", dest="capture_dispatch", metavar="every=N,max=M",
+                   help="Capture dispatch contexts every N-th tick (at most M files) under "
+                        "<datahub>/fixtures/dispatch/<run_id>, for openride policy bench --fixtures")
     p.add_argument("--structure", help="Cooperation structure id override (declared in the scenario's spec.json)")
     p.add_argument("--sharing-policy", dest="sharing_policy",
                    help="Sharing algorithm override for two-stage planners")

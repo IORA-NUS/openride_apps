@@ -9,6 +9,9 @@ Single responsibility: the ``openride.dispatch_context/1`` fixture format (plan
   ``decide`` (``getstate`` consumes nothing) and writes the fixture after ``decide``
   and before the invariants, honouring ``every_n_ticks`` and ``max_files``. A write
   failure is logged (``DISPATCH CAPTURE FAILED``) and never raised.
+- :func:`parse_capture_spec` parses the ``every=N,max=M`` text that
+  ``ORSIM_CAPTURE_DISPATCH`` / ``--capture-dispatch`` carry (the one parser for all
+  three surfaces).
 - :func:`context_to_fixture` / :func:`context_from_fixture` convert both ways;
   :func:`replay_heads` re-runs a fixture with its recorded RNG state and tiebreak.
 
@@ -45,8 +48,10 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "FIXTURE_FORMAT",
+    "CAPTURE_SPEC_FORMAT",
     "CaptureSettings",
     "CaptureRecorder",
+    "parse_capture_spec",
     "context_to_fixture",
     "context_from_fixture",
     "fixture_path",
@@ -58,6 +63,10 @@ __all__ = [
 
 FIXTURE_FORMAT = "openride.dispatch_context/1"
 _UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
+_DEFAULT_EVERY_N_TICKS = 1
+_DEFAULT_MAX_FILES = 40
+CAPTURE_SPEC_FORMAT = "every=N,max=M"
+_SPEC_KEYS = {"every": "every_n_ticks", "max": "max_files"}
 
 
 @dataclass(frozen=True)
@@ -86,8 +95,8 @@ class CaptureSettings:
         directory = raw.get("dir")
         if not isinstance(directory, str) or not directory:
             raise PolicyError(f"policy_capture.dir must be a non-empty path (got {directory!r}).")
-        every = _positive_int(raw.get("every_n_ticks", 1), "every_n_ticks")
-        cap = _positive_int(raw.get("max_files", 40), "max_files")
+        every = _positive_int(raw.get("every_n_ticks", _DEFAULT_EVERY_N_TICKS), "every_n_ticks")
+        cap = _positive_int(raw.get("max_files", _DEFAULT_MAX_FILES), "max_files")
         run_id = raw.get("run_id")
         return cls(dir=directory, every_n_ticks=every, max_files=cap,
                    run_id=None if run_id is None else str(run_id))
@@ -101,6 +110,34 @@ def _positive_int(value: Any, key: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise PolicyError(f"policy_capture.{key} must be a positive integer (got {value!r}).")
     return value
+
+
+def parse_capture_spec(text: str) -> dict[str, int]:
+    """Parse ``"every=N,max=M"`` into ``{"every_n_ticks": N, "max_files": M}``.
+
+    Both keys are optional (defaults ``every=1``, ``max=40``) but the text must name
+    at least one; values are positive decimal integers. Raises ``PolicyError`` naming
+    the expected format for empty text, an unknown or repeated key, or a bad value.
+    """
+    where = f"capture spec {text!r}"
+    hint = f"expected {CAPTURE_SPEC_FORMAT} (e.g. every=10,max=40)"
+    parts = [p.strip() for p in str(text or "").split(",")]
+    if not any(parts):
+        raise PolicyError(f"{where} is empty; {hint}.")
+    out: dict[str, int] = {}
+    for part in parts:
+        key, sep, value = part.partition("=")
+        key, value = key.strip(), value.strip()
+        if not sep or key not in _SPEC_KEYS:
+            raise PolicyError(f"{where}: {part!r} is not every=N or max=M; {hint}.")
+        field = _SPEC_KEYS[key]
+        if field in out:
+            raise PolicyError(f"{where} sets {key!r} twice; {hint}.")
+        if not (value.isascii() and value.isdigit()) or int(value) <= 0:
+            raise PolicyError(f"{where}: {key}={value!r} must be a positive integer; {hint}.")
+        out[field] = int(value)
+    return {"every_n_ticks": out.get("every_n_ticks", _DEFAULT_EVERY_N_TICKS),
+            "max_files": out.get("max_files", _DEFAULT_MAX_FILES)}
 
 
 def _rng_entry(rng: Any) -> dict[str, Any]:

@@ -462,11 +462,14 @@ class ServiceManager:
         sharing_policy: str | None = None,
         order_lifecycle: str | None = None,
         policy_overrides: dict | None = None,
+        capture_dispatch: str | None = None,
     ) -> ActionResult:
         """Start backend deps + simulation detached; logs to simulation_log.txt.
 
         ``policy_overrides`` (``{slot: {type?, timing?, params?}}``, already validated by
         ``openride_control.policies``) ships as ``ORSIM_POLICY_OVERRIDES`` JSON.
+        ``capture_dispatch`` (``every=N,max=M``, already validated by
+        ``dispatch.capture.parse_capture_spec``) ships as ``ORSIM_CAPTURE_DISPATCH``.
         """
         with self._lock:
             if self.is_simulation_running():
@@ -504,6 +507,8 @@ class ServiceManager:
                     extra_env["ORSIM_ORDER_LIFECYCLE"] = order_lifecycle.strip()
                 if policy_overrides:
                     extra_env["ORSIM_POLICY_OVERRIDES"] = json.dumps(policy_overrides, sort_keys=True)
+                if capture_dispatch and capture_dispatch.strip():
+                    extra_env["ORSIM_CAPTURE_DISPATCH"] = capture_dispatch.strip()
                 proc = spawn_simulation_process(extra_env=extra_env or None, background=True)
                 self.processes[SIMULATION_PROCESS_KEY] = proc
                 time.sleep(2)

@@ -102,6 +102,13 @@ def _run(argv: list[str] | None = None) -> int:
         "dispatch.dual_cycle_bonus_km=0); VALUE is JSON when it parses, else a string.",
     )
     run_p.add_argument(
+        "--capture-dispatch",
+        default=None,
+        metavar="every=N,max=M",
+        help="Capture dispatch contexts for `policy-bench --fixtures` (ORSIM_CAPTURE_DISPATCH): "
+        "every N-th tick, at most M files, under <datahub>/fixtures/dispatch/<run_id>.",
+    )
+    run_p.add_argument(
         "--cooperation-structure",
         default=None,
         help="Cooperation structure id override (ORSIM_COOP_STRUCTURE): a structure "
@@ -174,6 +181,21 @@ def _run(argv: list[str] | None = None) -> int:
     sub.add_parser("known-solvers", help="List runtime-selectable assignment solver strategies")
     sub.add_parser("known-policies", help="List selectable generation policies per role")
 
+    pval_p = sub.add_parser("policy-validate", help="Run a policy's contract battery (PASS/FAIL per check)")
+    pval_p.add_argument("--slot", required=True)
+    pval_p.add_argument("--name", required=True)
+
+    pbench_p = sub.add_parser("policy-bench", help="Single-tick bench of policies on synthetic or captured fixtures")
+    pbench_p.add_argument("--slot", required=True)
+    pbench_p.add_argument("--policies", required=True, metavar="A,B")
+    pbench_src = pbench_p.add_mutually_exclusive_group(required=True)
+    pbench_src.add_argument("--fixtures", default=None, metavar="DIR",
+                            help="Directory of captured step_*.json.gz (run-simulation --capture-dispatch)")
+    pbench_src.add_argument("--synthetic", default=None, metavar="NAME[,NAME]|all",
+                            help="Synthetic fixture(s), e.g. scale")
+    pbench_p.add_argument("--policy-param", action="append", default=[], metavar="POLICY.KEY=VALUE",
+                          help="Param override for one benched policy, repeatable; VALUE is JSON when it parses.")
+
     exists_sc_p = sub.add_parser("scenario-exists", help="Check whether a scenario slug is runnable")
     exists_sc_p.add_argument("--slug", required=True)
     exists_sc_p.add_argument("--domain", default=None)
@@ -241,7 +263,7 @@ def _run(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     if args.cmd == "run-simulation":
-        from openride_control.policies import validate_run_policy_args
+        from openride_control.policies import validate_capture_arg, validate_run_policy_args
 
         # Validate BEFORE spawning: the dashboard spawns this command detached, so an
         # error raised by the sim itself would only reach its log.
@@ -252,12 +274,18 @@ def _run(argv: list[str] | None = None) -> int:
             _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
                    "message": policy_overrides})
             return 1
+        capture_error = validate_capture_arg(args.capture_dispatch)
+        if capture_error:
+            _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
+                   "message": capture_error})
+            return 1
         result = mgr.run_simulation_background(
             scenario=args.scenario,
             run_name=args.run_name,
             run_id=args.run_id,
             solver=args.solver,
             policy_overrides=policy_overrides or None,
+            capture_dispatch=args.capture_dispatch,
             cooperation_structure=args.cooperation_structure,
             sharing_policy=args.sharing_policy,
             order_lifecycle=args.order_lifecycle,
@@ -378,6 +406,25 @@ def _run(argv: list[str] | None = None) -> int:
         from openride_control.scenario import cmd_known_policies
 
         payload = cmd_known_policies()
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "policy-validate":
+        from openride_control.policies import cmd_policy_validate
+
+        payload = cmd_policy_validate(args.slot, args.name)
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "policy-bench":
+        from openride_control.policies import cmd_policy_bench
+
+        payload = cmd_policy_bench(
+            args.slot, args.policies, fixtures_dir=args.fixtures,
+            synthetic=args.synthetic, params=args.policy_param,
+        )
         payload["commandId"] = command_id
         _emit(payload)
         return 0 if payload.get("ok") else 1
