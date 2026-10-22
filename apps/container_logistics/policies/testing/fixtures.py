@@ -8,9 +8,7 @@ candidate settings, the clock and the run id the tick seed derives from.
 :meth:`Fixture.profile` is the assignment-profile slice of that world (what the live
 app's profile carries), and :meth:`Fixture.context` turns the recipe into the whole
 tick ONLY through ``DispatchRunner.tick``, so a fixture tick is built exactly like a
-live one and any policy, leaf or decomposition, decides it. :meth:`Fixture.world` is
-the cooperation view the battery's information audit reads (``component_of``,
-``partners``), built from ``solver_lib.cooperation``.
+live one and any policy, leaf or decomposition, decides it.
 
 Randomness: the tick is the only randomness input (``tick.rng`` is
 ``Random(tick_seed)``, ``tick_seed = dispatch.tick.tick_seed(run_id, time_step)``); the
@@ -19,8 +17,7 @@ Randomness: the tick is the only randomness input (``tick.rng`` is
 (``module_rng``). Nothing here reads global state; ``scale`` uses its own
 ``random.Random(seed)``. Policies receive shared document dicts and must not mutate them.
 
-Testing side: imports the dispatch framework, ``solver_lib.cooperation`` (the audit
-view) and the cooperation normaliser of ``datagen.hauliers`` (so a fixture structure
+Testing side: imports the dispatch framework and the cooperation normaliser of ``datagen.hauliers`` (so a fixture structure
 has the compiled shape), never a policy module.
 """
 
@@ -35,13 +32,11 @@ from typing import Any, Callable, Iterator, Mapping
 from apps.container_logistics.datagen import hauliers as _hauliers
 from apps.container_logistics.policies.dispatch.runner import DispatchRunner
 from apps.container_logistics.policies.dispatch.tick import DispatchClock, Tick, tick_seed
-from apps.container_logistics.policies.solver_lib import cooperation as _cooperation
 from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "CooperationView",
     "Fixture",
     "SIM_CLOCK",
     "cooperation_structure",
@@ -99,18 +94,6 @@ _SETTINGS_KEYS = (("cell_deg", "spatial_cell_deg"), ("per_order", "spatial_candi
 
 
 @dataclass(frozen=True)
-class CooperationView:
-    """The fixture world's active arm as the battery's information audit reads it."""
-
-    component_of: Mapping[str, int]
-    adjacency: Mapping[str, frozenset[str]]
-
-    def partners(self, haulier_id: str) -> frozenset[str]:
-        """The companies ``haulier_id`` has a structure edge to (empty without one)."""
-        return self.adjacency.get(str(haulier_id), frozenset())
-
-
-@dataclass(frozen=True)
 class Fixture:
     """One synthetic whole tick.
 
@@ -143,15 +126,6 @@ class Fixture:
         for attr, key in _SETTINGS_KEYS:
             prof[key] = getattr(self.settings, attr)
         return prof
-
-    def world(self) -> CooperationView:
-        """The active arm's ``component_of`` / ``partners`` (``solver_lib.cooperation``), for the audit."""
-        from apps.container_logistics.policies.dispatch.bind import RunWorld
-
-        arm = _cooperation.resolve_arm(RunWorld.from_profile(self.profile()))
-        if arm is None:
-            return CooperationView(component_of={}, adjacency={})
-        return CooperationView(component_of=arm.component_of, adjacency=arm.adjacency)
 
     @contextmanager
     def module_random(self) -> Iterator[None]:

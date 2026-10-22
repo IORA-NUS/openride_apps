@@ -61,8 +61,7 @@ def group_composite():
     tick ``tick.rng``, also injected into the inner) or ``"module"`` (the ``random``
     module, as ``Partitioned`` must for byte identity)."""
     with isolated_registry():
-        @policy(slot="planner", name="GroupsVia", version="1", information_model="per_group",
-                description="one decision per cooperation group, drawing from the tick RNG")
+        @policy(slot="planner", name="GroupsVia", version="1", description="one decision per cooperation group, drawing from the tick RNG")
         class GroupsVia(CompositePolicy):
             sample_with = "decision"
 

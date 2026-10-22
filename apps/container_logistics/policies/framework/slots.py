@@ -68,7 +68,9 @@ _TABLE = (
         default=DEFAULT_PLANNER,
         description="Which free truck serves which unassigned order, decided for the whole tick "
                     "by the selected solver.",
-        timings=("online", "plan"),
+        # Only ``online``: a held-plan timing (``plan``) named the held-tails concept, which
+        # the generic contract does not have (results are pairs; plan G13).
+        timings=("online",),
         executable_timings=("online",),
     ),
 )

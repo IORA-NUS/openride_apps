@@ -1,4 +1,0 @@
-id:dual_cycle_bonus_km	2
-id:information_model	5
-id:share_tag_format	5
-sub:greedy	1

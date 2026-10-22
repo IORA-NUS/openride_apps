@@ -23,16 +23,23 @@ decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in
   declarations compose. ``no_module_rng`` under a ``module_rng`` declaration is
   scoped to the draws the declaration covers (:func:`_scoped_module_rng`): those are
   SKIP, a draw by a node that declared nothing still FAILS.
-- ``information`` -- ``scopes_respect_model`` (per arm): the sub-scopes the policy
-  built (``ctx.scope_log``, recorded only while auditing) respect its declared
-  model: ``per_company`` -- every sub-scope's trucks belong to one company and every
-  order is that company's or a world partner's; ``per_group`` -- every sub-scope lies
-  inside one cooperation group; and for both, every committed head lies inside one
-  sub-scope (a non-central policy that commits a head it decided outside any scope
-  decided centrally). ``central`` has no sub-scope restriction. This certifies the
-  ``compose``/``scopes`` helpers and the declared shape; it cannot prove a policy
-  never peeks at ``ctx`` beyond them. ``model_declared`` (default arm only): the
-  registration's model is one of the three and is what the resolved selection carries.
+- ``contract`` -- per arm, on every fixture:
+  ``scope_audit``: the selection's top runs its OWN optional
+  ``audit_scopes(scope_log, tick) -> list[str]`` over the sub-ticks it built
+  (``tick.restrict``, recorded only while auditing), and every committed pair must lie
+  inside one of those sub-ticks (a node that audits its scopes decides each pair inside
+  one); SKIP, with the reason, when the top has no ``audit_scopes`` (a central leaf).
+  This certifies the declared decomposition shape; it cannot prove a policy never
+  peeks beyond its sub-ticks.
+  ``bind_pure``: binding the selection twice against the fixture's profile gives equal
+  declarations and reads, and leaves the ``random`` module state and the profile
+  unchanged.
+  ``world_reads_at_bind``: every world key read while solving the tick was read by
+  some node's ``bind`` (the runner re-binds only when a key a bind read changes, so a
+  key read only while solving would be served stale).
+  ``declaration_within_ceiling``: the top's ``cross_company`` lies inside the
+  fixture's ceiling (``constraints.declared_partnerships``) and every nested
+  declaration inside the top's (messages 23 / 24, checked explicitly).
 - ``performance`` -- ``scale`` (per arm): best of 3 decide times on the 1000 x 500
   ``scale`` tick under :func:`arm_budget`. A budget is a MEASURED property of an
   arm (``max(3 x worst of 2 x 5 runs, 500)``, numbers at the decorator). An
@@ -68,6 +75,7 @@ Testing side: reads the registry and the dispatch framework; registers nothing.
 
 from __future__ import annotations
 
+import copy
 import logging
 import math
 import random
@@ -101,7 +109,6 @@ __all__ = [
     "DISPATCH_CHECKS",
     "ARM_CHECKS",
     "STRUCTURE_CHECKS",
-    "INFORMATION_MODELS",
     "arm_budget",
     "arm_label",
     "battery_check_ids",
@@ -111,8 +118,6 @@ __all__ = [
     "decide_seeded",
     "seeded_module_random",
 ]
-
-INFORMATION_MODELS: tuple[str, ...] = ("central", "per_group", "per_company")
 
 STRUCTURE_CHECKS: tuple[str, ...] = (
     "returns_plan", "no_truck_twice", "no_order_twice", "only_in_scope", "only_allowed_pairs",
@@ -124,13 +129,15 @@ ARM_CHECKS: tuple[str, ...] = (
     "determinism.reproducible",
     "determinism.order_independent",
     "determinism.no_module_rng",
-    "information.scopes_respect_model",
+    "contract.scope_audit",
+    "contract.bind_pure",
+    "contract.world_reads_at_bind",
+    "contract.declaration_within_ceiling",
     "performance.scale",
 )
 
 DISPATCH_CHECKS: tuple[str, ...] = (
     *ARM_CHECKS,
-    "information.model_declared",
     "params.defaults_validate",
     "params.rejects_unknown_key",
     "params.rejects_out_of_bounds",
@@ -386,14 +393,16 @@ def _arm_results(spec: PolicySpec, arm: dict[str, Any]) -> list[CheckResult]:
     checks["determinism.reproducible"] = _bind(_reproducible, spec, arm)
     checks["determinism.order_independent"] = _bind(_order_independent, spec, arm)
     checks["determinism.no_module_rng"] = _bind(_no_module_rng, outcomes)
-    checks["information.scopes_respect_model"] = _bind(_scopes_respect_model, outcomes)
+    checks["contract.scope_audit"] = _bind(_scope_audit, outcomes)
+    checks["contract.bind_pure"] = _bind(_bind_pure, spec, arm)
+    checks["contract.world_reads_at_bind"] = _bind(_world_reads_at_bind, outcomes)
+    checks["contract.declaration_within_ceiling"] = _bind(_declaration_within_ceiling, spec, arm)
     checks["performance.scale"] = _bind(_performance_scale, spec, arm)
     return [_timed(cid, checks[cid], arm) for cid in ARM_CHECKS]
 
 
 def _default_only_results(spec: PolicySpec) -> list[CheckResult]:
     checks: dict[str, Callable[[], tuple[bool, str]]] = {
-        "information.model_declared": _bind(_model_declared, spec),
         "params.defaults_validate": _bind(_defaults_validate, spec),
         "params.rejects_unknown_key": _bind(_rejects_unknown_key, spec),
         "params.rejects_out_of_bounds": _bind(_rejects_out_of_bounds, spec),
@@ -478,6 +487,10 @@ class _Decision:
     decide_ms: float
     module_rng_touched: bool
     scope_log: tuple[Mapping[str, Any], ...]
+    tick: Any = None                            # the whole tick decided (for the scope audit)
+    solve_reads: frozenset[str] = frozenset()   # world keys read while solving it
+    bind_reads: frozenset[str] = frozenset()    # world keys the bound tree's binds read
+    audit: Any = None                           # the top's audit_scopes, or None
 
     @property
     def fixture_id(self) -> str:
@@ -502,7 +515,8 @@ def _decide_via_runner(
     structure problems are ``check_result``'s against the tick (or the violation the
     solve raised), classified per check; a runner verdict that disagrees with them is
     a problem too. The sub-ticks the policy builds are recorded (``scope_log``) for the
-    information audit.
+    scope audit, and the world keys read while solving (``solve_reads``) against the
+    bound tree's (``bind_reads``).
     """
     recorder = _PlanRecorder()
     runner = build_runner_for_policy(spec.name, _arm_params(arm), capture=recorder)
@@ -518,6 +532,8 @@ def _decide_via_runner(
         except Exception as exc:  # noqa: BLE001 - reported by robustness
             error = f"{type(exc).__name__}: {exc}"
         touched = random.getstate() != before
+    solve_reads = ctx.world.reads
+    tree = runner.tree  # bound against the fixture's profile by runner.tick
     problems: list[tuple[str, str]] = []
     if error is None:
         if recorder.raised:
@@ -538,6 +554,10 @@ def _decide_via_runner(
         decide_ms=runner.stats["total_ms"],
         module_rng_touched=touched,
         scope_log=tuple(scope_log),
+        tick=ctx,
+        solve_reads=solve_reads,
+        bind_reads=tree.world_reads,
+        audit=getattr(tree.top.solver, "audit_scopes", None),
     )
 
 
@@ -923,70 +943,106 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
                   f"(module_rng declared by {declared}, but nothing drew on it here){note}")
 
 
-# --- information -------------------------------------------------------------
+# --- contract ----------------------------------------------------------------
 
-def _model_declared(spec: PolicySpec) -> tuple[bool, str]:
-    model = spec.information_model
-    if model not in INFORMATION_MODELS:
-        return False, f"information_model {model!r} is not one of {list(INFORMATION_MODELS)}"
-    resolved = build_runner_for_policy(spec.name).resolved.information_model
-    if resolved != model:
-        return False, f"the resolved selection carries information_model {resolved!r}, the registration {model!r}"
-    return True, f"information_model {model!r} (stamped as meta.policies.planner.information_model)"
-
-
-def _group_key(world: Any, hid: Any) -> Any:
-    if hid is None:
-        return None
-    return ("component", world.component_of[hid]) if hid in world.component_of else ("haulier", hid)
-
-
-def _scope_problems(model: str, entry: Mapping[str, Any], world: Any,
-                    truck_h: Mapping[str, Any], order_h: Mapping[str, Any]) -> list[str]:
-    where = f"scope {entry['key']}"
-    t_h = [truck_h.get(t) for t in entry["trucks"]]
-    o_h = [order_h.get(o) for o in entry["orders"]]
-    if model == "per_company":
-        hid = entry["key"].partition(":")[2] if entry["kind"] == "company" else (t_h[0] if t_h else None)
-        out = [f"{where} (company {hid}) holds truck {t} of {h}" for t, h in zip(entry["trucks"], t_h) if h != hid]
-        visible = {hid} | set(world.partners(hid)) if hid is not None else set()
-        out += [f"{where} (company {hid}) sees order {o} of {h}, neither its own nor a partner's"
-                for o, h in zip(entry["orders"], o_h) if h not in visible]
-        return out
-    keys = {_group_key(world, h) for h in t_h + o_h}
-    if len(keys) > 1 or None in keys:
-        return [f"{where} spans cooperation groups {sorted(map(str, keys))}"]
-    return []
-
-
-def _scopes_respect_model(outcomes: _Outcomes) -> tuple[bool, str]:
-    """Audit the sub-scopes the policy built against its declared information model."""
-    model = build_runner_for_policy(outcomes.spec.name, _arm_params(outcomes.arm)).resolved.information_model
-    if model == "central":
-        return True, "central: decides the whole tick; no sub-scope restriction to audit"
-    if model not in INFORMATION_MODELS:
-        return False, f"information_model {model!r} is not one of {list(INFORMATION_MODELS)}"
+def _scope_audit(outcomes: _Outcomes) -> tuple[bool, str]:
+    """The top's own ``audit_scopes`` over the sub-ticks it built; every committed pair inside one."""
+    decisions = [d for d in outcomes.all() if d.error is None]
+    audit = next((d.audit for d in decisions if d.audit is not None), None)
+    if audit is None:
+        return _skip(f"{outcomes.spec.name} defines no audit_scopes(scope_log, tick): it decides the tick "
+                     "without sub-ticks the battery could audit")
     problems: list[str] = []
     scopes = 0
+    for d in decisions:
+        scopes += len(d.scope_log)
+        problems += [f"{d.fixture_id}: {p}" for p in d.audit(list(d.scope_log), d.tick)]
+        members = [(set(e["trucks"]), set(e["orders"])) for e in d.scope_log]
+        for tid, oid in d.pairs:
+            if not any(tid in ts and oid in os_ for ts, os_ in members):
+                problems.append(f"{d.fixture_id}: committed pair ({tid}, {oid}) was decided outside every "
+                                "sub-tick; a policy that audits its scopes decides each pair inside one")
+    if problems:
+        shown = "; ".join(problems[:6]) + (f"; ... {len(problems) - 6} more" if len(problems) > 6 else "")
+        return False, shown
+    return True, f"{scopes} sub-tick(s) audited by {outcomes.spec.name}.audit_scopes, every committed pair inside one"
+
+
+def _bound_twice(spec: PolicySpec, arm: Mapping[str, Any], profile: Mapping[str, Any]) -> tuple[Any, Any]:
+    from apps.container_logistics.policies.dispatch.bind import bind_tree
+
+    tree = build_runner_for_policy(spec.name, _arm_params(arm)).tree
+    return (bind_tree(tree.resolved, tree.top.instance, profile),
+            bind_tree(tree.resolved, tree.top.instance, profile))
+
+
+def _declarations(tree: Any) -> list[tuple[str, Any, frozenset[str]]]:
+    return [(n.path, n.declaration, n.world_reads) for n in tree.nodes]
+
+
+def _bind_pure(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[bool, str]:
+    """Binding twice gives equal declarations and reads; no RNG draw, no mutation of the profile."""
+    problems: list[str] = []
+    fixtures = fx.ROBUSTNESS_FIXTURES
+    for make in fixtures:
+        fixture = make()
+        profile = fixture.profile()
+        snapshot = copy.deepcopy(profile)
+        with fixture.module_random():
+            before = random.getstate()
+            first, second = _bound_twice(spec, arm, profile)
+            drew = random.getstate() != before
+        if _declarations(first) != _declarations(second):
+            problems.append(f"{fixture.id}: two binds declared differently")
+        if drew:
+            problems.append(f"{fixture.id}: bind drew from the random module")
+        if profile != snapshot:
+            problems.append(f"{fixture.id}: bind mutated the profile")
+    if problems:
+        return False, "; ".join(problems[:6])
+    return True, f"bind pure on {len(fixtures)} fixture(s): equal declarations and reads, no draw, no mutation"
+
+
+def _world_reads_at_bind(outcomes: _Outcomes) -> tuple[bool, str]:
+    """Every world key the solve read was read at bind (the runner's re-bind key)."""
+    problems: list[str] = []
+    checked = 0
     for d in outcomes.all():
         if d.error is not None:
             continue
-        world = d.fixture.world()
-        truck_h = {str(t.get("_id")): assign_constraints.haulier_of(t) for t in d.fixture.trucks}
-        order_h = {str(o.get("_id")): assign_constraints.haulier_of(o) for o in d.fixture.orders}
-        members: list[tuple[set[str], set[str]]] = []
-        for entry in d.scope_log:
-            scopes += 1
-            problems += [f"{d.fixture_id}: {p}" for p in _scope_problems(model, entry, world, truck_h, order_h)]
-            members.append((set(entry["trucks"]), set(entry["orders"])))
-        for tid, oid in d.pairs:
-            if not any(tid in ts and oid in os_ for ts, os_ in members):
-                problems.append(f"{d.fixture_id}: committed head ({tid}, {oid}) was decided outside every "
-                                f"sub-scope; a {model} policy decides each head inside one scope")
+        checked += 1
+        late = sorted(d.solve_reads - d.bind_reads)
+        if late:
+            problems.append(f"{d.fixture_id}: read {late} while solving but no bind() read them")
     if problems:
-        shown = "; ".join(problems[:6]) + (f"; ... {len(problems) - 6} more" if len(problems) > 6 else "")
-        return False, f"{model}: {shown}"
-    return True, f"{model}: {scopes} sub-scope(s) audited (scope_log), every committed head inside one"
+        return False, "; ".join(problems[:6]) + ". A bind() must read every world key its solve_tick reads."
+    return True, f"solve reads within bind reads on {checked} whole tick(s)"
+
+
+def _declaration_within_ceiling(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[bool, str]:
+    """Top ``cross_company`` within the fixture's ceiling; every nested declaration within the top's."""
+    problems: list[str] = []
+    declared = 0
+    for make in fx.ROBUSTNESS_FIXTURES:
+        fixture = make()
+        profile = fixture.profile()
+        try:
+            tree, _ = _bound_twice(spec, arm, profile)
+        except PolicyError as exc:
+            problems.append(f"{fixture.id}: binding refused: {exc}")
+            continue
+        top = tree.declaration.cross_company
+        declared += len(top)
+        outside = sorted(top - assign_constraints.declared_partnerships(profile))
+        if outside:
+            problems.append(f"{fixture.id}: top declared {outside} outside the scenario's ceiling")
+        for node in tree.nodes[1:]:
+            wider = sorted(node.declaration.cross_company - top)
+            if wider:
+                problems.append(f"{fixture.id}: {node.path} declared {wider} beyond the top's declaration")
+    if problems:
+        return False, "; ".join(problems[:6])
+    return True, f"{declared} declared (owner, carrier) pair(s) over {len(fx.ROBUSTNESS_FIXTURES)} fixture(s), all within the ceiling"
 
 
 # --- performance -------------------------------------------------------------

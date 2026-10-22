@@ -118,8 +118,7 @@ def moving_composite():
     contract (WS1): ``tick.restrict`` / ``tick.call``, and ``bind`` declares the arm."""
     script: dict[str, str] = {}
     with isolated_registry():
-        @policy(slot="planner", name="Scripted", version="1", information_model="central",
-                description="returns the composite's script")
+        @policy(slot="planner", name="Scripted", version="1", description="returns the composite's script")
         class Scripted(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -128,8 +127,7 @@ def moving_composite():
             def decide(self, ctx):
                 return Plan(chains={t: (o,) for t, o in script.items()})
 
-        @policy(slot="planner", name="MoveForSubSolve", version="1", information_model="per_group",
-                description="moves trucks during a sub-solve (out of contract)")
+        @policy(slot="planner", name="MoveForSubSolve", version="1", description="moves trucks during a sub-solve (out of contract)")
         class MoveForSubSolve(CompositePolicy):
             move = False
 
@@ -208,8 +206,7 @@ def test_mutating_documents_during_a_sub_solve_is_outside_the_contract(moving_co
 
 
 def _recipe_composite(name: str, *, tiebreak: bool):
-    @policy(slot="planner", name=name, version="1", information_model="per_group",
-            description="per-group composite following the recipe")
+    @policy(slot="planner", name=name, version="1", description="per-group composite following the recipe")
     class Recipe(CompositePolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
@@ -260,7 +257,7 @@ def _probe_leaf(name: str, draw, *, declare: bool = False):
     """A central leaf that calls ``draw(self)`` then plans greedily."""
     extra = {"module_rng": "declared on purpose"} if declare else {}
 
-    @policy(slot="planner", name=name, version="1", description="probe", information_model="central", **extra)
+    @policy(slot="planner", name=name, version="1", description="probe", **extra)
     class Leaf(DispatchPolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
@@ -293,7 +290,7 @@ def test_a_renamed_self_is_still_attributed_to_its_node():
     again in ``_attribute_frame`` gave that SKIP.
     """
     with isolated_registry():
-        @policy(slot="planner", name="RenamedSelf", version="1", description="probe", information_model="central")
+        @policy(slot="planner", name="RenamedSelf", version="1", description="probe")
         class RenamedSelf(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -317,7 +314,7 @@ def test_a_scope_a_node_builds_for_itself_is_its_own_draw():
     self-built sub-tick (``tick_sampled_trucks(tick, ...)``) turned it into a SKIP.
     """
     with isolated_registry():
-        @policy(slot="planner", name="OwnScope", version="1", description="probe", information_model="central")
+        @policy(slot="planner", name="OwnScope", version="1", description="probe")
         class OwnScope(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):

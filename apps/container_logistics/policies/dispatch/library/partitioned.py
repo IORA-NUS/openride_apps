@@ -16,8 +16,9 @@ Byte identity with pre-v2 partitioned runs (the dispatch golden): every group su
 carries the INNER's own ``rng`` / ``tiebreak_seed`` / ``rebate_book`` (the ``random``
 module, ``None``, ``None`` unless something injected them) and samples from the
 ``random`` module; this solver never reads ``tick.rng``, so the tick ``Random`` is
-never built. Hence the ``module_rng`` and ``order_sensitive`` declarations, and the
-``v1`` share-tag format (reserved to this policy). An inner's non-contract exception
+never built. Hence the ``module_rng`` and ``order_sensitive`` declarations (the
+pre-v2 ``v1`` share-tag format of its runs is the compat name rule
+``compat.wire.share_tag_format_for``). An inner's non-contract exception
 propagates, as before; a contract violation drops only that group (message 19).
 
 Policy side of the boundary: the framework still checks the merged result against the
@@ -34,6 +35,7 @@ from typing import Any, Mapping
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.solver_lib import cooperation
+from apps.container_logistics.policies.solver_lib.provenance import node_provenance
 
 from ..bind import Declaration
 from ..composite import CompositePolicy
@@ -41,9 +43,13 @@ from ..result import Result
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["GroupScope", "Partitioned", "cooperation_groups"]
+__all__ = ["GROUP_BADGE", "GroupScope", "Partitioned", "cooperation_groups"]
 
 Doc = dict[str, Any]
+
+#: The display badge (catalog and stamped provenance) and the stamped truck-sample scope.
+GROUP_BADGE = "per group"
+_SAMPLE_SCOPE = "per_group"
 
 _INNER_HELP = (
     "The per-scope solver each cooperation group is decided by (a leaf: GreedyNearest, "
@@ -57,8 +63,9 @@ _INNER_HELP = (
     version="1",
     description="One planner per cooperation group (a partnered component, else one company), "
                 "each group decided by the inner solver. The pre-v2 'partitioned' topology.",
-    information_model="per_group",
-    share_tag_format="v1",
+    badge=GROUP_BADGE,
+    badge_tooltip="Each cooperation group is decided on its own; a decision sees only that group’s trucks "
+                  "and orders.",
     module_rng="pre-v2 byte identity: each group's inner shuffle and its sample cap draw from the "
                "random MODULE, exactly as the pre-v2 partitioned path did",
     order_sensitive="inner ties broken by a module-RNG shuffle over input order (pre-v2)",
@@ -88,10 +95,41 @@ class Partitioned(CompositePolicy):
         self._tiebreak_seed = tick_seed
 
     def bind(self, params: Any, world: Mapping[str, Any], *, top: bool) -> Declaration:
-        """At the top: validate the active arm (message 14) and declare its cross-company pairs."""
+        """Validate the active arm (message 14); at the top declare its pairs, stamp and run-name segment.
+
+        Provenance: the ``per group`` badge, the per-group sample scope and the
+        candidate knobs (read here as well; the inner's own bind reads them too).
+        """
         cooperation.validate_arm(world)
         arm = cooperation.resolve_arm(world)
-        return Declaration(cross_company=cooperation.directed_pairs(arm) if top else frozenset())
+        provenance = node_provenance(world, badge=GROUP_BADGE, sample_scope=_SAMPLE_SCOPE)
+        if not top:
+            return Declaration(provenance=provenance)
+        return Declaration(cross_company=cooperation.directed_pairs(arm), provenance=provenance,
+                           **cooperation.arm_declaration_fields(arm))
+
+    def audit_scopes(self, scope_log: Any, tick: Any) -> list[str]:
+        """The battery's scope audit: every sub-tick lies inside ONE cooperation group.
+
+        A haulier of a multi-company component of the active arm belongs to that
+        component's group, any other haulier to its own; a document without a haulier
+        belongs to none, so a scope holding one is a problem too.
+        """
+        arm = cooperation.resolve_arm(tick.world)
+        component_of = arm.component_of if arm is not None else {}
+        truck_h, order_h = _haulier_index(tick)
+
+        def group(hid: Any) -> Any:
+            if hid is None:
+                return None
+            return ("component", component_of[hid]) if hid in component_of else ("haulier", hid)
+
+        problems = []
+        for entry in scope_log:
+            keys = {group(truck_h.get(t)) for t in entry["trucks"]} | {group(order_h.get(o)) for o in entry["orders"]}
+            if len(keys) > 1 or None in keys:
+                problems.append(f"scope {entry['key']} spans cooperation groups {sorted(map(str, keys))}")
+        return problems
 
     def solve_tick(self, tick: Any, params: Any) -> Result:
         """One ``tick.call(params.inner, ...)`` per cooperation group; a dropped group adds nothing."""
@@ -124,6 +162,12 @@ class GroupScope:
     key: tuple[str, Any]
     trucks: tuple[Doc, ...]
     orders: tuple[Doc, ...]
+
+
+def _haulier_index(tick: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+    """``({truck id: haulier}, {order id: haulier})`` of the tick (``constraints.haulier_of``)."""
+    return ({str(t.get("_id")): assign_constraints.haulier_of(t) for t in tick.raw_trucks},
+            {str(o.get("_id")): assign_constraints.haulier_of(o) for o in tick.raw_orders})
 
 
 def cooperation_groups(tick: Any, component_of: Mapping[str, int]) -> list[GroupScope]:

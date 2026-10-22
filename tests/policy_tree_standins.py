@@ -57,8 +57,8 @@ class StandInPooledMarket(CompositePolicy):
 
 
 _STANDINS = (
-    (StandInPartitioned, dict(name="Partitioned", information_model="per_group", share_tag_format="v1")),
-    (StandInPooledMarket, dict(name="PooledMarket", information_model="per_company")),
+    (StandInPartitioned, dict(name="Partitioned", badge="per group")),
+    (StandInPooledMarket, dict(name="PooledMarket", badge="per company")),
 )
 
 

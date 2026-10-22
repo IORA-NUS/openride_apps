@@ -32,9 +32,7 @@ class ResolvedDispatch:
     solver reads its own params, and a caller reads a child's
     ``Declaration.candidate_hint`` (``dispatch/bind.py``).
 
-    Tree fields (round 2): ``information_model`` and ``share_tag_format`` are the
-    policy's registration (``None``/``"audited"`` for an unregistered class);
-    ``label`` is this node's name plus its ``inner`` chain, slash-joined
+    Tree fields (round 2): ``label`` is this node's name plus its ``inner`` chain, slash-joined
     (``"PooledMarket/GreedyNearest"``); ``leaf`` the innermost name; ``inner`` the
     resolved ``inner`` ref of a composite. The label and leaf default to ``name``.
     """
@@ -44,8 +42,6 @@ class ResolvedDispatch:
     timing: str
     params: PolicyParams | None
     source: ResolvedSource
-    information_model: str | None = None
-    share_tag_format: str = "audited"
     label: str = ""
     leaf: str = ""
     inner: "ResolvedDispatch | None" = None

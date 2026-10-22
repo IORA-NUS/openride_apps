@@ -155,8 +155,7 @@ def test_tick_scope_samples_per_haulier_from_ctx_rng_and_partition_scope_is_unch
 @pytest.fixture
 def crashers():
     with isolated_registry():
-        @policy(slot="planner", name="TopCrasher", version="1", information_model="central",
-                description="raises")
+        @policy(slot="planner", name="TopCrasher", version="1", description="raises")
         class TopCrasher(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -190,8 +189,7 @@ def test_a_crash_in_a_top_level_solver_or_a_group_propagates_out_of_assign(crash
 @pytest.fixture
 def borax_double_booker():
     with isolated_registry():
-        @policy(slot="planner", name="BoraxDoubleBooker", version="1", information_model="central",
-                description="double-books in borax's company scope")
+        @policy(slot="planner", name="BoraxDoubleBooker", version="1", description="double-books in borax's company scope")
         class BoraxDoubleBooker(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):

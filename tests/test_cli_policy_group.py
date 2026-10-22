@@ -5,7 +5,7 @@ Plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.4/P3.6/P3.7. What is locked and
 - the ``policy`` group exposes list/show/validate/bench, and ``solver list`` renders
   ``policy list planner`` restricted to the per-scope solvers (one catalog, no
   second list to drift); ``policy list`` shows the component kinds and an
-  information-model column, ``policy show`` renders ref params (round-2 §5 C4);
+  badge column, ``policy show`` renders ref params (round-2 §5 C4);
 - the control wrappers parse the control plane's payloads (the transport is
   monkeypatched; the real command is exercised by the P3 gate);
 - ``policy validate`` exits 1 on any FAIL, so it can gate a script;
@@ -47,7 +47,8 @@ _FAKE_CATALOG = {
                  "k": {"type": "number", "default": 1.0, "minimum": 0.0, "description": "a knob"}}},
              "defaults": {"k": 1.0}},
             {"name": "Beta", "version": "1", "description": "second", "requires": [], "missing": [],
-             "available": True, "order_sensitive": None, "information_model": "per_group",
+             "available": True, "order_sensitive": None, "badge": "per group",
+             "badge_tooltip": "Each group on its own.",
              "composite": True, "inner_param": "inner",
              "params_schema": {"type": "object", "properties": {
                  "offer": {"type": "object", "x-policy-ref": "market.offer", "x-leaf-only": False,
@@ -160,14 +161,14 @@ def test_solver_list_is_policy_list_dispatch_restricted_to_leaves(monkeypatch, c
 
 def test_policy_list_marks_default_missing_deps_components_and_models(monkeypatch, capsys):
     """Verified to have teeth: dropping the component rows from ``render_policy_list``
-    failed the ``OfferNone`` assertion; dropping the model column failed ``per_group``."""
+    failed the ``OfferNone`` assertion; dropping the badge column failed ``per group``."""
     _fake_catalogs(monkeypatch)
     assert cli.main(["policy", "list"]) == 0
     text = capsys.readouterr().out
     assert "missing: ortools" in text, "a policy with a missing dependency must say so"
     assert "market.offer" in text and "OfferNone" in text and "component" in text
     assert "planned" not in text and "lands in" not in text, "no slot has a lifecycle status any more"
-    assert "per_group" in text and "composite" in text
+    assert "per group" in text and "composite" in text and "Badge" in text
     assert "✓" in text
     assert cli.main(["policy", "list", "market.offer"]) == 0
     only_kind = capsys.readouterr().out
@@ -186,7 +187,7 @@ def test_policy_show_renders_params_and_rejects_unknown_names(monkeypatch, capsy
     assert cli.main(["policy", "show", "planner", "Beta"]) == 0
     text = capsys.readouterr().out
     assert "ref → market.offer" in text and "OfferAll, OfferNone" in text, "a ref lists its kind's names"
-    assert "ref → planner (leaf)" in text and "per_group" in text
+    assert "ref → planner (leaf)" in text and "badge: per group" in text and "Each group on its own." in text
     assert cli.main(["policy", "show", "market.offer", "OfferNone"]) == 0
     assert "none" in capsys.readouterr().out
     assert cli.main(["policy", "show", "planner", "Gamma"]) == 2

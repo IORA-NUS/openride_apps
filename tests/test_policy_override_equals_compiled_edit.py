@@ -177,11 +177,12 @@ def test_per_run_pooled_market_override_equals_the_compiled_pooled_market_edit(p
 def test_stamp_records_accounting_params_equal_to_the_policy(profiles):
     """Verified to have teeth: stamping ``accounting_params`` from the bundle's
     pre-override ``solver_params`` failed the equality."""
+    from apps.container_logistics.policies.dispatch.bind import bind_profile
     from apps.container_logistics.policies.framework import policies_stamp
 
     override = _overridden(profiles["base"], BONUS_0)
     resolved, _source = current_policies_for_profile(override)
-    stamp = policies_stamp(resolved, candidate_settings={},
+    stamp = policies_stamp(resolved, tree=bind_profile(override),
                            accounting_params=override["solver_params"], source="override")
     d = stamp["planner"]
     assert d["accounting_params"] == {"dual_cycle_bonus_km": 0.0, "dual_cycle_radius_km": 0.5}

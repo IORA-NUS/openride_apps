@@ -1,9 +1,10 @@
 """The policy registry: ``@policy`` registration, lookup, and built-in discovery.
 
 A policy is a class decorated with ``@policy(slot=..., name=..., version=...,
-description=...)`` that carries a nested frozen ``Params`` dataclass. A dispatch policy
-also declares its ``information_model`` (round 2,
-``docs/plans/policy_slots_round2_whole_tick.md`` §2.4). Registration
+description=...)`` that carries a nested frozen ``Params`` dataclass. It may declare a
+display-only ``badge`` / ``badge_tooltip`` (the catalog shows them; nothing reads them at
+run time; what a run actually did is stamped from its bound declaration, plan
+``plan_contract_final.md`` §2.1). Registration
 validates the declaration at import time and fails loud
 (``PolicyRegistrationError``). Lookups (:func:`get_policy_spec`,
 :func:`list_policies`, :func:`default_policy_name`, :func:`spec_for_class`) run
@@ -45,8 +46,6 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "PolicySpec",
-    "INFORMATION_MODELS",
-    "SHARE_TAG_FORMATS",
     "policy",
     "get_policy_spec",
     "spec_for_class",
@@ -57,7 +56,6 @@ __all__ = [
     "BUILTIN_POLICY_PACKAGES",
     "INNER_PARAM",
     "OFFLOAD_MODES",
-    "V1_SHARE_TAG_BUILTINS",
 ]
 
 BUILTIN_POLICY_PACKAGES = (
@@ -74,18 +72,6 @@ _SLOT_ENTRY_POINTS: dict[str, str] = {
 #: Where the framework offloads a node's work (``solve_in_thread``): its own
 #: ``solve_tick`` (``self``), or only the calls it makes to its children (``children``).
 OFFLOAD_MODES = ("self", "children")
-
-#: Whose private data a dispatch policy's decision may use (round-2 §2.4).
-INFORMATION_MODELS = ("central", "per_group", "per_company")
-#: Share-tag wire formats (round-2 §2.5). ``v1`` is the pre-v2 format, reserved to
-#: the ``Partitioned`` built-in so pre-v2 partitioned runs stay byte-identical.
-SHARE_TAG_FORMATS = ("v1", "audited")
-#: THE allowlist of ``(slot, name)`` that may register ``share_tag_format="v1"``: the
-#: built-ins whose pre-v2 runs must stay byte-identical, and nothing else (message 15).
-#: Keyed on the registered name, not the class: one class backs one name, and built-in
-#: discovery registers ``Partitioned`` first, so another class claiming the name fails
-#: loud in ``_store``. A new policy uses ``audited``; never add to this set.
-V1_SHARE_TAG_BUILTINS = frozenset({("planner", "Partitioned")})
 
 #: The dispatch-ref param a composite delegates each scope to (``dispatch/composite.py``).
 #: ``PolicySpec.inner_param`` is the one place the descent rule is read from: the
@@ -105,8 +91,8 @@ class PolicySpec:
     order, or ``None``; ``module_rng`` the stated reason it draws from the ``random``
     module, or ``None``. ``perf_budget_ms`` (the default arm) and ``arm_budgets_ms``
     (``"param=value"`` -> ms for other arms) are used by the battery only.
-    ``information_model`` (``INFORMATION_MODELS``; required for dispatch) and
-    ``share_tag_format`` (``SHARE_TAG_FORMATS``) are stamped with the run.
+    ``badge`` / ``badge_tooltip`` are display text for the catalog (``None``: no
+    badge); never read at run time.
     ``refs`` lists the ``PolicyRef`` params as ``(param, kind, leaf_only)``.
     ``offload`` (:data:`OFFLOAD_MODES`) says whether the framework runs the node's
     ``solve_tick`` through ``tick.execute`` (``self``) or the node offloads its own
@@ -122,12 +108,12 @@ class PolicySpec:
     params_cls: type[PolicyParams]
     order_sensitive: str | None
     perf_budget_ms: int
-    information_model: str | None
-    share_tag_format: str
     module_rng: str | None
     arm_budgets_ms: Mapping[str, int]
     refs: tuple[tuple[str, str, bool], ...]
     offload: str = "self"
+    badge: str | None = None
+    badge_tooltip: str | None = None
 
     @property
     def is_composite(self) -> bool:
@@ -188,11 +174,11 @@ def policy(
     requires: Sequence[str] = (),
     order_sensitive: str | None = None,
     perf_budget_ms: int = 2000,
-    information_model: str | None = None,
-    share_tag_format: str = "audited",
     module_rng: str | None = None,
     arm_budgets_ms: Mapping[str, int] | None = None,
     offload: str | None = None,
+    badge: str | None = None,
+    badge_tooltip: str | None = None,
 ) -> Callable[[type], type]:
     """Class decorator registering a policy into ``slot`` under ``name``.
 
@@ -200,8 +186,8 @@ def policy(
     unknown or non-implemented slot, malformed metadata, a missing/non-frozen/
     non-``PolicyParams`` nested ``Params``, defaults failing their own validation, a
     class without a callable ``solve_tick``, an ``offload`` outside
-    :data:`OFFLOAD_MODES`, a dispatch policy without an ``information_model``,
-    ``share_tag_format="v1"`` outside :data:`V1_SHARE_TAG_BUILTINS`, an ``arm_budgets_ms``
+    :data:`OFFLOAD_MODES`, a ``badge`` / ``badge_tooltip`` that is not ``None`` or
+    non-empty text (or a tooltip without a badge), an ``arm_budgets_ms``
     key naming no str-choice arm, ref defaults that form a cycle through registered
     dispatch policies (including a self-reference), or ``(slot, name)`` already bound
     to a different class.
@@ -209,8 +195,7 @@ def policy(
     """
     def decorate(cls: type) -> type:
         spec = _build_spec(cls, slot, name, version, description, requires, order_sensitive,
-                           perf_budget_ms, information_model, share_tag_format, module_rng,
-                           arm_budgets_ms, offload)
+                           perf_budget_ms, module_rng, arm_budgets_ms, offload, badge, badge_tooltip)
         with _LOCK:
             _store(spec)
         return cls
@@ -219,15 +204,14 @@ def policy(
 
 
 def _build_spec(cls, slot, name, version, description, requires, order_sensitive,
-                perf_budget_ms, information_model, share_tag_format, module_rng,
-                arm_budgets_ms, offload=None) -> PolicySpec:
+                perf_budget_ms, module_rng, arm_budgets_ms, offload=None, badge=None,
+                badge_tooltip=None) -> PolicySpec:
     where = f"@policy(slot={slot!r}, name={name!r}) on {getattr(cls, '__qualname__', cls)!r}"
     short = f"@policy(slot={slot!r}, name={name!r})"
     _check_slot_registrable(slot, where)
     _check_metadata(where, name, version, description, requires, order_sensitive, perf_budget_ms)
     _check_reason(where, "module_rng", module_rng)
-    _check_information_model(short, slot, information_model)
-    _check_share_tag_format(short, slot, name, share_tag_format)
+    _check_badge(short, badge, badge_tooltip)
     _check_slot_base(cls, slot, where)
     params_cls = _checked_params(cls, where)
     infos = declared_params(params_cls)
@@ -238,9 +222,8 @@ def _build_spec(cls, slot, name, version, description, requires, order_sensitive
     return PolicySpec(slot=slot, name=name, version=version, description=description,
                       requires=tuple(requires), cls=cls, params_cls=params_cls,
                       order_sensitive=order_sensitive, perf_budget_ms=perf_budget_ms,
-                      information_model=information_model, share_tag_format=share_tag_format,
                       module_rng=module_rng, arm_budgets_ms=budgets,
-                      refs=refs, offload=offload)
+                      refs=refs, offload=offload, badge=badge, badge_tooltip=badge_tooltip)
 
 
 def _check_slot_registrable(slot: str, where: str) -> None:
@@ -290,28 +273,15 @@ def _check_reason(where: str, label: str, value) -> None:
         raise PolicyRegistrationError(f"{where}: {label} must be None or the stated reason (got {value!r}).")
 
 
-def _check_information_model(short: str, slot: str, model) -> None:
-    if model is None and slot != "planner":
-        return
-    if model not in INFORMATION_MODELS:
-        got = "" if model is None else f" (got {model!r})"
-        raise PolicyRegistrationError(
-            f"{short}: declare information_model= one of {', '.join(INFORMATION_MODELS)} "
-            f"(whose private data this policy's decision may use){got}."
-        )
-
-
-def _check_share_tag_format(short: str, slot: str, name: str, fmt) -> None:
-    if fmt not in SHARE_TAG_FORMATS:
-        raise PolicyRegistrationError(
-            f"{short}: share_tag_format must be one of {', '.join(SHARE_TAG_FORMATS)} (got {fmt!r})."
-        )
-    if fmt == "v1" and (slot, name) not in V1_SHARE_TAG_BUILTINS:
-        owners = ", ".join(sorted(n for _s, n in V1_SHARE_TAG_BUILTINS))
-        raise PolicyRegistrationError(
-            f"{short}: share_tag_format='v1' is reserved for the {owners} built-in (the pre-v2 "
-            "wire format, kept only for byte identity); new policies use the default 'audited'."
-        )
+def _check_badge(short: str, badge, tooltip) -> None:
+    """``badge`` / ``badge_tooltip``: ``None`` or non-empty text; a tooltip needs a badge."""
+    for label, value in (("badge", badge), ("badge_tooltip", tooltip)):
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise PolicyRegistrationError(
+                f"{short}: {label} must be None or non-empty display text (got {value!r})."
+            )
+    if tooltip is not None and badge is None:
+        raise PolicyRegistrationError(f"{short}: badge_tooltip={tooltip!r} needs a badge to describe.")
 
 
 def _check_ref_default_cycles(short: str, slot: str, name: str, infos) -> None:

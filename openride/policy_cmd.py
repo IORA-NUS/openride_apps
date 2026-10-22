@@ -49,12 +49,12 @@ def _pick(catalog: dict[str, Any], components: dict[str, Any], name: str | None)
     )
 
 
-def _model(p: dict[str, Any]) -> str:
-    """The information-model cell: the declared model, plus ``composite (inner)`` for a decomposition."""
-    model = str(p.get("information_model") or "—")
+def _badge(p: dict[str, Any]) -> str:
+    """The badge cell: the policy's declared display ``badge``, plus ``composite (inner)`` for a decomposition."""
+    badge = str(p.get("badge") or "—")
     if p.get("composite"):
-        model += f"\n[dim]composite ({p.get('inner_param') or '?'})[/]"
-    return model
+        badge += f"\n[dim]composite ({p.get('inner_param') or '?'})[/]"
+    return badge
 
 
 def _slot_rows(tbl: Table, slot: str, entry: dict[str, Any], *, leaves_only: bool) -> None:
@@ -69,7 +69,7 @@ def _slot_rows(tbl: Table, slot: str, entry: dict[str, Any], *, leaves_only: boo
         else:
             status = f"[red]missing: {', '.join(missing)}[/]" if missing else "[green]available[/]"
         cell = f"[bold]{name}[/] v{p.get('version', '?')}\n[dim]{escape(str(p.get('description') or ''))}[/]"
-        tbl.add_row(slot, cell, _model(p), default, status)
+        tbl.add_row(slot, cell, _badge(p), default, status)
 
 
 def _component_rows(tbl: Table, kind: str, entry: dict[str, Any]) -> None:
@@ -102,7 +102,7 @@ def render_policy_list(name: str | None = None, *, as_json: bool = False, leaves
     tbl = Table(title=title, header_style="bold cyan")
     tbl.add_column("Slot / kind", no_wrap=True)
     tbl.add_column("Policy", min_width=30)
-    tbl.add_column("Info model", no_wrap=True)
+    tbl.add_column("Badge", no_wrap=True)
     tbl.add_column("Default", justify="center", no_wrap=True)
     tbl.add_column("Status", no_wrap=True)
     for slot, entry in slots.items():
@@ -183,12 +183,12 @@ def _cmd_show(args) -> int:
         " · slot default" if info["is_default"] and info["entry_kind"] == "slot" else
         " · kind default" if info["is_default"] else "")
     lines = [f"[bold]{info['name']}[/]  [dim]{head}[/]", escape(str(info.get("description") or ""))]
-    if info.get("information_model"):
-        lines.append(f"information model: [bold]{info['information_model']}[/]"
-                     + (f"  · composite (decomposes the tick; per-scope solver in '{info.get('inner_param')}')"
-                        if info.get("composite") else "  · leaf (a per-scope solver; --solver accepts it)"))
-    if info.get("share_tag_format"):
-        lines.append(f"share tag format: {info['share_tag_format']}")
+    if info.get("entry_kind") == "slot":
+        badge = f"badge: [bold]{escape(str(info['badge']))}[/]  · " if info.get("badge") else ""
+        lines.append(badge + (f"composite (decomposes the tick; per-scope solver in '{info.get('inner_param')}')"
+                              if info.get("composite") else "leaf (a per-scope solver; --solver accepts it)"))
+        if info.get("badge_tooltip"):
+            lines.append(f"[dim]{escape(str(info['badge_tooltip']))}[/]")
     if info.get("requires"):
         missing = info.get("missing") or []
         lines.append(f"requires: {', '.join(info['requires'])}"

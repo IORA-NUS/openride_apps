@@ -133,61 +133,77 @@ def _apply_capture_env_or_exit(assignment_collection, datahub_dir: str, run_id: 
     return directory
 
 
-def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
+def _stamp_effective_policies(scenario_manager, overridden: bool):
     """Stamp ``orsim_settings["POLICIES"]`` (-> ``run_config.meta.policies``) and print it.
 
-    Built from the EFFECTIVE first assignment profile (post-override). Exits 2 on a
-    ``PolicyError``.
+    Built from the EFFECTIVE first assignment profile (post-override) and its BOUND
+    selection (``dispatch.bind.bind_profile``, the binding the agent repeats), so the
+    stamp's ``provenance`` / ``declaration`` / ``world_reads`` are what the run's
+    solvers declared. Returns that bound tree (``None`` without an assignment
+    profile). Exits 2 on a ``PolicyError``.
     """
-    from apps.container_logistics.policies.solver_lib.candidates import (  # local: agent-side module
-        CandidateSettings,
-    )
     import json
 
+    from apps.container_logistics.policies.dispatch.bind import bind_profile
     from apps.container_logistics.policies.framework import policies_stamp
 
     collection = scenario_manager.get_agent_collection("assignment") or {}
     if not collection:
-        return
+        return None
     profile = next(iter(collection.values())).get("profile") or {}
     try:
         resolved, source = current_policies_for_profile(profile)
+        tree = bind_profile(profile)
+        stamp = policies_stamp(
+            resolved,
+            tree=tree,
+            # What AssignmentApp._solver_params will cost with (same ``or {}`` read).
+            accounting_params=profile.get("solver_params") or {},
+            source="override" if overridden else source,
+        )
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
-    stamp = policies_stamp(
-        resolved,
-        candidate_settings={
-            **CandidateSettings.from_profile(profile).to_dict(),
-            # Where the max_trucks_per_scope cap applies: per haulier on a central
-            # leaf's tick scope, per cooperation group / per company under the
-            # decompositions (so a central arm can see more candidates; C3 deviation 6).
-            "sample_scope": sample_scope_for(resolved["planner"].information_model),
-        },
-        # What AssignmentApp._solver_params will cost with (same ``or {}`` read).
-        accounting_params=profile.get("solver_params") or {},
-        source="override" if overridden else source,
-    )
     scenario_manager.orsim_settings["POLICIES"] = stamp
     d = stamp["planner"]
     print(
         f"Policies effective: planner={d['label']} v{d['version']} timing={d['timing']} "
-        f"information_model={d['information_model']} "
         f"params={json.dumps(d['params'], sort_keys=True)} "
         f"accounting_params={json.dumps(d['accounting_params'], sort_keys=True)}"
     )
+    return tree
 
 
-def sample_scope_for(information_model: str | None) -> str | None:
-    """The stamped ``candidate_settings.sample_scope`` of a dispatch information model.
+def _apply_run_declaration(scenario_manager, tree, run_name: str | None) -> str | None:
+    """Merge the top declaration's ``stamp_settings`` and run-name segments; return the run name.
 
-    ``central`` decides the whole tick, whose cap applies per haulier
-    (``solver_lib.candidates.TICK_SAMPLE_SCOPE``); ``per_group`` / ``per_company`` cap
-    each decomposition scope as a whole. ``None`` for an undeclared model.
+    ``stamp_settings`` (e.g. a solver's ``COOPERATION`` record, which the analytics agent
+    reads for its planner rows) are merged into ``orsim_settings``, which ships them to
+    the agents at spawn (the STREAM_GEO pattern). A key the settings already hold
+    (``POLICIES``, ``STREAM_GEO``, ...) is REFUSED (exit 2): a solver may add run
+    settings, never overwrite the framework's. ``run_name_segments`` are appended
+    after the legacy segments, idempotent by SEGMENT (not substring, so ``chain``
+    never matches ``chain2``): the ``--structure`` path already appended its
+    ``· <structure>`` and must not get ``… · chain · chain``.
     """
-    from apps.container_logistics.policies.solver_lib.candidates import TICK_SAMPLE_SCOPE  # local: agent-side
-
-    return {"central": TICK_SAMPLE_SCOPE, "per_group": "per_group",
-            "per_company": "per_company"}.get(information_model)
+    if tree is None:
+        return run_name
+    declaration = tree.declaration
+    clash = sorted(k for k in declaration.stamp_settings if k in scenario_manager.orsim_settings)
+    if clash:
+        _refuse_invalid_policy_config(PolicyError(
+            f"planner policy {tree.top.name} declared run setting(s) {', '.join(clash)} that the run "
+            "already sets; a solver's stamp_settings may add settings, never replace one."
+        ))
+    scenario_manager.orsim_settings.update(declaration.stamp_settings)
+    for segment in declaration.run_name_segments:
+        segments = [seg.strip() for seg in (run_name or "").split("·")]
+        if segment not in segments:
+            run_name = f"{run_name} · {segment}" if run_name else str(segment)
+    print(
+        f"Run declaration: cross_company={len(declaration.cross_company)} pairs, "
+        f"world_reads={','.join(sorted(tree.world_reads)) or '-'}"
+    )
+    return run_name
 
 
 def _resolve_order_lifecycle_mode() -> str:
@@ -392,63 +408,16 @@ def main():
     # Fail loud before any agent spawns: an unknown dispatch policy would otherwise
     # only surface agent-side, in the celery journal.
     _assert_policies_resolvable_or_exit(scenario_manager.get_agent_collection("assignment"))
-    _stamp_effective_policies(scenario_manager, policies_overridden)
+    bound_tree = _stamp_effective_policies(scenario_manager, policies_overridden)
 
-    # Ship the EFFECTIVE cooperation structure (post-override) to the analytics
-    # agent via orsim_settings (the STREAM_GEO pattern: validated allow_unknown,
-    # carried by scheduler['orsim_settings']) so planner-scope breakdown rows and
-    # gains attribution know the active structure without any celery coupling.
-    try:
-        _assign_coll = scenario_manager.get_agent_collection("assignment") or {}
-        _profile = next(iter(_assign_coll.values()), {}).get("profile") or {}
-        _coop = _profile.get("cooperation") or {}
-        _structures = {s.get("id"): s for s in _coop.get("structures", []) if isinstance(s, dict)}
-        _active = _structures.get(_coop.get("active"))
-        if _active is not None:
-            from apps.container_logistics.assignment.pooled_planner import (
-                effective_cooperation_stamp,
-            )
-
-            # EFFECTIVE state, not the compiled keys (plan §13.4 FIX-7 / F7): no
-            # shipped bundle carries a 'pools' key, yet the runtime derives a full
-            # market from 'edges', so the old stamp recorded the OPPOSITE of what
-            # ran -- on exactly the workflow §8 promises ("run old bundles pooled
-            # without recompiling"). One helper, shared with the runtime, so the
-            # stamp cannot drift from what executes.
-            _stamp = effective_cooperation_stamp(_profile, _active)
-            scenario_manager.orsim_settings["COOPERATION"] = _stamp
-
-            # Name the ARM in the run name, on EVERY run that has one — not just on the
-            # override path.
-            #
-            # Compare compares RUNS: "this scenario with structure A" and "this scenario with
-            # structure B" are two runs, and the run name is what tells them apart in the
-            # picker and in `lib/runNameMeta.ts::parseRunNameTags`. Only
-            # `apply_cooperation_override` appended a `· <structure>` segment, so a launch on
-            # the scenario's DEFAULT arm produced an unlabelled run — indistinguishable in the
-            # picker from the other arm of the same scenario.
-            #
-            # Taken from the stamp, so it is the EFFECTIVE structure (post-override) and can
-            # never disagree with what actually ran. Idempotent by SEGMENT (not substring, so
-            # `chain` never matches `chain2`), which is what keeps the override path — which
-            # already appended it above — from producing `… · chain · chain`.
-            _sid = _stamp.get("structure_id")
-            if _sid:
-                _segments = [seg.strip() for seg in (run_name or "").split("·")]
-                if _sid not in _segments:
-                    run_name = f"{run_name} · {_sid}" if run_name else str(_sid)
-
-            _mkt = _stamp["market"]
-            print(
-                f"Cooperation effective: topology={_stamp['topology']} "
-                f"pools={len(_stamp['pools'])} "
-                f"market={_mkt['offer']['type']}/{_mkt['claim']['type']}/"
-                f"{_mkt['arbitration']['type']} "
-                f"max_rounds_backstop={_mkt['max_rounds']}"
-            )
-            print(f"Cooperation active structure: {_active.get('id')}")
-    except Exception:
-        logging.exception("Failed to stamp COOPERATION into orsim_settings (non-fatal)")
+    # The top solver's run declaration: its stamp settings (e.g. the EFFECTIVE
+    # cooperation record the analytics agent builds planner-scope breakdown rows and
+    # gains attribution from, carried by scheduler['orsim_settings'] like STREAM_GEO)
+    # and its run-name segments. A solver that runs a cooperation arm names it here on
+    # EVERY run that has one, not just on the --structure path: Compare compares RUNS,
+    # and the run name is what tells two arms of one scenario apart in the picker
+    # (`lib/runNameMeta.ts::parseRunNameTags`).
+    run_name = _apply_run_declaration(scenario_manager, bound_tree, run_name)
 
     # Headless mode (CLI fast-path): suppress the per-tick truck-location Kafka publishing,
     # which exists purely to feed the LIVE frontend map. KPI/breakdown/run_status publishing

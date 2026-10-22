@@ -66,7 +66,7 @@ class _Base(DispatchPolicy):
 
 def _register(name: str, params_cls: type, *, model: str = "central", **kwargs) -> type:
     return policy(slot="planner", name=name, version="1", description="x",
-                  information_model=model, **kwargs)(type(name, (_Base,), {"Params": params_cls}))
+                  badge=model, **kwargs)(type(name, (_Base,), {"Params": params_cls}))
 
 
 def _wrapper_params(default: str, *, leaf_only: bool = True) -> type:
@@ -342,29 +342,32 @@ def test_pooled_market_registers_in_a_cold_interpreter():
 
 
 def test_the_v1_reservation_is_the_one_allowlist():
-    """Message 15 is unchanged and keyed on ``V1_SHARE_TAG_BUILTINS`` only.
+    """``v1`` is compat's explicit NAME rule (``compat.wire.V1_SHARE_TAG_BUILTINS``); no
+    registration can opt in (WS4b retired message 15 with the ``share_tag_format`` kwarg).
 
-    Verified to have teeth: reverting ``_check_share_tag_format`` to a bare
-    ``name != 'Partitioned'`` check failed the allowlist-extension assertion (X was
-    still refused); a second ``'Partitioned'`` literal in registry.py fails the count.
+    Verified to have teeth: a bare ``name == 'Partitioned'`` test in ``share_tag_format_for``
+    failed the allowlist-extension assertion (X stayed ``audited``); a ``'Partitioned'``
+    literal in registry.py fails the count.
     """
+    from apps.container_logistics.policies.compat import wire
+
     with isolated_registry():
-        with pytest.raises(PolicyRegistrationError) as exc:
+        with pytest.raises(TypeError, match="share_tag_format"):
             _register("X", _Empty, share_tag_format="v1")
-        assert str(exc.value) == (
-            "@policy(slot='planner', name='X'): share_tag_format='v1' is reserved for the "
-            "Partitioned built-in (the pre-v2 wire format, kept only for byte identity); new "
-            "policies use the default 'audited'.")
-    original = registry.V1_SHARE_TAG_BUILTINS
-    registry.V1_SHARE_TAG_BUILTINS = original | {("planner", "X")}
+    assert wire.share_tag_format_for("X") == "audited"
+    original = wire.V1_SHARE_TAG_BUILTINS
+    wire.V1_SHARE_TAG_BUILTINS = original | {("planner", "X")}
     try:
-        with isolated_registry():
-            assert _register("X", _Empty, share_tag_format="v1")
+        assert wire.share_tag_format_for("X") == "v1"
     finally:
-        registry.V1_SHARE_TAG_BUILTINS = original
-    literals = [n for n in ast.walk(ast.parse((FRAMEWORK / "registry.py").read_text()))
+        wire.V1_SHARE_TAG_BUILTINS = original
+
+    def literals(path):
+        return [n for n in ast.walk(ast.parse(path.read_text()))
                 if isinstance(n, ast.Constant) and n.value == "Partitioned"]
-    assert len(literals) == 1, "the v1 owner must be named in exactly one place"
+
+    assert not literals(FRAMEWORK / "registry.py"), "the framework registry names no v1 owner"
+    assert len(literals(FRAMEWORK.parent / "compat" / "wire.py")) == 1, "the v1 owner is named in exactly one place"
 
 
 def test_no_framework_module_mentions_the_dispatch_legacy_module():

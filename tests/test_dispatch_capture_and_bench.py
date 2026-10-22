@@ -21,7 +21,8 @@ What is locked (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5
 - ``bench`` decides whole ticks, accepts aliases, counts plans the invariants reject
   as violations, and reports the framework's accounting (``cross_company``,
   ``benefit_km_total`` from ``assignment.accounting.account_shares``) and the
-  selection's ``info_model`` and ``label`` for every policy alike.
+  selection's ``badge`` (its top node's stamped provenance badge) and ``label`` for every
+  policy alike.
 
 Why: captured ticks are the input of offline policy screening; a capture that did
 not replay exactly, or that perturbed the run it captured, would screen a policy
@@ -335,14 +336,14 @@ def test_bench_reports_framework_accounting_columns():
     entries = ["Partitioned", "pm=PooledMarket", "pg=PooledMarket", "GreedyNearest"]
     overrides = {"pg": {"inner": "GreedyNearest"}}
     report = bench(entries, fixtures, overrides)
-    for col in ("info_model", "cross_company", "benefit_km_total", "label"):
+    for col in ("badge", "cross_company", "benefit_km_total", "label"):
         assert col in BENCH_COLUMNS and col in render_table(report).splitlines()[2]
     rows = {r.policy: r for r in report.rows}
     assert list(rows) == ["Partitioned", "pm", "pg", "GreedyNearest"]
-    assert {k: (r.label, r.info_model) for k, r in rows.items()} == {
-        "Partitioned": ("Partitioned/RandomAssignment", "per_group"),
-        "pm": ("PooledMarket/RandomAssignment", "per_company"),
-        "pg": ("PooledMarket/GreedyNearest", "per_company"),
+    assert {k: (r.label, r.badge) for k, r in rows.items()} == {
+        "Partitioned": ("Partitioned/RandomAssignment", "per group"),
+        "pm": ("PooledMarket/RandomAssignment", "per company"),
+        "pg": ("PooledMarket/GreedyNearest", "per company"),
         "GreedyNearest": ("GreedyNearest", "central"),
     }
     params = {"Partitioned": None, "pm": None, "pg": {"inner": {"type": "GreedyNearest"}}, "GreedyNearest": None}
@@ -376,7 +377,7 @@ def test_bench_aliases_through_the_control_plane():
 def test_bench_counts_violations():
     """Verified to have teeth: reading ``violations`` as ``0`` in ``_bench_one`` failed this test."""
     with isolated_registry():
-        @policy(slot="planner", information_model="central", name="DoubleBooker", version="1", description="one order to every truck")
+        @policy(slot="planner", name="DoubleBooker", version="1", description="one order to every truck")
         class DoubleBooker(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -401,7 +402,7 @@ def test_capture_sees_the_raw_plan_before_the_invariants(tmp_path):
     Verified to have teeth: moving the capture call after ``check_result`` in
     ``DispatchRunner.run`` failed this test."""
     with isolated_registry():
-        @policy(slot="planner", information_model="central", name="DoubleBooker2", version="1", description="one order to two trucks")
+        @policy(slot="planner", name="DoubleBooker2", version="1", description="one order to two trucks")
         class DoubleBooker2(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):

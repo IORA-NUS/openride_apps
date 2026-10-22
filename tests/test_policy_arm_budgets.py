@@ -46,7 +46,7 @@ def test_arm_budget_keys_name_real_arms():
 def test_a_ref_budget_key_naming_no_target_is_caught():
     """Registration accepts a ref-param key unchecked (discovery order); this check catches it."""
     with isolated_registry():
-        @policy(slot="planner", information_model="central", name="TypoBudget", version="1",
+        @policy(slot="planner", name="TypoBudget", version="1",
                 description="a ref-arm budget with a typo", arm_budgets_ms={"offer=OfferNoen": 900})
         class TypoBudget(DispatchPolicy):
             @dataclass(frozen=True)

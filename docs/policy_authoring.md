@@ -73,7 +73,7 @@ from apps.container_logistics.policies.framework import PolicyParams, param, pol
 @policy(slot="planner", name="RegretMatch", version="1",
         description="Orders with the most to lose go first: largest gap between their best "
                     "and second-best truck.",
-        information_model="central",   # a leaf: correct at top level AND as an inner
+        badge="central",               # display only: a leaf at top level plans centrally
         # max(3 x worst measured, 500) on the 1000x500 `scale` fixture, per arm:
         perf_budget_ms=500,                           # spatial: ~95-110 ms
         arm_budgets_ms={"candidates=sampled": 4000})  # sampled: ~1.3 s (250k pairs)
@@ -251,7 +251,7 @@ from apps.container_logistics.policies.framework import PolicyParams, PolicyRef,
 
 @policy(slot="planner", name="LargestGroupFirst", version="1",
         description="Partitioned, but the cooperation group with the most trucks commits first.",
-        information_model="per_group")             # no module_rng: it draws only ctx.rng
+        badge="per group")                         # no module_rng: it draws only ctx.rng
 class LargestGroupFirst(CompositePolicy):
     @dataclass(frozen=True)
     class Params(PolicyParams):
@@ -309,22 +309,22 @@ class LargestGroupFirst(CompositePolicy):
 | Argument | Required | Meaning |
 |---|---|---|
 | `slot`, `name`, `version`, `description` | yes | Bump `version` when output changes for the same input (§12). |
-| `information_model` | **yes, for `planner`** | `central`, `per_group` or `per_company` (message 16). |
-| `share_tag_format` | no, default `"audited"` | `"v1"` is reserved to `Partitioned` (message 15). Leave it out. |
+| `badge`, `badge_tooltip` | no | Display text for the catalog / dashboard option (e.g. `"per group"`); never read at run time. A tooltip needs a badge. (The round-2 `information_model` and `share_tag_format` kwargs are retired: the share-tag format is compat's name rule `compat.wire.share_tag_format_for`, `v1` only for `Partitioned`.) |
 | `module_rng` | no | A stated reason the decision draws the `random` module. Covers only this node's own draws (and, on a composite, its scopes' `sample_rng` draws), reported `SKIP`; any other module draw still FAILS (§8). |
 | `order_sensitive` | no | A stated reason output depends on input order; `order_independent` is reported `SKIP`. |
 | `requires` | no | Optional imports; missing → catalog "unavailable", selection refused. |
 | `perf_budget_ms` | no, default 2000 | Battery budget for the **default** arm (§9). |
 | `arm_budgets_ms` | no | Budgets for other arms, keyed `"param=value"` (`{"candidates=sampled": 4000}`). Unknown keys are refused at registration (message 17); ref-arm keys (`"inner=GreedyNearest"`) are checked by `tests/test_policy_arm_budgets.py`. |
 
-**Information model.** The effective model is the **top-level** policy's:
-`Partitioned/GreedyNearest` is `per_group`, `PooledMarket/GreedyNearest` `per_company`,
-top-level `GreedyNearest` `central`. Stamped as `meta.policies.planner.information_model`,
-shown in the catalog and badged in the dashboard. Enforcement is **structural**: sub-scopes
-built by `scopes.py` hold only one group's, or one company's plus the market-visible,
-data; the battery's `information.scopes_respect_model` audits every sub-scope via
-`ctx.scope_log`. It certifies the helpers and the declared shape. **It cannot prove a
-third-party solver does not peek** (e.g. by keeping a reference to the tick context).
+**Badge and provenance.** What a run stamps is what its nodes DECLARE at bind
+(`Declaration.provenance`, stamped per node path as `meta.policies.planner.provenance`):
+the built-ins declare `{badge, sample_scope, candidate_settings}` at the top
+(`Partitioned/GreedyNearest` → `per group`, `PooledMarket/GreedyNearest` → `per company`,
+top-level `GreedyNearest` → `central`). A decomposition may define
+`audit_scopes(scope_log, tick) -> list[str]`; the battery's `contract.scope_audit` runs it
+over the sub-ticks it built (`tick.restrict`) and checks every committed pair lies inside
+one (SKIP without one). It certifies the declared shape. **It cannot prove a third-party
+solver does not peek** (e.g. by keeping a reference to the tick).
 The model describes what the **inner leaf** is handed. The decomposition itself sees the whole
 tick, and inside `PooledMarket` the `claim` component gets the market object and arbitration
 sees every bid.
@@ -607,16 +607,20 @@ old position, the market env vars add none). Only the leaf touched → ` · Leaf
 touched → the slash chain, ` · PooledMarket/GreedyNearest`,
 ` · PooledMarket(max_rounds=5)/GreedyNearest`. **Known limit:** central
 `--policy planner=GreedyNearest` and `--solver GreedyNearest` both read ` · GreedyNearest`;
-tell them apart by the stamp (label `GreedyNearest`/`central` vs
-`Partitioned/GreedyNearest`/`per_group`). A ` · central:<Leaf>` prefix was proposed and is
+tell them apart by the stamp (label `GreedyNearest`/badge `central` vs
+`Partitioned/GreedyNearest`/`per group`). A ` · central:<Leaf>` prefix was proposed and is
 **not implemented** (it would change the format `lib/runNameMeta.ts` parses).
 
 **The stamp** `run_config.meta.policies.planner`: `name`, `version`, `kind` (the slot kind,
 `operator`), `timing`, `source` (`bundle` / `legacy-profile` / `override`), `label`, `leaf`,
-`information_model`, `share_tag_format`, `params` (nested, refs `{type, version, params}`),
-`candidate_settings` (+ `sample_scope`: `per_haulier` for a central top, `per_group`,
-`per_company`), `accounting_params`. Console:
-`Policies effective: planner=<label> v<version> timing=<t> information_model=<m> params=<json> accounting_params=<json>`.
+`params` (nested, refs `{type, version, params}`), `share_tag_format`, `accounting_params`,
+`provenance` (`{<node path>: <its Declaration.provenance>}`; the built-ins' top carries
+`badge`, `sample_scope` — `per_haulier` for a central top, `per_group`, `per_company` — and
+`candidate_settings`), `declaration` (`{cross_company: [[owner, carrier], ...]}`) and
+`world_reads`. The top's `Declaration.stamp_settings` (e.g. `COOPERATION`) are merged into the
+run settings (a key the run already sets is refused) and its `run_name_segments` appended.
+Console: `Policies effective: planner=<label> v<version> timing=<t> params=<json>
+accounting_params=<json>` and `Run declaration: cross_company=<n> pairs, world_reads=<keys>`.
 
 ## 11. Legacy spellings (translated deterministically, `policies/dispatch/legacy.py`)
 
@@ -648,7 +652,7 @@ PooledMarket's params (8) and is inert next to another top. At run start the com
 - Every existing scenario at its defaults is byte-identical to pre-v2 (scope: doc 26 §5). A
   central top-level leaf, a `PooledMarket` with another `inner`, `RandomAssignment
   candidates=spatial`, or any param change is a **new arm, not comparable to old runs**; read
-  the arm from `label` and `information_model`. Noise is ~4–5% on `empty_ratio`: n≥3.
+  the arm from `label` and `provenance` (the top's `badge`). Noise is ~4–5% on `empty_ratio`: n≥3.
 - **Adding or editing a file under `apps/container_logistics/policies/**`** (or the solvers,
   components, `accounting.py`, `pooled_planner.py`) needs `systemctl --user restart
   openride-celery`. **Selecting a policy or changing its params never does** (data at spawn).

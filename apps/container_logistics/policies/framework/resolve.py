@@ -18,9 +18,9 @@ tolerated lossy step is dropping undeclared params of a slot translated from the
 LEGACY keys (``solver``/``solverParams``/``planner.deployment``), which were never
 validated; it is logged at WARNING.
 
-Leaf module (plan §2.7): imports only sibling framework modules, never
-``policies.dispatch.*`` or ``apps.container_logistics.assignment.*``. Missing
-dependencies are reported via ``PolicySpec.missing_requirements`` (``find_spec``), so
+Leaf module (plan §2.7): imports only sibling framework modules and the leaf
+``compat.wire`` (the stamp's share-tag rule), never ``policies.dispatch.*`` or
+``apps.container_logistics.assignment.*``. Missing dependencies are reported via ``PolicySpec.missing_requirements`` (``find_spec``), so
 nothing heavy is imported.
 """
 
@@ -30,6 +30,8 @@ import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Collection, Mapping, Sequence
+
+from apps.container_logistics.policies.compat.wire import stamp_fields
 
 from .components import ref_target
 from .errors import (
@@ -62,10 +64,9 @@ __all__ = [
 #: The keys a ``policies.<slot>`` entry may carry (authored, override and CLI forms).
 ENTRY_KEYS = ("type", "timing", "params")
 
-# Why a declared-but-not-executable timing cannot run yet, per (slot, timing).
-_TIMING_NOT_EXECUTABLE_REASON = {
-    ("planner", "plan"): "the held-plan dispatcher lands with P4",
-}
+# Why a declared-but-not-executable timing cannot run yet, per (slot, timing). Empty
+# today: the planner slot declares only executable timings.
+_TIMING_NOT_EXECUTABLE_REASON: dict[tuple[str, str], str] = {}
 
 
 @dataclass(frozen=True)
@@ -75,9 +76,8 @@ class ResolvedPolicy:
     ``params`` is the full validated dict (declared defaults filled in), in field order;
     a ref param is nested as ``{type, params}``. ``typed`` is the same value as the
     policy's ``Params`` instance (refs carry their versions). ``label`` is the name plus
-    the ``inner`` chain (:func:`selection_chain`), ``leaf`` its last name;
-    ``information_model``/``share_tag_format`` are the registration's. All four
-    default to the plain-name / unset forms for a hand-built value.
+    the ``inner`` chain (:func:`selection_chain`), ``leaf`` its last name. Both
+    default to the plain-name form for a hand-built value.
     """
 
     slot: str
@@ -88,8 +88,6 @@ class ResolvedPolicy:
     params: dict[str, Any]
     label: str = ""
     leaf: str = ""
-    information_model: str | None = None
-    share_tag_format: str | None = None
     typed: PolicyParams | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -234,8 +232,6 @@ def _resolve_entry(slot: str, entry: Mapping[str, Any], *, where: str, legacy: b
     return ResolvedPolicy(slot=slot, name=spec.name, version=spec.version, kind=spec.kind(),
                           timing=timing, params=params.to_dict(),
                           label="/".join(selection_chain(slot, spec.name, params)),
-                          information_model=spec.information_model,
-                          share_tag_format=spec.share_tag_format if slot == "planner" else None,
                           typed=params)
 
 
@@ -540,7 +536,7 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
         slot, sep, name = str(arg).partition("=")
         slot, name = slot.strip(), name.strip()
         if not sep or not slot or not name:
-            raise PolicyError(f"--policy {arg!r} must be SLOT=NAME, e.g. planner=GreedyNearest.")
+            raise PolicyError(f"--policy {arg!r} must be SLOT=NAME, e.g. planner=<a registered policy name>.")
         entry = out.setdefault(slot, {})
         if entry.get("type") not in (None, name):
             raise PolicyError(
@@ -576,7 +572,7 @@ def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]
     if not sep or not key_part:
         raise PolicyError(
             f"--policy-param {arg!r} must be SLOT.PATH=VALUE with a non-empty path, e.g. "
-            "planner.inner.dual_cycle_bonus_km=0."
+            "planner.inner.<param>=<value>."
         )
     segments = key_part.split(".")
     for cut in range(len(segments) - 1, 0, -1):
@@ -586,7 +582,7 @@ def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]
     if key_part in SLOTS:
         raise PolicyError(
             f"--policy-param {arg!r} must be SLOT.PATH=VALUE with a non-empty path, e.g. "
-            "planner.inner.dual_cycle_bonus_km=0."
+            "planner.inner.<param>=<value>."
         )
     known = ", ".join(SLOTS)
     renamed = RENAMED_SLOTS.get(segments[0])
@@ -599,31 +595,51 @@ def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]
 def policies_stamp(
     resolved: Mapping[str, ResolvedPolicy],
     *,
-    candidate_settings: Mapping[str, Any],
+    tree: Any,
     accounting_params: Mapping[str, Any],
     source: str,
 ) -> dict[str, Any]:
     """The run-provenance stamp ``run_config.meta.policies``.
 
-    ``{slot: {name, version, kind, timing, label, leaf, information_model, params,
-    source}}``: ``label`` is the selection (``"PooledMarket/GreedyNearest"``), ``leaf``
-    its innermost solver, ``params`` nested with each ref as ``{type, version,
-    params}``. The dispatch entry also carries ``share_tag_format``,
-    ``candidate_settings`` (the spatial knobs, plan §5) and
-    ``accounting_params``: the effective ``profile.solver_params`` the framework's
-    accounting (``benefit_km``, owner reserve, claims, arbitration) costs with
-    (review F1). It equals the shared keys of ``params`` whenever the policy
-    declares them; a cost-blind policy (Random) shows the dials it does not read.
-    ``source`` is ``bundle``, ``legacy-profile`` or ``override``.
+    ``{slot: {name, version, kind, timing, label, leaf, params, source}}``: ``label`` is
+    the selection (``"A/B"``: the top plus its ``inner`` chain), ``leaf`` its innermost
+    solver, ``params`` nested with each ref as ``{type, version, params}``. ``source`` is
+    ``bundle``, ``legacy-profile`` or ``override``. The planner entry also carries:
+
+    - ``share_tag_format`` -- the compat wire rule for the top
+      (``compat.wire.stamp_fields``);
+    - ``accounting_params`` -- the effective ``profile.solver_params`` the framework's
+      accounting (``benefit_km``, owner reserve) costs with (review F1);
+    - ``provenance`` -- ``{<node path>: <that node's Declaration.provenance>}`` for every
+      node of the bound ``tree`` (pre-order; the top's path is the shortest), the
+      solver's own JSON (e.g. its display ``badge`` and the candidate knobs it read);
+    - ``declaration`` -- ``{"cross_company": [[owner, carrier], ...]}``, the top's
+      declared pairs, sorted;
+    - ``world_reads`` -- the sorted world keys the bound tree's ``bind`` calls read.
+
+    ``tree`` is the run's ``dispatch.bind.BoundTree`` (duck-typed: ``nodes`` with
+    ``path`` and ``declaration``, ``declaration``, ``world_reads``), so this leaf module
+    imports nothing from ``policies.dispatch``.
     """
     stamp: dict[str, Any] = {}
     for slot, r in resolved.items():
         entry = {"name": r.name, "version": r.version, "kind": r.kind, "timing": r.timing,
-                 "label": r.label, "leaf": r.leaf, "information_model": r.information_model,
-                 "params": r.profile_params(), "source": source}
+                 "label": r.label, "leaf": r.leaf, "params": r.profile_params(), "source": source}
         if slot == "planner":
-            entry["share_tag_format"] = r.share_tag_format
-            entry["candidate_settings"] = dict(candidate_settings)
+            entry.update(stamp_fields(r.name))
             entry["accounting_params"] = dict(accounting_params)
+            entry["provenance"] = {node.path: _json_copy(node.declaration.provenance) for node in tree.nodes}
+            entry["declaration"] = {
+                "cross_company": [list(pair) for pair in sorted(tree.declaration.cross_company)],
+            }
+            entry["world_reads"] = sorted(tree.world_reads)
         stamp[slot] = entry
     return stamp
+
+
+def _json_copy(value: Mapping[str, Any]) -> dict[str, Any]:
+    """A plain-JSON deep copy of a provenance mapping (refuses a non-JSON value loudly)."""
+    try:
+        return json.loads(json.dumps(dict(value)))
+    except (TypeError, ValueError) as exc:
+        raise PolicyError(f"planner provenance {dict(value)!r} is not plain JSON: {exc}") from exc

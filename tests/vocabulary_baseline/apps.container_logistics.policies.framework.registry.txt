@@ -1,9 +1,0 @@
-id:INFORMATION_MODELS	4
-id:SHARE_TAG_FORMATS	4
-id:V1_SHARE_TAG_BUILTINS	4
-id:information_model	8
-id:per_company	1
-id:per_group	1
-id:share_tag_format	9
-str:v1	2
-sub:partitioned	1

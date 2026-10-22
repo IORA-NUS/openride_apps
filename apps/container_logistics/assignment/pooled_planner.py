@@ -30,9 +30,9 @@ from typing import Any, Callable, Dict, FrozenSet, List, Optional, Tuple
 
 from . import constraints as assign_constraints
 from . import spatial
-from .arbitration import DEFAULT_ARBITRATION_RULE, BaseArbitrationRule
-from .policy.claim import DEFAULT_CLAIM_POLICY, BaseClaimPolicy
-from .policy.offer import DEFAULT_OFFER_POLICY, BaseOfferPolicy
+from .arbitration import BaseArbitrationRule
+from .policy.claim import BaseClaimPolicy
+from .policy.offer import BaseOfferPolicy
 from .pools import Award, PoolMarket
 from .solver.base import Cost, Order, PairAllowed, Truck
 
@@ -42,8 +42,6 @@ __all__ = [
     "PooledMarketResult",
     "PooledPlannerContext",
     "build_round_candidates",
-    "effective_cooperation_stamp",
-    "resolve_market_config",
     "run_pooled_market",
 ]
 
@@ -67,74 +65,6 @@ logger = logging.getLogger(__name__)
 # backstop ever binds, the run is suspect and must say so itself.
 DEFAULT_MAX_ROUNDS = 20
 MAX_ROUNDS_CEILING = 100
-
-
-def resolve_market_config(planner: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The EFFECTIVE market block: authored values with defaults filled in.
-
-    Single source of truth for "what will actually run", used both by
-    :meth:`AssignmentApp._market_components` and by the run stamp, so a run can
-    never record a market block that differs from the one it executed (F7).
-    Pure and defensive — it never raises on a malformed block.
-    """
-    market = ((planner or {}).get("market") or {}) if isinstance(planner, dict) else {}
-    if not isinstance(market, dict):
-        market = {}
-
-    def _role(name: str, default_type: str) -> Dict[str, Any]:
-        raw = market.get(name)
-        if isinstance(raw, dict):
-            rtype = raw.get("type")
-            params = raw.get("params")
-            return {
-                "type": str(rtype) if rtype else default_type,
-                "params": dict(params) if isinstance(params, dict) else {},
-            }
-        return {"type": default_type, "params": {}}
-
-    try:
-        max_rounds = int(market.get("max_rounds", DEFAULT_MAX_ROUNDS))
-    except (TypeError, ValueError):
-        max_rounds = DEFAULT_MAX_ROUNDS
-    max_rounds = max(1, min(MAX_ROUNDS_CEILING, max_rounds))
-
-    return {
-        "offer": _role("offer", DEFAULT_OFFER_POLICY),
-        "claim": _role("claim", DEFAULT_CLAIM_POLICY),
-        "arbitration": _role("arbitration", DEFAULT_ARBITRATION_RULE),
-        "max_rounds": max_rounds,
-    }
-
-
-def effective_cooperation_stamp(
-    profile: Optional[Dict[str, Any]], active_structure: Optional[Dict[str, Any]]
-) -> Dict[str, Any]:
-    """What the run will ACTUALLY do, for the run record (plan §13.4 FIX-7).
-
-    Built from the same functions the runtime uses, so the stamp cannot drift
-    from reality. This exists because the previous stamp wrote ``pools: []`` for
-    every shipped bundle — none carries a compiled ``pools`` key — while the
-    runtime derived a full market from ``edges``, i.e. it recorded the OPPOSITE
-    of what ran, on exactly the workflow §8 promises.
-    """
-    from .pools import pools_from_structure  # local: keeps import graph acyclic
-
-    active = active_structure if isinstance(active_structure, dict) else {}
-    planner = (profile or {}).get("planner")
-    topology = str((planner or {}).get("topology") or "partitioned")
-    if topology == "two-stage":
-        topology = "pooled"
-    return {
-        "structure_id": active.get("id"),
-        "components": active.get("components") or [],
-        "adjacency": active.get("adjacency") or {},
-        "pools": [
-            {"id": p.id, "members": sorted(p.members)}
-            for p in pools_from_structure(active)
-        ],
-        "topology": topology,
-        "market": resolve_market_config(planner),
-    }
 
 
 @dataclass

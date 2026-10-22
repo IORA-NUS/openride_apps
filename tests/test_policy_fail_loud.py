@@ -78,7 +78,10 @@ def test_run_start_wiring_exits_2_before_the_cooperation_stamp(capsys):
     block and before the cooperation stamp.
     Verified to have teeth: changing ``sys.exit(2)`` to ``sys.exit(1)`` in
     ``_refuse_invalid_policy_config`` failed the exit-code assertion; moving the call
-    below the "Ship the EFFECTIVE cooperation" comment failed the ordering assertion.
+    below the "Ship the EFFECTIVE cooperation" comment failed the ordering assertion
+    (pre-WS4b). Since WS4b the anchor is the run-declaration merge
+    (``_apply_run_declaration``, which ships the solver's cooperation stamp); removing
+    that call from ``main`` failed the assertion.
     """
     import apps.simulation.run_container_logistics_simulation as launcher
 
@@ -93,7 +96,7 @@ def test_run_start_wiring_exits_2_before_the_cooperation_stamp(capsys):
     source = inspect.getsource(launcher.main)
     check = source.index("_assert_policies_resolvable_or_exit(")
     assert source.index("_apply_dispatch_overrides_or_exit(") < check < source.index(
-        "Ship the EFFECTIVE cooperation structure"
+        "_apply_run_declaration("
     ), "the run-start check must run after the overrides and before the cooperation stamp"
 
 

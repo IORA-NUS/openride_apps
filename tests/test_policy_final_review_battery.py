@@ -58,7 +58,7 @@ def _register_slow_leaf(name: str, budget_ms: int):
     """A correct central leaf that is slow ONLY on the scale tick, declaring ``budget_ms``."""
 
     @policy(slot="planner", name=name, version="1", description="slow by nature (a NetworkFlow stand-in)",
-            information_model="central", perf_budget_ms=budget_ms)
+            perf_budget_ms=budget_ms)
     class SlowLeaf(DispatchPolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
@@ -151,8 +151,7 @@ def test_check_result_status_names_skip_pass_and_fail():
 
 
 def _module_random_leaf(name: str = "ModuleRandom"):
-    @policy(slot="planner", name=name, version="1", description="draws from the random module",
-            information_model="central")
+    @policy(slot="planner", name=name, version="1", description="draws from the random module")
     class ModuleRandom(DispatchPolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
@@ -204,7 +203,7 @@ def _groups_composite(name: str, *, declare: bool, own_draw: bool):
     extra = {"module_rng": "draws one module number per tick on purpose"} if declare else {}
 
     @policy(slot="planner", name=name, version="1", description="groups via the shipped helpers",
-            information_model="per_group", **extra)
+            **extra)
     class Groups(CompositePolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
@@ -286,8 +285,7 @@ def test_cli_renders_skip_and_exits_0(monkeypatch, capsys):
 # --- MINOR-7: name lists from the registry ----------------------------------------------
 
 def _extra_leaf(name: str = "ExtraLeafZ"):
-    @policy(slot="planner", name=name, version="1", description="an extra registered leaf",
-            information_model="central")
+    @policy(slot="planner", name=name, version="1", description="an extra registered leaf")
     class Extra(DispatchPolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):

@@ -429,7 +429,7 @@ def test_unknown_dispatch_timing_is_named_as_such(timing):
     from apps.container_logistics.policies.framework import PolicyTimingError
 
     prof = {"policies": {"planner": {"type": "GreedyNearest", "timing": timing, "params": {}}}}
-    with pytest.raises(PolicyTimingError, match="is not a planner timing. Allowed: online, plan"):
+    with pytest.raises(PolicyTimingError, match="is not a planner timing. Allowed: online\\.$"):
         resolve_dispatch_for_profile(prof)
 
 
@@ -625,8 +625,7 @@ def test_build_policy_tree_refuses_a_class_that_rejects_the_construction_keyword
     """
     with isolated_registry():
 
-        @policy(slot="planner", name="TestNoInnerKwargs", version="1", description="test only",
-                information_model="per_group")
+        @policy(slot="planner", name="TestNoInnerKwargs", version="1", description="test only")
         class _NoInnerKwargs:
             @dataclass(frozen=True)
             class Params(PolicyParams):

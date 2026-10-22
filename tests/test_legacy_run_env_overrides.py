@@ -274,4 +274,6 @@ def test_run_name_segments_unchanged_for_legacy_inputs(case, legacy_bundle, monk
             behavior["profile"].pop("policies_format")
     assert _run_name(monkeypatch, tmp_path, assignment, env) == expected
     out = capsys.readouterr().out
-    assert "Policies effective: planner=" in out and "information_model=" in out
+    # WS4b: the effective line dropped ``information_model=``; the run declaration is printed.
+    assert "Policies effective: planner=" in out and "information_model=" not in out
+    assert "Run declaration: cross_company=" in out

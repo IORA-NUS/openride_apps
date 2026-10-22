@@ -142,7 +142,7 @@ def _register_leaf(name, *, str_param=False):
     from apps.container_logistics.policies.dispatch.plan import Plan
     from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
-    @policy(slot="planner", name=name, version="1", description="test leaf", information_model="central")
+    @policy(slot="planner", name=name, version="1", description="test leaf")
     class Leaf(DispatchPolicy):
         if str_param:
             @dataclass(frozen=True)
