@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import scenario_config
-from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
+from apps.container_logistics.policies.compat.legacy import LEGACY_LEAF_DEFAULT
 from apps.container_logistics.policies.framework import list_policies
 from .order_demand import (
     LEGACY_EARLY_ORDER_COUNT,
@@ -1568,7 +1568,7 @@ def _legacy_fallback_selection(gs: dict[str, Any]) -> dict[str, Any]:
     ``planner`` names when it translates, else ``Partitioned``. The raw solver text is
     kept as written so the editor can show the error.
     """
-    from apps.container_logistics.policies.dispatch import legacy
+    from apps.container_logistics.policies.compat import legacy
 
     raw_solver = gs.get("solver")
     leaf = {"type": str(raw_solver).strip() if raw_solver else LEGACY_LEAF_DEFAULT, "params": {}}

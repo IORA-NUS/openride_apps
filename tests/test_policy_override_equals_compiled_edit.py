@@ -31,8 +31,8 @@ from pathlib import Path
 import pytest
 
 from apps.container_logistics.datagen.preprocess import SpecValidationError
+from apps.container_logistics.policies.compat.legacy_env import apply_planner_topology_override
 from apps.container_logistics.scenario.scenario_overrides import (
-    apply_planner_topology_override,
     apply_policy_overrides,
     apply_solver_override,
     current_policies_for_profile,

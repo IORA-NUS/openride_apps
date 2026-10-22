@@ -31,6 +31,7 @@ from apps.container_logistics.scenario.frontend_scenario_spec import sanitize_ru
 from apps.container_logistics.policies.dispatch.profile import (
     assert_assignment_profiles_resolvable,
 )
+from apps.container_logistics.policies.compat.legacy_env import read_legacy_dispatch_env
 from apps.container_logistics.policies.framework import PolicyError
 
 
@@ -88,24 +89,19 @@ def _resolve_policy_overrides() -> dict:
 def _apply_dispatch_overrides_or_exit(assignment_collection) -> tuple[dict, dict]:
     """Apply every per-run dispatch input in one place; exit 2 on any ``PolicyError``.
 
-    ``ORSIM_POLICY_OVERRIDES``, ``ORSIM_PLANNER_TOPOLOGY``, ``ORSIM_OFFER_POLICY`` /
-    ``ORSIM_CLAIM_POLICY`` / ``ORSIM_ARBITRATION_RULE`` / ``ORSIM_MARKET_MAX_ROUNDS``
-    and ``ORSIM_SOLVER``, in that order, through
+    ``ORSIM_POLICY_OVERRIDES``, the legacy dispatch variables (read by
+    ``compat.legacy_env.read_legacy_dispatch_env`` and handed through opaquely) and
+    ``ORSIM_SOLVER``, in that order, through
     ``scenario_overrides.run_dispatch_overrides`` (the function the control plane's
     dry run calls too). Returns ``(merged_overrides, labels)``: ``labels`` holds the
-    ``planner`` and ``topology`` run-name segments (or ``None``).
+    ``planner`` run-name segment (or ``None``) and the ``legacy`` segments (a list).
     """
-    env = {key: os.environ.get(name, "").strip() or None for key, name in (
-        ("topology", "ORSIM_PLANNER_TOPOLOGY"), ("offer", "ORSIM_OFFER_POLICY"),
-        ("claim", "ORSIM_CLAIM_POLICY"), ("arbitration", "ORSIM_ARBITRATION_RULE"),
-        ("max_rounds", "ORSIM_MARKET_MAX_ROUNDS"),
-    )}
     try:
         return run_dispatch_overrides(
             assignment_collection,
             overrides=_resolve_policy_overrides(),
             solver=_resolve_solver(),
-            **env,
+            legacy_env=read_legacy_dispatch_env(os.environ),
         )
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
@@ -341,12 +337,12 @@ def main():
         scenario_manager.orsim_settings
     )
 
-    # Per-run dispatch selection (ORSIM_POLICY_OVERRIDES, ORSIM_PLANNER_TOPOLOGY, the
-    # ORSIM_* market variables and ORSIM_SOLVER = the innermost per-scope solver):
-    # patch the loaded assignment behaviors in place so this run uses the requested
-    # policy/params on the identical (unchanged) scenario data — enabling
+    # Per-run dispatch selection (ORSIM_POLICY_OVERRIDES, the legacy dispatch
+    # variables of compat/legacy_env.py and ORSIM_SOLVER = the innermost per-scope
+    # solver): patch the loaded assignment behaviors in place so this run uses the
+    # requested policy/params on the identical (unchanged) scenario data — enabling
     # apples-to-apples comparisons on one scenario dir. ONE application point; the
-    # topology segment is appended at its old place below.
+    # legacy segments are appended at their old place below.
     dispatch_overrides, dispatch_labels = _apply_dispatch_overrides_or_exit(
         scenario_manager.get_agent_collection("assignment")
     )
@@ -382,20 +378,15 @@ def main():
         if coop_sharing:
             print(f"Sharing algorithm override requested: {coop_sharing}")
 
-    # Per-run PLANNER TOPOLOGY (shared-pool plan §6.12), applied above with the other
-    # dispatch inputs (ORSIM_PLANNER_TOPOLOGY is translated into --policy
-    # planner=PooledMarket / Partitioned, keeping the per-scope solver; the ORSIM_*
-    # market variables into its params). The DEFAULT TOPOLOGY IS NOT FLIPPED —
-    # selection is per run, on purpose: pooled and partitioned produce different
-    # numbers and their runs are NOT comparable (plan §8). The segment stays here so
-    # run names keep their pre-v2 order (solver · structure · topology).
-    applied_topology = dispatch_labels["topology"]
-    if applied_topology:
-        print(f"Planner topology override: {applied_topology}")
-        # Surface the topology in run lists (same trick as the solver override)
+    # The legacy dispatch variables' run-name segments (compat/legacy_env.py), applied
+    # above with the other dispatch inputs. They stay HERE so run names keep their
+    # pre-v2 order (solver · structure · legacy segment) and stay byte-identical.
+    for legacy_segment in dispatch_labels["legacy"]:
+        print(f"Legacy dispatch override: {legacy_segment}")
+        # Surface the segment in run lists (same trick as the solver override)
         # so runs are self-describing in the picker.
         run_name = (
-            f"{run_name} · {applied_topology}" if run_name else applied_topology
+            f"{run_name} · {legacy_segment}" if run_name else legacy_segment
         )
 
     # Fail loud before any agent spawns: an unknown dispatch policy would otherwise

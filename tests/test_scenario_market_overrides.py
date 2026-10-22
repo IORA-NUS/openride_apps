@@ -14,7 +14,7 @@ import pytest
 
 from apps.container_logistics.datagen.preprocess import PLANNER_TOPOLOGIES
 from apps.container_logistics.policies.framework import PolicyError, UnknownPolicyError
-from apps.container_logistics.scenario.scenario_overrides import (
+from apps.container_logistics.policies.compat.legacy_env import (
     apply_market_override,
     apply_planner_topology_override,
     known_planner_topologies,

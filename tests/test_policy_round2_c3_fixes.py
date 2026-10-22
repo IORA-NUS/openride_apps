@@ -48,10 +48,8 @@ from apps.container_logistics.policies.framework.catalog import policy_catalog
 from apps.container_logistics.policies.framework.registry import get_policy_spec, isolated_registry, list_policies
 from apps.container_logistics.policies.dispatch.context import DispatchClock
 from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
-from apps.container_logistics.scenario.scenario_overrides import (
-    apply_planner_topology_override,
-    apply_policy_overrides,
-)
+from apps.container_logistics.policies.compat.legacy_env import apply_planner_topology_override
+from apps.container_logistics.scenario.scenario_overrides import apply_policy_overrides
 from tests.test_assignment_cooperation import _order, _truck
 from tests.test_whole_tick_dispatch import _CLOCK, _app, _base_profile, _ids
 

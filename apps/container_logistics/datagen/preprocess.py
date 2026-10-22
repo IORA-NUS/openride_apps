@@ -39,7 +39,7 @@ from .distributions.sources import load_curve_file, load_matrix_file
 from .agents.registry import POLICY_REGISTRY, canonical_policy_type, default_policy_name
 # The one policies import datagen makes (round-2 §4): the legacy translation leaf
 # (stdlib + framework errors; component names are checked through it lazily).
-from apps.container_logistics.policies.dispatch import legacy as _legacy_dispatch
+from apps.container_logistics.policies.compat import legacy as _legacy_dispatch
 from .spec import GenerationSpec
 
 MAX_TRUCKS = 1_000_000
