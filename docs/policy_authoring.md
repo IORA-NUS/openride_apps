@@ -285,7 +285,7 @@ class LargestGroupFirst(CompositePolicy):
   `determinism.no_module_rng[inner=RandomAssignment]` (checked: exit 1). This is the pattern
   `PooledMarket` uses.
 - Run each heavy scope solve through `ctx.execute` (the eventlet `tpool` under
-  `solve_in_thread`). The runner offloads a top-level **non-composite** itself; a composite
+  `solve_in_thread`, which is off by default). The runner offloads a top-level **non-composite** itself; a composite
   is called directly and owns its scopes' offloading. Both built-ins do this: `Partitioned`
   per group, `PooledMarket` per company solve (`ScopeDecider.run` calls
   `company_ctx.execute`). Offload depth is 1: the runner never wraps a composite, so nothing
@@ -319,6 +319,9 @@ built by `scopes.py` hold only one group's, or one company's plus the market-vis
 data; the battery's `information.scopes_respect_model` audits every sub-scope via
 `ctx.scope_log`. It certifies the helpers and the declared shape. **It cannot prove a
 third-party solver does not peek** (e.g. by keeping a reference to the tick context).
+The model describes what the **inner leaf** is handed. The decomposition itself sees the whole
+tick, and inside `PooledMarket` the `claim` component gets the market object and arbitration
+sees every bid.
 
 ## 5. The context (`DispatchContext`, `dispatch/context.py`)
 
@@ -382,8 +385,11 @@ tick, more than the shortcut saves.
   builds a heads-only plan (a repeated truck raises). Insertion order is commit order.
   Deferring an order = leaving it out (it stays owned and unassigned). Reserved notes:
   `market` (`rounds_used`, `converged`, `candidate_pairs_round1`, `candidate_pairs_total`,
-  `max_rounds`) and `pair_notes` (`{(truck_id, order_id): {...}}`; only `pool_id` and
-  `market_round` reach a tag).
+  `max_rounds`) and `pair_notes` (`{(truck_id, order_id): {...}}`, cross-company awards only;
+  only `pool_id` and `market_round` reach a tag).
+- A `PooledMarket` still committing when `max_rounds` is reached stops unconverged: the tick
+  is counted as truncated (WARNING per tick, `POOLED MARKET TRUNCATED BY BACKSTOP` ERROR once
+  per run, `meta.market.ticks_truncated_by_backstop`).
 
 **Discards.** ERROR lines, agent-side: `journalctl --user -u openride-celery`, **not** `sim.log`.
 - **Tick level** (message 18; whole tick discarded, nothing committed):
@@ -396,24 +402,29 @@ tick, more than the shortcut saves.
 
 | Where | What happens |
 |---|---|
-| Top-level leaf, `Partitioned`'s inner, or your own composite (unless it catches) | Propagates out of `AssignmentApp.assign()`, i.e. the tick. |
+| Top-level leaf, `Partitioned`'s inner, your own composite (unless it catches), or a `PooledMarket` arbitration rule | Propagates out of `AssignmentApp.assign()`, i.e. the tick. ORSim's step handler catches it (`Exception in step for Agent …`): that tick commits nothing and the agent lives on. |
 | `PooledMarket`'s inner | Message 20, `DISPATCH POLICY CRASHED: inner <name> raised for company '<hid>' in round <r> at step <n>; that company commits nothing this round (pooled-market behaviour, unchanged). Traceback follows. (celery journal, not sim.log)`; counted in `stats["crashes"]`; the tick continues. |
+| `PooledMarket`'s offer or claim component | Swallowed: `Offer policy failed for haulier …` / `Claim policy failed for haulier …`; that company contributes / bids nothing. Not counted, not message 20. |
 
 Violations and crashes are **not stamped into `run_config`**; only the journal line and the
 in-memory `stats`. A run whose policy never commits anything can still finish `ok: true`.
 
 ## 7. Accounting is not your objective
 
-Computed in `assignment/accounting.py` after the commit, with **no solver input**:
+Computed in `assignment/accounting.py` after the commit. The numbers come from the committed
+pairs and the world cost (the only solver-supplied values are `pool_id`/`market_round` from
+`pair_notes`), so the same committed pairs get the same tags whichever solver produced them:
 `account_shares(pairs, *, candidates, cost, own_allowed)` then
 `render_share_tags(accounts, *, fmt, pair_notes=None)` (called in
 `AssignmentApp._dispatch_tick` with `cost=world.accounting_cost`,
 `own_allowed=world.own_allowed`, `fmt` = the top policy's `share_tag_format`).
 
 - Cross-company pairs only (both hauliers known and different).
-- `owner_reserve_km`: the owner's cheapest free, own-feasible truck after the commit;
+- `owner_reserve_km`: the owner's cheapest free, own-feasible truck after the commit (`None`
+  when it had none), so it depends on the plan;
   `awarded_cost_km = float(accounting_cost(t, o))` (exception → `inf`);
-  `benefit_km = reserve − awarded`.
+  `benefit_km = reserve − awarded`, **signed**, `None` when there is no reserve, rounded to
+  0.001 km.
 - The cost is `constraints.assignment_cost` with the profile's `solver_params`, whatever the
   policy optimises. `solver_params` mirrors the dual-cycle params of the first node, pre-order,
   that declares them (normally the leaf); stamped as `accounting_params`.
@@ -424,7 +435,8 @@ Two wire formats, the same values:
 - `audited` (default): `shared`, `owner_haulier_id`, `carrier_haulier_id`, `benefit_km`,
   `pool_id`, `awarded_cost_km`, `owner_reserve_km`, `market_round`; non-finite → `None`
   (FIX-5). `pool_id`/`market_round` are `None` unless `pair_notes` supply them.
-- `v1` (`Partitioned` only): the first four keys; a non-finite benefit stays ±inf. Kept so
+- `v1` (`Partitioned` only): the first four keys; a non-finite benefit stays `-inf` (the only
+  reachable one: the reserve is always finite). Kept so
   every pre-v2 partitioned run stays byte-identical. Do not "clean it up".
 
 ## 8. Determinism
@@ -525,7 +537,8 @@ Single ticks screen; runs certify (n≥3, interleaved).
 `live_heads`, `rebate_aware`. `every=N` counts **dispatch ticks, not sim steps**: the first
 tick is always captured, then every N-th (a runner rebuilt mid-run restarts the count;
 `max` still counts the files on disk). Replay reproduces the live heads; it refuses a rebate-aware tick
-and any `/1` file (message 22: re-capture). Also `run-simulation --capture-dispatch` and
+(the rebate book is never captured, so re-capturing does not help) and any `/1` file
+(message 22: re-capture). Also `run-simulation --capture-dispatch` and
 `ORSIM_CAPTURE_DISPATCH=every=N,max=M`; a malformed value refuses the run (exit 2).
 
 ## 10. Select it

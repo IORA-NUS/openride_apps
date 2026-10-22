@@ -58,7 +58,7 @@ topologies hard-wired in `AssignmentApp`). Round 2 hands the policy the whole ti
 | Which cooperation structure / pools exist; who may serve whom (`ctx.world.allowed`) | **Framework** (world data; the Run step's structure dropdown) |
 | Every committed head is world-allowed; no truck/order twice | **Framework** (tick-level `check_plan`) |
 | Committing chain heads (`online`: heads only) | **Framework** |
-| `benefit_km`, `owner_reserve_km`, `awarded_cost_km` | **Framework** (`assignment/accounting.py`, no solver input) |
+| `benefit_km`, `owner_reserve_km`, `awarded_cost_km` | **Framework** (`assignment/accounting.py`; computed from the committed pairs, so the same pairs get the same tags whichever solver produced them) |
 | `meta.market` patch | **Framework**, only when the plan's notes carry `market` |
 | How the tick is split (none / per group / per company) | **Solver** |
 | Offers, claims, rounds, arbitration, I-P1..I-P4 | **Solver** (`PooledMarket` + components) |
@@ -71,7 +71,7 @@ central planner (NetworkFlow, P4) is just a leaf.
 | Policy | Kind | Information model | Share tags | Notes |
 |---|---|---|---|---|
 | `Partitioned(inner)` | decomposition | `per_group` | `v1` (reserved) | **Default.** Groups in pre-v2 order; passes `sample_rng=random` and declares `module_rng` for that draw, plus `order_sensitive` (pre-v2 byte identity). Inner exceptions propagate. |
-| `PooledMarket(max_rounds, offer, claim, arbitration, inner)` | decomposition | `per_company` | `audited` | The pooled topology as a solver; engine stays in `assignment/pooled_planner.py`. Each company solve goes through `ctx.execute` (offload depth 1), so `solve_in_thread` covers a heavy inner such as NetworkFlow. |
+| `PooledMarket(max_rounds, offer, claim, arbitration, inner)` | decomposition | `per_company` | `audited` | The pooled topology as a solver; engine stays in `assignment/pooled_planner.py`. Each company solve goes through `ctx.execute` (offload depth 1), so `solve_in_thread` (off by default) covers a heavy inner such as NetworkFlow. |
 | `GreedyNearest` | leaf | `central` | `audited` | As `inner`: per scope. At top level: a **central** planner. |
 | `RandomAssignment` | leaf | `central` | `audited` | Same. Default `inner`. |
 
@@ -99,7 +99,10 @@ longer slots: `PooledMarket` params, validated against the live `OFFER_REGISTRY`
    solve; depth is always 1) → capture → `check_plan` vs `world.allowed` → heads.
 6. `account_shares(pairs, candidates=, cost=world.accounting_cost, own_allowed=world.own_allowed)`
    → `render_share_tags(fmt=<top's share_tag_format>, pair_notes=notes["pair_notes"])`.
-7. `notes["market"]` present → `_record_round_stats` + `meta.market` patch.
+7. `notes["market"]` present → `_record_round_stats` + `meta.market` patch. A market still
+   committing when `max_rounds` is reached stops unconverged: the tick is **truncated**
+   (WARNING per tick, `POOLED MARKET TRUNCATED BY BACKSTOP` ERROR once per run,
+   `meta.market.ticks_truncated_by_backstop` pushed immediately).
 
 **Tick-scope sampling is per haulier** (C3 deviation): a central leaf with
 `candidates=sampled` caps `max_trucks_per_scope` per company, a decomposition caps each scope
@@ -155,13 +158,20 @@ at registration and on component lookup), so no name contains a separator, `=`, 
 information_model=<m> params=<json> accounting_params=<json>`. `meta.market` is written only on
 the pooled path. The information model is enforced structurally (sub-scopes built by
 `scopes.py`) and audited by `information.scopes_respect_model`; a tripwire, not a proof.
+The model describes what the **inner leaf** is handed: the decomposition itself sees the whole
+tick, and inside `PooledMarket` `claim` gets the market object and arbitration sees every bid.
 
 ### 3.4 Accounting: one computation, two wire formats
 
-`assignment/accounting.py`: cross-company pairs only, after the commit, no solver input.
-`owner_reserve_km` (moved verbatim from `pooled_planner`), `awarded_cost_km =
-float(accounting_cost(t, o))` (exception → `inf`), `benefit_km = reserve − awarded`.
-- **`v1`** (4 keys, non-finite benefit stays ±inf, FIX-5 defect) — reserved to `Partitioned` by
+`assignment/accounting.py`: cross-company pairs only, after the commit. The only solver-supplied
+values are `pool_id`/`market_round` from `pair_notes`; the numbers come from the committed pairs
+and the world cost, so the same committed pairs get the same tags whichever solver produced
+them. They still depend on the plan: `owner_reserve_km` (moved verbatim from `pooled_planner`)
+is the owner's cheapest own truck still free **after** the tick's commits (`None` when it had
+none), `awarded_cost_km = float(accounting_cost(t, o))` (exception → `inf`), and `benefit_km =
+reserve − awarded` is **signed**, `None` when there is no reserve, rounded to 0.001 km.
+- **`v1`** (4 keys, a non-finite benefit stays `-inf`, the only reachable one since the reserve
+  is always finite; FIX-5 defect) — reserved to `Partitioned` by
   registration (message 15), because every pre-v2 partitioned run carries exactly these bytes.
 - **`audited`** (8 keys, non-finite → `None`) — every other policy, central leaves included
   (`pool_id`/`market_round` `None`).
@@ -202,9 +212,12 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
   comparison over real bundles: **204/204 identical**, `277e67b` vs `f8b91b9` (17 compiled
   bundles × partitioned / pooled / env-pooled × 4 ticks). Runs at defaults before and after
   are comparable.
-- **Selecting the old pooled topology is the same arm**: `--policy dispatch=PooledMarket` and
-  `ORSIM_PLANNER_TOPOLOGY=pooled` resolve to the same selection (label
-  `PooledMarket/<leaf>`, verified offline) and equal the old pooled path (test).
+- **Selecting the old pooled topology is the same arm, where `planner.market` is the default**:
+  `ORSIM_PLANNER_TOPOLOGY=pooled` takes the market from `planner.market` and equals the old
+  pooled path (tested); `--policy dispatch=PooledMarket` resets the components to their
+  defaults. Both give label `PooledMarket/<leaf>`, and they are equal only where
+  `planner.market` is the default, which holds for every shipped spec (the `--policy` arm's
+  equality is the pending live gate in §7).
 - **New arms, NOT comparable to existing runs:** a top-level `GreedyNearest` /
   `RandomAssignment` / any leaf (central); `PooledMarket` with a different `inner`;
   `RandomAssignment candidates=spatial`; **any params change** (incl. `OfferSpare` /
@@ -222,7 +235,7 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
    `--policy-param dispatch.inner=X`. Check `label`.
 2. **Round-1-compiled bundles are refused** (`policies_format` missing). Recompile
    (`openride scenario compile <slug>`); never hand-patch.
-3. **`v1` tags are reserved to `Partitioned`.** Do not "clean up" the ±inf rendering.
+3. **`v1` tags are reserved to `Partitioned`.** Do not "clean up" the `-inf` rendering.
 4. **Module RNG.** `Partitioned` passes the `random` module as its groups' RNG and as
    `partition_context`'s `sample_rng` (declared `module_rng`) and never reads `ctx.rng`, so no
    tick `Random` is built on the default path. `sample_rng` is a **required** keyword: a NEW
@@ -240,10 +253,13 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
 6. **Two discard levels.** Tick-level violation (message 18) discards the whole tick;
    scope-level (19) only that scope — inside `PooledMarket` that company for that round.
    ERROR lines in `journalctl --user -u openride-celery`, **not** `sim.log`.
-7. **Crashes.** A top-level leaf's, `Partitioned`'s inner's or a custom composite's exception
-   propagates out of the tick. A `PooledMarket` inner crash is logged
-   `DISPATCH POLICY CRASHED` (20), counted, and that company commits nothing that round; the
-   run still finishes `ok: true`. Neither violations nor crashes are stamped in `run_config`.
+7. **Crashes.** A top-level leaf's, `Partitioned`'s inner's, a custom composite's or a
+   `PooledMarket` arbitration rule's exception propagates out of the tick; ORSim's step
+   handler catches it (`Exception in step for Agent …`), the tick commits nothing and the
+   agent lives on. A `PooledMarket` inner crash is logged `DISPATCH POLICY CRASHED` (20),
+   counted, and that company commits nothing that round. An offer or claim crash is swallowed
+   (`Offer/Claim policy failed for haulier …`: that company contributes / bids nothing), not
+   counted and not message 20. The run still finishes `ok: true`. Neither violations nor crashes are stamped in `run_config`.
 8. **Per-arm budgets.** `GreedyNearest candidates=sampled` is budgeted 5790 ms (measured
    ~1.9 s), above `STEP_SETTLE_SECONDS` (2 s): at 1000×500 that arm makes the assignment agent
    a per-step straggler. An unmeasured composite `inner=X` arm is budgeted
@@ -269,8 +285,9 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
     physical verdict for heads it already proved (keyed on document identity), so a policy
     that mutates and restores a truck or order during a sub-solve can commit infeasible heads.
     A fingerprint check was measured at ~0.9 ms per tick and not adopted; the contract is
-    documented in `DispatchPolicy` and pinned by tests. `policies_format` must be the integer
-    2 (`2.0` and other values are refused as an unknown format).
+    documented in `DispatchPolicy` and pinned by tests. A profile that carries a `policies`
+    block needs `policies_format` = the integer 2 (`2.0` and other values are refused as an
+    unknown format); a profile with no `policies` block is legacy and accepted.
 
 ---
 
@@ -298,10 +315,12 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
   `no_module_rng[inner=RandomAssignment]` (exit 1).
 - Gate 6 (performance) vs `277e67b`, interleaved, 70 samples per arm: partitioned **1.012
   PASS**, sampled **1.021 PASS**, pooled **1.069** (+19.4 ms/tick vs a +16.1 ms bound):
-  **WAIVED**, attributed to GC-phase noise (1.013 with the GC phase held level).
+  **WAIVED** (so not all offline gates are green), attributed to GC-phase noise (1.013 with
+  the GC phase held level).
   **Independently re-measured** (n=50/arm): spec protocol pooled 1.059 (+16.6 ms, 0.5 ms over);
   with `gc.collect()`+`gc.disable()` per sample 1.012 (+3.2 ms); steady state both arms run 23
-  gen-2 collections per 40 ticks. The GC-phase explanation holds; waiver confirmed.
+  gen-2 collections per 40 ticks. The GC-phase explanation holds; waiver confirmed. A real
+  residual remains: about +2% (~6 ms/tick) in steady state, the operational cost.
 - Frontend (analytics `57cba42`): `tsc --noEmit` 0, vitest 601/601.
 - `policy list market.offer` lists the three components; `policy list` shows info models.
 
@@ -310,7 +329,8 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
       `dual_cycle_rate` in band, 100% `osrm`, 0 `DISPATCH POLICY` lines, stamp `label` and
       `information_model` present, run name unchanged.
 - [ ] `collab_scale_500t_v2 --structure chain --policy dispatch=PooledMarket` n=3: as above,
-      plus `meta.market` present and `benefit == reserve − awarded` on every tag.
+      plus `meta.market` present and `benefit == reserve − awarded` (to the 0.001 km rounding)
+      on every tag that carries all three values.
 - [ ] One `ORSIM_PLANNER_TOPOLOGY=pooled` run whose stamp equals the `--policy` arm.
 - [ ] Browser: edit a nested ref param in Operator policies, save, run, confirm the stamp.
 - [ ] `--capture-dispatch` run, then `policy bench --fixtures` over it.
