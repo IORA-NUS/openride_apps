@@ -25,8 +25,19 @@ which message 14 guarantees at run start. ``CompanyRule`` still builds the round
 prebuilt spatial candidates (``pooled_planner.build_round_candidates``).
 
 Returns ``Result(pairs in award order, solver_notes={(truck_id, order_id): {pool_id,
-market_round}}, tick_notes={"market": round provenance})``. The framework re-checks
-every pair, does the accounting (``audited`` tags) and records the round provenance.
+market_round}}, tick_notes=<round provenance, MARKET_NOTE_KEYS>)``. The framework
+re-checks every pair and does the accounting (``audited`` tags); the round provenance is
+folded by the run-stats aggregator the top ``bind`` declares
+(``_market_stats.RoundStatsAggregator``, ``run_config.meta.market``).
+
+Bid cost (plan ``plan_contract_final.md`` G2, WS4a): the market prices offers, claims,
+arbitration and award ``cost_km`` with its OWN cost, built from its inner's dual-cycle
+params when the inner declares them (GreedyNearest) and the constraint defaults
+otherwise; it no longer borrows the framework's accounting measurement. Identical
+whenever the live dials equal the inner's (the one-dial mirror) or are at the defaults
+(every shipped bundle and golden case). The boundary: pooled + a cost-blind inner
+(RandomAssignment) + non-default ``solver_params`` now bids with the constraint defaults.
+The company sub-ticks keep the framework's measurement.
 
 Randomness: the tick ``Random`` (``tick.rng``, created here on first read) is injected
 into ``inner`` with ``set_rng`` and the tick seed with ``set_tiebreak`` (through the
@@ -47,18 +58,19 @@ from apps.container_logistics.assignment import pooled_planner
 from apps.container_logistics.assignment.pools import PoolMarket
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework.components import instantiate_component
-from apps.container_logistics.policies.solver_lib import cooperation
+from apps.container_logistics.policies.solver_lib import cooperation, objective
 from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 
 from ..bind import Declaration
 from ..composite import CompositePolicy
 from ..result import Result
+from ._market_stats import RoundStatsAggregator
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["CompanyRule", "PooledMarket", "MARKET_NOTE_KEYS"]
 
-#: The keys of ``Result.tick_notes["market"]`` (``AssignmentApp._record_round_stats`` reads them).
+#: The keys of ``Result.tick_notes`` (``_market_stats.RoundStatsAggregator.fold`` reads them).
 MARKET_NOTE_KEYS = ("rounds_used", "converged", "candidate_pairs_round1", "candidate_pairs_total", "max_rounds")
 
 _INNER_HELP = (
@@ -139,7 +151,7 @@ class PooledMarket(CompositePolicy):
         return self._components
 
     def bind(self, params: Any, world: Mapping[str, Any], *, top: bool) -> Declaration:
-        """Validate the active arm (message 14); at the top declare its cross-company pairs.
+        """Validate the active arm (message 14); at the top declare its cross-company pairs and run stats.
 
         Reads every world key ``solve_tick`` reads: ``cooperation``,
         ``max_travel_time_pickup`` (the company rule) and the four candidate knobs (the
@@ -149,7 +161,9 @@ class PooledMarket(CompositePolicy):
         arm = cooperation.resolve_arm(world)
         world.get("max_travel_time_pickup")
         CandidateSettings.from_world(world)
-        return Declaration(cross_company=cooperation.directed_pairs(arm) if top else frozenset())
+        if not top:
+            return Declaration()
+        return Declaration(cross_company=cooperation.directed_pairs(arm), run_stats=RoundStatsAggregator)
 
     def solve_tick(self, tick: Any, params: Any) -> Result:
         """Run the market for ``tick``'s trucks and orders; the result carries the round provenance."""
@@ -170,7 +184,7 @@ class PooledMarket(CompositePolicy):
                 claim=claim,
                 arbitration=arbitration,
                 max_rounds=max_rounds,
-                cost=tick.measure.cost,
+                cost=_bid_cost(tick.callee(params.inner).params),
                 rng=tick.rng,
                 tick_seed=tick.seed,
                 max_travel_time_pickup=tick.world.get("max_travel_time_pickup"),
@@ -185,8 +199,17 @@ class PooledMarket(CompositePolicy):
             "candidate_pairs_total": result.candidate_pairs_total,
             "max_rounds": max_rounds,
         }
-        return Result.from_pairs(result.assignment, solver_notes=dict(result.pair_notes),
-                                 tick_notes={"market": market})
+        return Result.from_pairs(result.assignment, solver_notes=dict(result.pair_notes), tick_notes=market)
+
+
+def _bid_cost(inner_params: Any) -> Any:
+    """The market's own bid cost: its inner's dual-cycle params when declared, else the constraint defaults."""
+    bonus = getattr(inner_params, "dual_cycle_bonus_km", None)
+    radius = getattr(inner_params, "dual_cycle_radius_km", None)
+    return objective.dual_cycle_cost_fn(
+        bonus_km=assign_constraints._DEFAULT_DUAL_CYCLE_BONUS_KM if bonus is None else bonus,
+        radius_km=assign_constraints._DEFAULT_DUAL_CYCLE_RADIUS_KM if radius is None else radius,
+    )
 
 
 @dataclass(frozen=True)

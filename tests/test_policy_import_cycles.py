@@ -61,6 +61,11 @@ _LEAVES = [
     "apps.container_logistics.policies.compat.defaults",
     "apps.container_logistics.policies.compat.mirrors",
     "apps.container_logistics.policies.compat.legacy_env",
+    # WS4a: the run-stats protocol/writer, the market's aggregator and the app's compat
+    # accessor mixin (assignment.app imports compat.run_stats at module top).
+    "apps.container_logistics.policies.dispatch.run_stats",
+    "apps.container_logistics.policies.dispatch.library._market_stats",
+    "apps.container_logistics.policies.compat.run_stats",
 ]
 
 

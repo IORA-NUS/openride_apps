@@ -357,6 +357,8 @@ def test_market_stamp_is_flushed_at_close():
     app.assign("2020-01-01 08:00:00", time_step=0)
 
     flushed = []
-    app._patch_round_stats_to_run_config = lambda force=False: flushed.append(force) or True
+    # WS4a: the round stats are the market's declared run-stats aggregator; close()
+    # force-pushes every aggregator through the app's run-record writer.
+    app._patch_run_config_meta = lambda key, value: flushed.append((key, value)) or True
     app.close("2020-01-01 09:00:00")
-    assert flushed == [True], "close() did not force a final provenance flush"
+    assert flushed == [("market", app.round_stats())], "close() did not force a final provenance flush"

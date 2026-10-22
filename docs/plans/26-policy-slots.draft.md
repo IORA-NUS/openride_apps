@@ -173,7 +173,11 @@ at registration and on component lookup), so no name contains a separator, `=`, 
 `candidate_settings` (+ `sample_scope` `per_haulier` | `per_group` | `per_company`),
 `accounting_params`. Console: `Policies effective: planner=<label> v<v> timing=<t>
 information_model=<m> params=<json> accounting_params=<json>`. `meta.market` is written only on
-the pooled path. The information model is enforced structurally (sub-scopes built by
+the pooled path: `PooledMarket`'s top `bind` declares `run_stats=RoundStatsAggregator`
+(`dispatch/library/_market_stats.py`, `meta_key="market"`), and the app drives any declared
+aggregator generically (`dispatch/run_stats.py`: fold, cadence-owned push, forced push on
+truncation, flush at `close`); `AssignmentApp.round_stats()` survives as
+`compat/run_stats.LegacyAppAccessors`. The information model is enforced structurally (sub-scopes built by
 `scopes.py`) and audited by `information.scopes_respect_model`; a tripwire, not a proof.
 The model describes what the **inner leaf** is handed: the decomposition itself sees the whole
 tick, and inside `PooledMarket` `claim` gets the market object and arbitration sees every bid.
@@ -240,6 +244,15 @@ full block). The pools warning reads the resolved `policies.planner` top.
   `RandomAssignment candidates=spatial`; **any params change** (incl. `OfferSpare` /
   `ClaimIfGainExceeds` parameterisations and a binding `max_rounds`). Read the arm from
   `label` + `information_model`, not from the run name (§3.2 known limit).
+- **The market's bid cost is its own (WS4a, plan G2).** `PooledMarket` prices offers, claims,
+  arbitration and award `cost_km` with `objective.dual_cycle_cost_fn` built from its inner's
+  `dual_cycle_bonus_km` / `dual_cycle_radius_km` when the inner declares them (GreedyNearest),
+  else the constraint defaults (5.0 / 0.5); it no longer borrows the framework's accounting
+  measurement (`AssignmentApp._solver_params`). Identical wherever the dials equal the inner's
+  (the one-dial mirror) or sit at the defaults — every shipped bundle and every golden case.
+  **Boundary:** pooled + a cost-blind inner (RandomAssignment) + non-default `solver_params`
+  now bids with the constraint defaults, so such a run is NOT comparable with one before WS4a.
+  The share accounting (`awarded_cost_km`, `benefit_km`) still uses the framework measurement.
 - Noise is ~4–5% on `empty_ratio` (CLAUDE.md §8): n≥3, interleaved, report `dual_cycle_rate`
   beside it. `policy bench` deadhead is haversine at decision time, not the road KPI.
 

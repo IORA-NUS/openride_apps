@@ -1,5 +1,1 @@
-id:round_stats	2
 id:share_tag_format	1
-sub:cooperation	1
-sub:market	15
-sub:pooled	1

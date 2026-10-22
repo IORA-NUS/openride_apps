@@ -4,12 +4,6 @@ import json
 import logging
 from typing import Any, Dict, List, Tuple
 
-# How often the pooled market's round provenance is pushed onto run_config.
-# Cheap (two HTTP calls, a few dozen times per run) and bounded: the recorded
-# stats can lag the true tick count by at most this many ticks, but a truncation
-# event is pushed immediately, so `ticks_truncated_by_backstop` is never stale.
-_ROUND_STATS_PATCH_EVERY = 5
-
 # Appended to an UnknownPolicyError raised agent-side (celery journal, not sim.log):
 # a name the worker does not know is the one failure a stale worker explains.
 _STALE_WORKER_HINT = (
@@ -21,6 +15,7 @@ from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from apps.container_logistics.rebate import RebateBook
 from apps.container_logistics.statemachine import ContainerLogisticsActions
+from apps.container_logistics.policies.compat.run_stats import LegacyAppAccessors
 from apps.container_logistics.policies.compat.wire import wire_fields
 from apps.container_logistics.policies.framework import UnknownPolicyError
 from orsim.lifecycle import ORSimApp
@@ -46,7 +41,7 @@ def _direct_call(fn, *args):
     return fn(*args)
 
 
-class AssignmentApp(ORSimApp):
+class AssignmentApp(LegacyAppAccessors, ORSimApp):
     """Periodic assignment: match unassigned orders to feasible online trucks, then notify trucks."""
 
     def __init__(self, run_id: str, sim_clock: str, behavior: Dict[str, Any], messenger, agent_helper=None):
@@ -117,7 +112,8 @@ class AssignmentApp(ORSimApp):
     # Import-cycle rule (round-2 §4): ``policies.dispatch`` modules are imported ONLY
     # locally: in the two accessors below (``_build_dispatch_policy``,
     # ``_dispatch_runner``), in ``_tick_seed`` (the one seed formula,
-    # ``dispatch.tick.tick_seed``) and in ``_dispatch_tick`` (the clock value).
+    # ``dispatch.tick.tick_seed``), in ``_dispatch_tick`` (the clock value, the run
+    # stats) and in ``close`` / ``_patch_run_config_meta`` (``dispatch.run_stats``).
     # ``policies.dispatch`` reaches back into this package (constraints, spatial,
     # pooled_planner), so a module-top import here would cycle through
     # ``assignment/__init__`` (tests/test_policy_import_cycles.py pins it). The leaf
@@ -266,174 +262,25 @@ class AssignmentApp(ORSimApp):
 
         return tick_seed(run_id, time_step)
 
-    def round_stats(self) -> Dict[str, Any]:
-        """Per-run round provenance for the pooled market (plan §14.4 R3-5/R3-6).
+    def _patch_run_config_meta(self, key: str, value: Any) -> bool:
+        """Write one run-stats snapshot onto ``run_config.meta.<key>`` (best-effort; ``dispatch.run_stats``)."""
+        from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
 
-        ``ticks_truncated_by_backstop > 0`` means the auction was cut short on at
-        least one tick, so that tick under-served and the run's throughput and
-        deadhead numbers are suspect. A trustworthy cooperation result needs 0.
-
-        Two round-2 corrections are baked in here:
-
-        * ``rounds_mean`` averages over **auction ticks only** (``rounds_used >= 1``).
-          Averaging in the no-op ticks — where the market opened with nothing free to
-          allocate — diluted the figure that is quoted as *auction depth* and made a
-          deeper auction look shallower (review MEDIUM-9). Idle ticks are still
-          reported, as ``ticks_idle``, because losing them would hide the opposite
-          error.
-        * ``ticks`` is split into ``ticks_in_horizon`` / ``ticks_drain`` so the count
-          sits on the same horizon as the KPI block beside it (review HIGH-4).
-        """
-        s = getattr(self, "_round_stats", None)
-        if not s or not s.get("ticks"):
-            return {
-                "ticks": 0, "ticks_in_horizon": 0, "ticks_drain": 0,
-                "ticks_idle": 0, "auction_ticks": 0,
-                "rounds_min": None, "rounds_mean": None, "rounds_max": None,
-                "ticks_truncated_by_backstop": 0, "max_rounds_backstop": None,
-                "candidate_pairs_round1": 0, "candidate_pairs_total": 0,
-            }
-        auction = s["auction_ticks"]
-        return {
-            "ticks": s["ticks"],
-            "ticks_in_horizon": s["ticks_in_horizon"],
-            "ticks_drain": s["ticks_drain"],
-            "ticks_idle": s["ticks_idle"],
-            "auction_ticks": auction,
-            # min/mean over ticks where an auction actually ran; max over all.
-            "rounds_min": s["rounds_min"],
-            "rounds_mean": (round(s["rounds_sum"] / auction, 3) if auction else None),
-            "rounds_max": s["rounds_max"],
-            "ticks_truncated_by_backstop": s["truncated"],
-            "max_rounds_backstop": s.get("backstop"),
-            "candidate_pairs_round1": s["cand_round1"],
-            "candidate_pairs_total": s["cand_total"],
-        }
-
-    def _patch_round_stats_to_run_config(self, *, force: bool = False) -> bool:
-        """Write the market's round provenance onto ``run_config.meta.market``.
-
-        **Why it is done from the AGENT and not at finalize.** The pooled market runs
-        inside the long-lived celery workers (CLAUDE.md §8) and the run record is
-        written by a different process, so there is no in-process handoff. The wire
-        cannot carry it either: ``trip.meta.collaboration`` only rides along on
-        SHARED assignments (``truck/app.py`` attaches ``_collaboration`` only when
-        ``shared`` is true), so a tick that truncated while awarding nothing
-        cross-haulier would leave no trace at all — and truncation is exactly the
-        condition that must never be silent.
-
-        So the agent PATCHes the run record itself, using the admin REST client it
-        already holds. ``run_config.meta`` is an unschema'd dict in the Eve model, so
-        this needs **no new resource and no api container rebuild** (CLAUDE.md §8).
-
-        Best-effort by construction: any failure is logged at debug and swallowed —
-        provenance must never be able to break an assignment tick.
-        """
-        stats = getattr(self, "_round_stats", None)
-        if not stats or not stats.get("ticks"):
-            return False
-        # Push on a schedule, and additionally whenever the round profile grows —
-        # a new maximum is new information and there may be few ticks in total, so
-        # a pure modulo cadence can leave the final snapshot stale.
-        grew = stats.get("rounds_max") != stats.get("_last_pushed_max")
-        if not force and not grew and stats["ticks"] % _ROUND_STATS_PATCH_EVERY:
-            return False
-        stats["_last_pushed_max"] = stats.get("rounds_max")
-        try:
-            from apps.common.resource_client_mixin import get_http_session
-            from apps.config import settings
-
-            base = settings["OPENRIDE_SERVER_URL"]
-            timeout = settings.get("NETWORK_REQUEST_TIMEOUT", 10)
-            session = get_http_session()
-            found = session.get(
-                f"{base}/run-config",
-                headers=self.user.get_headers(),
-                params={"where": json.dumps({"run_id": self.run_id})},
-                timeout=timeout,
-            )
-            items = (found.json() or {}).get("_items") or []
-            if not items:
-                return False
-            doc = items[0]
-            # Dotted patch: leaves every other meta key untouched, and mirrors how
-            # SimulationRuntime.update_status patches `step_metrics.<k>`.
-            response = session.patch(
-                f"{base}/run-config/{doc['_id']}",
-                headers=self.user.get_headers(etag=doc["_etag"]),
-                data=json.dumps({"meta.market": self.round_stats()}),
-                timeout=timeout,
-            )
-            return response.status_code in (200, 201)
-        except Exception:
-            logging.debug("Round-stats provenance patch failed (non-fatal).", exc_info=True)
-            return False
-
-    def _record_round_stats(self, market_notes: Dict[str, Any], time_step=None) -> None:
-        """Fold one tick's market provenance (``Plan.notes["market"]``) into ``_round_stats``."""
-        s = getattr(self, "_round_stats", None)
-        if s is None:
-            s = {"ticks": 0, "ticks_in_horizon": 0, "ticks_drain": 0, "ticks_idle": 0,
-                 "auction_ticks": 0, "rounds_sum": 0, "rounds_min": None,
-                 "rounds_max": None, "truncated": 0, "backstop": None, "warned": False,
-                 "cand_round1": 0, "cand_total": 0}
-            self._round_stats = s
-        r = int(market_notes["rounds_used"])
-        # Candidate provenance (plan §14.4 R3-2): round-1 parity with `partitioned`
-        # is the guarantee; the per-tick total legitimately exceeds it in a
-        # multi-round auction. Recording both makes the ratio auditable instead of
-        # arguable.
-        s["cand_round1"] += int(market_notes.get("candidate_pairs_round1", 0) or 0)
-        s["cand_total"] += int(market_notes.get("candidate_pairs_total", 0) or 0)
-        if market_notes.get("max_rounds") is not None:
-            s["backstop"] = int(market_notes["max_rounds"])
-        s["ticks"] += 1
-
-        # Horizon split: a tick past the simulation horizon is post-horizon DRAIN,
-        # not part of the measured window the KPI block covers.
-        horizon = getattr(self, "_sim_horizon_steps", None)
-        if horizon and time_step is not None and int(time_step) >= int(horizon):
-            s["ticks_drain"] += 1
-        else:
-            s["ticks_in_horizon"] += 1
-
-        if r >= 1:
-            s["auction_ticks"] += 1
-            s["rounds_sum"] += r
-            s["rounds_min"] = r if s["rounds_min"] is None else min(s["rounds_min"], r)
-        else:
-            # The market opened with nothing free to allocate. Real, but not depth.
-            s["ticks_idle"] += 1
-        s["rounds_max"] = r if s["rounds_max"] is None else max(s["rounds_max"], r)
-
-        if not market_notes["converged"]:
-            s["truncated"] += 1
-            # Push immediately: truncation is the one condition that must never be
-            # silent, and the run may end before the next scheduled patch.
-            self._patch_round_stats_to_run_config(force=True)
-            if not s["warned"]:
-                # Loud, once, and greppable in celery_log.txt — agent-side logs do
-                # not reach simulation_log.txt (CLAUDE.md §8).
-                logging.error(
-                    "POOLED MARKET TRUNCATED BY BACKSTOP on tick %d (rounds_used=%d). "
-                    "The auction had not converged; this run under-serves and its "
-                    "cooperation numbers are NOT trustworthy. Raise "
-                    "planner.market.max_rounds.",
-                    s["ticks"], r,
-                )
-                s["warned"] = True
+        return run_stats.patch_run_config_meta(self, key, value)
 
     def close(self, sim_clock):
-        """FINAL FLUSH of the market provenance before the agent leaves (R3-5).
+        """FINAL FLUSH of the declared run stats before the agent leaves (R3-5).
 
         Without this the stamp was whatever the last scheduled push happened to
         catch — the review measured ``ticks: 15`` against a true 17. A provenance
         stamp that stops early is worse than none, because it reads exact.
         """
         try:
-            self._patch_round_stats_to_run_config(force=True)
+            from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
+
+            run_stats.flush(getattr(self, "_run_stats", None) or {}, self._patch_run_config_meta)
         except Exception:  # pragma: no cover - never block shutdown
-            logging.debug("final market-provenance flush failed", exc_info=True)
+            logging.debug("final run-stats flush failed", exc_info=True)
         return super().close(sim_clock)
 
     def assign(self, sim_clock: str, time_step: int = 0) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
@@ -481,8 +328,8 @@ class AssignmentApp(ORSimApp):
         # Haulier scoping is enforced (no fallback). If there were assignable trucks AND
         # unassigned orders but nothing matched, the data is almost certainly missing or
         # mismatched haulier_id — surface it loudly instead of silently running dead.
-        # Not on a tick whose plan (or a scope's) the framework discarded or whose market
-        # company crashed: that was already logged (message 18/19/20), the haulier text
+        # Not on a tick whose result (or a sub-tick's) the framework discarded or whose
+        # solver noted an incident: that was already logged (message 18/19/20), the haulier text
         # would misdiagnose it, and the one-shot warning must stay armed (review C3 #6).
         if candidates and orders and not assignment and not self._warned_haulier_block \
                 and not getattr(self, "_tick_contract_events", 0):
@@ -513,7 +360,8 @@ class AssignmentApp(ORSimApp):
         the runner (solve -> check against ownership-or-declared and physical
         feasibility -> commit the pairs), then the solver-independent share accounting
         (priced with the tick's measurement, dials ``self._solver_params``) and, when
-        the solver reports a market, its round provenance. Returns the committed pairs.
+        the top declared run stats, folds the tick's notes into them
+        (``dispatch.run_stats``). Returns the committed pairs.
         """
         from apps.container_logistics.policies.dispatch.tick import DispatchClock  # local: cycle rule
 
@@ -549,12 +397,16 @@ class AssignmentApp(ORSimApp):
             fmt=runner.share_tag_format,
             solver_notes=outcome.solver_notes,
         )
-        market_notes = outcome.tick_notes.get("market")
-        if market_notes is not None:
-            # Solver provenance: only a solver that ran a market reports it, so the
-            # agent-side meta.market writer stays on the pooled path only.
-            self._record_round_stats(market_notes, time_step=time_step)
-            self._patch_round_stats_to_run_config()
+        stats_cls = runner.tree.top.declaration.run_stats
+        if stats_cls is not None and outcome.result is not None:
+            # Solver provenance: only a top that declared run stats has them, and a
+            # discarded tick (message 18) is never folded.
+            from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
+
+            store = getattr(self, "_run_stats", None)
+            if store is None:
+                store = self._run_stats = {}
+            run_stats.record_tick(store, stats_cls, outcome.tick_notes, tick.clock, self._patch_run_config_meta)
         if self._share_tags:
             logging.info("Planner %s: %d cross-company assignment(s) this tick.",
                          runner.resolved.label, len(self._share_tags))
