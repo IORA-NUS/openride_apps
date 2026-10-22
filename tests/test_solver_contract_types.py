@@ -356,3 +356,15 @@ def test_measure_is_dual_cycle_equals_the_constraint_predicate():
                 assert Measure.is_dual_cycle(t, o, radius_km=radius) is want
                 hits += want
     assert hits > 0
+
+
+def test_serves_is_directional_like_the_declaration():
+    """``serves(carrier, owner)`` holds for own or a declared ``(owner, carrier)``, never the reverse.
+
+    Teeth: swapping the tuple to ``(carrier_id, owner_id)`` in ``Tick.serves`` failed it.
+    """
+    prof = _profile()
+    tree, _top, _leaf = _tree(prof, top_decl=Declaration(cross_company={("h_a", "h_b")}))
+    tick = _top_tick(tree, [], [], prof)
+    assert tick.serves("h_b", "h_a") and tick.serves("h_a", "h_a")
+    assert not tick.serves("h_a", "h_b") and not tick.serves("h_c", "h_a")

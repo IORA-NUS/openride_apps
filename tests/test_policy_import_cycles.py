@@ -50,7 +50,6 @@ _LEAVES = [
     "apps.container_logistics.policies.dispatch.plan",
     "apps.container_logistics.policies.dispatch.result",
     "apps.container_logistics.policies.dispatch.bind",
-    "apps.container_logistics.policies.compat",
     "apps.container_logistics.policies.solver_lib",
     "apps.container_logistics.policies.solver_lib.pair_solver",
     "apps.container_logistics.policies.dispatch.resolved",

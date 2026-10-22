@@ -1,8 +1,0 @@
-id:CompanyRule	2
-id:PartitionRule	2
-id:candidate_kind	6
-id:company_context	2
-id:company_scope_key	3
-id:partition_context	2
-id:partition_scope_key	3
-id:tick_allowed	1

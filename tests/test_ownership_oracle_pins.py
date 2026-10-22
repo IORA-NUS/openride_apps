@@ -42,6 +42,16 @@ Verified to have teeth (WS0, mutate / see it fail / restore):
   delegates to ``self.rule.allowed`` (``world.py:105-107``).
 - returning ``list(reversed(groups))`` from ``compose.cooperation_groups`` failed pin 3
   (11 world x tick cases).
+
+Re-verified after WS1 re-pointed the adapters (``Tick.permitted`` / ``Tick.serves`` of
+the profile's bound selection, ``library.partitioned.cooperation_groups``):
+
+- dropping the declared-pair test from ``tick._top_permitted`` (every cross pair passes
+  ownership) failed pin 1 (12 cases);
+- ``list(reversed(groups))`` in ``partitioned.cooperation_groups`` failed pin 3 (11 cases);
+- swapping ``(owner, carrier)`` in ``Tick.serves`` does NOT fail pin 2: every golden and
+  synthetic adjacency is symmetric, so the direction is not observable here (the
+  directional rule is pinned in ``test_solver_contract_types.py::test_serves_is_directional_like_the_declaration``).
 """
 
 from __future__ import annotations
@@ -72,33 +82,42 @@ Edge = tuple[str, str]  # (owner, carrier)
 # --- the code under test: the ONLY place it is reached (WS1 re-points these) -----------
 
 
-def _sut_permitted(profile: Mapping[str, Any]) -> Callable[[Doc, Doc], bool]:
-    """The framework's pair feasibility for ``profile`` (today ``DispatchWorld.allowed``)."""
-    from apps.container_logistics.policies.dispatch.world import DispatchWorld
+def _sut_tick(profile: Mapping[str, Any]) -> Any:
+    """A whole tick of ``profile``'s own selection, bound against ``profile`` (WS1: ``dispatch.bind``)."""
+    from apps.container_logistics.policies.dispatch.bind import bind_profile
+    from apps.container_logistics.policies.dispatch.runner import DispatchRunner
+    from apps.container_logistics.policies.dispatch.tick import DispatchClock
 
-    return DispatchWorld.from_profile(dict(profile), accounting_params={}).allowed
+    prof = dict(profile)
+    runner = DispatchRunner(bind_profile(prof), profile=prof)
+    return runner.tick(candidates=[], orders=[], profile=prof,
+                       clock=DispatchClock(sim_clock="Wed, 01 Jan 2020 08:00:00 GMT", time_step=0), seed=0)
+
+
+def _sut_permitted(profile: Mapping[str, Any]) -> Callable[[Doc, Doc], bool]:
+    """The framework's pair feasibility for ``profile`` (WS1: the whole tick's ``Tick.permitted``)."""
+    return _sut_tick(profile).permitted
 
 
 def _sut_serves(profile: Mapping[str, Any]) -> Callable[[str, str], bool]:
-    """``serves(carrier, owner)`` for ``profile`` (today ``PartitionRule.serves``)."""
-    from apps.container_logistics.policies.dispatch.world import DispatchWorld
-
-    return DispatchWorld.from_profile(dict(profile), accounting_params={}).rule.serves
+    """``serves(carrier, owner)`` for ``profile`` (WS1: ``Tick.serves``)."""
+    return _sut_tick(profile).serves
 
 
 def _sut_groups(profile: Mapping[str, Any], trucks: list[Doc], orders: list[Doc]) -> list[tuple[Any, list, list]]:
-    """``(key, truck ids, order ids)`` per cooperation group (today ``compose.cooperation_groups``).
+    """``(key, truck ids, order ids)`` per cooperation group (WS1: ``library.partitioned.cooperation_groups``).
 
-    ``cooperation_groups`` reads exactly ``ctx.world.component_of``, ``ctx.raw_trucks``
-    and ``ctx.raw_orders``, so a namespace with those three is the whole input.
+    It reads exactly ``tick.raw_trucks`` / ``tick.raw_orders`` plus the active arm's
+    ``component_of``, so a namespace with the two document tuples is the whole tick input.
     """
-    from apps.container_logistics.policies.dispatch import compose
-    from apps.container_logistics.policies.dispatch.world import DispatchWorld
+    from apps.container_logistics.policies.dispatch.bind import RunWorld
+    from apps.container_logistics.policies.dispatch.library import partitioned
+    from apps.container_logistics.policies.solver_lib import cooperation
 
-    world = DispatchWorld.from_profile(dict(profile), accounting_params={})
-    ctx = SimpleNamespace(world=world, raw_trucks=tuple(trucks), raw_orders=tuple(orders))
+    arm = cooperation.resolve_arm(RunWorld.from_profile(dict(profile)))
+    tick = SimpleNamespace(raw_trucks=tuple(trucks), raw_orders=tuple(orders))
     return [(g.key, [t["_id"] for t in g.trucks], [o["_id"] for o in g.orders])
-            for g in compose.cooperation_groups(ctx)]
+            for g in partitioned.cooperation_groups(tick, arm.component_of if arm is not None else {})]
 
 
 # --- the oracle: documents and cooperation data only -----------------------------------
