@@ -50,6 +50,8 @@ _LEAVES = [
     "apps.container_logistics.policies.dispatch.resolved",
     "apps.container_logistics.policies.dispatch.legacy",
     "apps.container_logistics.policies.dispatch.composite",
+    # WS3: assignment.accounting and assignment.app import compat.wire at module top.
+    "apps.container_logistics.policies.compat.wire",
 ]
 
 

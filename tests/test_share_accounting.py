@@ -11,7 +11,8 @@ What is locked:
   ``audited`` never lets a non-finite number through;
 - the owner reserve is the minimum over the owner's FREE (uncommitted by any pair of
   the tick), feasible (``own_allowed``) candidate trucks;
-- only whitelisted ``pair_notes`` keys reach a tag; self-serves and haulier-less
+- only the legacy note keys reach their old tag keys, any other ``solver_notes`` key is
+  confined to the ``solver_notes`` tag key; self-serves and haulier-less
   pairs are never shares.
 
 Why: C3 moves the share accounting out of the two topology code paths into this one
@@ -63,11 +64,11 @@ def _tick_inputs(case):
     return candidates, pairs, world
 
 
-def _rendered(case, fmt, pair_notes=None):
+def _rendered(case, fmt, solver_notes=None):
     candidates, pairs, world = _tick_inputs(case)
     accounts = accounting.account_shares(pairs, candidates=candidates, cost=world.accounting_cost,
                                          own_allowed=world.own_allowed)
-    tags = accounting.render_share_tags(accounts, fmt=fmt, pair_notes=pair_notes)
+    tags = accounting.render_share_tags(accounts, fmt=fmt, solver_notes=solver_notes)
     rows = sorted(([list(k), t] for k, t in tags.items()), key=lambda r: (r[0][0], r[0][1]))
     return json.loads(json.dumps(rows))
 
@@ -111,7 +112,7 @@ def _account(pairs, candidates, world=None):
 def test_v1_non_finite_awarded_cost_renders_minus_inf():
     """The pre-v2 partitioned arithmetic, kept for byte identity (FIX-5 defect).
 
-    Verified to have teeth: passing the benefit through ``finite_or_none`` in ``_v1_tag``
+    Verified to have teeth: passing the benefit through ``finite_or_none`` in ``render_v1_tag``
     failed this test.
     """
     carrier = {"_id": "tb", "state": "online", "haulier_id": "b", "profile": {"haulier_id": "b"}}  # no location
@@ -184,22 +185,30 @@ def test_reserve_is_min_over_owner_free_feasible_trucks():
     assert accounting.render_share_tags([none_acc], fmt="v1")[("tb", "oa")]["benefit_km"] is None
 
 
-def test_only_whitelisted_pair_notes_reach_the_tag():
-    """Verified to have teeth: merging the raw note over the computed tag
-    (``{**tag, **raw}``) let the note's ``benefit_km``/``shared`` through and failed this test."""
+def test_solver_notes_never_overwrite_a_computed_tag_value():
+    """Only the legacy note keys reach their old tag keys; every other note key is confined
+    to the ``solver_notes`` tag key, so a note can never overwrite a computed value.
+
+    Verified to have teeth: merging the rest of the note over the computed tag
+    (``tag.update(rest)`` in ``compat.wire.render_v1_tag``) let the note's
+    ``benefit_km``/``shared`` through and failed this test."""
     carrier, own = _truck("tb", "b", 103.85, 1.30), _truck("ta", "a", 103.86, 1.30)
     order = _order("oa", "a", 103.85, 1.30)
     (acc,) = _account([(carrier, order)], [carrier, own])
     notes = {("tb", "oa"): {"pool_id": "p:a+b", "market_round": 2, "benefit_km": 999.0,
                             "shared": False, "owner_reserve_km": -1}}
-    tag = accounting.render_share_tags([acc], fmt="audited", pair_notes=notes)[("tb", "oa")]
+    tag = accounting.render_share_tags([acc], fmt="audited", solver_notes=notes)[("tb", "oa")]
     assert (tag["pool_id"], tag["market_round"]) == ("p:a+b", 2)
     assert tag["shared"] is True and tag["benefit_km"] != 999.0 and tag["owner_reserve_km"] != -1
     assert tag["benefit_km"] == round(acc.owner_reserve_km - acc.awarded_cost_km, 3)
+    assert tag["solver_notes"] == {"benefit_km": 999.0, "shared": False, "owner_reserve_km": -1}
     bare = accounting.render_share_tags([acc], fmt="audited")[("tb", "oa")]
     assert (bare["pool_id"], bare["market_round"]) == (None, None)
-    v1 = accounting.render_share_tags([acc], fmt="v1", pair_notes=notes)[("tb", "oa")]
-    assert "pool_id" not in v1, "v1 never carries market notes"
+    assert "solver_notes" not in bare
+    v1 = accounting.render_share_tags([acc], fmt="v1", solver_notes=notes)[("tb", "oa")]
+    assert "pool_id" not in v1 and "market_round" not in v1, "v1 has no legacy note keys"
+    assert v1["solver_notes"] == {"benefit_km": 999.0, "shared": False, "owner_reserve_km": -1}
+    assert v1["shared"] is True and v1["benefit_km"] == tag["benefit_km"]
     with pytest.raises(ValueError, match="'v1' or 'audited'"):
         accounting.render_share_tags([acc], fmt="v2")
 

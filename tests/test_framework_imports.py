@@ -68,8 +68,12 @@ COMPAT_ALLOWED: dict[str, frozenset[str]] = {
     "selection_keys": frozenset({"LEGACY_SELECTION_KEYS"}),
     "unregistered": frozenset({"UnregisteredPairLeaf", "legacy_spatial_rule"}),
     "capture_v2": frozenset({"read_fixture_v2"}),
+    # ``share_tag_renderer`` (reviewed WS3 addition): ``accounting.render_share_tags``
+    # dispatches on an opaque format name and must still refuse an unknown one. Doing that
+    # in accounting would mean spelling the banned ``"v1"`` there; the renderer lookup keeps
+    # every format name (and the refusal message) inside compat.wire.
     "wire": frozenset({"share_tag_format_for", "stamp_fields", "split_notes", "render_v1_tag",
-                       "render_audited_tag", "wire_fields"}),
+                       "render_audited_tag", "wire_fields", "share_tag_renderer"}),
     "run_stats": frozenset({"LegacyAppAccessors"}),
     "legacy_context": frozenset({"LegacyDecideContext", "Plan"}),
     "defaults": frozenset({"DEFAULT_PLANNER"}),

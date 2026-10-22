@@ -28,6 +28,18 @@ class AssignedHaulTripPayload:
     awarded_cost_km: Optional[float] = None
     owner_reserve_km: Optional[float] = None
     market_round: Optional[int] = None
+    # A solver's opaque per-pair notes beyond the legacy fields above
+    # (``policies.compat.wire``). APPENDED LAST, and OMITTED from the wire by
+    # :meth:`to_wire_dict` when ``None``, so every payload without notes keeps its
+    # exact bytes. Only shared pairs carry it (notes ride on share tags).
+    solver_notes: Optional[Dict[str, Any]] = None
+
+    def to_wire_dict(self) -> Dict[str, Any]:
+        """The published JSON object: the fields in declaration order, ``solver_notes`` only when set."""
+        out = dict(self.__dict__)
+        if out.get("solver_notes") is None:
+            out.pop("solver_notes", None)
+        return out
 
     @classmethod
     def parse(cls, payload: Any) -> Optional["AssignedHaulTripPayload"]:
@@ -50,6 +62,7 @@ class AssignedHaulTripPayload:
             awarded_cost_km=payload.get("awarded_cost_km"),
             owner_reserve_km=payload.get("owner_reserve_km"),
             market_round=payload.get("market_round"),
+            solver_notes=payload.get("solver_notes"),
         )
 
 

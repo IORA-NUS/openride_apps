@@ -1,7 +1,5 @@
-id:market_round	2
-id:pool_id	2
 id:round_stats	2
 id:share_tag_format	1
 sub:cooperation	5
-sub:market	21
+sub:market	19
 sub:pooled	2
