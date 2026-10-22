@@ -425,64 +425,54 @@ def apply_solver_override(assignment_collection, strategy):
     return _checked_solver(strategy)
 
 
-def apply_cooperation_override(assignment_collection, structure=None, sharing=None):
-    """Per-run collaboration overrides (mirror of ``apply_solver_override``).
+def apply_cooperation_override(assignment_collection, structure=None):
+    """Per-run cooperation-structure override: ``--structure X`` / ``ORSIM_COOP_STRUCTURE``.
 
-    ``structure``: id of a structure declared in the baked ``profile.cooperation`` —
-    patches ``cooperation.active`` in place. ``sharing``: sharing-algorithm name —
-    patches ``planner.sharing.type``. Both fail-soft: unknown/falsy values are
-    ignored with a warning and the scenario's own defaults stand. Mutates the loaded
-    behaviors only (never the on-disk bundle). Returns the applied structure id (or
-    ``None``).
+    Patches ``cooperation.active`` in place on every assignment profile to the
+    declared structure ``structure`` names. The match is on the SLUG
+    (``datagen.hauliers.structure_id_slug``, F6), so the authored form
+    ``"Port Alliance"`` finds the compiled ``"port-alliance"``. Mutates the loaded
+    behaviors only (never the on-disk bundle).
+
+    Returns ``(applied_id, patched_world_keys)``: the structure id now active (or
+    ``None`` when ``structure`` is falsy, nothing changed) and the world keys the
+    patch wrote (``frozenset({"cooperation"})``, or empty). The caller hands the keys
+    to the run-start check (``dispatch.profile.assert_assignment_profiles_resolvable``),
+    which refuses a patch the bound planner tree never reads (message 25).
+
+    Fail-loud (message 26, ``PolicyError``, raised before anything is mutated): an id
+    no structure declares, or any structure on a profile with no cooperation block.
+    It used to warn and run the scenario's own arm, so a typo produced a run labelled
+    as one experiment that was another.
     """
-    applied = None
-    for behavior in (assignment_collection or {}).values():
+    from apps.container_logistics.datagen.hauliers import structure_id_slug
+    from apps.container_logistics.policies.framework import PolicyError
+
+    if not structure:
+        return None, frozenset()
+    wanted = structure_id_slug(structure) or structure
+    blocks = []
+    for agent_id, behavior in (assignment_collection or {}).items():
         if not isinstance(behavior, dict):
             continue
-        profile = behavior.setdefault("profile", {})
-        coop = profile.get("cooperation")
-        if structure and isinstance(coop, dict):
-            # Compiled structure ids are slugs — slugify the override input too so
-            # the authored form ("Port Alliance") matches ("port-alliance") instead
-            # of silently keeping the scenario default (F6).
-            from apps.container_logistics.datagen.hauliers import structure_id_slug
-
-            wanted = structure_id_slug(structure) or structure
-            declared = {s.get("id") for s in coop.get("structures", []) if isinstance(s, dict)}
-            if wanted in declared:
-                coop["active"] = wanted
-                applied = wanted
-            else:
-                logging.warning(
-                    "Ignoring unknown cooperation structure override %r (declared: %s); "
-                    "using the scenario's active structure.",
-                    structure,
-                    ", ".join(sorted(d for d in declared if d)),
-                )
-        elif structure:
-            logging.warning(
-                "Cooperation structure override %r requested but this scenario has no "
-                "baked cooperation block (recompile it with the new pipeline).",
-                structure,
+        coop = (behavior.get("profile") or {}).get("cooperation")
+        if not isinstance(coop, dict):
+            raise PolicyError(
+                f"cooperation structure override {structure!r}: assignment agent {agent_id!r} has no "
+                "cooperation block (declared structures: none), so there is no arm to select. Drop the "
+                "override, or declare structures in the scenario's spec.json cooperation block and recompile."
             )
-        if sharing:
-            planner = profile.get("planner")
-            if not isinstance(planner, dict):
-                # Aligned with ``apply_planner_topology_override``: CREATE the block
-                # on a legacy bundle rather than warn-and-refuse. Both behaviours
-                # were defensible; having both in adjacent modules was not (review
-                # F17). Creating wins because §8 promises old bundles stay runnable
-                # under a per-run override without recompiling.
-                logging.info(
-                    "Sharing override %r: creating a planner block (bundle predates it).",
-                    sharing,
-                )
-                planner = {}
-                profile["planner"] = planner
-            planner["sharing"] = {"type": str(sharing), "params": dict(
-                (planner.get("sharing") or {}).get("params") or {}
-            )}
-    return applied
+        declared = [s.get("id") for s in coop.get("structures", []) if isinstance(s, dict) and s.get("id")]
+        if wanted not in declared:
+            raise PolicyError(
+                f"cooperation structure override {structure!r} is not declared by assignment agent "
+                f"{agent_id!r} (declared structures: {', '.join(declared) or 'none'}). Pick a declared id "
+                "or fix the typo; the run was not started on the scenario's own arm instead."
+            )
+        blocks.append(coop)
+    for coop in blocks:
+        coop["active"] = wanted
+    return (wanted, frozenset({"cooperation"})) if blocks else (None, frozenset())
 
 
 @contextmanager

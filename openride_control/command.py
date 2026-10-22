@@ -123,11 +123,10 @@ def _run(argv: list[str] | None = None) -> int:
         help="Cooperation structure id override (ORSIM_COOP_STRUCTURE): a structure "
         "declared in the scenario's spec.json cooperation block",
     )
-    run_p.add_argument(
-        "--sharing-policy",
-        default=None,
-        help="Sharing algorithm override for two-stage planners (ORSIM_SHARING_POLICY)",
-    )
+    # REMOVED (plan item 34): planner.sharing is read only at compile time, so the
+    # run-time override was inert. Still parsed, so a caller gets the reason as a JSON
+    # refusal instead of an argparse usage error.
+    run_p.add_argument("--sharing-policy", default=None, help=argparse.SUPPRESS)
     run_p.add_argument(
         "--order-lifecycle",
         choices=["agents", "service"],
@@ -217,6 +216,20 @@ def _run(argv: list[str] | None = None) -> int:
     vrp_p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME")
     vrp_p.add_argument("--policy-param", action="append", default=[], metavar="SLOT.PATH=VALUE")
     vrp_p.add_argument("--policy-overrides", default=None, metavar="JSON")
+    vrp_p.add_argument("--cooperation-structure", default=None,
+                       help="Cooperation structure id override, refused like run-simulation refuses it")
+
+    pre_p = sub.add_parser(
+        "run-preflight",
+        help="Bind a scenario's planner (after the run's overrides) and report the world keys "
+        "it reads and the declared cooperation structures; synchronous, writes nothing",
+    )
+    pre_p.add_argument("--scenario", default=None)
+    pre_p.add_argument("--solver", default=None)
+    pre_p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME")
+    pre_p.add_argument("--policy-param", action="append", default=[], metavar="SLOT.PATH=VALUE")
+    pre_p.add_argument("--policy-overrides", default=None, metavar="JSON")
+    pre_p.add_argument("--cooperation-structure", default=None)
 
     exists_sc_p = sub.add_parser("scenario-exists", help="Check whether a scenario slug is runnable")
     exists_sc_p.add_argument("--slug", required=True)
@@ -289,8 +302,14 @@ def _run(argv: list[str] | None = None) -> int:
 
         # Validate BEFORE spawning: the dashboard spawns this command detached, so an
         # error raised by the sim itself would only reach its log.
+        if args.sharing_policy is not None:
+            _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
+                   "message": "--sharing-policy removed: inert at run time (set planner.sharing "
+                              "in spec.json and recompile)"})
+            return 1
         policy_overrides = validate_run_policy_args(
-            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides
+            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides,
+            args.cooperation_structure,
         )
         if isinstance(policy_overrides, str):
             _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
@@ -309,7 +328,6 @@ def _run(argv: list[str] | None = None) -> int:
             policy_overrides=policy_overrides or None,
             capture_dispatch=args.capture_dispatch,
             cooperation_structure=args.cooperation_structure,
-            sharing_policy=args.sharing_policy,
             order_lifecycle=args.order_lifecycle,
         )
         _emit(_result_payload(result, command_id=command_id, action="run_simulation"))
@@ -455,7 +473,23 @@ def _run(argv: list[str] | None = None) -> int:
         from openride_control.policies import cmd_validate_run_policies
 
         payload = cmd_validate_run_policies(
-            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides
+            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides,
+            args.cooperation_structure,
+        )
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "run-preflight":
+        from openride_control.policies import run_preflight
+
+        payload = run_preflight(
+            args.scenario,
+            cooperation_structure=args.cooperation_structure,
+            solver=args.solver,
+            policies=args.policy,
+            params=args.policy_param,
+            overrides_json=args.policy_overrides,
         )
         payload["commandId"] = command_id
         _emit(payload)

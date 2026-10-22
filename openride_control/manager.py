@@ -459,7 +459,6 @@ class ServiceManager:
         run_id: str | None = None,
         solver: str | None = None,
         cooperation_structure: str | None = None,
-        sharing_policy: str | None = None,
         order_lifecycle: str | None = None,
         policy_overrides: dict | None = None,
         capture_dispatch: str | None = None,
@@ -501,8 +500,6 @@ class ServiceManager:
                     extra_env["ORSIM_SOLVER"] = solver.strip()
                 if cooperation_structure and cooperation_structure.strip():
                     extra_env["ORSIM_COOP_STRUCTURE"] = cooperation_structure.strip()
-                if sharing_policy and sharing_policy.strip():
-                    extra_env["ORSIM_SHARING_POLICY"] = sharing_policy.strip()
                 if order_lifecycle and order_lifecycle.strip():
                     extra_env["ORSIM_ORDER_LIFECYCLE"] = order_lifecycle.strip()
                 if policy_overrides:

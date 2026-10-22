@@ -83,7 +83,6 @@ class SimulationRunner:
         run_id: Optional[str] = None,
         headless: bool = True,
         cooperation_structure: Optional[str] = None,
-        sharing_policy: Optional[str] = None,
         policy_overrides: Optional[dict] = None,
         capture_dispatch: Optional[str] = None,
     ) -> None:
@@ -94,7 +93,6 @@ class SimulationRunner:
         # Already validated (control.validate_capture_dispatch); ships as ORSIM_CAPTURE_DISPATCH.
         self.capture_dispatch = capture_dispatch or None
         self.cooperation_structure = cooperation_structure
-        self.sharing_policy = sharing_policy
         self.run_name = run_name
         self.run_id = run_id or new_run_id()
         self.headless = headless
@@ -138,8 +136,6 @@ class SimulationRunner:
             env["ORSIM_CAPTURE_DISPATCH"] = self.capture_dispatch
         if self.cooperation_structure:
             env["ORSIM_COOP_STRUCTURE"] = self.cooperation_structure
-        if self.sharing_policy:
-            env["ORSIM_SHARING_POLICY"] = self.sharing_policy
         if self.headless:
             env["ORSIM_HEADLESS"] = "1"
         return env

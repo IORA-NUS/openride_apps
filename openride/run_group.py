@@ -8,6 +8,7 @@ geo/truck-location streaming that only feeds the map, so analysis-only runs go f
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from typing import Optional
@@ -126,9 +127,13 @@ def _cmd_run(args) -> int:
 
     # --solver X is the innermost per-scope solver (ORSIM_SOLVER, shipped separately);
     # validated with the policy flags against the scenario now, not after the sim has spawned.
+    if getattr(args, "sharing_policy", None) is not None:
+        console.print(f"[red]Invalid flag:[/] {control.SHARING_POLICY_REMOVED}")
+        return 2
     try:
         policy_overrides = control.validate_run_policies(
-            scenario, solver, getattr(args, "policy", None), getattr(args, "policy_param", None)
+            scenario, solver, getattr(args, "policy", None), getattr(args, "policy_param", None),
+            cooperation_structure=getattr(args, "structure", None),
         )
     except control.ControlError as exc:
         console.print(f"[red]Invalid policy override:[/] {exc}")
@@ -143,7 +148,6 @@ def _cmd_run(args) -> int:
     runner = SimulationRunner(
         scenario=scenario, run_name=args.run_name, headless=headless, solver=solver,
         cooperation_structure=getattr(args, "structure", None),
-        sharing_policy=getattr(args, "sharing_policy", None),
         policy_overrides=policy_overrides,
         capture_dispatch=capture_dispatch,
     )
@@ -209,8 +213,8 @@ def register(sub) -> None:
                    help="Capture dispatch contexts every N-th dispatch tick (not sim step; at most M files) under "
                         "<datahub>/fixtures/dispatch/<run_id>, for openride policy bench --fixtures")
     p.add_argument("--structure", help="Cooperation structure id override (declared in the scenario's spec.json)")
-    p.add_argument("--sharing-policy", dest="sharing_policy",
-                   help="Sharing algorithm override for two-stage planners")
+    # REMOVED (plan item 34): inert at run time. Still parsed so the refusal names the reason.
+    p.add_argument("--sharing-policy", dest="sharing_policy", help=argparse.SUPPRESS)
     p.add_argument("--run-name", help="Human-readable run name")
     p.add_argument("--no-headless", action="store_true",
                    help="Keep geo/truck-location streaming on (slower; same as a dashboard run)")

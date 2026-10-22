@@ -93,7 +93,9 @@ _LEGACY_SOURCE_NOTE = (
 # --- the run-start check ----------------------------------------------------------
 
 
-def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None:
+def assert_assignment_profiles_resolvable(
+    collection: Mapping[str, Any], *, patched_world_keys: Any = ()
+) -> dict[str, Any]:
     """Raise ``PolicyError`` unless every assignment agent's dispatch resolves and runs.
 
     ``collection`` is the assignment behavior collection, ``{agent_id: behavior}``.
@@ -104,12 +106,17 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
     :func:`check_mirrors` (message 13), then the run-start BINDING
     (``dispatch.bind.bind_tree`` over a fresh tree: each node's ``bind``, so a built-in
     top validates its cooperation arm, message 14, and the framework checks messages
-    23 / 24). The raised error is the
+    23 / 24), then ``dispatch.bind.refuse_unread_patches`` (message 25: a world key a
+    per-run override patched, ``patched_world_keys``, that the bound tree never reads).
+    The raised error is the
     original class (e.g. ``UnknownPolicyError``) with the agent id prefixed; a
-    behavior that is not a mapping raises plain ``PolicyError``.
+    behavior that is not a mapping raises plain ``PolicyError``. Returns the bound
+    trees, ``{agent_id: BoundTree}`` (the control plane's run preflight reports their
+    ``world_reads``).
     """
-    from .bind import bind_tree
+    from .bind import bind_tree, refuse_unread_patches
 
+    trees: dict[str, Any] = {}
     for agent_id, behavior in (collection or {}).items():
         if not isinstance(behavior, Mapping):
             raise PolicyError(
@@ -121,9 +128,12 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
             check_policies_format(profile)
             node = resolve_dispatch_for_profile(profile)
             check_mirrors(profile, node)
-            bind_tree(node, build_policy_tree(node), profile)
+            tree = bind_tree(node, build_policy_tree(node), profile)
+            refuse_unread_patches(tree, patched_world_keys)
         except PolicyError as exc:
             raise type(exc)(f"assignment agent {agent_id!r}: {exc}") from exc
+        trees[agent_id] = tree
+    return trees
 
 
 # --- profile -> resolved policies -------------------------------------------------

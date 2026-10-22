@@ -49,10 +49,44 @@ def _refuse_invalid_policy_config(error: PolicyError) -> None:
     sys.exit(2)
 
 
-def _assert_policies_resolvable_or_exit(assignment_collection) -> None:
-    """Exit 2 (via :func:`_refuse_invalid_policy_config`) on an unresolvable dispatch policy."""
+def _assert_policies_resolvable_or_exit(assignment_collection, patched_world_keys=frozenset()) -> None:
+    """Exit 2 (via :func:`_refuse_invalid_policy_config`) on an unresolvable dispatch policy.
+
+    ``patched_world_keys``: the world keys a per-run override patched (message 25 when
+    the bound planner tree reads none of them).
+    """
     try:
-        assert_assignment_profiles_resolvable(assignment_collection)
+        assert_assignment_profiles_resolvable(
+            assignment_collection, patched_world_keys=patched_world_keys
+        )
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
+
+
+#: Removed per-run variable (plan item 34): ``planner.sharing`` is read only at
+#: compile time (``datagen/preprocess.py``), so patching it at run start changed nothing.
+_REMOVED_SHARING_ENV = "ORSIM_SHARING_POLICY"
+
+
+def _refuse_removed_sharing_env_or_exit() -> None:
+    """Exit 2 when the removed ``ORSIM_SHARING_POLICY`` is set (it used to be ignored silently)."""
+    value = os.environ.get(_REMOVED_SHARING_ENV, "").strip()
+    if value:
+        _refuse_invalid_policy_config(PolicyError(
+            f"{_REMOVED_SHARING_ENV}={value!r} is removed: set planner.sharing in spec.json and "
+            "recompile; the run-time override was inert."
+        ))
+
+
+def _apply_cooperation_override_or_exit(assignment_collection) -> tuple[str | None, frozenset]:
+    """``ORSIM_COOP_STRUCTURE`` onto the loaded assignment profiles; exit 2 on message 26.
+
+    Returns ``scenario_overrides.apply_cooperation_override``'s ``(applied_id,
+    patched_world_keys)``, ``(None, frozenset())`` when the variable is unset.
+    """
+    structure = os.environ.get("ORSIM_COOP_STRUCTURE", "").strip() or None
+    try:
+        return apply_cooperation_override(assignment_collection, structure)
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
 
@@ -375,24 +409,21 @@ def main():
     if capture_dir:
         print(f"Dispatch context capture: {capture_dir}")
 
-    # Per-run cooperation-structure / sharing-algorithm override (collaboration plan
-    # §7): same mechanism as the solver override — pure data patched onto the loaded
-    # assignment profile before agents spawn; the on-disk bundle is never touched.
-    coop_structure = os.environ.get("ORSIM_COOP_STRUCTURE", "").strip() or None
-    coop_sharing = os.environ.get("ORSIM_SHARING_POLICY", "").strip() or None
-    if coop_structure or coop_sharing:
-        applied_structure = apply_cooperation_override(
-            scenario_manager.get_agent_collection("assignment"),
-            structure=coop_structure,
-            sharing=coop_sharing,
+    # Per-run cooperation-structure override (collaboration plan §7): same mechanism as
+    # the solver override — pure data patched onto the loaded assignment profile before
+    # agents spawn; the on-disk bundle is never touched. Fail-loud: an undeclared id (or
+    # a scenario with no cooperation block) exits 2 (message 26), and the patched world
+    # keys go to the run-start check below, which refuses a patch the bound planner tree
+    # never reads (message 25). It runs BEFORE that check so the check sees the patch.
+    _refuse_removed_sharing_env_or_exit()
+    applied_structure, patched_world_keys = _apply_cooperation_override_or_exit(
+        scenario_manager.get_agent_collection("assignment")
+    )
+    if applied_structure:
+        print(f"Cooperation structure override: {applied_structure}")
+        run_name = (
+            f"{run_name} · {applied_structure}" if run_name else applied_structure
         )
-        if applied_structure:
-            print(f"Cooperation structure override: {applied_structure}")
-            run_name = (
-                f"{run_name} · {applied_structure}" if run_name else applied_structure
-            )
-        if coop_sharing:
-            print(f"Sharing algorithm override requested: {coop_sharing}")
 
     # The legacy dispatch variables' run-name segments (compat/legacy_env.py), applied
     # above with the other dispatch inputs. They stay HERE so run names keep their
@@ -407,7 +438,9 @@ def main():
 
     # Fail loud before any agent spawns: an unknown dispatch policy would otherwise
     # only surface agent-side, in the celery journal.
-    _assert_policies_resolvable_or_exit(scenario_manager.get_agent_collection("assignment"))
+    _assert_policies_resolvable_or_exit(
+        scenario_manager.get_agent_collection("assignment"), patched_world_keys
+    )
     bound_tree = _stamp_effective_policies(scenario_manager, policies_overridden)
 
     # The top solver's run declaration: its stamp settings (e.g. the EFFECTIVE
