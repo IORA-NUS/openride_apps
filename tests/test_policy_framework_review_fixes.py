@@ -9,8 +9,9 @@ What is locked, and why each matters:
   cycle, with a ``PolicyRegistrationError`` naming the path; a cycle that bypassed
   registration (component kinds) is a named ``PolicyParamsError``, never a
   ``RecursionError``; and one bad entry never blanks the catalog (#2).
-- Component kinds are declared by the solver side (``register_component_kind``) and
-  still found when nothing imported the market modules; the ``v1`` share-tag
+- Component kinds are declared by the solver side (``register_component_kind``,
+  including their listing ``order``) and still found when nothing imported the market
+  modules, through policy discovery alone; the ``v1`` share-tag
   reservation is one allowlist; the framework never imports ``dispatch.legacy`` (#5).
 - A ref ``version`` must be a non-blank string or null, and drift from the registered
   version is logged as ``POLICY VERSION DRIFT``, nested and at the top level (#7).
@@ -266,11 +267,13 @@ print(json.dumps({"before": before, "kinds": kinds, "after": offer in sys.module
 @pytest.mark.parametrize("first", ["", "apps.container_logistics.assignment.arbitration"])
 def test_builtin_kinds_are_found_lazily_in_a_fixed_order_whatever_was_imported_first(first):
     """Importing the framework imports no market module; the first kind lookup loads
-    them, and the order is the bootstrap list's, not the import order.
+    them (via policy discovery), and the order is the declared ``order``, not the
+    import order.
 
-    Verified to have teeth: emptying ``BUILTIN_COMPONENT_MODULES`` made the cold
-    probe list no kinds; ordering by declaration only put ``market.arbitration``
-    first when arbitration was imported first.
+    Verified to have teeth: making ``_load_builtin_kinds`` a no-op made the cold probe
+    list no kinds; ordering by declaration sequence only (``_order`` returning
+    ``_KIND_SEQ[kind]``) put ``market.arbitration`` first when arbitration was
+    imported first.
     """
     out = subprocess.run([sys.executable, "-c", _PROBE, first], cwd=REPO, capture_output=True,
                          text=True, check=True, env={"PYTHONPATH": str(REPO), "PYTHONDONTWRITEBYTECODE": "1"})
@@ -280,6 +283,62 @@ def test_builtin_kinds_are_found_lazily_in_a_fixed_order_whatever_was_imported_f
     if not first:
         assert not probe["before"], "importing framework.components must not import the market"
         assert not probe["legacy"], "the framework must not pull in the legacy translation (compat.legacy)"
+
+
+def test_a_kind_with_an_order_sorts_before_a_default_one_and_order_is_checked():
+    """A kind's declared ``order`` sets its listing position, before declaration order:
+    a kind declared later with ``order=5`` lists first, one with the default order
+    lists after every built-in; the order is part of the re-declaration identity.
+
+    Verified to have teeth: dropping ``order=order`` from the ``ComponentKind(...)`` in
+    ``register_component_kind`` listed ``test.early`` last; dropping ``order`` from
+    the re-declaration tuple let the ``order=6`` re-declaration through.
+    """
+    class Widget:
+        """A widget component."""
+        version = "1"
+
+    widgets = {"Plain": Widget}
+    try:
+        late = register_component_kind("test.late", lambda: widgets, "Plain", "Late.")
+        early = register_component_kind("test.early", lambda: widgets, "Plain", "Early.", order=5)
+        assert late.order == components.DEFAULT_KIND_ORDER and early.order == 5
+        assert list(COMPONENT_KINDS) == ["test.early", "market.offer", "market.claim",
+                                         "market.arbitration", "test.late"]
+        assert [COMPONENT_KINDS[k].order for k in ("market.offer", "market.claim",
+                                                   "market.arbitration")] == [10, 20, 30]
+        with pytest.raises(PolicyRegistrationError, match="already declared by"):
+            register_component_kind("test.early", lambda: widgets, "Plain", "Early.", order=6)
+        with pytest.raises(PolicyRegistrationError, match="order must be an int"):
+            register_component_kind("test.bad", lambda: widgets, "Plain", "Bad.", order="1")
+    finally:
+        for kind in ("test.late", "test.early", "test.bad"):
+            components._KINDS.pop(kind, None)
+            params_mod._REF_RESOLVERS.pop(kind, None)
+
+
+_COLD_POOLED = """
+import json
+from apps.container_logistics.policies.framework.registry import get_policy_spec
+spec = get_policy_spec("planner", "PooledMarket")
+print(json.dumps({"name": spec.name, "refs": [list(r) for r in spec.refs]}))
+"""
+
+
+def test_pooled_market_registers_in_a_cold_interpreter():
+    """With no market module imported first, discovery registers ``PooledMarket`` and
+    its component refs resolve: ``pooled_planner`` imports the declaring modules before
+    the ``@policy`` decorator runs (a kind lookup DURING discovery returns early).
+
+    Verified to have teeth: moving ``pooled_market``'s ``pooled_planner`` import below
+    the ``@policy`` class made the cold registration fail ("needs kind= one of ...").
+    """
+    out = subprocess.run([sys.executable, "-c", _COLD_POOLED], cwd=REPO, capture_output=True,
+                         text=True, check=True, env={"PYTHONPATH": str(REPO), "PYTHONDONTWRITEBYTECODE": "1"})
+    probe = json.loads(out.stdout.strip().splitlines()[-1])
+    assert probe["name"] == "PooledMarket"
+    assert {kind for _name, kind, _leaf in probe["refs"]} >= {
+        "planner", "market.offer", "market.claim", "market.arbitration"}, probe
 
 
 def test_the_v1_reservation_is_the_one_allowlist():

@@ -252,7 +252,7 @@ DEFAULT_CLAIM_POLICY = "ClaimAllPlanned"
 # This module owns the component kind 'market.claim': the framework resolves refs of that kind
 # against the live registry above (framework/components.py, round-2 review #5).
 register_component_kind("market.claim", lambda: CLAIM_REGISTRY, DEFAULT_CLAIM_POLICY,
-                        "Which planned pool pairs a company bids for.")
+                        "Which planned pool pairs a company bids for.", order=20)
 
 
 def get_claim_policy(
