@@ -1,3 +1,0 @@
-sub:market	1
-sub:partitioned	2
-sub:pooled	1
