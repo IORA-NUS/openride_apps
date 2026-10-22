@@ -2,17 +2,23 @@
 
 Three kinds (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P1.3):
 
-- ``spatial`` -- the spatial index's nearby feasible pairs
-  (:func:`spatial_pairs_for_partition` on the partitioned path; the pooled path
-  prebuilds its pairs once per round in ``pooled_planner.build_round_candidates``).
+- ``spatial`` -- the spatial index's nearby feasible pairs (:func:`spatial_pairs` over
+  a tick; the pooled market prebuilds its pairs once per round in
+  ``pooled_planner.build_round_candidates`` and hands them down as ``tick.candidates``).
 - ``sampled`` -- every scope truck, randomly capped at ``max_trucks_per_scope``
-  (:func:`sampled_trucks`), crossed with every order by the policy itself.
-- ``full`` -- the uncapped feasible cross product (:func:`full_pairs`).
+  (:func:`tick_sampled_trucks`), crossed with every order by the solver itself.
+- ``full`` -- the uncapped feasible cross product (:func:`tick_full_pairs`).
 
-Every function here is a verbatim move of code that lived inline in
-``assignment/app.py``; the dispatch golden test holds it byte-identical, including
-how many draws it takes from the RNG it is handed. ``spatial.iter_candidate_pairs``
-is called THROUGH ITS MODULE because tests monkeypatch it (plan §2.8).
+The tick-level helpers (:func:`spatial_pairs`, :func:`tick_sampled_trucks`,
+:func:`tick_full_pairs`) take a ``dispatch.tick.Tick`` and read only its public
+surface: eligibility from ``tick.serves``, feasibility from ``tick.permitted``, the
+cap sample from ``tick.rng`` (whole tick, per haulier: :data:`TICK_SAMPLE_SCOPE`) or
+``tick.sample_rng`` (a sub-tick, the whole slice). The knobs come from the run world
+(:meth:`CandidateSettings.from_world`). The list-level functions below them are
+verbatim moves of code that lived inline in ``assignment/app.py``; the dispatch golden
+test holds them byte-identical, including how many draws they take from the RNG they
+are handed. ``spatial.iter_candidate_pairs`` is called THROUGH ITS MODULE because
+tests monkeypatch it (plan §2.8).
 
 Solver helper (``policies/solver_lib``; the framework never imports it). Not a leaf module: it
 imports ``assignment.spatial`` / ``assignment.constraints`` at top, which is safe
@@ -23,13 +29,10 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Literal, Mapping
+from typing import Any, Callable, Iterable, Literal, Mapping
 
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.assignment import spatial
-
-if TYPE_CHECKING:
-    from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,10 @@ __all__ = [
     "CANDIDATE_KINDS",
     "DEFAULT_MAX_TRUCKS_PER_SCOPE",
     "CandidateSettings",
+    "TICK_SAMPLE_SCOPE",
+    "spatial_pairs",
+    "tick_sampled_trucks",
+    "tick_full_pairs",
     "spatial_pairs_for_partition",
     "sampled_trucks",
     "sampled_trucks_per_haulier",
@@ -56,6 +63,11 @@ CANDIDATE_KINDS: tuple[str, ...] = ("spatial", "sampled", "full")
 # keeps the worst case at 500 trucks x 500 orders = 250K pairs, the proven-fast
 # envelope. Raise it to widen the candidate pool at the cost of solve time.
 DEFAULT_MAX_TRUCKS_PER_SCOPE = 500
+
+#: How :func:`tick_sampled_trucks` applies the cap on the WHOLE tick (``depth == 0``):
+#: per haulier (round-2 C3 deviation). A sub-tick samples its whole slice at once.
+TICK_SAMPLE_SCOPE = "per_haulier"
+_SAMPLED_MEMO = "solver_lib.candidates.sampled"
 
 
 @dataclass(frozen=True)
@@ -84,6 +96,11 @@ class CandidateSettings:
             ),
         )
 
+    @classmethod
+    def from_world(cls, world: Mapping[str, Any]) -> "CandidateSettings":
+        """The same parse over a run world (``dispatch.bind.RunWorld``): reads the four knob keys."""
+        return cls.from_profile(world)
+
     def spatial_params(self) -> dict[str, Any]:
         """The three-key dict ``PooledPlannerContext.spatial_params`` carries today."""
         return {"cell_deg": self.cell_deg, "per_order": self.per_order, "max_rings": self.max_rings}
@@ -93,16 +110,53 @@ class CandidateSettings:
         return {**self.spatial_params(), "max_trucks_per_scope": self.max_trucks_per_scope}
 
 
+def spatial_pairs(tick: Any, settings: CandidateSettings) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """The tick's spatial candidate pairs: :func:`spatial_pairs_for_partition` over its documents.
+
+    Eligibility is ``tick.serves`` (own haulier or a declared partner), feasibility
+    ``tick.permitted``. Draws no RNG.
+    """
+    return spatial_pairs_for_partition(list(tick.raw_trucks), list(tick.raw_orders), serves=tick.serves,
+                                       allowed=tick.permitted, settings=settings)
+
+
+def tick_sampled_trucks(tick: Any, settings: CandidateSettings) -> list[dict[str, Any]]:
+    """The tick's trucks, randomly capped at ``settings.max_trucks_per_scope``; drawn ONCE per tick object.
+
+    The whole tick (``depth == 0``) caps per haulier from ``tick.rng``
+    (:data:`TICK_SAMPLE_SCOPE`); a sub-tick caps its whole slice from
+    ``tick.sample_rng``. Memoised in ``tick.scratch`` so a second call draws nothing;
+    a fresh list is returned each call.
+    """
+    sampled = tick.scratch.get(_SAMPLED_MEMO)
+    if sampled is None:
+        cap = settings.max_trucks_per_scope
+        if tick.depth == 0:
+            sampled = sampled_trucks_per_haulier(list(tick.raw_trucks), cap=cap, rng=tick.rng)
+        else:
+            sampled = sampled_trucks(list(tick.raw_trucks), cap=cap, rng=tick.sample_rng)
+        tick.scratch[_SAMPLED_MEMO] = sampled
+    return list(sampled)
+
+
+def tick_full_pairs(tick: Any, trucks: Iterable[dict[str, Any]] | None = None) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """Every ``tick.permitted`` pair over ``trucks`` (default: all the tick's) and its orders, truck-major."""
+    return full_pairs(tick.raw_trucks if trucks is None else trucks, tick.raw_orders, allowed=tick.permitted)
+
+
 def spatial_pairs_for_partition(
     trucks: list[dict[str, Any]],
     orders: list[dict[str, Any]],
     *,
-    rule: "PartitionRule",
+    serves: Callable[[str, str], bool],
+    allowed: Callable[[dict[str, Any], dict[str, Any]], bool],
     settings: CandidateSettings,
 ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """Spatial candidate pairs for one partition, grouped by ORDER haulier.
+    """Spatial candidate pairs for one set of trucks and orders, grouped by ORDER haulier.
 
-    Verbatim body of the spatial branch of ``AssignmentApp.assign._solve_bucket``.
+    Verbatim body of the spatial branch of ``AssignmentApp.assign._solve_bucket``
+    (``rule.serves`` / ``rule.allowed`` are now the ``serves`` / ``allowed`` arguments:
+    ``serves(truck_haulier, order_haulier)``).
     Candidates are generated per order-haulier (first-seen order) over only the
     trucks eligible to serve that haulier (own + edge partners): a single
     component-wide index let share-INELIGIBLE trucks consume the per-order cap by
@@ -119,7 +173,7 @@ def spatial_pairs_for_partition(
     for oh, o_group in orders_by_haulier.items():
         eligible = [
             t for t in trucks
-            if (assign_constraints.haulier_of(t) or "") and rule.serves(
+            if (assign_constraints.haulier_of(t) or "") and serves(
                 assign_constraints.haulier_of(t), oh
             )
         ]
@@ -129,7 +183,7 @@ def spatial_pairs_for_partition(
             spatial.iter_candidate_pairs(
                 eligible,
                 o_group,
-                pair_allowed=rule.allowed,
+                pair_allowed=allowed,
                 cell_deg=settings.cell_deg,
                 per_order=settings.per_order,
                 max_rings=settings.max_rings,

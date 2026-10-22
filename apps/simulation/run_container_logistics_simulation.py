@@ -180,11 +180,11 @@ def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
 def sample_scope_for(information_model: str | None) -> str | None:
     """The stamped ``candidate_settings.sample_scope`` of a dispatch information model.
 
-    ``central`` decides the tick scope, whose cap applies per haulier
-    (``context.TICK_SAMPLE_SCOPE``); ``per_group`` / ``per_company`` cap each
-    decomposition scope as a whole. ``None`` for an undeclared model.
+    ``central`` decides the whole tick, whose cap applies per haulier
+    (``solver_lib.candidates.TICK_SAMPLE_SCOPE``); ``per_group`` / ``per_company`` cap
+    each decomposition scope as a whole. ``None`` for an undeclared model.
     """
-    from apps.container_logistics.policies.dispatch.context import TICK_SAMPLE_SCOPE  # local: agent-side
+    from apps.container_logistics.policies.solver_lib.candidates import TICK_SAMPLE_SCOPE  # local: agent-side
 
     return {"central": TICK_SAMPLE_SCOPE, "per_group": "per_group",
             "per_company": "per_company"}.get(information_model)

@@ -1,25 +1,34 @@
 """``PooledMarket``: one planner per company, cooperating through shared order pools.
 
-Single responsibility: the pre-v2 ``pooled`` topology as an ordinary built-in dispatch
-solver (plan ``docs/plans/policy_slots_round2_whole_tick.md`` §2.3, §2.6). It builds
-the market's components from its typed params (``framework.components
-.instantiate_component``, the ONLY instantiation path: the fail-soft legacy getters
-are not used), the companies' fleets and order books, and the ``PoolMarket`` of the
-active structure, and runs the market engine (``assignment.pooled_planner
-.run_pooled_market``). Each company's deployment is decided by ``inner`` through
-``compose.ScopeDecider`` (message 19 drops that company for that round; a crash is
-message 20 and skips it, as before). Every company solve goes through
-``ctx.execute`` (``ScopeDecider.run``), so ``solve_in_thread`` offloads it once, as
-``Partitioned`` offloads each group (final review MAJOR-5, correcting C3 deviation 8).
+Single responsibility: the pre-v2 ``pooled`` topology as an ordinary built-in planner
+solver (plan ``docs/plans/policy_slots_round2_whole_tick.md`` §2.3, §2.6; contract
+``plan_contract_final.md`` §2). At run start ``bind`` resolves the scenario's active
+cooperation arm, validates it (message 14) and, at the top, declares the arm's
+cross-company pairs (a pool only pairs adjacent companies, so the market's foreign
+awards are exactly those). Each tick it builds the market's components from its typed
+params (``framework.components.instantiate_component``, the ONLY instantiation path:
+the fail-soft legacy getters are not used), the companies' fleets and order books, and
+the ``PoolMarket`` of the active arm, and runs the market engine
+(``assignment.pooled_planner.run_pooled_market``). Each company's deployment is a
+sub-tick decided by ``inner`` through ``tick.call`` (:class:`_CompanyDecider`, the
+duck-typed ``dispatch`` object of ``PooledPlannerContext``): message 19 drops that
+company for that round; a crash is message 20 and skips it, as before. The framework
+offloads every company solve when ``solve_in_thread`` is on (final review MAJOR-5).
 Byte identity holds: with the flag off ``execute`` is a plain call, and with it on
 ``tpool.execute`` is synchronous, so solve order and RNG draws are unchanged.
 
-Returns ``Plan(chains in award order, notes={"market": round provenance,
-"pair_notes": {(truck_id, order_id): {pool_id, market_round}}})``. The framework
-re-checks every head against the world rule, does the accounting (``audited`` tags)
-and records the round provenance from ``notes["market"]``.
+Company feasibility (``CompanyRule``, moved here from the framework): own orders keep
+the strict rule, pooled foreign orders the physical rule only. The company sub-tick
+keeps the framework's ``permitted`` (``narrow=None``): a company sub-tick holds only
+that carrier's trucks, so the two agree whenever every pool pairs adjacent companies,
+which message 14 guarantees at run start. ``CompanyRule`` still builds the round's
+prebuilt spatial candidates (``pooled_planner.build_round_candidates``).
 
-Randomness: the tick ``Random`` (``ctx.rng``, created here on first read) is injected
+Returns ``Result(pairs in award order, solver_notes={(truck_id, order_id): {pool_id,
+market_round}}, tick_notes={"market": round provenance})``. The framework re-checks
+every pair, does the accounting (``audited`` tags) and records the round provenance.
+
+Randomness: the tick ``Random`` (``tick.rng``, created here on first read) is injected
 into ``inner`` with ``set_rng`` and the tick seed with ``set_tiebreak`` (through the
 methods, so a patched class method still sees them), before any draw, in the pre-v2
 order. Offer, claim, arbitration, company sampling and the inner all draw from it.
@@ -31,24 +40,25 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Mapping
 
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.assignment import pooled_planner
 from apps.container_logistics.assignment.pools import PoolMarket
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework.components import instantiate_component
+from apps.container_logistics.policies.solver_lib import cooperation
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 
-from .. import compose
+from ..bind import Declaration
 from ..composite import CompositePolicy
-from ..context import DispatchContext
-from ..plan import Plan
+from ..result import Result
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["PooledMarket", "MARKET_NOTE_KEYS"]
+__all__ = ["CompanyRule", "PooledMarket", "MARKET_NOTE_KEYS"]
 
-#: The keys of ``Plan.notes["market"]`` (``AssignmentApp._record_round_stats`` reads them).
+#: The keys of ``Result.tick_notes["market"]`` (``AssignmentApp._record_round_stats`` reads them).
 MARKET_NOTE_KEYS = ("rounds_used", "converged", "candidate_pairs_round1", "candidate_pairs_total", "max_rounds")
 
 _INNER_HELP = (
@@ -128,43 +138,140 @@ class PooledMarket(CompositePolicy):
             )
         return self._components
 
-    def decide(self, ctx: DispatchContext) -> Plan:
-        """Run the market for ``ctx``'s trucks and orders; the plan carries the round provenance."""
+    def bind(self, params: Any, world: Mapping[str, Any], *, top: bool) -> Declaration:
+        """Validate the active arm (message 14); at the top declare its cross-company pairs.
+
+        Reads every world key ``solve_tick`` reads: ``cooperation``,
+        ``max_travel_time_pickup`` (the company rule) and the four candidate knobs (the
+        round prebuild).
+        """
+        cooperation.validate_arm(world)
+        arm = cooperation.resolve_arm(world)
+        world.get("max_travel_time_pickup")
+        CandidateSettings.from_world(world)
+        return Declaration(cross_company=cooperation.directed_pairs(arm) if top else frozenset())
+
+    def solve_tick(self, tick: Any, params: Any) -> Result:
+        """Run the market for ``tick``'s trucks and orders; the result carries the round provenance."""
         # Before any draw and in the pre-v2 order (S4): the leaf's equal-cost shuffle and
         # tie-break become reproducible for this tick.
-        self.inner.set_rng(ctx.rng)
-        self.inner.set_tiebreak(ctx.tick_seed)
+        self.inner.set_rng(tick.rng)
+        self.inner.set_tiebreak(tick.seed)
         offer, claim, arbitration = self.components()
         max_rounds = int(self.params["max_rounds"])
+        arm = cooperation.resolve_arm(tick.world)
         result = pooled_planner.run_pooled_market(
-            trucks_by_haulier=_by_haulier(ctx.raw_trucks),
-            orders_by_haulier=_by_haulier(ctx.raw_orders),
-            market=PoolMarket.from_structure(ctx.world.structure),
+            trucks_by_haulier=_by_haulier(tick.raw_trucks),
+            orders_by_haulier=_by_haulier(tick.raw_orders),
+            market=PoolMarket.from_structure(arm.structure if arm is not None else None),
             ctx=pooled_planner.PooledPlannerContext(
-                dispatch=compose.ScopeDecider(self.inner, self.inner_node, ctx),
+                dispatch=_CompanyDecider(tick, params.inner),
                 offer=offer,
                 claim=claim,
                 arbitration=arbitration,
                 max_rounds=max_rounds,
-                cost=ctx.accounting_cost,
-                rng=ctx.rng,
-                tick_seed=ctx.tick_seed,
-                max_travel_time_pickup=ctx.world.max_travel_time_pickup,
-                candidate_settings=ctx.candidate_settings,
-                clock=ctx.clock,
+                cost=tick.measure.cost,
+                rng=tick.rng,
+                tick_seed=tick.seed,
+                max_travel_time_pickup=tick.world.get("max_travel_time_pickup"),
+                candidate_settings=CandidateSettings.from_world(tick.world),
+                clock=tick.clock,
             ),
         )
-        notes = {
-            "market": {
-                "rounds_used": result.rounds_used,
-                "converged": result.converged,
-                "candidate_pairs_round1": result.candidate_pairs_round1,
-                "candidate_pairs_total": result.candidate_pairs_total,
-                "max_rounds": max_rounds,
-            },
-            "pair_notes": dict(result.pair_notes),
+        market = {
+            "rounds_used": result.rounds_used,
+            "converged": result.converged,
+            "candidate_pairs_round1": result.candidate_pairs_round1,
+            "candidate_pairs_total": result.candidate_pairs_total,
+            "max_rounds": max_rounds,
         }
-        return Plan.from_pairs(result.assignment, notes=notes)
+        return Result.from_pairs(result.assignment, solver_notes=dict(result.pair_notes),
+                                 tick_notes={"market": market})
+
+
+@dataclass(frozen=True)
+class CompanyRule:
+    """Pooled-market feasibility for one carrier company (moved verbatim from ``dispatch/allowed.py``).
+
+    Own orders keep the STRICT rule (``constraints.pair_allowed``); pooled foreign
+    orders drop the haulier-equality test because pool visibility already proved
+    eligibility by construction (``pair_allowed_ignoring_haulier``).
+    """
+
+    haulier_id: str
+    max_travel_time_pickup: Any
+
+    def allowed(self, t: dict[str, Any], o: dict[str, Any]) -> bool:
+        """``pooled_planner._pair_allowed_for(haulier_id)``, verbatim."""
+        if assign_constraints.haulier_of(o) == self.haulier_id:
+            return assign_constraints.pair_allowed(
+                t, o, max_travel_time_pickup=self.max_travel_time_pickup
+            )
+        return assign_constraints.pair_allowed_ignoring_haulier(
+            t, o, max_travel_time_pickup=self.max_travel_time_pickup
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-safe form (diagnostics)."""
+        return {
+            "kind": "company",
+            "haulier_id": self.haulier_id,
+            "max_travel_time_pickup": self.max_travel_time_pickup,
+        }
+
+
+class _CompanyDecider:
+    """Decides one pooled-market company per call: the object ``PooledPlannerContext.dispatch`` holds.
+
+    The market engine (``assignment.pooled_planner``) calls ``candidate_kind``,
+    ``company_rule``, ``company_context``, ``run`` and ``report_crash``; each maps onto
+    the market's tick (``callee``, ``restrict``, ``call``, ``docs``, ``note_incident``).
+    Moved from the old framework ``compose.ScopeDecider``.
+    """
+
+    def __init__(self, tick: Any, inner_ref: Any) -> None:
+        self.tick = tick
+        self.inner_ref = inner_ref
+        self.node = tick.callee(inner_ref)
+        self.candidate_kind = self.node.declaration.candidate_hint or "sampled"
+
+    @staticmethod
+    def company_rule(haulier_id: str, max_travel_time_pickup: Any) -> CompanyRule:
+        """The pooled feasibility rule for ``haulier_id`` (builds the round's prebuilt candidates)."""
+        return CompanyRule(haulier_id=haulier_id, max_travel_time_pickup=max_travel_time_pickup)
+
+    def company_context(self, *, trucks: list[Doc], orders: list[Doc], haulier_id: str, round: int | None,
+                        rule: CompanyRule, rng: Any, settings: Any, accounting_cost: Any, clock: Any,
+                        prebuilt_pairs: Any = None) -> Any:
+        """The company's sub-tick: its trucks and visible orders; the round's prebuilt pairs on the spatial kind.
+
+        ``rng`` (the market's tick ``Random``) is the cap sample's RNG. ``rule``,
+        ``settings``, ``accounting_cost`` and ``clock`` are the market's own and need no
+        handing down (the sub-tick inherits the tick's ``permitted``, world, measure and
+        clock); ``round`` is not recorded.
+        """
+        return self.tick.restrict(
+            trucks=trucks,
+            orders=orders,
+            scope=f"company:{haulier_id}",
+            sample_rng=rng,
+            candidates=list(prebuilt_pairs or ()) if self.candidate_kind == "spatial" else None,
+        )
+
+    def run(self, sub: Any) -> list[tuple[Doc, Doc]]:
+        """The pairs ``inner`` commits for company sub-tick ``sub`` (``[]`` when its result is discarded)."""
+        result = self.tick.call(self.inner_ref, sub)
+        return [] if result is None else sub.docs(result)
+
+    def report_crash(self, *, haulier_id: str, round: int) -> None:
+        """Log message 20 with the traceback (call it inside ``except``) and count it."""
+        self.tick.note_incident()
+        logger.exception(
+            "PLANNER POLICY CRASHED: inner %s raised for company %r in round %d at step %d; "
+            "that company commits nothing this round (pooled-market behaviour, unchanged). "
+            "Traceback follows. (celery journal, not sim.log)",
+            self.node.name, haulier_id, round, self.tick.clock.time_step,
+        )
 
 
 def _by_haulier(docs: Any) -> dict[str, list[Doc]]:

@@ -1,16 +1,17 @@
-"""``CompositePolicy``: a dispatch policy that decomposes the tick and delegates to an inner one.
+"""``CompositePolicy``: an OPTIONAL helper base for a solver that delegates to an ``inner`` one.
 
 Single responsibility: the shared shape of a decomposition solver (``Partitioned``,
 ``PooledMarket``; plan ``docs/plans/policy_slots_round2_whole_tick.md`` §2.3, §4). It
 holds the built ``inner`` policy and the ``inner_node`` (the inner's
 ``ResolvedDispatch``) and forwards the opt-in injections (``set_rng``,
 ``set_tiebreak``, ``set_rebate_book``) to the inner, so a caller that injects into the
-top reaches the per-scope solver that actually reads them. :func:`innermost_policy`
-walks a built tree down to its leaf.
+top reaches the per-scope solver that actually reads them.
 
-A composite is built by ``dispatch/profile.build_policy_tree`` as
-``cls(params=<dict>, inner=<policy>, inner_node=<ResolvedDispatch>)``; its own
-``decide(ctx)`` stays abstract.
+A node with an ``inner`` ref is built by ``dispatch/profile.build_policy_tree`` as
+``cls(params=<dict>, inner=<policy>, inner_node=<ResolvedDispatch>)`` (the construction
+protocol); any class accepting those keywords works, this base is a convenience. The
+framework never ``isinstance``-checks it: it walks its own bound tree
+(``dispatch.bind.BoundTree``) and delegates through ``tick.call``.
 
 Leaf module (plan §2.7, round-2 §4): imports only ``dispatch/base.py``,
 ``dispatch/resolved.py`` and the stdlib-only ``apps.container_logistics.rebate`` (for
@@ -31,7 +32,7 @@ from .resolved import ResolvedDispatch
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CompositePolicy", "innermost_policy"]
+__all__ = ["CompositePolicy"]
 
 
 class CompositePolicy(DispatchPolicy):
@@ -73,9 +74,3 @@ class CompositePolicy(DispatchPolicy):
         super().set_rebate_book(book)
         self.inner.set_rebate_book(book)
 
-
-def innermost_policy(policy: DispatchPolicy) -> DispatchPolicy:
-    """The leaf of a built policy tree: follow ``inner`` until a non-composite."""
-    while isinstance(policy, CompositePolicy):
-        policy = policy.inner
-    return policy

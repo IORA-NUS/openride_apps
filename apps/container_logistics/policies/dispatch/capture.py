@@ -1,43 +1,47 @@
-"""Dispatch capture: write one whole tick's inputs to disk, and replay them.
+"""Planner capture: write one whole tick's inputs to disk, and replay them.
 
-Single responsibility: the ``openride.dispatch_context/2`` fixture format (round 2,
-``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5): ONE file per captured tick,
-``<dir>/step_<n>.json.gz``, holding everything the selected dispatch policy decided
-from:
+Single responsibility: the ``openride.dispatch_context/3`` fixture format (plan
+``plan_contract_final.md`` §5.1 row 27): ONE file per captured tick,
+``<dir>/step_<n>.json.gz``, holding everything the selected planner decided from:
 
 - ``format``, ``run_id``, ``time_step``, ``sim_clock``, ``horizon_steps``;
-- ``tick_seed`` (the tick context's ``ctx.rng`` is ``Random(tick_seed)``) and
-  ``module_rng_state`` (the ``random`` module's state just before ``decide``:
-  ``Partitioned`` draws from the module by declaration);
+- ``tick_seed`` (the tick's ``rng`` is ``Random(tick_seed)``) and ``module_rng_state``
+  (the ``random`` module's state just before the solve: ``Partitioned`` draws from the
+  module by declaration);
 - ``selection``: the bound selection in stamp form (``name``, ``version``, ``label``,
-  ``leaf``, ``information_model``, ``share_tag_format``, ``timing``, nested ``params``
-  with each ref as ``{type, version, params}``);
-- ``candidate_settings``; ``world`` = ``{structure, max_travel_time_pickup,
-  accounting_params}`` (``DispatchWorld.from_profile`` rebuilds the same world);
+  ``leaf``, ``timing``, nested ``params`` with each ref as ``{type, version, params}``);
+- ``world``: the run world (the assignment profile minus the selection keys, the RAW
+  mapping: the whole cooperation menu with its active arm, the candidate knobs,
+  ``max_travel_time_pickup``, ...); ``accounting_params``: the measurement's dials;
+- ``declaration``: the top's ``cross_company`` (sorted ``[owner, carrier]`` lists) and
+  each node path's ``candidate_hint``;
 - ``trucks``, ``orders`` (the candidates and unassigned orders, in tick order);
-- ``live_heads``: the raw plan's heads (captured BEFORE the invariants judged it), or
-  ``None`` when ``decide`` returned no ``Plan``;
+- ``live_pairs``: the raw result's pairs (captured BEFORE the invariants judged it), or
+  ``None`` when the solve returned no ``Result``;
 - ``rebate_aware``: whether the profile opted the solver into rebate pricing. The
   rebate book is NOT captured, so such a tick cannot be replayed (refused).
+
+Format ``/2`` files are read through ``compat.capture_v2`` (converted to ``/3``);
+``/1`` is refused (message 22).
 
 Surfaces:
 
 - :class:`CaptureSettings` comes from ``profile["policy_capture"]``; absent (the
   default) means ``None`` and the runner gets no hook at all.
 - :class:`CaptureRecorder` is the runner hook. On a capture tick it snapshots the
-  module RNG before ``decide`` (``getstate`` consumes nothing) and writes the fixture
-  after ``decide`` and before the invariants, honouring ``every_n_ticks`` (every N-th
+  module RNG before the solve (``getstate`` consumes nothing) and writes the fixture
+  after the solve and before the invariants, honouring ``every_n_ticks`` (every N-th
   whole dispatch TICK this recorder sees, counted from its first, which is always
-  captured -- NOT every N-th sim step; final review MINOR-4) and ``max_files``. Sub-scope calls (``compose.decide_in_scope``) are ignored: the whole
-  tick replays them. A write failure is logged (``PLANNER CAPTURE FAILED``) and
-  never raised.
+  captured -- NOT every N-th sim step; final review MINOR-4) and ``max_files``.
+  Sub-tick calls (``Tick.call``) are ignored: the whole tick replays them. A write
+  failure is logged (``PLANNER CAPTURE FAILED``) and never raised.
 - :func:`parse_capture_spec` parses the ``every=N,max=M`` text that
   ``ORSIM_CAPTURE_DISPATCH`` / ``--capture-dispatch`` carry (the one parser).
-- :func:`read_fixture` refuses format ``/1`` (message 22) and anything else;
-  :func:`context_from_fixture` rebuilds the tick context for any runner;
-  :func:`replay_heads` re-decides the captured selection with the recorded RNG state.
+- :func:`read_fixture` refuses format ``/1`` (message 22) and anything not ``/2``
+  or ``/3``; :func:`context_from_fixture` rebuilds the tick for any runner;
+  :func:`replay_heads` re-solves the captured selection with the recorded RNG state.
 
-Framework side of the boundary. Not a leaf module (imports ``context``/``world``).
+Framework side of the boundary. Not a leaf module (imports ``tick``).
 """
 
 from __future__ import annotations
@@ -54,15 +58,15 @@ from typing import Any, Iterator, Mapping
 
 from apps.container_logistics.policies.framework.errors import PolicyError
 
-from .context import DispatchClock, DispatchContext
-from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
-from .plan import Plan
+from .result import Result
+from .tick import DispatchClock, Tick
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "FIXTURE_FORMAT",
     "FORMAT_1",
+    "FORMAT_2",
     "CAPTURE_SPEC_FORMAT",
     "CaptureSettings",
     "CaptureRecorder",
@@ -70,7 +74,6 @@ __all__ = [
     "context_to_fixture",
     "context_from_fixture",
     "fixture_path",
-    "fixture_world",
     "write_fixture",
     "read_fixture",
     "check_fixture",
@@ -79,7 +82,9 @@ __all__ = [
     "selection_stamp",
 ]
 
-FIXTURE_FORMAT = "openride.dispatch_context/2"
+FIXTURE_FORMAT = "openride.dispatch_context/3"
+#: The round-2 whole-tick format: read through ``compat.capture_v2``.
+FORMAT_2 = "openride.dispatch_context/2"
 #: The round-1 one-scope format: refused on read (message 22).
 FORMAT_1 = "openride.dispatch_context/1"
 _DEFAULT_EVERY_N_TICKS = 1
@@ -183,49 +188,52 @@ def selection_stamp(node: Any) -> dict[str, Any]:
         "version": node.version,
         "label": node.label,
         "leaf": node.leaf,
-        "information_model": node.information_model,
-        "share_tag_format": node.share_tag_format,
         "timing": node.timing,
         "params": None if params is None else params.to_profile_dict(),
     }
 
 
+def declaration_record(tree: Any) -> dict[str, Any]:
+    """The bound tree's declarations in capture form: the top's ``cross_company``, each path's hint."""
+    return {
+        "cross_company": [list(p) for p in sorted(tree.declaration.cross_company)],
+        "hints": {node.path: node.declaration.candidate_hint for node in tree.nodes},
+    }
+
+
 def context_to_fixture(
-    ctx: DispatchContext,
-    plan: Any,
+    tick: Tick,
+    result: Any,
     resolved: Any,
     *,
     module_rng_state: list[Any] | None,
     run_id: str | None = None,
     rebate_aware: bool = False,
 ) -> dict[str, Any]:
-    """The ``openride.dispatch_context/2`` dict for one decided TICK context.
+    """The ``openride.dispatch_context/3`` dict for one solved WHOLE tick.
 
-    ``resolved`` is the bound selection (a ``ResolvedDispatch`` tree). ``live_heads``
-    is ``plan.heads()``, or ``None`` when ``plan`` is not a ``Plan``. Raises
-    ``PolicyError`` for a sub-scope context or one without a world.
+    ``resolved`` is the bound selection (a ``ResolvedDispatch`` tree). ``live_pairs``
+    is ``result.pairs``, or ``None`` when ``result`` is not a ``Result``. The world is
+    the RAW mapping (never iterated through the read-tracking view). Raises
+    ``PolicyError`` for a sub-tick.
     """
-    if ctx.scope.kind != "tick" or ctx.world is None:
-        raise PolicyError(f"scope {ctx.scope.key}: only a whole-tick context with a world is captured (format /2)")
-    world = ctx.world
+    if tick.depth != 0:
+        raise PolicyError(f"scope {tick.scope}: only a whole tick is captured (format /3)")
     return {
         "format": FIXTURE_FORMAT,
         "run_id": run_id,
-        "time_step": ctx.clock.time_step,
-        "sim_clock": ctx.clock.sim_clock,
-        "horizon_steps": ctx.clock.horizon_steps,
-        "tick_seed": ctx.tick_seed,
+        "time_step": tick.clock.time_step,
+        "sim_clock": tick.clock.sim_clock,
+        "horizon_steps": tick.clock.horizon_steps,
+        "tick_seed": tick.seed,
         "module_rng_state": module_rng_state,
         "selection": selection_stamp(resolved),
-        "candidate_settings": ctx.candidate_settings.to_dict(),
-        "world": {
-            "structure": None if world.structure is None else dict(world.structure),
-            "max_travel_time_pickup": world.max_travel_time_pickup,
-            "accounting_params": dict(world.accounting_params),
-        },
-        "trucks": list(ctx.raw_trucks),
-        "orders": list(ctx.raw_orders),
-        "live_heads": [list(h) for h in plan.heads()] if isinstance(plan, Plan) else None,
+        "world": dict(tick.world.unread()),
+        "accounting_params": dict(tick.measure.dials),
+        "declaration": declaration_record(tick._shared.tree),
+        "trucks": list(tick.raw_trucks),
+        "orders": list(tick.raw_orders),
+        "live_pairs": [list(p) for p in result.pairs] if isinstance(result, Result) else None,
         "rebate_aware": bool(rebate_aware),
     }
 
@@ -249,29 +257,33 @@ def write_fixture(path: str, fx: Mapping[str, Any]) -> None:
 
 
 def check_fixture(fx: Any, path: str = "<fixture>") -> Mapping[str, Any]:
-    """``fx`` when it is a format ``/2`` fixture; raises ``PolicyError`` otherwise (message 22 for ``/1``)."""
+    """``fx`` as a format ``/3`` fixture (a ``/2`` one converted); raises ``PolicyError`` otherwise (message 22 for ``/1``)."""
     fmt = fx.get("format") if isinstance(fx, Mapping) else None
     if fmt == FORMAT_1:
         raise PolicyError(
             f"dispatch fixture {path} is format {FORMAT_1} (one scope); this version replays whole ticks "
-            "(format /2). Re-capture with --capture-dispatch."
+            "(format /3). Re-capture with --capture-dispatch."
         )
+    if fmt == FORMAT_2:
+        from apps.container_logistics.policies.compat.capture_v2 import read_fixture_v2
+
+        return read_fixture_v2(fx)
     if fmt != FIXTURE_FORMAT:
         raise PolicyError(f"{path}: not a {FIXTURE_FORMAT} fixture (format={fmt!r}).")
     return fx
 
 
 def read_fixture(path: str) -> dict[str, Any]:
-    """Read one fixture file. Raises ``PolicyError`` for format ``/1`` (message 22) or any other format."""
+    """Read one fixture file (``/3``, or ``/2`` converted). Raises ``PolicyError`` for ``/1`` (message 22) or any other format."""
     with gzip.open(path, "rt", encoding="utf-8") as fh:
         fx = json.load(fh)
     return dict(check_fixture(fx, path))
 
 
 class CaptureRecorder:
-    """The runner's capture hook: ``before_decide(ctx)`` then ``__call__(ctx=, plan=, problems=)``.
+    """The runner's capture hook: ``before_solve(tick)`` then ``__call__(tick=, result=, problems=)``.
 
-    Records whole ticks only (a sub-scope call is ignored). Writes at most
+    Records whole ticks only (a sub-tick call is ignored). Writes at most
     ``settings.max_files`` files (counting files already in the directory) and only
     on ``settings.wants(tick_index)`` ticks, ``tick_index`` counting the whole ticks
     this recorder has seen (0 = the first, always captured). A rebuilt runner (the
@@ -299,28 +311,28 @@ class CaptureRecorder:
     def _wants(self, tick_index: int) -> bool:
         return self.settings.wants(tick_index) and self._room_left()
 
-    def before_decide(self, ctx: DispatchContext) -> None:
-        """Snapshot the module RNG for ``ctx`` when this tick will be captured."""
-        if ctx.scope.kind != "tick":
+    def before_solve(self, tick: Tick) -> None:
+        """Snapshot the module RNG for ``tick`` when this tick will be captured."""
+        if tick.depth != 0:
             return
         self._pending = None
         tick_index, self.ticks_seen = self.ticks_seen, self.ticks_seen + 1
         try:
             if self._wants(tick_index):
-                self._pending = (id(ctx), _module_state())
+                self._pending = (id(tick), _module_state())
         except Exception:  # noqa: BLE001 - capture must never break a tick
             logger.exception("PLANNER CAPTURE FAILED: RNG snapshot at step %d (celery journal)",
-                             ctx.clock.time_step)
+                             tick.clock.time_step)
 
-    def __call__(self, *, ctx: DispatchContext, plan: Any, problems: list[str]) -> None:
-        if ctx.scope.kind != "tick":
+    def __call__(self, *, tick: Tick, result: Any, problems: list[str]) -> None:
+        if tick.depth != 0:
             return
         pending, self._pending = self._pending, None
-        if pending is None or pending[0] != id(ctx):
+        if pending is None or pending[0] != id(tick):
             return
-        path = fixture_path(self.settings.dir, ctx.clock.time_step)
+        path = fixture_path(self.settings.dir, tick.clock.time_step)
         try:
-            fx = context_to_fixture(ctx, plan, self.resolved, module_rng_state=pending[1],
+            fx = context_to_fixture(tick, result, self.resolved, module_rng_state=pending[1],
                                     run_id=self.settings.run_id, rebate_aware=self.rebate_aware)
             write_fixture(path, fx)
             self.written = (self.written or 0) + 1
@@ -328,42 +340,30 @@ class CaptureRecorder:
             logger.exception(
                 "PLANNER CAPTURE FAILED: could not write %s at step %d; the tick continues "
                 "uncaptured (agent-side: see celery's journal, not sim.log).",
-                path, ctx.clock.time_step,
+                path, tick.clock.time_step,
             )
 
 
-def fixture_world(fx: Mapping[str, Any]) -> Any:
-    """The captured tick's ``DispatchWorld`` (``DispatchWorld.from_profile`` on the captured world)."""
-    from .world import DispatchWorld
-
-    world = fx["world"]
-    prof: dict[str, Any] = {"max_travel_time_pickup": world.get("max_travel_time_pickup")}
-    structure = world.get("structure")
-    if structure is not None:
-        prof["cooperation"] = {"active": structure.get("id"), "structures": [structure]}
-    return DispatchWorld.from_profile(prof, accounting_params=world.get("accounting_params") or {})
-
-
-def context_from_fixture(fx: Mapping[str, Any], runner: Any = None, *, scope_log: list | None = None) -> DispatchContext:
-    """Rebuild the captured tick's context for ``runner``'s selection (``runner.tick_context``).
+def context_from_fixture(fx: Mapping[str, Any], runner: Any = None, *, scope_log: list | None = None) -> Tick:
+    """Rebuild the captured tick for ``runner``'s selection (``runner.tick``).
 
     ``runner`` defaults to a fresh runner for the captured selection. The world, tick
-    seed, candidate settings, clock and documents are the captured ones. Raises
-    ``PolicyError`` for a fixture that is not format ``/2``.
+    seed, accounting dials, clock and documents are the captured ones. Raises
+    ``PolicyError`` for a fixture that is not format ``/3`` (or a convertible ``/2``).
     """
     from .runner import build_runner_for_policy
 
-    check_fixture(fx)
+    fx = check_fixture(fx)
     if runner is None:
         runner = build_runner_for_policy(fx["selection"]["name"], fx["selection"]["params"])
-    return runner.tick_context(
+    return runner.tick(
         candidates=list(fx["trucks"]),
         orders=list(fx["orders"]),
-        world=fixture_world(fx),
-        settings=CandidateSettings(**fx["candidate_settings"]),
+        profile=dict(fx["world"]),
         clock=DispatchClock(sim_clock=fx["sim_clock"], time_step=fx["time_step"],
                             horizon_steps=fx.get("horizon_steps")),
-        tick_seed=fx["tick_seed"],
+        seed=fx["tick_seed"],
+        dials=dict(fx.get("accounting_params") or {}),
         scope_log=scope_log,
     )
 
@@ -386,16 +386,16 @@ def restored_module_rng(fx: Mapping[str, Any]) -> Iterator[None]:
 
 
 def replay_heads(fx: Mapping[str, Any]) -> list[list[str]]:
-    """Re-decide the captured selection on ``fx`` with its recorded tick seed and module RNG state.
+    """Re-solve the captured selection on ``fx`` with its recorded tick seed and module RNG state.
 
-    Returns the plan's heads as ``[[truck_id, order_id], ...]``, comparable with
-    ``fx["live_heads"]``. Raises ``PolicyError`` for a fixture that is not format
-    ``/2``, one captured with ``rebate_aware: true`` (the rebate book is not
-    captured), one without RNG state, or an unregistered selection.
+    Returns the result's pairs as ``[[truck_id, order_id], ...]``, comparable with
+    ``fx["live_pairs"]``. Raises ``PolicyError`` for a fixture that is not format
+    ``/3`` (or a convertible ``/2``), one captured with ``rebate_aware: true`` (the
+    rebate book is not captured), one without RNG state, or an unregistered selection.
     """
     from .runner import build_runner_for_policy
 
-    check_fixture(fx)
+    fx = check_fixture(fx)
     if fx.get("rebate_aware"):
         raise PolicyError(
             f"dispatch fixture at step {fx.get('time_step')} was captured with planner.rebate_aware: true; "
@@ -403,6 +403,6 @@ def replay_heads(fx: Mapping[str, Any]) -> list[list[str]]:
         )
     runner = build_runner_for_policy(fx["selection"]["name"], fx["selection"]["params"])
     with restored_module_rng(fx):
-        ctx = context_from_fixture(fx, runner)
-        plan = runner.policy.decide(ctx)
-    return [list(h) for h in plan.heads()]
+        tick = context_from_fixture(fx, runner)
+        result = runner.solve_unchecked(tick)
+    return [list(p) for p in result.pairs]

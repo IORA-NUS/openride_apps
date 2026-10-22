@@ -10,9 +10,10 @@ not.
 
 Format 2 (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5) is a
 HARNESS change only: each case is one whole tick (``Fixture.context`` ->
-``runner.tick_context``), decided with nothing injected (the context's
-``Random(tick_seed)`` is the randomness input, the module RNG seeded with the
-fixture's ``seed``). The format-1 file (``policy_golden.json.gz``: one partition scope
+``runner.tick``), decided with nothing injected (the tick's ``Random(tick_seed)`` is
+the randomness input, the module RNG seeded with the fixture's ``seed``). Since the
+generic contract (WS1) a case's "heads" are the result's pairs: every shipped result
+is length-1 chains, so the JSON is the same. The format-1 file (``policy_golden.json.gz``: one partition scope
 per case, with and without an injected tiebreak) is deleted. GreedyNearest and
 RandomAssignment keep version "1": the dispatch golden (``dispatch_golden_v1``)
 proves their behaviour unchanged; only how this file exercises them changed.
@@ -58,8 +59,8 @@ def golden_cases(name: str) -> list[dict[str, Any]]:
     cases = []
     for make in fx.ROBUSTNESS_FIXTURES:
         fixture = make()
-        _ctx, plan = decide_seeded(build_runner_for_policy(name), fixture)
-        cases.append({"fixture": fixture.id, "heads": [list(h) for h in plan.heads()]})
+        _tick, result = decide_seeded(build_runner_for_policy(name), fixture)
+        cases.append({"fixture": fixture.id, "heads": [list(p) for p in result.pairs]})
     return cases
 
 

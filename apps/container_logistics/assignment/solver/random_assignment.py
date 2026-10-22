@@ -3,8 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Tuple
 
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
+from apps.container_logistics.policies.solver_lib import candidates
+from apps.container_logistics.policies.solver_lib.pair_leaf import PairLeafMixin
 
 from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
 
@@ -25,7 +27,7 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     # 1.3-2x on its own (CLAUDE.md §17), hence the 3x margin and the best-of-3.
     perf_budget_ms=550,
 )
-class RandomAssignmentSolver(BaseAssignmentSolver):
+class RandomAssignmentSolver(PairLeafMixin, BaseAssignmentSolver):
     """Baseline: shuffle orders, give each the first feasible free truck at random.
 
     Ignores ``cost`` — kept as the reference/no-optimisation strategy.
@@ -43,23 +45,24 @@ class RandomAssignmentSolver(BaseAssignmentSolver):
             ),
         )
 
-    def decide(self, ctx) -> Plan:
+    def solve_tick(self, tick, params) -> Result:
         """``solve`` over the sampled trucks (default), or ``solve_pairs`` on spatial pairs.
 
-        Both ignore cost; the accounting cost is passed only to honour the signatures.
-        Runs under ``decision_rng``: the shuffles draw from the scope's RNG.
+        Both ignore cost; the measurement cost is passed only to honour the signatures.
+        Runs under ``decision_rng``: the shuffles draw from the tick's RNG. The caller's
+        ``tick.candidates`` are used on the spatial path only.
         """
-        with self.decision_rng(ctx):
-            if ctx.params.candidates == "spatial":
-                return Plan.from_pairs(
-                    self.solve_pairs(ctx.candidate_pairs("spatial"), cost=ctx.accounting_cost)
-                )
-            return Plan.from_pairs(
+        settings = candidates.CandidateSettings.from_world(tick.world)
+        with self.decision_rng(tick):
+            if params.candidates == "spatial":
+                pairs = tick.candidates if tick.candidates is not None else candidates.spatial_pairs(tick, settings)
+                return Result.from_pairs(self.solve_pairs(pairs, cost=tick.measure.cost))
+            return Result.from_pairs(
                 self.solve(
-                    ctx.sampled_trucks(),
-                    list(ctx.raw_orders),
-                    pair_allowed=ctx.allowed_raw,
-                    cost=ctx.accounting_cost,
+                    candidates.tick_sampled_trucks(tick, settings),
+                    list(tick.raw_orders),
+                    pair_allowed=tick.permitted,
+                    cost=tick.measure.cost,
                 )
             )
 

@@ -56,6 +56,7 @@ __all__ = [
     "isolated_registry",
     "BUILTIN_POLICY_PACKAGES",
     "INNER_PARAM",
+    "OFFLOAD_MODES",
     "V1_SHARE_TAG_BUILTINS",
 ]
 
@@ -64,11 +65,15 @@ BUILTIN_POLICY_PACKAGES = (
     "apps.container_logistics.policies.dispatch.library",
 )
 
-# Per-slot required base class, as "module:QualName", imported lazily at registration
-# so this leaf never imports the slot's contract module at top.
-_SLOT_BASES: dict[str, str] = {
-    "planner": "apps.container_logistics.policies.dispatch.base:DispatchPolicy",
+# Per-slot entry point a registered class must define (callable): the framework calls it
+# every tick. ``solve_tick``, NOT ``solve`` (the pair API of PairSolver, plan B1). The
+# helper base ``dispatch.base.DispatchPolicy`` provides one for a legacy ``decide(ctx)``.
+_SLOT_ENTRY_POINTS: dict[str, str] = {
+    "planner": "solve_tick",
 }
+#: Where the framework offloads a node's work (``solve_in_thread``): its own
+#: ``solve_tick`` (``self``), or only the calls it makes to its children (``children``).
+OFFLOAD_MODES = ("self", "children")
 
 #: Whose private data a dispatch policy's decision may use (round-2 §2.4).
 INFORMATION_MODELS = ("central", "per_group", "per_company")
@@ -103,6 +108,9 @@ class PolicySpec:
     ``information_model`` (``INFORMATION_MODELS``; required for dispatch) and
     ``share_tag_format`` (``SHARE_TAG_FORMATS``) are stamped with the run.
     ``refs`` lists the ``PolicyRef`` params as ``(param, kind, leaf_only)``.
+    ``offload`` (:data:`OFFLOAD_MODES`) says whether the framework runs the node's
+    ``solve_tick`` through ``tick.execute`` (``self``) or the node offloads its own
+    child calls (``children``; the default for a node with a planner ref).
     """
 
     slot: str
@@ -119,6 +127,7 @@ class PolicySpec:
     module_rng: str | None
     arm_budgets_ms: Mapping[str, int]
     refs: tuple[tuple[str, str, bool], ...]
+    offload: str = "self"
 
     @property
     def is_composite(self) -> bool:
@@ -183,13 +192,15 @@ def policy(
     share_tag_format: str = "audited",
     module_rng: str | None = None,
     arm_budgets_ms: Mapping[str, int] | None = None,
+    offload: str | None = None,
 ) -> Callable[[type], type]:
     """Class decorator registering a policy into ``slot`` under ``name``.
 
     Returns the class unchanged. Raises ``PolicyRegistrationError`` (at import) for an
     unknown or non-implemented slot, malformed metadata, a missing/non-frozen/
     non-``PolicyParams`` nested ``Params``, defaults failing their own validation, a
-    wrong slot base class, a dispatch policy without an ``information_model``,
+    class without a callable ``solve_tick``, an ``offload`` outside
+    :data:`OFFLOAD_MODES`, a dispatch policy without an ``information_model``,
     ``share_tag_format="v1"`` outside :data:`V1_SHARE_TAG_BUILTINS`, an ``arm_budgets_ms``
     key naming no str-choice arm, ref defaults that form a cycle through registered
     dispatch policies (including a self-reference), or ``(slot, name)`` already bound
@@ -199,7 +210,7 @@ def policy(
     def decorate(cls: type) -> type:
         spec = _build_spec(cls, slot, name, version, description, requires, order_sensitive,
                            perf_budget_ms, information_model, share_tag_format, module_rng,
-                           arm_budgets_ms)
+                           arm_budgets_ms, offload)
         with _LOCK:
             _store(spec)
         return cls
@@ -209,7 +220,7 @@ def policy(
 
 def _build_spec(cls, slot, name, version, description, requires, order_sensitive,
                 perf_budget_ms, information_model, share_tag_format, module_rng,
-                arm_budgets_ms) -> PolicySpec:
+                arm_budgets_ms, offload=None) -> PolicySpec:
     where = f"@policy(slot={slot!r}, name={name!r}) on {getattr(cls, '__qualname__', cls)!r}"
     short = f"@policy(slot={slot!r}, name={name!r})"
     _check_slot_registrable(slot, where)
@@ -222,12 +233,14 @@ def _build_spec(cls, slot, name, version, description, requires, order_sensitive
     infos = declared_params(params_cls)
     budgets = _checked_arm_budgets(short, infos, arm_budgets_ms)
     _check_ref_default_cycles(short, slot, name, infos)
+    refs = tuple((i.name, i.meta.kind, i.meta.leaf_only) for i in infos if i.is_ref)
+    offload = _checked_offload(short, offload, refs)
     return PolicySpec(slot=slot, name=name, version=version, description=description,
                       requires=tuple(requires), cls=cls, params_cls=params_cls,
                       order_sensitive=order_sensitive, perf_budget_ms=perf_budget_ms,
                       information_model=information_model, share_tag_format=share_tag_format,
                       module_rng=module_rng, arm_budgets_ms=budgets,
-                      refs=tuple((i.name, i.meta.kind, i.meta.leaf_only) for i in infos if i.is_ref))
+                      refs=refs, offload=offload)
 
 
 def _check_slot_registrable(slot: str, where: str) -> None:
@@ -374,15 +387,24 @@ def _checked_arm_budgets(short: str, infos, budgets) -> Mapping[str, int]:
 
 
 def _check_slot_base(cls: type, slot: str, where: str) -> None:
-    target = _SLOT_BASES.get(slot)
-    if target is None:
+    entry = _SLOT_ENTRY_POINTS.get(slot)
+    if entry is None:
         return
-    module_name, _, qualname = target.partition(":")
-    base = importlib.import_module(module_name)
-    for part in qualname.split("."):
-        base = getattr(base, part)
-    if not (isinstance(cls, type) and issubclass(cls, base)):
-        raise PolicyRegistrationError(f"{where}: a {slot} policy must subclass {target}.")
+    if not (isinstance(cls, type) and callable(getattr(cls, entry, None))):
+        raise PolicyRegistrationError(
+            f"{where}: a {slot} policy class must define a callable {entry}(tick, params) "
+            "(or subclass apps.container_logistics.policies.dispatch.base:DispatchPolicy, whose "
+            f"{entry} runs a legacy decide(ctx))."
+        )
+
+
+def _checked_offload(short: str, offload: str | None, refs: tuple[tuple[str, str, bool], ...]) -> str:
+    """``offload`` or its default: ``children`` for a node with a planner ref, else ``self``."""
+    if offload is None:
+        return "children" if any(kind == "planner" for _n, kind, _l in refs) else "self"
+    if offload not in OFFLOAD_MODES:
+        raise PolicyRegistrationError(f"{short}: offload {offload!r} is not one of {list(OFFLOAD_MODES)}.")
+    return offload
 
 
 def _checked_params(cls: type, where: str) -> type[PolicyParams]:

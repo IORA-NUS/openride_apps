@@ -13,7 +13,8 @@ dispatch slot (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7 and P1.6; roun
   :class:`ResolvedDispatch` tree (:func:`dispatch_node`).
 - :func:`build_policy_tree` instantiates a tree; :func:`bind_instance` fits an
   already-built policy object (``AssignmentApp._solver``) into a tree, or refuses;
-  :func:`bind_profile_instance` does that for a profile (the runner's entry point).
+  :func:`bind_profile_instance` does that for a profile. ``dispatch.bind.bind_profile``
+  then binds the instances (``bind`` per node, messages 23/24).
 - :func:`mirror_dispatch_selection` / :func:`check_mirrors` (the legacy mirrors,
   message 13) live in ``policies/compat/mirrors.py`` and are re-exported here.
 - :func:`assert_assignment_profiles_resolvable` is the run-start check
@@ -22,8 +23,11 @@ dispatch slot (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7 and P1.6; roun
 Everything raises ``PolicyError`` subclasses; nothing falls back silently.
 
 Import contract (plan §2.7): imports only leaf ``policies`` modules at module top,
-never ``apps.container_logistics.assignment.*`` (``dispatch/world.py`` is imported
+never ``apps.container_logistics.assignment.*`` (``dispatch/bind.py`` is imported
 locally), so ``assignment.app`` can import it without a cycle. Framework side.
+The framework never ``isinstance``-checks a helper base here: a node "has an inner"
+when its registration declares an ``inner`` ref, and instances are walked through
+their ``inner`` attribute (the construction protocol).
 """
 
 from __future__ import annotations
@@ -56,8 +60,7 @@ from apps.container_logistics.policies.compat.legacy import (
 from apps.container_logistics.policies.compat.mirrors import check_mirrors, mirror_dispatch_selection
 
 from .base import DispatchPolicy
-from .composite import CompositePolicy, innermost_policy
-from .resolved import ResolvedDispatch, ResolvedSource, candidate_kind_for
+from .resolved import ResolvedDispatch, ResolvedSource
 
 logger = logging.getLogger(__name__)
 
@@ -98,12 +101,14 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
     (``legacy.check_policies_format``: a round-1 flat block is refused), then it goes
     through :func:`resolve_dispatch_for_profile` (the shared
     framework resolver also refuses a non-executable timing), then
-    :func:`check_mirrors` (message 13) and ``world.validate_cooperation_world``
-    (message 14). The raised error is the
+    :func:`check_mirrors` (message 13), then the run-start BINDING
+    (``dispatch.bind.bind_tree`` over a fresh tree: each node's ``bind``, so a built-in
+    top validates its cooperation arm, message 14, and the framework checks messages
+    23 / 24). The raised error is the
     original class (e.g. ``UnknownPolicyError``) with the agent id prefixed; a
     behavior that is not a mapping raises plain ``PolicyError``.
     """
-    from .world import validate_cooperation_world  # local: world imports assignment.*
+    from .bind import bind_tree
 
     for agent_id, behavior in (collection or {}).items():
         if not isinstance(behavior, Mapping):
@@ -116,7 +121,7 @@ def assert_assignment_profiles_resolvable(collection: Mapping[str, Any]) -> None
             check_policies_format(profile)
             node = resolve_dispatch_for_profile(profile)
             check_mirrors(profile, node)
-            validate_cooperation_world(profile)
+            bind_tree(node, build_policy_tree(node), profile)
         except PolicyError as exc:
             raise type(exc)(f"assignment agent {agent_id!r}: {exc}") from exc
 
@@ -263,7 +268,6 @@ def dispatch_node(name: str, params: Any, *, timing: str, source: ResolvedSource
         version=spec.version,
         timing=timing,
         params=params,
-        candidate_kind=candidate_kind_for(params),
         source=source,
         information_model=spec.information_model,
         share_tag_format=spec.share_tag_format,
@@ -310,13 +314,14 @@ def _preorder(node: ResolvedDispatch) -> Iterator[ResolvedDispatch]:
 
 
 def build_policy_tree(node: ResolvedDispatch, reuse: DispatchPolicy | None = None) -> DispatchPolicy:
-    """Instantiate ``node``: each policy with ``params=<validated dict>``, composites around.
+    """Instantiate ``node``: each policy with ``params=<validated dict>``, inner-holders around.
 
-    A composite is built as ``cls(params=..., inner=<built inner>, inner_node=<inner
-    node>)``. ``reuse`` is used AS the innermost leaf instead of a new instance (the
-    caller, :func:`bind_instance`, has checked it fits). Raises ``PolicyError`` for an
-    unregistered leaf with no ``reuse`` and for a composite class that is not a
-    ``CompositePolicy``.
+    A node with an ``inner`` is built as ``cls(params=..., inner=<built inner>,
+    inner_node=<inner node>)`` (the construction protocol; the inner is built ONCE and
+    is the object ``bind.bind_tree`` binds as the child). ``reuse`` is used AS the
+    innermost leaf instead of a new instance (the caller, :func:`bind_instance`, has
+    checked it fits). Raises ``PolicyError`` for an unregistered leaf with no ``reuse``
+    and for a class that rejects the construction keywords.
     """
     if node.inner is None:
         if reuse is not None:
@@ -328,13 +333,33 @@ def build_policy_tree(node: ResolvedDispatch, reuse: DispatchPolicy | None = Non
             )
         return get_policy_spec("planner", node.name).cls(params=node.params.to_dict())
     spec = get_policy_spec("planner", node.name)
-    if not issubclass(spec.cls, CompositePolicy):
+    inner = build_policy_tree(node.inner, reuse)
+    try:
+        return spec.cls(params=node.params.to_dict(), inner=inner, inner_node=node.inner)
+    except TypeError as exc:
         raise PolicyError(
             f"planner policy {spec.name!r} has an '{INNER_PARAM}' but its class "
-            f"{spec.cls.__qualname__} does not subclass CompositePolicy (dispatch/composite.py)."
-        )
-    inner = build_policy_tree(node.inner, reuse)
-    return spec.cls(params=node.params.to_dict(), inner=inner, inner_node=node.inner)
+            f"{spec.cls.__qualname__} does not accept the construction keywords "
+            f"cls(params=..., inner=..., inner_node=...) ({exc}); subclass "
+            "dispatch/composite.py CompositePolicy or accept them."
+        ) from exc
+
+
+def _inner_of(policy: Any) -> Any:
+    """``policy.inner`` when its registration declares an ``inner`` ref, else ``None``."""
+    spec = spec_for_class(type(policy))
+    if spec is None or spec.inner_param is None:
+        return None
+    return getattr(policy, "inner", None)
+
+
+def _innermost_instance(policy: Any) -> Any:
+    """The leaf of a built policy tree: follow ``inner`` while the registration declares one."""
+    while True:
+        inner = _inner_of(policy)
+        if inner is None:
+            return policy
+        policy = inner
 
 
 def _instance_label(policy: Any) -> str:
@@ -342,7 +367,7 @@ def _instance_label(policy: Any) -> str:
     while policy is not None:
         spec = spec_for_class(type(policy))
         names.append(spec.name if spec is not None else type(policy).__name__)
-        policy = policy.inner if isinstance(policy, CompositePolicy) else None
+        policy = _inner_of(policy)
     return "/".join(names)
 
 
@@ -353,15 +378,13 @@ def _mismatch(instance: Any, node: ResolvedDispatch) -> PolicyError:
     )
 
 
-def _unregistered_node(policy: Any, *, timing: str, use_spatial_matching: bool) -> ResolvedDispatch:
-    """The legacy candidate rule: spatial iff ``use_spatial_matching`` and ``solve_pairs``."""
-    spatial = use_spatial_matching and hasattr(policy, "solve_pairs")
+def _unregistered_node(policy: Any, *, timing: str) -> ResolvedDispatch:
+    """The node of a hand-injected unregistered solver (its candidate rule: ``compat.unregistered``)."""
     return ResolvedDispatch(
         name=type(policy).__name__,
         version="unregistered",
         timing=timing,
         params=None,
-        candidate_kind="spatial" if spatial else "sampled",
         source="unregistered",
     )
 
@@ -373,9 +396,7 @@ def _with_innermost(node: ResolvedDispatch, leaf: ResolvedDispatch) -> ResolvedD
     return dataclasses.replace(node, inner=_with_innermost(node.inner, leaf), label="", leaf="")
 
 
-def _bound_reused_tree(
-    node: ResolvedDispatch, instance: Any, use_spatial_matching: bool
-) -> tuple[ResolvedDispatch, bool]:
+def _bound_reused_tree(node: ResolvedDispatch, instance: Any) -> tuple[ResolvedDispatch, bool]:
     """Check a REUSED top instance's inner chain against ``node``: ``(bound node, current)``.
 
     Each inner instance must be the registered class ``node`` names, recursively; an
@@ -392,13 +413,13 @@ def _bound_reused_tree(
     inner = getattr(instance, "inner", None)
     spec = spec_for_class(type(inner)) if inner is not None else None
     if spec is not None and spec.name == node.inner.name:
-        bound_inner, current = _bound_reused_tree(node.inner, inner, use_spatial_matching)
+        bound_inner, current = _bound_reused_tree(node.inner, inner)
         bound = node if bound_inner is node.inner else dataclasses.replace(
             node, inner=bound_inner, label="", leaf="")
     elif inner is not None and spec is None and node.inner.inner is None \
-            and not isinstance(inner, CompositePolicy):
+            and getattr(inner, "inner", None) is None:
         _refuse_unregistered_subclass(type(inner))
-        leaf = _unregistered_node(inner, timing=node.timing, use_spatial_matching=use_spatial_matching)
+        leaf = _unregistered_node(inner, timing=node.timing)
         bound, current = dataclasses.replace(node, inner=leaf, label="", leaf=""), True
     else:
         raise _mismatch(instance, node)
@@ -415,8 +436,8 @@ def _rebuilt_around_leaf(stale: DispatchPolicy, bound: ResolvedDispatch) -> Disp
     ``set_rebate_book``) are re-injected into the new top when they were set, so a
     rebuild changes nothing but the stale params.
     """
-    fresh = build_policy_tree(bound, reuse=innermost_policy(stale))
-    if stale._rng is not None:
+    fresh = build_policy_tree(bound, reuse=_innermost_instance(stale))
+    if getattr(stale, "_rng", None) is not None:
         fresh.set_rng(stale._rng)
     if stale.tiebreak_seed is not None:
         fresh.set_tiebreak(stale.tiebreak_seed)
@@ -425,41 +446,41 @@ def _rebuilt_around_leaf(stale: DispatchPolicy, bound: ResolvedDispatch) -> Disp
     return fresh
 
 
-def bind_instance(
-    node: ResolvedDispatch, instance: DispatchPolicy, *, use_spatial_matching: bool = True
-) -> tuple[DispatchPolicy, ResolvedDispatch]:
+def bind_instance(node: ResolvedDispatch, instance: DispatchPolicy) -> tuple[DispatchPolicy, ResolvedDispatch]:
     """Fit an already-built ``instance`` into the selection ``node``: ``(policy, bound node)``.
 
     - A registered class named like the TOP is reused as is; its ``inner`` chain must
       match ``node``'s names recursively (an unregistered innermost instance is
-      accepted under the legacy candidate rule). When a reused composite's params or
+      accepted; its candidate rule is ``compat.unregistered``). When a reused composite's params or
       ``inner_node`` differ from the bound tree (a profile patched after construction),
       the composites are REBUILT from the bound tree around the same innermost leaf
       (injections carried), so what runs is what ``bound`` reports (review C3 #4).
     - A registered class named like the INNERMOST leaf becomes that leaf, and the
       wrappers are built around it (:func:`build_policy_tree` with ``reuse``).
-    - An unregistered class (a hand-injected test solver) becomes the innermost leaf
-      under the legacy candidate rule (spatial iff ``use_spatial_matching`` and it has
-      ``solve_pairs``); the bound node carries it as ``source="unregistered"``.
+    - An unregistered class (a hand-injected test solver) becomes the innermost leaf;
+      the bound node carries it as ``source="unregistered"`` and ``bind.bind_tree``
+      wraps it in ``compat.unregistered.UnregisteredPairLeaf`` (spatial iff the
+      profile's ``use_spatial_matching`` and it has ``solve_pairs``).
     - Anything else raises ``PolicyError`` naming both trees ("AssignmentApp._solver is
       a X but the profile resolves dispatch to Partitioned/Y"), as does an unregistered
-      subclass of a registered policy or an unregistered composite.
+      subclass of a registered policy or an unregistered composite (it holds an
+      ``inner``).
     """
     spec = spec_for_class(type(instance))
     if spec is not None and spec.name == node.name:
-        bound, current = _bound_reused_tree(node, instance, use_spatial_matching)
+        bound, current = _bound_reused_tree(node, instance)
         return (instance if current else _rebuilt_around_leaf(instance, bound)), bound
     if spec is not None:
         if spec.name == node.innermost.name:
             return build_policy_tree(node, reuse=instance), node
         raise _mismatch(instance, node)
     _refuse_unregistered_subclass(type(instance))
-    if isinstance(instance, CompositePolicy):
+    if getattr(instance, "inner", None) is not None:
         raise PolicyError(
-            f"{type(instance).__qualname__} is an unregistered CompositePolicy; register it "
-            "with @policy(slot='planner', ...) to select it."
+            f"{type(instance).__qualname__} is an unregistered composite (it holds an 'inner'); "
+            "register it with @policy(slot='planner', ...) to select it."
         )
-    leaf = _unregistered_node(instance, timing=node.timing, use_spatial_matching=use_spatial_matching)
+    leaf = _unregistered_node(instance, timing=node.timing)
     bound = _with_innermost(node, leaf)
     return build_policy_tree(bound, reuse=instance), bound
 
@@ -480,5 +501,4 @@ def bind_profile_instance(prof: Mapping[str, Any], instance: DispatchPolicy) -> 
     Returns ``(top-level policy, bound node)``. Raises ``PolicyError`` when the
     profile does not resolve or ``instance`` fits neither its top nor its leaf.
     """
-    return bind_instance(resolve_dispatch_for_profile(prof), instance,
-                         use_spatial_matching=use_spatial_matching(prof))
+    return bind_instance(resolve_dispatch_for_profile(prof), instance)

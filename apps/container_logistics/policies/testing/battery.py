@@ -3,15 +3,16 @@
 Single responsibility: decide, for one registered dispatch policy, whether it honours
 the dispatch contract on WHOLE TICKS (round 2, ``docs/plans/policy_slots_round2_whole_tick.md``
 §5 C5; plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.2). Every decision is one tick
-(``fixtures.Fixture.context`` -> ``DispatchRunner.tick_context``) through
+(``fixtures.Fixture.context`` -> ``DispatchRunner.tick``) through
 ``DispatchRunner.run``, so what passes here is what the sim executes, leaf or
 decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in order:
 
-- ``structure`` -- on every fixture: the tick plan passes ``invariants.check_plan``
-  (on the tick scope its feasibility is the WORLD rule, so a cross-company head the
-  structure does not permit fails ``only_allowed_pairs``). Each verdict is derived
-  from ``check_plan``'s own messages (:func:`classify_contract_problem`);
-  ``Plan.from_pairs``' "truck twice" violation is ``no_truck_twice``.
+- ``structure`` -- on every fixture: the tick result passes ``invariants.check_result``
+  (on the whole tick its feasibility is ownership-or-declared AND physical, so a
+  cross-company pair the top did not declare fails ``only_allowed_pairs``). Each
+  verdict is derived from ``check_result``'s own messages
+  (:func:`classify_contract_problem`); ``Result.from_pairs``' "truck twice" violation
+  is ``no_truck_twice``.
 - ``robustness`` -- one per fixture: ``decide`` does not raise anything but a
   contract violation (reported once, under ``structure``).
 - ``determinism`` -- ``reproducible``: two fresh instances on the same tick give the
@@ -77,12 +78,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterator, Mapping, NamedTuple
 
 from apps.container_logistics.assignment import constraints as assign_constraints
-from apps.container_logistics.policies.dispatch import compose as _compose_module
+from apps.container_logistics.policies.compat.legacy_context import LegacyDecideContext
 from apps.container_logistics.policies.dispatch import runner as _runner_module
-from apps.container_logistics.policies.dispatch.context import DispatchContext
-from apps.container_logistics.policies.dispatch.invariants import check_plan
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.dispatch import tick as _tick_module
+from apps.container_logistics.policies.dispatch.invariants import check_result
+from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.dispatch.runner import DispatchRunner, build_runner_for_policy
+from apps.container_logistics.policies.dispatch.tick import Tick
 from apps.container_logistics.policies.framework.components import ref_names, ref_target
 from apps.container_logistics.policies.framework.errors import PolicyError, SlotNotImplementedError
 from apps.container_logistics.policies.framework.params import SUPPORTED_SCHEMA_KEYWORDS, declared_params
@@ -137,18 +139,22 @@ DISPATCH_CHECKS: tuple[str, ...] = (
     "params.schema_keywords_supported",
 )
 
-# check_plan's message kinds (invariants.py), each keyed on its stable wording, and
+# check_result's message kinds (invariants.py), each keyed on its stable wording, and
 # the structure check it fails. tests/test_policy_battery_structure_via_check_plan.py
-# asserts this table covers every message check_plan can produce.
+# asserts this table covers every message check_result can produce.
 _PLAN_MESSAGE_KINDS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("returns_plan", re.compile(r"^decide\(\) returned .+, expected Plan$")),
+    ("returns_plan", re.compile(r"^solve_tick\(\) returned .+, expected Result$")),
+    ("returns_plan", re.compile(r"^pair .+ is not a \(truck_id, order_id\) pair of strings$")),
+    ("no_truck_twice", re.compile(r"^truck .+ appears twice in the result$")),
+    ("no_order_twice", re.compile(r"^order .+ appears twice in the result$")),
     ("only_in_scope", re.compile(r"^truck .+ is not in scope ")),
-    ("returns_plan", re.compile(r"^chain for truck .+ is empty or not a tuple: ")),
-    ("no_order_twice", re.compile(r"^order .+ appears twice in the plan$")),
     ("only_in_scope", re.compile(r"^order .+ is not in scope ")),
-    ("only_allowed_pairs", re.compile(r"^head pair \(.+\) is not allowed$")),
+    ("only_allowed_pairs", re.compile(r"^pair \(.+\) is not allowed$")),
+    ("returns_plan", re.compile(r"^solver_notes key .+ is not one of the result's pairs$")),
+    ("returns_plan", re.compile(r"^solver_notes for .+ is not a mapping with string keys$")),
 )
-# Raised by Plan.from_pairs inside decide (a pair list cannot repeat a truck legally).
+# Raised by Result.from_pairs (or the legacy Plan.from_pairs) inside the solve (a pair
+# list cannot repeat a truck legally).
 _RAISED_MESSAGE_KINDS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("no_truck_twice", re.compile(r"^truck .+ appears twice in pairs$")),
 )
@@ -213,17 +219,17 @@ def decide_seeded(
     *,
     trucks: list[dict[str, Any]] | None = None,
     orders: list[dict[str, Any]] | None = None,
-) -> tuple[DispatchContext, Any]:
-    """``runner.policy.decide`` on a fresh whole-tick fixture context, module RNG seeded.
+) -> tuple[Tick, Any]:
+    """The top's raw ``solve_tick`` on a fresh whole fixture tick, module RNG seeded.
 
-    The policy's raw output, NOT the runner path (no ``check_plan``): this is what the
-    policy golden captures. Nothing is injected (the context is the randomness input);
+    The policy's raw output, NOT the runner path (no ``check_result``): this is what
+    the policy golden captures. Nothing is injected (the tick is the randomness input);
     the ``random`` module is seeded with ``fixture.seed`` for the call. Exceptions
     propagate.
     """
     with fixture.module_random():
-        ctx = fixture.context(runner, trucks=trucks, orders=orders)
-        return ctx, runner.policy.decide(ctx)
+        tick = fixture.context(runner, trucks=trucks, orders=orders)
+        return tick, runner.solve_unchecked(tick)
 
 
 # --- arms --------------------------------------------------------------------
@@ -334,8 +340,8 @@ def battery_check_ids(slot: str, name: str) -> list[str]:
 def classify_contract_problem(message: str, *, raised: bool = False) -> str:
     """The structure check (an entry of ``STRUCTURE_CHECKS``) a contract message fails.
 
-    ``raised`` marks a ``DispatchContractViolation`` raised inside ``decide`` (e.g.
-    ``Plan.from_pairs``); otherwise ``message`` is one of ``check_plan``'s. An
+    ``raised`` marks a ``DispatchContractViolation`` raised inside the solve (e.g.
+    ``Result.from_pairs``); otherwise ``message`` is one of ``check_result``'s. An
     unknown message maps to ``returns_plan``, so it still fails.
     """
     for check, pattern in (_RAISED_MESSAGE_KINDS if raised else _PLAN_MESSAGE_KINDS):
@@ -428,11 +434,11 @@ class _ViolationFilter(logging.Filter):
 def _quiet_runner_violations() -> Iterator[None]:
     """Drop the CONTRACT VIOLATION ERROR lines for the block (the battery reports them).
 
-    The runner logs a tick violation (message 18); a sub-scope violation (message 19)
-    is logged by ``compose``.
+    The runner logs a tick violation (message 18); a sub-tick violation (message 19)
+    is logged by ``dispatch.tick``.
     """
     flt = _ViolationFilter()
-    loggers = (_runner_module.logger, _compose_module.logger)
+    loggers = (_runner_module.logger, _tick_module.logger)
     for lg in loggers:
         lg.addFilter(flt)
     try:
@@ -443,19 +449,19 @@ def _quiet_runner_violations() -> Iterator[None]:
 
 
 class _PlanRecorder:
-    """Capture hook: the raw TICK plan and any violation ``decide`` raised (``DispatchRunner.run``).
+    """Capture hook: the raw TICK result and any violation the solve raised (``DispatchRunner.run``).
 
-    Sub-scope calls (``compose.decide_in_scope`` reuses the hook) are ignored.
+    Sub-tick calls (``Tick.call`` reuses the hook) are ignored.
     """
 
     def __init__(self) -> None:
         self.plan: Any = None
         self.raised: list[str] = []
 
-    def __call__(self, *, ctx: DispatchContext, plan: Any, problems: list[str]) -> None:
-        if ctx.scope.kind != "tick":
+    def __call__(self, *, tick: Tick, result: Any, problems: list[str]) -> None:
+        if tick.depth != 0:
             return
-        self.plan = plan
+        self.plan = result
         self.raised = list(problems)
 
 
@@ -465,8 +471,8 @@ class _Decision:
 
     fixture: Any
     n_trucks: int
-    plan: Any
-    pairs: tuple[tuple[str, str], ...]          # committed heads (truck id, order id)
+    plan: Any                                   # the raw tick result
+    pairs: tuple[tuple[str, str], ...]          # committed pairs (truck id, order id)
     problems: tuple[tuple[str, str], ...]       # (structure check, message)
     error: str | None                           # a non-contract exception, as text
     decide_ms: float
@@ -493,10 +499,10 @@ def _decide_via_runner(
     """``DispatchRunner.run`` on a fresh ``spec`` instance with params ``arm``, on one tick.
 
     The module RNG is seeded with ``fixture.seed``; nothing is injected. The
-    structure problems are ``check_plan``'s against the tick context (or the violation
-    ``decide`` raised), classified per check; a runner verdict that disagrees with
-    them is a problem too. The sub-scopes the policy builds are recorded
-    (``scope_log``) for the information audit.
+    structure problems are ``check_result``'s against the tick (or the violation the
+    solve raised), classified per check; a runner verdict that disagrees with them is
+    a problem too. The sub-ticks the policy builds are recorded (``scope_log``) for the
+    information audit.
     """
     recorder = _PlanRecorder()
     runner = build_runner_for_policy(spec.name, _arm_params(arm), capture=recorder)
@@ -517,11 +523,11 @@ def _decide_via_runner(
         if recorder.raised:
             problems = [(classify_contract_problem(m, raised=True), m) for m in recorder.raised]
         else:
-            problems = [(classify_contract_problem(m), m) for m in check_plan(recorder.plan, ctx)]
+            problems = [(classify_contract_problem(m), m) for m in check_result(recorder.plan, ctx)]
         discarded = runner.stats["violations"] > 0
         if discarded != bool(problems):
-            problems.append((_UNCLASSIFIED, f"the runner {'discarded' if discarded else 'committed'} the plan "
-                                            f"but check_plan found {len(problems)} problem(s)"))
+            problems.append((_UNCLASSIFIED, f"the runner {'discarded' if discarded else 'committed'} the result "
+                                            f"but check_result found {len(problems)} problem(s)"))
     return _Decision(
         fixture=fixture,
         n_trucks=n_trucks,
@@ -561,13 +567,13 @@ def _structure_check(outcomes: _Outcomes, check: str) -> tuple[bool, str]:
         mine = [f"{d.fixture_id}: {msg}" for kind, msg in d.problems if kind == check]
         if mine:
             problems += mine
-        elif d.error is not None or not isinstance(d.plan, Plan):
+        elif d.error is not None or not isinstance(d.plan, Result):
             skipped.append(d.fixture_id)
     if problems:
         return False, "; ".join(problems)
-    note = (f" (not checked on {', '.join(skipped)}: no Plan to check, see robustness.* "
+    note = (f" (not checked on {', '.join(skipped)}: no Result to check, see robustness.* "
             "and the other structure.* checks)") if skipped else ""
-    return True, f"check_plan clean on {len(outcomes.all()) - len(skipped)} whole tick(s){note}"
+    return True, f"check_result clean on {len(outcomes.all()) - len(skipped)} whole tick(s){note}"
 
 
 # --- robustness --------------------------------------------------------------
@@ -578,8 +584,8 @@ def _robustness_check(outcomes: _Outcomes, make: Callable[[], Any]) -> tuple[boo
     if d.error is not None:
         return False, f"decide raised {d.error}"
     if d.problems:
-        return True, f"plan discarded by the runner{timing}: contract problems, reported under structure.*"
-    return True, f"{len(d.plan.heads())} head(s) over {d.n_trucks} trucks{timing}"
+        return True, f"result discarded by the runner{timing}: contract problems, reported under structure.*"
+    return True, f"{len(d.plan.pairs)} pair(s) over {d.n_trucks} trucks{timing}"
 
 
 # --- determinism -------------------------------------------------------------
@@ -591,12 +597,12 @@ def _determinism_fixtures() -> list[Any]:
 def _plan_items(d: _Decision) -> Any:
     if d.error is not None:
         return ("raised", d.error)
-    return list(d.plan.chains.items()) if isinstance(d.plan, Plan) else d.plan
+    return list(d.plan.pairs) if isinstance(d.plan, Result) else d.plan
 
 
 def _plan_mapping(d: _Decision) -> Any:
-    """Chains as a dict (commit order ignored), or the non-plan outcome itself."""
-    return dict(d.plan.chains) if d.error is None and isinstance(d.plan, Plan) else _plan_items(d)
+    """Pairs as a truck -> order dict (commit order ignored), or the non-result outcome itself."""
+    return dict(d.plan.pairs) if d.error is None and isinstance(d.plan, Result) else _plan_items(d)
 
 
 def _reproducible(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str]:
@@ -701,16 +707,8 @@ def _module_draw_names() -> tuple[str, ...]:
 
 
 def _selection_instances(runner: DispatchRunner) -> list[tuple[Any, Any]]:
-    """``[(built policy, its ResolvedDispatch), ...]`` from the top down the ``inner`` chain."""
-    from apps.container_logistics.policies.dispatch.composite import CompositePolicy
-
-    out, inst, node = [], runner.policy, runner.resolved
-    while inst is not None and node is not None:
-        out.append((inst, node))
-        if not isinstance(inst, CompositePolicy):
-            break
-        inst, node = inst.inner, node.inner
-    return out
+    """``[(built policy, its ResolvedDispatch), ...]`` from the top down the bound tree."""
+    return [(bound.instance, bound.node) for bound in runner.tree.nodes]
 
 
 def _frame_arguments(frame: Any) -> list[Any]:
@@ -736,12 +734,13 @@ def _attribute_frame(frame: Any, ids: Mapping[int, str]) -> tuple[str, str] | No
     built policies (``ids``: ``id(instance) -> name``). Matching the first parameter
     by identity, not a local called ``self``, attributes ``def decide(me, ctx)``
     correctly, and never credits a composite's frame that merely holds its inner in a
-    local. ``channel`` is ``"sample"`` only for the cap sample of a scope HANDED to
-    that node: a non-tick ``DispatchContext`` method on the way, whose context is a
-    parameter of the node's entry frame (the outermost frame with that node as first
-    parameter below its parent's: ``compose.decide_in_scope`` / ``decide``). A scope
-    the node built for itself (``partition_context(sample_rng=random)`` inside its own
-    ``decide``) is the node's own ``"direct"`` draw.
+    local. ``channel`` is ``"sample"`` only for the cap sample of a sub-tick HANDED to
+    that node: a frame on the way whose first parameter is a sub-tick (a ``Tick`` at
+    ``depth > 0``, or a legacy context over one: ``solver_lib.candidates`` takes the
+    tick first), and that sub-tick is a parameter of the node's entry frame (the
+    outermost frame with that node as first parameter below its parent's:
+    ``solve_tick``). A sub-tick the node built for itself (``restrict(sample_rng=random)``
+    inside its own ``solve_tick``) is the node's own ``"direct"`` draw.
     """
     sample_ctx = None
     while frame is not None:
@@ -750,7 +749,7 @@ def _attribute_frame(frame: Any, ids: Mapping[int, str]) -> tuple[str, str] | No
             if sample_ctx is not None and not _handed_to(owner, frame, sample_ctx, ids):
                 sample_ctx = None
             return ("sample" if sample_ctx is not None else "direct"), ids[id(owner)]
-        if sample_ctx is None and isinstance(owner, DispatchContext) and owner.scope.kind != "tick":
+        if sample_ctx is None and isinstance(owner, (Tick, LegacyDecideContext)) and owner.depth != 0:
             sample_ctx = owner
         frame = frame.f_back
     return None
@@ -854,7 +853,7 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
     The provenance rule (final review MINOR-1, after MAJOR-4):
 
     - a node's ``module_rng`` covers its OWN code's direct draws, and the cap sample of a
-      scope built under it (a ``DispatchContext`` whose ``sample_rng`` the composite set
+      sub-tick built under it (a ``Tick`` whose ``sample_rng`` the composite set
       to the module: ``Partitioned``'s ``sample_rng=random``) when the node or an
       ancestor of the drawing node declares it;
     - the inner's ``self.rng`` channel is not exempt: it is redirected to a private

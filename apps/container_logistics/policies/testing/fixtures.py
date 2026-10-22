@@ -5,22 +5,23 @@ Single responsibility: build the inputs of one assignment tick from a fixed reci
 is the recipe: raw truck/order documents shaped like ``AssignmentApp.assign`` reads
 them, the active cooperation ``structure`` (or ``None``), ``max_travel_time_pickup``,
 candidate settings, the clock and the run id the tick seed derives from.
-:meth:`Fixture.world` builds the ``DispatchWorld`` exactly like the live app
-(``DispatchWorld.from_profile`` on a profile carrying that structure), and
-:meth:`Fixture.context` turns the recipe into the whole-tick context ONLY through
-``DispatchRunner.tick_context``, so a fixture context is built exactly like a live
-tick and any policy, leaf or decomposition, decides it.
+:meth:`Fixture.profile` is the assignment-profile slice of that world (what the live
+app's profile carries), and :meth:`Fixture.context` turns the recipe into the whole
+tick ONLY through ``DispatchRunner.tick``, so a fixture tick is built exactly like a
+live one and any policy, leaf or decomposition, decides it. :meth:`Fixture.world` is
+the cooperation view the battery's information audit reads (``component_of``,
+``partners``), built from ``solver_lib.cooperation``.
 
-Randomness: the context is the only randomness input (``ctx.rng`` is
-``Random(tick_seed)``, ``tick_seed = world.tick_seed(run_id, time_step)``); the
+Randomness: the tick is the only randomness input (``tick.rng`` is
+``Random(tick_seed)``, ``tick_seed = dispatch.tick.tick_seed(run_id, time_step)``); the
 ``random`` MODULE is seeded with ``seed`` around each decide
 (:meth:`Fixture.module_random`), because ``Partitioned`` draws from it by declaration
 (``module_rng``). Nothing here reads global state; ``scale`` uses its own
 ``random.Random(seed)``. Policies receive shared document dicts and must not mutate them.
 
-Testing side: imports the dispatch framework (and the cooperation normaliser of
-``datagen.hauliers``, so a fixture structure has the compiled shape), never a policy
-module.
+Testing side: imports the dispatch framework, ``solver_lib.cooperation`` (the audit
+view) and the cooperation normaliser of ``datagen.hauliers`` (so a fixture structure
+has the compiled shape), never a policy module.
 """
 
 from __future__ import annotations
@@ -32,14 +33,15 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping
 
 from apps.container_logistics.datagen import hauliers as _hauliers
-from apps.container_logistics.policies.dispatch.context import DispatchClock, DispatchContext
+from apps.container_logistics.policies.dispatch.runner import DispatchRunner
+from apps.container_logistics.policies.dispatch.tick import DispatchClock, Tick, tick_seed
+from apps.container_logistics.policies.solver_lib import cooperation as _cooperation
 from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
-from apps.container_logistics.policies.dispatch.runner import DispatchRunner, accounting_params_for
-from apps.container_logistics.policies.dispatch.world import DispatchWorld, tick_seed
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CooperationView",
     "Fixture",
     "SIM_CLOCK",
     "cooperation_structure",
@@ -84,11 +86,28 @@ def cooperation_structure(edges: list[tuple[str, str]], haulier_ids: list[str], 
 
 
 def world_profile(structure: Mapping[str, Any] | None, max_travel_time_pickup: Any) -> dict[str, Any]:
-    """The assignment-profile slice ``DispatchWorld.from_profile`` reads for this world."""
+    """The assignment-profile slice of this world: ``max_travel_time_pickup`` and the cooperation block."""
     prof: dict[str, Any] = {"max_travel_time_pickup": max_travel_time_pickup}
     if structure is not None:
         prof["cooperation"] = {"active": structure.get("id"), "structures": [dict(structure)]}
     return prof
+
+
+#: ``CandidateSettings`` field -> the assignment-profile key it is parsed from.
+_SETTINGS_KEYS = (("cell_deg", "spatial_cell_deg"), ("per_order", "spatial_candidates_per_order"),
+                  ("max_rings", "spatial_max_rings"), ("max_trucks_per_scope", "max_trucks_per_haulier"))
+
+
+@dataclass(frozen=True)
+class CooperationView:
+    """The fixture world's active arm as the battery's information audit reads it."""
+
+    component_of: Mapping[str, int]
+    adjacency: Mapping[str, frozenset[str]]
+
+    def partners(self, haulier_id: str) -> frozenset[str]:
+        """The companies ``haulier_id`` has a structure edge to (empty without one)."""
+        return self.adjacency.get(str(haulier_id), frozenset())
 
 
 @dataclass(frozen=True)
@@ -98,8 +117,8 @@ class Fixture:
     ``structure`` is the ACTIVE cooperation structure (compiled shape) or ``None`` (no
     cooperation: own-haulier only). ``seed`` seeds the ``random`` module around each
     decide; ``run_id`` (default ``fixture:<id>``) and ``time_step`` give the tick seed.
-    ``accounting_params`` are the world's accounting dials; empty means "the
-    selection's own" (``runner.accounting_params_for``, the F1 one-dial rule).
+    ``accounting_params`` are the measurement's accounting dials; empty means "the
+    selection's own" (``compat.measurement.accounting_params_for``, the F1 one-dial rule).
     """
 
     id: str
@@ -115,16 +134,24 @@ class Fixture:
 
     @property
     def tick_seed(self) -> int:
-        """``world.tick_seed(run_id, time_step)``: the live formula."""
+        """``dispatch.tick.tick_seed(run_id, time_step)``: the live formula."""
         return tick_seed(self.run_id if self.run_id is not None else f"fixture:{self.id}", self.time_step)
 
-    def world(self, runner: DispatchRunner | None = None) -> DispatchWorld:
-        """The fixture's ``DispatchWorld``, built like the live app's (``from_profile``)."""
-        accounting = dict(self.accounting_params)
-        if not accounting and runner is not None:
-            accounting = accounting_params_for(runner.resolved)
-        return DispatchWorld.from_profile(world_profile(self.structure, self.max_travel_time_pickup),
-                                          accounting_params=accounting)
+    def profile(self) -> dict[str, Any]:
+        """The assignment-profile slice of this world: cooperation, ``max_travel_time_pickup``, the candidate knobs."""
+        prof = world_profile(self.structure, self.max_travel_time_pickup)
+        for attr, key in _SETTINGS_KEYS:
+            prof[key] = getattr(self.settings, attr)
+        return prof
+
+    def world(self) -> CooperationView:
+        """The active arm's ``component_of`` / ``partners`` (``solver_lib.cooperation``), for the audit."""
+        from apps.container_logistics.policies.dispatch.bind import RunWorld
+
+        arm = _cooperation.resolve_arm(RunWorld.from_profile(self.profile()))
+        if arm is None:
+            return CooperationView(component_of={}, adjacency={})
+        return CooperationView(component_of=arm.component_of, adjacency=arm.adjacency)
 
     @contextmanager
     def module_random(self) -> Iterator[None]:
@@ -139,15 +166,19 @@ class Fixture:
         trucks: list[dict[str, Any]] | None = None,
         orders: list[dict[str, Any]] | None = None,
         scope_log: list[dict[str, Any]] | None = None,
-    ) -> DispatchContext:
-        """A fresh whole-tick context for ``runner`` (``trucks``/``orders`` override the order only)."""
-        return runner.tick_context(
+    ) -> Tick:
+        """A fresh whole tick for ``runner`` (``trucks``/``orders`` override the order only).
+
+        The measurement dials are ``accounting_params`` when set, else the selection's
+        own (``compat.measurement.accounting_params_for``, the F1 one-dial rule).
+        """
+        return runner.tick(
             candidates=list(self.trucks if trucks is None else trucks),
             orders=list(self.orders if orders is None else orders),
-            world=self.world(runner),
-            settings=self.settings,
+            profile=self.profile(),
             clock=DispatchClock(sim_clock=SIM_CLOCK, time_step=self.time_step),
-            tick_seed=self.tick_seed,
+            seed=self.tick_seed,
+            dials=dict(self.accounting_params) or None,
             scope_log=scope_log,
         )
 
