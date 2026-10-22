@@ -1,0 +1,5 @@
+id:KIND_WITHOUT_CANDIDATES_PARAM	3
+id:candidate_kind	1
+id:candidate_kind_for	2
+id:information_model	1
+id:share_tag_format	1

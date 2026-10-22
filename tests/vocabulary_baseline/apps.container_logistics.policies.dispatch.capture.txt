@@ -1,0 +1,3 @@
+id:information_model	2
+id:share_tag_format	2
+sub:cooperation	1

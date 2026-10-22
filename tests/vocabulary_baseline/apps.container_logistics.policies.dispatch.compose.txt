@@ -1,0 +1,9 @@
+id:CompanyRule	3
+id:ScopeDecider	2
+id:candidate_kind	4
+id:company_context	2
+id:proves_physical	1
+pair:component_of	4
+sub:cooperation	2
+sub:market	1
+sub:pooled	1
