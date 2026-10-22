@@ -277,7 +277,7 @@ def register(sub) -> None:
 
     ls = psub.add_parser("list", help="List policy slots, their policies and the market components")
     ls.add_argument("slot", nargs="?", default=None, metavar="SLOT|KIND",
-                    help="Only this slot (e.g. dispatch) or component kind (e.g. market.offer)")
+                    help="Only this slot (e.g. planner) or component kind (e.g. market.offer)")
     ls.add_argument("--json", action="store_true", help="Emit the raw catalog JSON")
     ls.set_defaults(func=_cmd_list)
 

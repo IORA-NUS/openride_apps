@@ -362,6 +362,9 @@ def run_battery(slot: str, name: str) -> list[CheckResult]:
 
 def _dispatch_spec(slot: str, name: str) -> PolicySpec:
     spec = get_policy_spec(slot, name)
+    # Unreachable while ``planner`` is the only slot (get_policy_spec refuses any other
+    # first). Kept on purpose: adding a slot is one SlotSpec entry, and that new slot must
+    # be refused here until it has a battery, not run through the planner's checks.
     if slot != "planner":
         raise SlotNotImplementedError(f"no contract battery for slot {slot!r}; only 'planner' has one")
     return spec

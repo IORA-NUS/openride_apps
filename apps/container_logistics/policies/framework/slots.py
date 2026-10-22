@@ -38,15 +38,15 @@ class SlotSpec:
     """
 
     name: str
-    kind: Literal["operator", "world"]
+    kind: Literal["operator"]
     default: str
     description: str
     timings: tuple[str, ...] = ()
     executable_timings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.kind not in ("operator", "world"):
-            raise ValueError(f"slot {self.name!r}: kind {self.kind!r} is not 'operator' or 'world'")
+        if self.kind != "operator":
+            raise ValueError(f"slot {self.name!r}: kind {self.kind!r} is not 'operator'")
         if not self.default:
             raise ValueError(f"slot {self.name!r}: a slot needs a default policy")
         extra = set(self.executable_timings) - set(self.timings)

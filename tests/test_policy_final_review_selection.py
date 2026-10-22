@@ -298,3 +298,21 @@ def test_minor6_authored_policies_block_is_still_echoed(tmp_path, monkeypatch):
     written = json.loads((folder / "spec.json").read_text())
     assert written["policies"]["planner"]["type"] == "PooledMarket"
     assert written["policies"]["planner"]["params"]["inner"]["type"] == "GreedyNearest"
+
+
+def test_a_format2_bundle_compiled_before_the_slot_rename_gets_the_hint_and_recompile():
+    """A format-2 bundle compiled before ``dispatch`` -> ``planner`` still holds
+    ``policies.dispatch``: refused with the rename hint AND the recompile fix, for both
+    the marked and the unmarked (round-1) form."""
+    from apps.container_logistics.policies.dispatch.legacy import check_policies_format
+
+    entry = {"type": "Partitioned", "version": "1", "kind": "operator", "timing": "online",
+             "params": {"inner": {"type": "GreedyNearest", "params": {}}}}
+    stale = {"strategy": "GreedyNearest", "policies_format": 2, "policies": {"dispatch": entry}}
+    with pytest.raises(PolicyError, match=r"names slot 'dispatch'.*\(The slot 'dispatch' was renamed "
+                                          r"to 'planner'\.\) Recompile the scenario"):
+        check_policies_format(stale)
+    unmarked = {"strategy": "GreedyNearest", "policies": {"dispatch": entry}}
+    with pytest.raises(PolicyError, match=r"Recompile the scenario.*\(The slot 'dispatch' was renamed"):
+        check_policies_format(unmarked)
+    check_policies_format({**stale, "policies": {"planner": entry}})  # the current spelling passes

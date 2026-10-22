@@ -346,14 +346,25 @@ def check_policies_format(profile: Mapping[str, Any]) -> None:
     if not isinstance(profile, Mapping) or profile.get("policies") is None:
         return
     marker = profile.get(POLICIES_FORMAT_KEY)
+    from apps.container_logistics.policies.framework.slots import RENAMED_SLOTS
+
+    block = profile["policies"]
+    renamed = [old for old in RENAMED_SLOTS if isinstance(block, Mapping) and old in block]
+    hint = "".join(f" (The slot {old!r} was renamed to {RENAMED_SLOTS[old]!r}.)" for old in renamed)
     if type(marker) is int and marker == POLICIES_FORMAT:
+        if renamed:
+            raise PolicyError(
+                f"profile.policies names slot {renamed[0]!r}: the bundle was compiled before the "
+                f"slot rename.{hint} Recompile the scenario (openride scenario compile <slug>); "
+                "never hand-patch the bundle."
+            )
         return
     if marker is None:
         raise PolicyError(
             f"profile.policies has {POLICIES_FORMAT_KEY}={marker!r}, not {POLICIES_FORMAT}: it was "
-            "compiled before round 2, when a flat policies.planner {type: X} meant the per-scope "
+            "compiled before round 2, when a flat policies.dispatch {type: X} meant the per-scope "
             "solver X under planner.topology; it now means a CENTRAL X. Recompile the scenario "
-            "(openride scenario compile <slug>); never hand-patch the bundle."
+            "(openride scenario compile <slug>); never hand-patch the bundle." + hint
         )
     raise PolicyError(
         f"profile.policies has {POLICIES_FORMAT_KEY}={marker!r}: unknown format. This build reads "

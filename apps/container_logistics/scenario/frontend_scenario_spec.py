@@ -1579,7 +1579,7 @@ def _legacy_fallback_selection(gs: dict[str, Any]) -> dict[str, Any]:
 
 
 def _edit_form_solver(policy_slots: dict[str, Any]) -> Any:
-    """The editForm ``solver``: the raw innermost solver name of ``policySlots.dispatch`` (or ``None``)."""
+    """The editForm ``solver``: the raw innermost solver name of ``policySlots.planner`` (or ``None``)."""
     from apps.container_logistics.datagen.preprocess import Preprocessor
 
     dispatch = policy_slots.get("planner")

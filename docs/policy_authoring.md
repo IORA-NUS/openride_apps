@@ -192,7 +192,7 @@ inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True
 - A ref is validated against the **live** registry of its kind, the target's params
   recursively, with the full path in the error, e.g.
   `policies.planner.params.inner.params for GreedyNearest: 'dual_cycle_bonus_km' must be >= 0 (got -1.0).`
-  (a per-run override reads `policy overrides.dispatch.params.inner.params for …`).
+  (a per-run override reads `policy overrides.planner.params.inner.params for …`).
 - A policy with a `kind="planner"` ref is a composite (`PolicySpec.is_composite`).
 - In JSON a ref value is always `{type, params?}`; a compiled or stamped ref also carries
   `version` (ignored on read). Any other key is refused.
