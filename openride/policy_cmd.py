@@ -54,7 +54,7 @@ def _model(p: dict[str, Any]) -> str:
     return model
 
 
-def _implemented_rows(tbl: Table, slot: str, entry: dict[str, Any], *, leaves_only: bool) -> None:
+def _slot_rows(tbl: Table, slot: str, entry: dict[str, Any], *, leaves_only: bool) -> None:
     for p in entry.get("policies") or []:
         if leaves_only and p.get("composite"):
             continue
@@ -67,12 +67,6 @@ def _implemented_rows(tbl: Table, slot: str, entry: dict[str, Any], *, leaves_on
             status = f"[red]missing: {', '.join(missing)}[/]" if missing else "[green]available[/]"
         cell = f"[bold]{name}[/] v{p.get('version', '?')}\n[dim]{escape(str(p.get('description') or ''))}[/]"
         tbl.add_row(slot, cell, _model(p), default, status)
-
-
-def _muted_rows(tbl: Table, slot: str, entry: dict[str, Any]) -> None:
-    status = entry.get("status")
-    note = f"{entry.get('kind', '')} slot, lands in {entry.get('lands_in', '?')}"
-    tbl.add_row(f"[dim]{slot}[/]", f"[dim]— {note}[/]", "", "", f"[dim]{status}[/]")
 
 
 def _component_rows(tbl: Table, kind: str, entry: dict[str, Any]) -> None:
@@ -109,10 +103,7 @@ def render_policy_list(name: str | None = None, *, as_json: bool = False, leaves
     tbl.add_column("Default", justify="center", no_wrap=True)
     tbl.add_column("Status", no_wrap=True)
     for slot, entry in slots.items():
-        if entry.get("status") == "implemented":
-            _implemented_rows(tbl, slot, entry, leaves_only=leaves_only)
-        else:
-            _muted_rows(tbl, slot, entry)
+        _slot_rows(tbl, slot, entry, leaves_only=leaves_only)
     for kind, entry in kinds.items():
         _component_rows(tbl, kind, entry)
     console.print(tbl)
@@ -131,8 +122,6 @@ def _find_policy(catalog: dict[str, Any], components: dict[str, Any], slot: str,
     else:
         entry = _pick(catalog, components, slot)[0][slot]
         kind = "slot"
-        if entry.get("status") != "implemented":
-            raise ValueError(f"slot {slot!r} is {entry.get('status')}; it has no registered policies to show")
     for p in entry.get("policies") or []:
         if p.get("name") == name:
             return {**p, "slot": slot, "is_default": name == entry.get("default"), "entry_kind": kind}

@@ -36,7 +36,6 @@ from .errors import (
     PolicyDependencyError,
     PolicyError,
     PolicyRegistrationError,
-    SlotNotImplementedError,
     UnknownPolicyError,
 )
 from .params import PolicyParams, check_defaults, declared_params
@@ -233,13 +232,9 @@ def _build_spec(cls, slot, name, version, description, requires, order_sensitive
 
 def _check_slot_registrable(slot: str, where: str) -> None:
     try:
-        spec = slot_spec(slot)
+        slot_spec(slot)
     except PolicyError as exc:
         raise PolicyRegistrationError(f"{where}: {exc}") from exc
-    if spec.status == "planned":
-        raise PolicyRegistrationError(
-            f"{where}: slot {slot!r} is declared but not implemented yet (lands in {spec.lands_in})"
-        )
 
 
 #: What a policy NAME may be (final review MINOR-3): the frontend's ``NODE_NAME``
@@ -477,11 +472,10 @@ def _import_package_modules(package_name: str) -> None:
 def get_policy_spec(slot: str, name: str) -> PolicySpec:
     """Return the registered policy ``name`` in ``slot``.
 
-    Raises ``UnknownSlotError`` for an unknown slot, ``SlotNotImplementedError`` for a
-    planned slot, and ``UnknownPolicyError`` (listing the registered names and
+    Raises ``UnknownSlotError`` for an unknown slot and ``UnknownPolicyError`` (listing the registered names and
     the CLI command that lists them) for an unknown name. Never falls back.
     """
-    _require_implemented(slot)
+    slot_spec(slot)
     discover_builtin_policies()
     spec = _REGISTRY.get((slot, name)) if isinstance(name, str) else None
     if spec is None:
@@ -491,14 +485,6 @@ def get_policy_spec(slot: str, name: str) -> PolicySpec:
             f"(List them: openride policy list {slot})"
         )
     return spec
-
-
-def _require_implemented(slot: str) -> None:
-    spec = slot_spec(slot)
-    if spec.status == "planned":
-        raise SlotNotImplementedError(
-            f"slot {slot!r} is declared but not implemented yet (lands in {spec.lands_in})"
-        )
 
 
 def spec_for_class(cls: type) -> PolicySpec | None:
@@ -525,18 +511,11 @@ def list_policies(slot: str | None = None) -> list[PolicySpec]:
 def default_policy_name(slot: str) -> str:
     """Return ``slot``'s declared default policy name.
 
-    For an implemented slot the default must be registered (else
-    ``UnknownPolicyError``). Raises ``SlotNotImplementedError`` for a slot that has
-    no default (a planned slot), ``UnknownSlotError`` for an unknown slot.
+    The default must be registered (else ``UnknownPolicyError``); ``UnknownSlotError``
+    for an unknown slot.
     """
     spec = slot_spec(slot)
-    if spec.default is None:
-        raise SlotNotImplementedError(
-            f"slot {slot!r} has no default policy: it is declared but not implemented yet "
-            f"(lands in {spec.lands_in})"
-        )
-    if spec.status == "implemented":
-        get_policy_spec(slot, spec.default)
+    get_policy_spec(slot, spec.default)
     return spec.default
 
 

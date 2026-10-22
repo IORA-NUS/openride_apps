@@ -38,7 +38,7 @@ CLI_DIR = Path(__file__).resolve().parents[1] / "openride"
 
 _FAKE_CATALOG = {
     "dispatch": {
-        "kind": "operator", "status": "implemented", "default": "Beta",
+        "kind": "operator", "default": "Beta",
         "timings": ["online"], "executable_timings": ["online"], "description": "d",
         "policies": [
             {"name": "Alpha", "version": "3", "description": "first", "requires": ["ortools"],
@@ -57,7 +57,6 @@ _FAKE_CATALOG = {
              "defaults": {}},
         ],
     },
-    "idle": {"kind": "operator", "status": "planned", "lands_in": "P5"},
 }
 _FAKE_COMPONENTS = {
     "market.offer": {"default": "OfferAll", "description": "offers", "policies": [
@@ -159,7 +158,7 @@ def test_solver_list_is_policy_list_dispatch_restricted_to_leaves(monkeypatch, c
     assert [p["name"] for p in full_json["dispatch"]["policies"]] == ["Alpha", "Beta"]
 
 
-def test_policy_list_marks_default_missing_deps_muted_slots_components_and_models(monkeypatch, capsys):
+def test_policy_list_marks_default_missing_deps_components_and_models(monkeypatch, capsys):
     """Verified to have teeth: dropping the component rows from ``render_policy_list``
     failed the ``OfferNone`` assertion; dropping the model column failed ``per_group``."""
     _fake_catalogs(monkeypatch)
@@ -167,7 +166,8 @@ def test_policy_list_marks_default_missing_deps_muted_slots_components_and_model
     text = capsys.readouterr().out
     assert "missing: ortools" in text, "a policy with a missing dependency must say so"
     assert "market.offer" in text and "OfferNone" in text and "component" in text
-    assert "planned" in text and "per_group" in text and "composite" in text
+    assert "planned" not in text and "lands in" not in text, "no slot has a lifecycle status any more"
+    assert "per_group" in text and "composite" in text
     assert "✓" in text
     assert cli.main(["policy", "list", "market.offer"]) == 0
     only_kind = capsys.readouterr().out

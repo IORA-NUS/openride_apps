@@ -19,7 +19,6 @@ from apps.container_logistics.policies.framework import (
     PolicyParams,
     PolicyRef,
     PolicyRegistrationError,
-    SlotNotImplementedError,
     UnknownPolicyError,
     UnknownSlotError,
     default_policy_name,
@@ -134,15 +133,12 @@ def test_registering_into_an_unknown_slot_raises():
             _dummy("TestDummyE", slot="dispatchh")
 
 
-def test_registering_into_a_planned_slot_raises_with_phase():
-    """A planned slot names the phase it lands in.
-
-    Verified to have teeth: removing the ``status == "planned"`` branch let the dummy
-    fall through to the legacy-slot message and the match failed.
-    """
+def test_registering_into_a_removed_slot_is_an_unknown_slot():
+    """``idle`` (and queue/world.*) were removed as slots: registering into one is the
+    ordinary unknown-slot refusal."""
     with isolated_registry():
         with pytest.raises(PolicyRegistrationError,
-                           match=r"slot 'idle' is declared but not implemented yet \(lands in P5\)"):
+                           match=r"Unknown policy slot 'idle'\. Known slots: dispatch\.$"):
             _dummy("TestDummyF", slot="idle")
 
 
@@ -238,21 +234,18 @@ def test_unknown_policy_error_format_is_exact():
     )
 
 
-def test_lookups_in_non_implemented_or_unknown_slots_raise():
-    """Lookup errors are specific: unknown slot, planned slot, slot without a default.
-
-    Verified to have teeth: dropping ``_require_implemented`` from ``get_policy_spec``
-    turned the planned-slot lookup into UnknownPolicyError; disabling the no-default
-    branch of ``default_policy_name`` returned None for 'idle'.
-    """
+def test_lookups_in_unknown_or_removed_slots_raise():
+    """Lookups in an unknown slot -- including the removed ``idle``/``queue`` -- raise
+    ``UnknownSlotError`` naming the known slots; never a fallback."""
     with pytest.raises(UnknownSlotError):
         get_policy_spec("nope", "X")
-    with pytest.raises(SlotNotImplementedError, match=r"lands in P5"):
+    with pytest.raises(UnknownSlotError, match=r"^Unknown policy slot 'queue'\. Known slots: dispatch\.$"):
         get_policy_spec("queue", "Fifo")
     with pytest.raises(UnknownSlotError):
         get_policy_spec("market.claim", "ClaimNone")
-    with pytest.raises(SlotNotImplementedError, match=r"slot 'idle' has no default policy"):
+    with pytest.raises(UnknownSlotError, match=r"^Unknown policy slot 'idle'\. Known slots: dispatch\.$"):
         default_policy_name("idle")
+    assert default_policy_name("dispatch") == "Partitioned"
     with pytest.raises(UnknownSlotError):
         list_policies("nope")
 

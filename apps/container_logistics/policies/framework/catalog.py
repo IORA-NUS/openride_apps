@@ -30,9 +30,8 @@ __all__ = ["policy_catalog", "component_catalog"]
 def policy_catalog() -> dict[str, Any]:
     """Return a JSON-serialisable description of every slot, in ``SLOTS`` order.
 
-    Implemented slots list their registered policies (schema, defaults, missing
-    requirements, and the dispatch declarations); planned slots carry only the phase
-    they land in. Raises whatever discovery raises (a broken policy module must not
+    Each slot lists its registered policies (schema, defaults, missing requirements,
+    and the dispatch declarations). Raises whatever discovery raises (a broken policy module must not
     silently vanish). ONE bad entry never blanks the catalog: a registered policy whose
     schema or default tree fails to resolve (an unknown or unavailable default target,
     a cycle that bypassed registration) is listed with ``available: false``, an
@@ -52,17 +51,14 @@ def component_catalog() -> dict[str, Any]:
 
 
 def _slot_entry(slot: SlotSpec) -> dict[str, Any]:
-    if slot.status == "implemented":
-        return {
-            "kind": slot.kind,
-            "status": slot.status,
-            "default": slot.default,
-            "timings": list(slot.timings),
-            "executable_timings": list(slot.executable_timings),
-            "description": slot.description,
-            "policies": [_policy_entry(p) for p in list_policies(slot.name)],
-        }
-    return {"kind": slot.kind, "status": slot.status, "lands_in": slot.lands_in}
+    return {
+        "kind": slot.kind,
+        "default": slot.default,
+        "timings": list(slot.timings),
+        "executable_timings": list(slot.executable_timings),
+        "description": slot.description,
+        "policies": [_policy_entry(p) for p in list_policies(slot.name)],
+    }
 
 
 def _policy_entry(spec: PolicySpec) -> dict[str, Any]:

@@ -26,13 +26,7 @@ class _TestPolicyBase(DispatchPolicy):
         return Plan(chains={})
 
 
-EXPECTED_SLOTS = {
-    "dispatch": ("operator", "implemented"),
-    "idle": ("operator", "planned"),
-    "queue": ("operator", "planned"),
-    "world.shedding": ("world", "planned"),
-    "world.duration": ("world", "planned"),
-}
+EXPECTED_SLOTS = {"dispatch": "operator"}
 
 
 def _register_dummies():
@@ -52,21 +46,19 @@ def _register_dummies():
            requires=("definitely_not_a_module_xyz",))(type("TestCatalogB", (_TestPolicyBase,), {"Params": NoParams}))
 
 
-def test_all_five_slots_declared_with_kind_and_status():
-    """The table and the catalog both hold exactly the five slots, in table order.
-
-    Verified to have teeth: renaming the ``world.duration`` row in ``slots._TABLE``
-    failed the equality; flipping ``world.shedding`` to kind 'operator' failed it too.
+def test_the_one_slot_declared_with_kind():
+    """The table and the catalog both hold exactly the dispatch slot (the other four
+    were removed: idle trucks, the facility queue, demand exit and durations are the
+    simulation's own state machines / world model), and no lifecycle status.
     """
-    assert {n: (s.kind, s.status) for n, s in SLOTS.items()} == EXPECTED_SLOTS
+    assert {n: s.kind for n, s in SLOTS.items()} == EXPECTED_SLOTS
     catalog = policy_catalog()
     assert list(catalog) == list(SLOTS), "catalog must keep SLOTS order"
-    assert {n: (e["kind"], e["status"]) for n, e in catalog.items()} == EXPECTED_SLOTS
+    assert {n: e["kind"] for n, e in catalog.items()} == EXPECTED_SLOTS
+    assert all("status" not in e and "lands_in" not in e for e in catalog.values())
     dispatch = catalog["dispatch"]
     assert dispatch["default"] == "Partitioned", "round 2: the slot default is the decomposition"
     assert dispatch["timings"] == ["online", "plan"] and dispatch["executable_timings"] == ["online"]
-    for name in ("idle", "queue", "world.shedding", "world.duration"):
-        assert catalog[name] == {"kind": EXPECTED_SLOTS[name][0], "status": "planned", "lands_in": "P5"}
 
 
 def test_components_list_three_kinds_with_live_names_schema_and_defaults():
@@ -156,7 +148,7 @@ def test_known_policies_command_keeps_datagen_keys_and_adds_slots_and_components
     assert set(payload["policies"]) == {"truck", "order", "facility"}
     assert payload["slots"] == policy_catalog()
     assert payload["components"] == component_catalog()
-    assert len(payload["slots"]) == 5 and len(payload["components"]) == 3
+    assert list(payload["slots"]) == ["dispatch"] and len(payload["components"]) == 3
     json.dumps(payload)
 
 

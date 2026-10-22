@@ -4,10 +4,13 @@
 > NOT merged into the main tree, not live yet.** Backend HEAD `f8b91b9`. Everything below
 > describes the branch; the main tree still runs the pre-v2 code.
 
-A **policy** answers one simulation decision; a **slot** is the decision. There are five
-slots: `dispatch` (implemented: given every free truck and every unassigned order this tick,
-which truck serves which order) and `idle`, `queue`, `world.shedding`, `world.duration`
-(planned, P5). `market.offer`, `market.claim` and `market.arbitration` are **not slots**:
+A **policy** answers one simulation decision; a **slot** is the decision. There is one
+slot: `dispatch` (given every free truck and every unassigned order this tick, which truck
+serves which order). Idle trucks, the facility queue, unserved-demand exit and durations are
+**not slots**: they are the simulation's own behaviour (the truck state machine and
+`idle_trip_manager`, `statemachine/facility_queue_sm.py`, the order lifecycle, OSRM plus
+`haul_trip_duration.py`). Adding a slot later is one `SlotSpec` entry in
+`framework/slots.py`. `market.offer`, `market.claim` and `market.arbitration` are **not slots**:
 they are *components* of the `PooledMarket` dispatch policy (§3.3).
 `openride policy list` shows the live catalog, including components and each dispatch
 policy's information model. Plans: `docs/plans/policy_slots_p0_p3.md` (round 1) and

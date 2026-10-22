@@ -2311,3 +2311,19 @@ final review. New test file `tests/test_policy_verification_review_fixes.py`, 19
    `openride policy validate dispatch X`, exit 0 each: `Partitioned` `PASS 44 passed, 3
    skipped`; `PooledMarket` `PASS 179 passed, 8 skipped`; `GreedyNearest` `PASS all 47
    checks passed`; `RandomAssignment` `PASS 45 passed, 2 skipped`.
+
+### Slot table cut (2026-10-22, per user)
+
+1. **Five slots → one; the other four removed per user, because the behaviour lives in the
+   state machines/world model.** `idle`, `queue`, `world.shedding` and `world.duration`
+   (§3.1, all `status="planned"`, `lands_in="P5"`, zero runtime readers) are gone from
+   `framework/slots.py`. Idle trucks are the truck state machine + `idle_trip_manager`;
+   the facility FIFO is `statemachine/facility_queue_sm.py`; unserved-demand exit is the
+   order lifecycle; durations are OSRM + `haul_trip_duration.py`. With them went the
+   `status`/`lands_in` fields, the "declared but not implemented yet (lands in P5)"
+   refusals (registry, resolver, `default_policy_name`), the catalog's `status`/`lands_in`
+   keys and the CLI's muted rows. A spec naming one now gets the ordinary
+   `Unknown policy slot 'idle' in 'policies'. Known slots: dispatch.` `SlotSpec.kind` is
+   KEPT: `ResolvedPolicy.to_profile` echoes it into every compiled profile entry, so it is
+   bundle bytes. `SlotNotImplementedError` is kept for the battery's "no contract battery
+   for slot" refusal. Adding a slot later is one `SlotSpec` entry.

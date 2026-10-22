@@ -52,20 +52,31 @@ def _greedy(**params):
     return resolve_policies_block({"dispatch": {"type": "GreedyNearest", "params": params}})
 
 
+def test_parse_policy_cli_args_dotted_slot_name(monkeypatch):
+    """A slot name may contain dots: the slot is the LONGEST known prefix.
+
+    No dotted slot exists today, so a table with ``world`` and ``world.x`` stands in;
+    matching the shortest prefix would read ``world.x.k=1`` as slot ``world``."""
+    from types import MappingProxyType
+
+    from apps.container_logistics.policies.framework import resolve as resolve_mod
+    monkeypatch.setattr(resolve_mod, "SLOTS", MappingProxyType({"dispatch": None, "world": None, "world.x": None}))
+    out = parse_policy_cli_args([], ["world.x.k=1", "world.y=2"])
+    assert out == {"world.x": {"params": {"k": 1}}, "world": {"params": {"y": 2}}}
+
+
 def test_parse_policy_cli_args_json_coercion():
     """Round 2 (§3.3): the slot is the longest known prefix; every further non-final
     segment is a policy reference.
 
     Verified to have teeth: treating every segment after the slot as one dotted key
-    (no nesting) failed the ``offer``/``inner`` assertions; matching the SHORTEST
-    known prefix is untestable with today's one implemented slot, so the dotted
-    planned slot ``world.shedding`` locks it."""
+    (no nesting) failed the ``offer``/``inner`` assertions. Dotted slot names are
+    locked by :func:`test_parse_policy_cli_args_dotted_slot_name`."""
     out = parse_policy_cli_args(
         ["dispatch=GreedyNearest"],
         ["dispatch.dual_cycle_bonus_km=0", "dispatch.candidates=sampled", "dispatch.flag=true",
          "dispatch.quoted=\"60\"", "dispatch.offer.keep_below_km=1.5", "dispatch.eq=a=b",
-         "dispatch.inner=RandomAssignment", "dispatch.inner.candidates=spatial",
-         "world.shedding.x=1"],
+         "dispatch.inner=RandomAssignment", "dispatch.inner.candidates=spatial"],
     )
     assert out["dispatch"]["type"] == "GreedyNearest"
     p = out["dispatch"]["params"]
@@ -74,7 +85,6 @@ def test_parse_policy_cli_args_json_coercion():
     assert p["eq"] == "a=b"
     assert p["offer"] == {"params": {"keep_below_km": 1.5}}
     assert p["inner"] == {"type": "RandomAssignment", "params": {"candidates": "spatial"}}
-    assert out["world.shedding"] == {"params": {"x": 1}}
     with pytest.raises(PolicyError, match=r"^--policy-param 'dispach.inner=X': no known slot is a prefix "
                                           r"of 'dispach.inner'. Known slots: dispatch.$"):
         parse_policy_cli_args([], ["dispach.inner=X"])

@@ -32,7 +32,7 @@ class UnknownSlotError(PolicyError):
 
 
 class SlotNotImplementedError(PolicyError):
-    """A slot that is declared (legacy or planned) but has no registry-backed policies."""
+    """A slot that lacks a facility another component needs (e.g. a contract battery)."""
 
 
 class UnknownPolicyError(PolicyError):

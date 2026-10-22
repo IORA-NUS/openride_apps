@@ -1,9 +1,10 @@
-"""The slot table: every decision point a policy can fill, and its lifecycle status.
+"""The slot table: every decision point a policy can fill.
 
-A slot is ``implemented`` (registry-backed, fail-loud) or ``planned`` (declared so the
-catalog and error messages can name the phase it lands in). Plan
-``docs/plans/policy_slots_p0_p3.md`` §4 P0.1; round 2
-``docs/plans/policy_slots_round2_whole_tick.md`` §3.1: five slots. The pooled market's
+Every slot is registry-backed and fail-loud; adding one is one ``SlotSpec`` entry in
+``_TABLE``. Plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.1; round 2
+``docs/plans/policy_slots_round2_whole_tick.md`` §3.1 (Deviations: five slots became
+one -- idle trucks, the facility queue, unserved-demand exit and durations are the
+simulation's own state machines and world model, not slots). The pooled market's
 offer/claim/arbitration are not slots but components of the ``PooledMarket`` dispatch
 policy (``framework/components.py``).
 
@@ -30,29 +31,24 @@ class SlotSpec:
     """One slot's declaration.
 
     ``timings`` are the timings a config may name; ``executable_timings`` the subset
-    the runner can execute today. ``lands_in`` names the phase for planned slots.
+    the runner can execute today. ``kind`` is echoed into every compiled profile entry
+    (``ResolvedPolicy.to_profile``), so it is part of the compiled bundle's bytes.
 
     Raises ``ValueError`` at construction for an internally inconsistent declaration.
     """
 
     name: str
     kind: Literal["operator", "world"]
-    status: Literal["implemented", "planned"]
-    default: str | None
+    default: str
     description: str
     timings: tuple[str, ...] = ()
     executable_timings: tuple[str, ...] = ()
-    lands_in: str | None = None
 
     def __post_init__(self) -> None:
         if self.kind not in ("operator", "world"):
             raise ValueError(f"slot {self.name!r}: kind {self.kind!r} is not 'operator' or 'world'")
-        if self.status not in ("implemented", "planned"):
-            raise ValueError(f"slot {self.name!r}: unknown status {self.status!r}")
-        if self.status == "implemented" and not self.default:
-            raise ValueError(f"slot {self.name!r}: an implemented slot needs a default policy")
-        if self.status == "planned" and not self.lands_in:
-            raise ValueError(f"slot {self.name!r}: a planned slot must name the phase it lands in")
+        if not self.default:
+            raise ValueError(f"slot {self.name!r}: a slot needs a default policy")
         extra = set(self.executable_timings) - set(self.timings)
         if extra:
             raise ValueError(
@@ -64,7 +60,6 @@ _TABLE = (
     SlotSpec(
         name="dispatch",
         kind="operator",
-        status="implemented",
         # The whole-tick default: per-cooperation-group decomposition whose inner
         # defaults to RandomAssignment (the pre-v2 no-strategy behaviour). The flat
         # legacy leaf default is policies/dispatch/legacy.LEGACY_LEAF_DEFAULT.
@@ -73,38 +68,6 @@ _TABLE = (
                     "(the decomposition, e.g. Partitioned or PooledMarket, is part of the selection).",
         timings=("online", "plan"),
         executable_timings=("online",),
-    ),
-    SlotSpec(
-        name="idle",
-        kind="operator",
-        status="planned",
-        default=None,
-        description="Where a truck with no work goes and waits.",
-        lands_in="P5",
-    ),
-    SlotSpec(
-        name="queue",
-        kind="operator",
-        status="planned",
-        default=None,
-        description="Which queued truck a facility gate serves next.",
-        lands_in="P5",
-    ),
-    SlotSpec(
-        name="world.shedding",
-        kind="world",
-        status="planned",
-        default=None,
-        description="When unserved demand leaves the market.",
-        lands_in="P5",
-    ),
-    SlotSpec(
-        name="world.duration",
-        kind="world",
-        status="planned",
-        default=None,
-        description="How long a haul leg or a facility service takes.",
-        lands_in="P5",
     ),
 )
 

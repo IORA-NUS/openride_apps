@@ -35,7 +35,7 @@ Every simulation decision is meant to become a **slot** with registered, typed, 
 | P3 | `21bd28e`, `7670b86`, `a075b91` | Contract battery, bench, capture, per-policy golden; `openride policy list/show/validate/bench`. |
 | R1 fix | `c30fd25` | A per-run override accounts like a compiled edit; one strict resolver. |
 | C0 | `4f01034`, `3d7e84e` | Golden payloads compared modulo the transport's trailing `sim_clock`/`time_step`. |
-| C1 | `a7d26a6`, `1047f9c` | `PolicyRef`/`ref()`/nullable numbers; `framework/components.py`; `@policy(information_model=, share_tag_format=, module_rng=, arm_budgets_ms=)`; 5 slots, dispatch default `Partitioned`. |
+| C1 | `a7d26a6`, `1047f9c` | `PolicyRef`/`ref()`/nullable numbers; `framework/components.py`; `@policy(information_model=, share_tag_format=, module_rng=, arm_budgets_ms=)`; 5 slots (later cut to 1, see below), dispatch default `Partitioned`. |
 | C2 | `ba74fbe` | `dispatch/legacy.py`, `dispatch/world.py`, `assignment/accounting.py`, resolution tree, `bind_instance`, mirrors. |
 | C3 | `d87f8f6`, `d45741b` | Whole-tick runtime: `Partitioned`, `PooledMarket`; `_assign_pooled`, `_market_components`, `_resolved_topology` deleted from `assignment/app.py`. |
 | C5 | `2a1ccf2` | Whole-tick battery, per-arm budgets, capture /2, bench columns, `policy_golden_v2.json.gz`. |
@@ -80,7 +80,13 @@ is the top policy's. **Components** (`market.offer`, `market.claim`, `market.arb
 longer slots: `PooledMarket` params, validated against the live `OFFER_REGISTRY` /
 `CLAIM_REGISTRY` / `ARBITRATION_REGISTRY`, each with typed `Params`, `version="1"`.
 `OfferSpare.keep_below_km` is a nullable number (`None` = the class's `inf`). Slots:
-`dispatch`, `idle`, `queue`, `world.shedding`, `world.duration` (last four planned, P5).
+`dispatch` only. The four planned slots (`idle`, `queue`, `world.shedding`,
+`world.duration`) were REMOVED (2026-10-22, per user): that behaviour lives in the
+simulation itself (truck state machine + `idle_trip_manager`, `facility_queue_sm.py`, the
+order lifecycle, OSRM + `haul_trip_duration.py`) and they never had a runtime reader. The
+`planned`/`lands_in` status machinery went with them; naming one now gets the ordinary
+`Unknown policy slot 'idle' ... Known slots: dispatch.` `kind` (operator/world) is kept: it
+is echoed into every compiled profile entry, so it is part of the bundle bytes.
 
 ---
 
@@ -343,8 +349,7 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
   in the venv). Selection, accounting, stamp and battery come free because it is a leaf. It
   still needs `ctx.travel`, facility ids, time windows, executable `timing: "plan"` with held
   tails, and an optional time-budget `fallback` ref.
-- **P5**: `idle`, `queue`, `world.shedding`, `world.duration`; `inner_by_company` (needs a
-  map-of-refs param type). The cooperation **structure** stays world data.
+- **P5**: `inner_by_company` (needs a map-of-refs param type). The cooperation **structure** stays world data.
 - The ` · central:<Leaf>` run-name prefix (§3.2 known limit): proposed, not implemented.
 - Violations/crashes are not stamped into `run_config`.
 - The live gates in §7.
@@ -353,7 +358,7 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
 
 | Where | Responsibility |
 |---|---|
-| `policies/framework/` | `slots.py` (5 slots), `params.py` (`PolicyRef`, `ref`, nullable), `registry.py` (`@policy`, discovery, `isolated_registry`), `resolve.py` (merge, CLI parse, `policies_stamp`), `catalog.py`, `components.py`, `errors.py` |
+| `policies/framework/` | `slots.py` (1 slot), `params.py` (`PolicyRef`, `ref`, nullable), `registry.py` (`@policy`, discovery, `isolated_registry`), `resolve.py` (merge, CLI parse, `policies_stamp`), `catalog.py`, `components.py`, `errors.py` |
 | `policies/dispatch/` | `context.py`, `scopes.py` (only context builders), `runner.py`, `world.py`, `compose.py`, `composite.py`, `legacy.py`, `profile.py`, `resolved.py`, `invariants.py`, `plan.py`, `base.py`, `pair_solver.py`, `capture.py` (/2), `library/{partitioned,pooled_market}.py` |
 | `policies/testing/` | whole-tick `fixtures.py`, `battery.py` (`arm_budget`, `Skip`, scoped `module_rng`), `bench.py` |
 | `policies/dispatch/helpers/objective.py` | `dual_cycle_cost`, `dual_cycle_cost_fn` (knobs bound once; GreedyNearest's hot loop), `is_dual_cycle` |

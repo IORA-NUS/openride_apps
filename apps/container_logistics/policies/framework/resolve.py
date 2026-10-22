@@ -36,7 +36,6 @@ from .errors import (
     PolicyError,
     PolicyParamsError,
     PolicyTimingError,
-    SlotNotImplementedError,
     UnknownSlotError,
 )
 from .params import PolicyParams, declared_params
@@ -120,16 +119,10 @@ class ResolvedPolicy:
 
 
 def _check_selectable_slot(slot: Any, where: str) -> None:
-    """Raise unless ``slot`` is an implemented slot a ``policies`` block may select."""
-    spec = SLOTS.get(slot) if isinstance(slot, str) else None
-    if spec is None:
+    """Raise unless ``slot`` is a slot a ``policies`` block may select."""
+    if not isinstance(slot, str) or slot not in SLOTS:
         raise UnknownSlotError(
             f"Unknown policy slot {slot!r} in {where!r}. Known slots: {', '.join(SLOTS)}."
-        )
-    if spec.status == "planned":
-        raise SlotNotImplementedError(
-            f"Policy slot {slot!r} is declared but not implemented yet (lands in "
-            f"{spec.lands_in}). Remove '{where}.{slot}'."
         )
 
 
@@ -301,12 +294,12 @@ def resolve_policies_block(
 ) -> dict[str, ResolvedPolicy]:
     """Validate ``block`` against the registry; return one resolved policy per slot.
 
-    Every implemented slot is present in the result, in ``SLOTS`` order; a slot the
+    Every slot is present in the result, in ``SLOTS`` order; a slot the
     block does not name gets its default (``{}`` means "all defaults"; see
     :func:`default_policy_name`).
     ``legacy_slots`` names slots whose entry was translated from the legacy keys:
     their undeclared params are dropped with a WARNING instead of rejected.
-    Raises ``PolicyError`` subclasses (unknown/planned slot, unknown entry key,
+    Raises ``PolicyError`` subclasses (unknown slot, unknown entry key,
     unknown policy, timing, missing dependency, params).
     """
     if block is None:
@@ -316,9 +309,7 @@ def resolve_policies_block(
     for slot in block:
         _check_selectable_slot(slot, where)
     out: dict[str, ResolvedPolicy] = {}
-    for slot, spec in SLOTS.items():
-        if spec.status != "implemented":
-            continue
+    for slot in SLOTS:
         entry = block.get(slot)
         if entry is None:
             entry = {"type": default_policy_name(slot)}
@@ -537,7 +528,7 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
 
     Returns ``{slot: {"type"?: name, "params"?: {...}}}`` for
     :func:`merge_policy_overrides`. The slot is the longest dotted prefix that names a
-    known slot (slot names may contain dots, ``world.shedding``); every further
+    known slot (slot names may contain dots, e.g. a future ``world.x``); every further
     non-final segment is a policy reference (``dispatch.inner.k=v`` ->
     ``{"dispatch": {"params": {"inner": {"params": {"k": v}}}}}``) and a value given
     to a reference itself sets its type (``dispatch.inner=RandomAssignment``). A value
@@ -581,7 +572,7 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
 def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]]:
     """``"dispatch.inner.k"`` -> ``("dispatch", ["inner", "k"])``: the slot is the longest known prefix.
 
-    Slot names may contain dots (``world.shedding``). Raises ``PolicyError`` (message
+    Slot names may contain dots (e.g. a future ``world.x``). Raises ``PolicyError`` (message
     21) for a missing ``=``/path, or when no known slot is a prefix.
     """
     if not sep or not key_part:
@@ -599,7 +590,7 @@ def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]
             f"--policy-param {arg!r} must be SLOT.PATH=VALUE with a non-empty path, e.g. "
             "dispatch.inner.dual_cycle_bonus_km=0."
         )
-    known = ", ".join(name for name, spec in SLOTS.items() if spec.status == "implemented")
+    known = ", ".join(SLOTS)
     raise PolicyError(
         f"--policy-param {arg!r}: no known slot is a prefix of {key_part!r}. Known slots: {known}."
     )
