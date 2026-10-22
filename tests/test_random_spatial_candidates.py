@@ -25,7 +25,7 @@ from apps.container_logistics.assignment.solver import RandomAssignmentSolver
 from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from apps.container_logistics.policies.dispatch.profile import resolve_dispatch_for_profile
 from apps.container_logistics.policies.dispatch.runner import DispatchRunner
 from tests.test_assignment_cooperation import _app, _order, _truck

@@ -265,7 +265,7 @@ def test_override_patches_profile_policies_and_strategy_mirror():
 
 
 def test_stamp_shape():
-    from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
+    from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 
     stamp = policies_stamp(_greedy(), source="bundle",
                            candidate_settings=CandidateSettings.from_profile({}).to_dict(),

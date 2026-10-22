@@ -4,7 +4,7 @@ import math
 from dataclasses import dataclass
 from typing import Iterable, List, Tuple
 
-from apps.container_logistics.policies.dispatch.helpers import objective
+from apps.container_logistics.policies.solver_lib import objective
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 

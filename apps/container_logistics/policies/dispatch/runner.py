@@ -57,7 +57,7 @@ from . import compose, scopes
 from .base import DispatchPolicy
 from .composite import CompositePolicy
 from .context import DispatchClock, DispatchContext, direct_execute
-from .helpers.candidates import CANDIDATE_KINDS, CandidateSettings
+from apps.container_logistics.policies.solver_lib.candidates import CANDIDATE_KINDS, CandidateSettings
 from .invariants import check_plan
 from .resolved import ResolvedDispatch
 

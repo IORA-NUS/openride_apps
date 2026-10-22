@@ -33,7 +33,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 from apps.container_logistics.datagen import hauliers as _hauliers
 from apps.container_logistics.policies.dispatch.context import DispatchClock, DispatchContext
-from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from apps.container_logistics.policies.dispatch.runner import DispatchRunner, accounting_params_for
 from apps.container_logistics.policies.dispatch.world import DispatchWorld, tick_seed
 

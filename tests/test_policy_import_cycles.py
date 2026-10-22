@@ -48,7 +48,8 @@ _LEAVES = [
     "apps.container_logistics.policies.framework.catalog",
     "apps.container_logistics.policies.dispatch.base",
     "apps.container_logistics.policies.dispatch.plan",
-    "apps.container_logistics.policies.dispatch.pair_solver",
+    "apps.container_logistics.policies.solver_lib",
+    "apps.container_logistics.policies.solver_lib.pair_solver",
     "apps.container_logistics.policies.dispatch.resolved",
     "apps.container_logistics.policies.dispatch.legacy",
     "apps.container_logistics.policies.dispatch.composite",
@@ -102,7 +103,7 @@ def test_leaf_modules_pull_in_no_assignment_module(module):
 def test_the_walk_found_the_dispatch_modules():
     mods = set(_policy_modules())
     assert "apps.container_logistics.policies.dispatch.runner" in mods
-    assert "apps.container_logistics.policies.dispatch.helpers.candidates" in mods
+    assert "apps.container_logistics.policies.solver_lib.candidates" in mods
     # Round 2 C3: the whole-tick runtime's new modules are walked too.
     assert {"apps.container_logistics.policies.dispatch.compose",
             "apps.container_logistics.policies.dispatch.library.partitioned",

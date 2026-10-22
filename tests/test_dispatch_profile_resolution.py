@@ -40,9 +40,9 @@ from apps.container_logistics.assignment.solver import (
 from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from apps.container_logistics.policies.dispatch.composite import CompositePolicy, innermost_policy
-from apps.container_logistics.policies.dispatch.pair_solver import PairSolver
+from apps.container_logistics.policies.solver_lib.pair_solver import PairSolver
 from apps.container_logistics.policies.dispatch.profile import (
     assert_assignment_profiles_resolvable,
     bind_instance,

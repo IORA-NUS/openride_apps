@@ -32,7 +32,7 @@ from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.allowed import CompanyRule
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy, framework_accounting_cost
 from apps.container_logistics.policies.framework import PolicyParams, param, policy

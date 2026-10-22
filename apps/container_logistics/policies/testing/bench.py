@@ -45,7 +45,7 @@ from apps.container_logistics.assignment import accounting
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.dispatch import capture
 from apps.container_logistics.policies.dispatch.context import DispatchContext
-from apps.container_logistics.policies.dispatch.helpers import objective
+from apps.container_logistics.policies.solver_lib import objective
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
 from apps.container_logistics.policies.framework.errors import PolicyError
 from apps.container_logistics.policies.framework.registry import get_policy_spec

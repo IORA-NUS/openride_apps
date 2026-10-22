@@ -14,7 +14,7 @@ Every function here is a verbatim move of code that lived inline in
 how many draws it takes from the RNG it is handed. ``spatial.iter_candidate_pairs``
 is called THROUGH ITS MODULE because tests monkeypatch it (plan §2.8).
 
-Policy helper (framework-owned arithmetic a policy may call). Not a leaf module: it
+Solver helper (``policies/solver_lib``; the framework never imports it). Not a leaf module: it
 imports ``assignment.spatial`` / ``assignment.constraints`` at top, which is safe
 while ``assignment/app.py`` imports ``policies`` only lazily (plan §2.7).
 """

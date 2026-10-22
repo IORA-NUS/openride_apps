@@ -24,8 +24,8 @@ from apps.container_logistics.assignment import constraints as assign_constraint
 from apps.container_logistics.assignment import spatial
 from apps.container_logistics.policies.dispatch.allowed import CompanyRule, PartitionRule
 from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.dispatch.helpers import candidates as C
-from apps.container_logistics.policies.dispatch.helpers import objective as OBJ
+from apps.container_logistics.policies.solver_lib import candidates as C
+from apps.container_logistics.policies.solver_lib import objective as OBJ
 from apps.container_logistics.policies.dispatch.scopes import company_context, partition_context
 from apps.container_logistics.policies.dispatch.views import OrderView, TruckView
 from apps.container_logistics.rebate import RebateBook  # noqa: F401  (leaf import check)

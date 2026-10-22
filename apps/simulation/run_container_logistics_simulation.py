@@ -139,7 +139,7 @@ def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
     Built from the EFFECTIVE first assignment profile (post-override). Exits 2 on a
     ``PolicyError``.
     """
-    from apps.container_logistics.policies.dispatch.helpers.candidates import (  # local: agent-side module
+    from apps.container_logistics.policies.solver_lib.candidates import (  # local: agent-side module
         CandidateSettings,
     )
     import json

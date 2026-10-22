@@ -24,11 +24,11 @@ import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING
 
-from .base import Assignment, Cost, DispatchPolicy, Order, PairAllowed, Truck
-from .plan import Plan
+from apps.container_logistics.policies.dispatch.base import Assignment, Cost, DispatchPolicy, Order, PairAllowed, Truck
+from apps.container_logistics.policies.dispatch.plan import Plan
 
 if TYPE_CHECKING:
-    from .context import DispatchContext
+    from apps.container_logistics.policies.dispatch.context import DispatchContext
 
 logger = logging.getLogger(__name__)
 

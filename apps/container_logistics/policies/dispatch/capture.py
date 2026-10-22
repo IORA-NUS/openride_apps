@@ -55,7 +55,7 @@ from typing import Any, Iterator, Mapping
 from apps.container_logistics.policies.framework.errors import PolicyError
 
 from .context import DispatchClock, DispatchContext
-from .helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from .plan import Plan
 
 logger = logging.getLogger(__name__)

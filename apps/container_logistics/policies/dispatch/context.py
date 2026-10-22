@@ -54,9 +54,9 @@ from typing import Any, Callable, Literal
 
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation
 
-from .helpers import candidates as _candidates
-from .helpers import objective as _objective
-from .helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib import candidates as _candidates
+from apps.container_logistics.policies.solver_lib import objective as _objective
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from .views import OrderView, TruckView, order_view, truck_view
 
 logger = logging.getLogger(__name__)

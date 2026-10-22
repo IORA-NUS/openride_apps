@@ -24,9 +24,9 @@ from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.allowed import PartitionRule
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.dispatch.helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from apps.container_logistics.policies.dispatch.invariants import check_plan
-from apps.container_logistics.policies.dispatch.pair_solver import PairSolver
+from apps.container_logistics.policies.solver_lib.pair_solver import PairSolver
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.dispatch.resolved import ResolvedDispatch
 from apps.container_logistics.policies.dispatch.runner import DispatchRunner
@@ -268,7 +268,7 @@ def test_pair_solver_default_decide_reproduces_the_legacy_call(kind):
     if kind == "sampled":
         want = policy.solve(trucks, orders, pair_allowed=rule.allowed, cost=assign_constraints.assignment_cost)
     else:
-        from apps.container_logistics.policies.dispatch.helpers.candidates import spatial_pairs_for_partition
+        from apps.container_logistics.policies.solver_lib.candidates import spatial_pairs_for_partition
         pairs = spatial_pairs_for_partition(trucks, orders, rule=rule, settings=CandidateSettings.from_profile({}))
         want = policy.solve_pairs(pairs, cost=assign_constraints.assignment_cost)
     assert [(t["_id"], o["_id"]) for t, o in got] == [(t["_id"], o["_id"]) for t, o in want]

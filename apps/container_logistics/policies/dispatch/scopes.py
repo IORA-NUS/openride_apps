@@ -30,8 +30,8 @@ from typing import Any, Callable, Iterable
 
 from .allowed import CompanyRule, PartitionRule
 from .context import TICK_SCOPE_KEY, DispatchClock, DispatchContext, Scope, direct_execute
-from .helpers import candidates as _candidates
-from .helpers.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib import candidates as _candidates
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 
 logger = logging.getLogger(__name__)
 
