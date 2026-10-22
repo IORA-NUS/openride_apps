@@ -5,12 +5,15 @@
 > describes the branch; the main tree still runs the pre-v2 code.
 
 A **policy** answers one simulation decision; a **slot** is the decision. There is one
-slot: `dispatch` (given every free truck and every unassigned order this tick, which truck
+slot: `planner` (given every free truck and every unassigned order this tick, which truck
 serves which order). Idle trucks, the facility queue, unserved-demand exit and durations are
 **not slots**: they are the simulation's own behaviour (the truck state machine and
 `idle_trip_manager`, `statemachine/facility_queue_sm.py`, the order lifecycle, OSRM plus
 `haul_trip_duration.py`). Adding a slot later is one `SlotSpec` entry in
-`framework/slots.py`. `market.offer`, `market.claim` and `market.arbitration` are **not slots**:
+`framework/slots.py`. The slot was called `dispatch` until 2026-10-22; the old name is
+refused, not aliased (`Unknown policy slot 'dispatch' ... (The slot was renamed to
+'planner'.)`). Python identifiers keep the old word (`policies/dispatch/`, `DispatchPolicy`,
+`DispatchContext`, ...). `market.offer`, `market.claim` and `market.arbitration` are **not slots**:
 they are *components* of the `PooledMarket` dispatch policy (§3.3).
 `openride policy list` shows the live catalog, including components and each dispatch
 policy's information model. Plans: `docs/plans/policy_slots_p0_p3.md` (round 1) and
@@ -50,9 +53,9 @@ One file in `apps/container_logistics/policies/dispatch/library/`. Discovery
 `assignment/solver/`; names starting with `_` are skipped, and an import error fails loudly.
 
 The example below was dropped into a scratch copy of the branch at `f8b91b9` as
-`library/regret_match.py` and passed `openride policy validate dispatch RegretMatch`
+`library/regret_match.py` and passed `openride policy validate planner RegretMatch`
 (`PASS all 47 checks passed`). With it and the composite of §3.4 registered,
-`policy validate dispatch Partitioned` (`67 checks passed (4 skipped)`) and `PooledMarket`
+`policy validate planner Partitioned` (`67 checks passed (4 skipped)`) and `PooledMarket`
 (`207 checks passed (8 skipped)`) also passed, because they battery-check every leaf as an
 inner (§9). A skip is reported as `SKIP`, not `PASS` (§9).
 
@@ -67,7 +70,7 @@ from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
 
-@policy(slot="dispatch", name="RegretMatch", version="1",
+@policy(slot="planner", name="RegretMatch", version="1",
         description="Orders with the most to lose go first: largest gap between their best "
                     "and second-best truck.",
         information_model="central",   # a leaf: correct at top level AND as an inner
@@ -122,9 +125,9 @@ The same class is usable three ways, with no code change (all three were dry-run
 
 | Selection | Label (stamp) | Information model |
 |---|---|---|
-| `--policy dispatch=RegretMatch` | `RegretMatch` | `central` (whole tick, a **new arm**) |
-| `--solver RegretMatch` (or `--policy-param dispatch.inner=RegretMatch`) | `Partitioned/RegretMatch` | `per_group` |
-| `--policy dispatch=PooledMarket --policy-param dispatch.inner=RegretMatch` | `PooledMarket/RegretMatch` | `per_company` |
+| `--policy planner=RegretMatch` | `RegretMatch` | `central` (whole tick, a **new arm**) |
+| `--solver RegretMatch` (or `--policy-param planner.inner=RegretMatch`) | `Partitioned/RegretMatch` | `per_group` |
+| `--policy planner=PooledMarket --policy-param planner.inner=RegretMatch` | `PooledMarket/RegretMatch` | `per_company` |
 
 A leaf must not assume which of these it is in: read `ctx.trucks`/`ctx.raw_trucks`,
 `ctx.orders`, `ctx.allowed`, `ctx.candidate_pairs()`, `ctx.accounting_cost` and `ctx.rng`,
@@ -179,18 +182,18 @@ experiment.
 ```python
 from apps.container_logistics.policies.framework import PolicyRef, ref
 
-inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True,
+inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True,
                          help="The per-scope solver each group is decided with.")
 ```
 
-- `kind` is required on, and only allowed on, a `PolicyRef` field: `dispatch`, or a
+- `kind` is required on, and only allowed on, a `PolicyRef` field: `planner`, or a
   component kind `market.offer` / `market.claim` / `market.arbitration`.
 - `leaf_only=True` refuses a composite target (message 2). Every dispatch `inner` sets it.
 - A ref is validated against the **live** registry of its kind, the target's params
   recursively, with the full path in the error, e.g.
-  `policies.dispatch.params.inner.params for GreedyNearest: 'dual_cycle_bonus_km' must be >= 0 (got -1.0).`
+  `policies.planner.params.inner.params for GreedyNearest: 'dual_cycle_bonus_km' must be >= 0 (got -1.0).`
   (a per-run override reads `policy overrides.dispatch.params.inner.params for …`).
-- A policy with a `kind="dispatch"` ref is a composite (`PolicySpec.is_composite`).
+- A policy with a `kind="planner"` ref is a composite (`PolicySpec.is_composite`).
 - In JSON a ref value is always `{type, params?}`; a compiled or stamped ref also carries
   `version` (ignored on read). Any other key is refused.
 
@@ -246,13 +249,13 @@ from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 
 
-@policy(slot="dispatch", name="LargestGroupFirst", version="1",
+@policy(slot="planner", name="LargestGroupFirst", version="1",
         description="Partitioned, but the cooperation group with the most trucks commits first.",
         information_model="per_group")             # no module_rng: it draws only ctx.rng
 class LargestGroupFirst(CompositePolicy):
     @dataclass(frozen=True)
     class Params(PolicyParams):
-        inner: PolicyRef = param(ref("GreedyNearest"), kind="dispatch", leaf_only=True,
+        inner: PolicyRef = param(ref("GreedyNearest"), kind="planner", leaf_only=True,
                                  help="The per-group solver.")
 
     def decide(self, ctx) -> Plan:
@@ -306,7 +309,7 @@ class LargestGroupFirst(CompositePolicy):
 | Argument | Required | Meaning |
 |---|---|---|
 | `slot`, `name`, `version`, `description` | yes | Bump `version` when output changes for the same input (§12). |
-| `information_model` | **yes, for `dispatch`** | `central`, `per_group` or `per_company` (message 16). |
+| `information_model` | **yes, for `planner`** | `central`, `per_group` or `per_company` (message 16). |
 | `share_tag_format` | no, default `"audited"` | `"v1"` is reserved to `Partitioned` (message 15). Leave it out. |
 | `module_rng` | no | A stated reason the decision draws the `random` module. Covers only this node's own draws (and, on a composite, its scopes' `sample_rng` draws), reported `SKIP`; any other module draw still FAILS (§8). |
 | `order_sensitive` | no | A stated reason output depends on input order; `order_independent` is reported `SKIP`. |
@@ -316,7 +319,7 @@ class LargestGroupFirst(CompositePolicy):
 
 **Information model.** The effective model is the **top-level** policy's:
 `Partitioned/GreedyNearest` is `per_group`, `PooledMarket/GreedyNearest` `per_company`,
-top-level `GreedyNearest` `central`. Stamped as `meta.policies.dispatch.information_model`,
+top-level `GreedyNearest` `central`. Stamped as `meta.policies.planner.information_model`,
 shown in the catalog and badged in the dashboard. Enforcement is **structural**: sub-scopes
 built by `scopes.py` hold only one group's, or one company's plus the market-visible,
 data; the battery's `information.scopes_respect_model` audits every sub-scope via
@@ -396,17 +399,17 @@ tick, more than the shortcut saves.
 
 **Discards.** ERROR lines, agent-side: `journalctl --user -u openride-celery`, **not** `sim.log`.
 - **Tick level** (message 18; whole tick discarded, nothing committed):
-  `DISPATCH POLICY CONTRACT VIOLATION: <label> v<version> at step <n> returned an invalid tick plan: <problems>. The plan was DISCARDED (nothing committed this tick). This is a policy bug: run \`openride policy validate dispatch <name>\`.`
+  `PLANNER POLICY CONTRACT VIOLATION: <label> v<version> at step <n> returned an invalid tick plan: <problems>. The plan was DISCARDED (nothing committed this tick). This is a policy bug: run \`openride policy validate planner <name>\`.`
 - **Scope level** (message 19; that scope only, others commit). Inside `PooledMarket` the
   scope is one company in one round: that company commits nothing that round.
-  `DISPATCH POLICY CONTRACT VIOLATION: inner <name> v<version> in scope <key> at step <n> returned an invalid plan: <problems>. The scope's plan was DISCARDED (nothing committed for this scope this tick). This is a policy bug: run \`openride policy validate dispatch <name>\`.`
+  `PLANNER POLICY CONTRACT VIOLATION: inner <name> v<version> in scope <key> at step <n> returned an invalid plan: <problems>. The scope's plan was DISCARDED (nothing committed for this scope this tick). This is a policy bug: run \`openride policy validate planner <name>\`.`
 
 **Crashes (non-contract exceptions).**
 
 | Where | What happens |
 |---|---|
 | Top-level leaf, `Partitioned`'s inner, your own composite (unless it catches), or a `PooledMarket` arbitration rule | Propagates out of `AssignmentApp.assign()`, i.e. the tick. ORSim's step handler catches it (`Exception in step for Agent …`): that tick commits nothing and the agent lives on. |
-| `PooledMarket`'s inner | Message 20, `DISPATCH POLICY CRASHED: inner <name> raised for company '<hid>' in round <r> at step <n>; that company commits nothing this round (pooled-market behaviour, unchanged). Traceback follows. (celery journal, not sim.log)`; counted in `stats["crashes"]`; the tick continues. |
+| `PooledMarket`'s inner | Message 20, `PLANNER POLICY CRASHED: inner <name> raised for company '<hid>' in round <r> at step <n>; that company commits nothing this round (pooled-market behaviour, unchanged). Traceback follows. (celery journal, not sim.log)`; counted in `stats["crashes"]`; the tick continues. |
 | `PooledMarket`'s offer or claim component | Swallowed: `Offer policy failed for haulier …` / `Claim policy failed for haulier …`; that company contributes / bids nothing. Not counted, not message 20. |
 
 Violations and crashes are **not stamped into `run_config`**; only the journal line and the
@@ -482,16 +485,16 @@ unseparable SKIP ("provenance cannot be separated"), never PASS. Without a decla
 ## 9. Validate, bench, capture
 
 ```
-openride policy validate dispatch RegretMatch           # PASS/FAIL table, exit 1 on any FAIL
-openride policy bench dispatch --policies RegretMatch,part=Partitioned,pm=PooledMarket \
+openride policy validate planner RegretMatch           # PASS/FAIL table, exit 1 on any FAIL
+openride policy bench planner --policies RegretMatch,part=Partitioned,pm=PooledMarket \
     --policy-param part.inner=RegretMatch --policy-param pm.inner=RegretMatch \
     --synthetic three_company_chain,scale [--json]
 openride run <slug> --capture-dispatch every=10,max=40  # <datahub>/fixtures/dispatch/<run_id>/step_<n>.json.gz
-openride policy bench dispatch --policies Partitioned,RegretMatch --fixtures <datahub>/fixtures/dispatch/<run_id>
+openride policy bench planner --policies Partitioned,RegretMatch --fixtures <datahub>/fixtures/dispatch/<run_id>
 ```
 
-Control-plane equivalents: `python -m openride_control.command policy-validate --slot dispatch
---name X` and `policy-bench --slot dispatch --policies … (--synthetic … | --fixtures DIR)`.
+Control-plane equivalents: `python -m openride_control.command policy-validate --slot planner
+--name X` and `policy-bench --slot planner --policies … (--synthetic … | --fixtures DIR)`.
 `python -m openride_control.command validate-run-policies --scenario S` with no policy flags
 returns `{}` without reading the bundle, so it does not catch a bundle compiled before round
 2; the run itself refuses such a bundle at start (exit 2, "compiled before round 2 …
@@ -546,10 +549,10 @@ tick is always captured, then every N-th (a runner rebuilt mid-run restarts the 
 
 ## 10. Select it
 
-**Scenario (`spec.json`).** `policies.dispatch` is the only dial:
+**Scenario (`spec.json`).** `policies.planner` is the only dial:
 
 ```json
-"policies": {"dispatch": {"type": "PooledMarket", "timing": "online",
+"policies": {"planner": {"type": "PooledMarket", "timing": "online",
   "params": {"max_rounds": 20,
              "offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0}},
              "claim": {"type": "ClaimAllPlanned"}, "arbitration": {"type": "LowestCost"},
@@ -566,21 +569,21 @@ badges); the Run step's **structure** dropdown is separate and unchanged.
 
 CLI on a scenario: `openride scenario new --solver X` → `Partitioned{inner: X}` (never a flat
 central `{type: X}`); `openride scenario edit <slug> --solver X` sets the **innermost leaf** of
-the current selection; `--policy dispatch=X` / `--policy-param …` rebase onto the current
+the current selection; `--policy planner=X` / `--policy-param …` rebase onto the current
 block.
 
 **One run** (`openride run`, `run-simulation`, `validate-run-policies`):
-- `--policy dispatch=PooledMarket` sets the top type. A changed type starts from its defaults,
+- `--policy planner=PooledMarket` sets the top type. A changed type starts from its defaults,
   **except that a new decomposition keeps the current per-scope solver as its `inner`, with
   that solver's params** (the current `inner`, or the current top when that is a leaf),
   unless the request names the inner's type (spec §3.3).
-- `--policy-param dispatch.inner=RandomAssignment` sets a ref's type (params reset);
-  `--policy-param dispatch.inner.dual_cycle_bonus_km=0`, `dispatch.offer.keep_below_km=3`,
-  `dispatch.max_rounds=5`: nested paths (slot = longest known-slot prefix; every other
+- `--policy-param planner.inner=RandomAssignment` sets a ref's type (params reset);
+  `--policy-param planner.inner.dual_cycle_bonus_km=0`, `planner.offer.keep_below_km=3`,
+  `planner.max_rounds=5`: nested paths (slot = longest known-slot prefix; every other
   non-final segment is a ref). VALUE is JSON when it parses.
 - `--solver X` (`ORSIM_SOLVER`, shipped **separately** from `ORSIM_POLICY_OVERRIDES`) sets the
   innermost leaf (or a leaf top). A decomposition name is refused (message 11), a different
-  explicit `dispatch.inner.type` too (message 12, which names where it came from:
+  explicit `planner.inner.type` too (message 12, which names where it came from:
   `--policy/--policy-param/--policy-overrides`). The source profile's `policies_format`
   marker is checked **before** any override resolves, so no override (not even `--solver`)
   can make an unmarked round-1 block runnable.
@@ -593,9 +596,9 @@ block.
   `--scenario nope --solver Nope` names `Nope`. The dashboard maps `ok:false` to HTTP 400 and
   a non-answer (older backend) to 503.
 
-**Trap.** `--policy dispatch=GreedyNearest` selects a **central** planner (label
+**Trap.** `--policy planner=GreedyNearest` selects a **central** planner (label
 `GreedyNearest`, `central`), a new arm. For "same decomposition, other leaf" use `--solver X`
-or `--policy-param dispatch.inner=X`.
+or `--policy-param planner.inner=X`.
 
 **Run-name segment** (`dispatch_override_label`): legacy forms are byte-identical
 (`--solver GreedyNearest` → ` · GreedyNearest`; `ORSIM_PLANNER_TOPOLOGY` → ` · pooled` at its
@@ -603,17 +606,17 @@ old position, the market env vars add none). Only the leaf touched → ` · Leaf
 ` · Leaf(k=v)` (values as compact JSON: `GreedyNearest(candidates="sampled")`). A higher node
 touched → the slash chain, ` · PooledMarket/GreedyNearest`,
 ` · PooledMarket(max_rounds=5)/GreedyNearest`. **Known limit:** central
-`--policy dispatch=GreedyNearest` and `--solver GreedyNearest` both read ` · GreedyNearest`;
+`--policy planner=GreedyNearest` and `--solver GreedyNearest` both read ` · GreedyNearest`;
 tell them apart by the stamp (label `GreedyNearest`/`central` vs
 `Partitioned/GreedyNearest`/`per_group`). A ` · central:<Leaf>` prefix was proposed and is
 **not implemented** (it would change the format `lib/runNameMeta.ts` parses).
 
-**The stamp** `run_config.meta.policies.dispatch`: `name`, `version`, `kind` (the slot kind,
+**The stamp** `run_config.meta.policies.planner`: `name`, `version`, `kind` (the slot kind,
 `operator`), `timing`, `source` (`bundle` / `legacy-profile` / `override`), `label`, `leaf`,
 `information_model`, `share_tag_format`, `params` (nested, refs `{type, version, params}`),
 `candidate_settings` (+ `sample_scope`: `per_haulier` for a central top, `per_group`,
 `per_company`), `accounting_params`. Console:
-`Policies effective: dispatch=<label> v<version> timing=<t> information_model=<m> params=<json> accounting_params=<json>`.
+`Policies effective: planner=<label> v<version> timing=<t> information_model=<m> params=<json> accounting_params=<json>`.
 
 ## 11. Legacy spellings (translated deterministically, `policies/dispatch/legacy.py`)
 
@@ -624,7 +627,7 @@ tell them apart by the stamp (label `GreedyNearest`/`central` vs
 | bundle profile without `policies` (`strategy`, `solver_params`, `use_spatial_matching`, `planner`) | same; `use_spatial_matching: false` → `inner.candidates = "sampled"` where declared; no `strategy` → `RandomAssignment`. Accepted without `policies_format` |
 | undeclared leaf/component params | dropped at WARNING |
 | unknown topology (message 6), unknown component (3), `max_rounds` not an int in 1..100 | **loud** (used to fail soft / clamp) |
-| `ORSIM_PLANNER_TOPOLOGY=pooled\|two-stage\|partitioned` | top → PooledMarket / Partitioned, inner kept; market from the current PooledMarket else `profile.planner.market`; conflict with an explicit `dispatch.type` refused (10) |
+| `ORSIM_PLANNER_TOPOLOGY=pooled\|two-stage\|partitioned` | top → PooledMarket / Partitioned, inner kept; market from the current PooledMarket else `profile.planner.market`; conflict with an explicit `planner.type` refused (10) |
 | `ORSIM_OFFER_POLICY` / `_CLAIM_POLICY` / `_ARBITRATION_RULE` / `_MARKET_MAX_ROUNDS` | the PooledMarket component (params reset) / `max_rounds` 1..100 (11..100 used to be ignored); refused unless the top is PooledMarket after the topology step (9) |
 | a `profile.policies` block **without `policies_format: 2`** (round-1 compile on this branch) | **refused at run start**, checked on the source profile before any override applies: recompile (`openride scenario compile <slug>`), never hand-patch |
 
@@ -661,7 +664,7 @@ PooledMarket's params (8) and is inert next to another top. At run start the com
 - Only `online` timing executes; `plan` timing with held tails is P4.
 - The battery's module-RNG attribution cannot separate a draw through a function bound at
   import (reported SKIP, §8).
-- Central `--policy dispatch=X` and `--solver X` give the same run-name segment (§10).
+- Central `--policy planner=X` and `--solver X` give the same run-name segment (§10).
 - Central and partitioned arms differ in sampled candidate coverage under cooperation (§5).
 - Violations and crashes are not in `run_config`.
 - Capture /2 refuses rebate-aware ticks.

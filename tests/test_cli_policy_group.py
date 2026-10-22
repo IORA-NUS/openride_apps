@@ -3,7 +3,7 @@
 Plan ``docs/plans/policy_slots_p0_p3.md`` §4 P3.4/P3.6/P3.7. What is locked and why:
 
 - the ``policy`` group exposes list/show/validate/bench, and ``solver list`` renders
-  ``policy list dispatch`` restricted to the per-scope solvers (one catalog, no
+  ``policy list planner`` restricted to the per-scope solvers (one catalog, no
   second list to drift); ``policy list`` shows the component kinds and an
   information-model column, ``policy show`` renders ref params (round-2 §5 C4);
 - the control wrappers parse the control plane's payloads (the transport is
@@ -37,7 +37,7 @@ from openride_control.models import ActionResult, ServiceState
 CLI_DIR = Path(__file__).resolve().parents[1] / "openride"
 
 _FAKE_CATALOG = {
-    "dispatch": {
+    "planner": {
         "kind": "operator", "default": "Beta",
         "timings": ["online"], "executable_timings": ["online"], "description": "d",
         "policies": [
@@ -52,7 +52,7 @@ _FAKE_CATALOG = {
              "params_schema": {"type": "object", "properties": {
                  "offer": {"type": "object", "x-policy-ref": "market.offer", "x-leaf-only": False,
                            "default": {"type": "OfferAll", "params": {}}, "description": "an offer"},
-                 "inner": {"type": "object", "x-policy-ref": "dispatch", "x-leaf-only": True,
+                 "inner": {"type": "object", "x-policy-ref": "planner", "x-leaf-only": True,
                            "default": {"type": "Alpha", "params": {"k": 1.0}}, "description": "the solver"}}},
              "defaults": {}},
         ],
@@ -122,22 +122,22 @@ def test_policy_group_parses_each_subcommand():
     """The real parser accepts every documented form (and rejects bench without a source)."""
     parser = cli._build_parser()
     assert parser.parse_args(["policy", "list"]).slot is None
-    assert parser.parse_args(["policy", "list", "dispatch", "--json"]).json is True
-    shown = parser.parse_args(["policy", "show", "dispatch", "GreedyNearest"])
-    assert (shown.slot, shown.name) == ("dispatch", "GreedyNearest")
-    assert parser.parse_args(["policy", "validate", "dispatch", "X"]).name == "X"
-    bench = parser.parse_args(["policy", "bench", "dispatch", "--policies", "A,B", "--synthetic", "scale",
+    assert parser.parse_args(["policy", "list", "planner", "--json"]).json is True
+    shown = parser.parse_args(["policy", "show", "planner", "GreedyNearest"])
+    assert (shown.slot, shown.name) == ("planner", "GreedyNearest")
+    assert parser.parse_args(["policy", "validate", "planner", "X"]).name == "X"
+    bench = parser.parse_args(["policy", "bench", "planner", "--policies", "A,B", "--synthetic", "scale",
                                "--policy-param", "A.k=1"])
     assert (bench.synthetic, bench.fixtures, bench.policy_param) == ("scale", None, ["A.k=1"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["policy", "bench", "dispatch", "--policies", "A"])
+        parser.parse_args(["policy", "bench", "planner", "--policies", "A"])
     with pytest.raises(SystemExit):
-        parser.parse_args(["policy", "bench", "dispatch", "--policies", "A", "--synthetic", "scale",
+        parser.parse_args(["policy", "bench", "planner", "--policies", "A", "--synthetic", "scale",
                            "--fixtures", "/tmp"])
 
 
 def test_solver_list_is_policy_list_dispatch_restricted_to_leaves(monkeypatch, capsys):
-    """``solver list`` prints ``policy list dispatch`` without the decompositions (round 2:
+    """``solver list`` prints ``policy list planner`` without the decompositions (round 2:
     ``--solver`` accepts only per-scope solvers), text and JSON.
 
     Verified to have teeth: changing it to ``render_policy_list(None, ...)`` (every slot
@@ -149,13 +149,13 @@ def test_solver_list_is_policy_list_dispatch_restricted_to_leaves(monkeypatch, c
         assert cli.main(argv) == 0
         return capsys.readouterr().out
 
-    leaves, full = out(["solver", "list"]), out(["policy", "list", "dispatch"])
+    leaves, full = out(["solver", "list"]), out(["policy", "list", "planner"])
     assert "Alpha" in leaves and "Beta" not in leaves and "Beta" in full
     alias_json = json.loads(out(["solver", "list", "--json"]))
-    assert list(alias_json) == ["dispatch"]
-    assert [p["name"] for p in alias_json["dispatch"]["policies"]] == ["Alpha"]
-    full_json = json.loads(out(["policy", "list", "dispatch", "--json"]))
-    assert [p["name"] for p in full_json["dispatch"]["policies"]] == ["Alpha", "Beta"]
+    assert list(alias_json) == ["planner"]
+    assert [p["name"] for p in alias_json["planner"]["policies"]] == ["Alpha"]
+    full_json = json.loads(out(["policy", "list", "planner", "--json"]))
+    assert [p["name"] for p in full_json["planner"]["policies"]] == ["Alpha", "Beta"]
 
 
 def test_policy_list_marks_default_missing_deps_components_and_models(monkeypatch, capsys):
@@ -180,16 +180,16 @@ def test_policy_show_renders_params_and_rejects_unknown_names(monkeypatch, capsy
     """Verified to have teeth: rendering a ref param's raw ``type`` (``object``) instead
     of ``_type_cell`` failed the ``ref → market.offer`` assertion."""
     _fake_catalogs(monkeypatch)
-    assert cli.main(["policy", "show", "dispatch", "Alpha"]) == 0
+    assert cli.main(["policy", "show", "planner", "Alpha"]) == 0
     text = capsys.readouterr().out
     assert "version 3" in text and "a knob" in text and ">= 0.0" in text
-    assert cli.main(["policy", "show", "dispatch", "Beta"]) == 0
+    assert cli.main(["policy", "show", "planner", "Beta"]) == 0
     text = capsys.readouterr().out
     assert "ref → market.offer" in text and "OfferAll, OfferNone" in text, "a ref lists its kind's names"
-    assert "ref → dispatch (leaf)" in text and "per_group" in text
+    assert "ref → planner (leaf)" in text and "per_group" in text
     assert cli.main(["policy", "show", "market.offer", "OfferNone"]) == 0
     assert "none" in capsys.readouterr().out
-    assert cli.main(["policy", "show", "dispatch", "Gamma"]) == 2
+    assert cli.main(["policy", "show", "planner", "Gamma"]) == 2
     assert "registered: Alpha, Beta" in capsys.readouterr().out
     assert cli.main(["policy", "show", "idle", "X"]) == 2
 
@@ -200,12 +200,12 @@ def test_policy_validate_exits_1_on_any_fail(monkeypatch, capsys):
                {"id": "performance.scale", "ok": False, "detail": "too slow", "ms": 900.0}]
     monkeypatch.setattr(control, "policy_validate", lambda slot, name: {
         "ok": False, "results": results, "message": "1 check(s) failed: performance.scale"})
-    assert cli.main(["policy", "validate", "dispatch", "Alpha"]) == 1
+    assert cli.main(["policy", "validate", "planner", "Alpha"]) == 1
     text = capsys.readouterr().out
     assert "FAIL" in text and "too slow" in text
     monkeypatch.setattr(control, "policy_validate", lambda slot, name: {
         "ok": True, "results": results[:1], "message": "all 1 checks passed"})
-    assert cli.main(["policy", "validate", "dispatch", "Alpha"]) == 0
+    assert cli.main(["policy", "validate", "planner", "Alpha"]) == 0
     assert "PASS" in capsys.readouterr().out
 
 
@@ -234,26 +234,26 @@ def test_policy_validate_wrapper_returns_failed_results_and_raises_on_refusal(mo
     ``control.policy_validate`` turned a battery FAIL into a ControlError."""
     payload = {"ok": False, "action": "policy_validate", "results": [{"id": "a.b", "ok": False}]}
     seen = _transport(monkeypatch, payload)
-    assert control.policy_validate("dispatch", "X") == payload, "a FAIL is a result, not an error"
-    assert seen == [["policy-validate", "--slot", "dispatch", "--name", "X"]]
-    _transport(monkeypatch, {"ok": False, "code": "INVALID", "message": "Unknown dispatch policy 'X'"})
-    with pytest.raises(control.ControlError, match="Unknown dispatch policy") as excinfo:
-        control.policy_validate("dispatch", "X")
+    assert control.policy_validate("planner", "X") == payload, "a FAIL is a result, not an error"
+    assert seen == [["policy-validate", "--slot", "planner", "--name", "X"]]
+    _transport(monkeypatch, {"ok": False, "code": "INVALID", "message": "Unknown planner policy 'X'"})
+    with pytest.raises(control.ControlError, match="Unknown planner policy") as excinfo:
+        control.policy_validate("planner", "X")
     assert excinfo.value.code == "INVALID"
 
 
 def test_policy_bench_wrapper_builds_argv_and_parses_report(monkeypatch):
     seen = _transport(monkeypatch, {"ok": True, "report": {"rows": [1]}, "table": "T"})
-    out = control.policy_bench("dispatch", ["A", "B"], synthetic="scale", params=["A.k=1", "B.j=x"])
+    out = control.policy_bench("planner", ["A", "B"], synthetic="scale", params=["A.k=1", "B.j=x"])
     assert out == {"report": {"rows": [1]}, "table": "T"}
-    assert seen == [["policy-bench", "--slot", "dispatch", "--policies", "A,B", "--synthetic", "scale",
+    assert seen == [["policy-bench", "--slot", "planner", "--policies", "A,B", "--synthetic", "scale",
                      "--policy-param", "A.k=1", "--policy-param", "B.j=x"]]
     seen = _transport(monkeypatch, {"ok": True, "report": {}, "table": ""})
-    control.policy_bench("dispatch", ["A"], fixtures_dir="/d")
+    control.policy_bench("planner", ["A"], fixtures_dir="/d")
     assert seen[0][-2:] == ["--fixtures", "/d"]
     _transport(monkeypatch, {"ok": False, "code": "INVALID", "message": "no step_*.json.gz fixtures"})
     with pytest.raises(control.ControlError, match="no step_"):
-        control.policy_bench("dispatch", ["A"], fixtures_dir="/d")
+        control.policy_bench("planner", ["A"], fixtures_dir="/d")
 
 
 @pytest.mark.parametrize("text, expected", [

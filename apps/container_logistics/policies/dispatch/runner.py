@@ -75,7 +75,7 @@ __all__ = [
 
 # Derived, never restated: when P4 makes 'plan' executable in the slot table, the
 # catalog and this runner change together (review F13).
-EXECUTABLE_TIMINGS: tuple[str, ...] = SLOTS["dispatch"].executable_timings
+EXECUTABLE_TIMINGS: tuple[str, ...] = SLOTS["planner"].executable_timings
 
 Pair = tuple[dict[str, Any], dict[str, Any]]
 
@@ -110,12 +110,12 @@ class DispatchRunner:
     ) -> None:
         if resolved.timing not in EXECUTABLE_TIMINGS:
             raise PolicyTimingError(
-                f"dispatch timing {resolved.timing!r} for {resolved.name} is not executable; "
+                f"planner timing {resolved.timing!r} for {resolved.name} is not executable; "
                 f"executable timings: {list(EXECUTABLE_TIMINGS)}. Use timing {EXECUTABLE_TIMINGS[0]!r}."
             )
         if resolved.candidate_kind not in CANDIDATE_KINDS:
             raise PolicyError(
-                f"dispatch candidate kind {resolved.candidate_kind!r} for {resolved.name} is not "
+                f"planner candidate kind {resolved.candidate_kind!r} for {resolved.name} is not "
                 f"one of {list(CANDIDATE_KINDS)}."
             )
         self.policy = policy
@@ -200,9 +200,9 @@ class DispatchRunner:
             return
         self.stats["violations"] += 1
         logger.error(
-            "DISPATCH POLICY CONTRACT VIOLATION: %s v%s at step %d returned an invalid tick plan: "
+            "PLANNER POLICY CONTRACT VIOLATION: %s v%s at step %d returned an invalid tick plan: "
             "%s. The plan was DISCARDED (nothing committed this tick). This is a policy bug: run "
-            "`openride policy validate dispatch %s`.",
+            "`openride policy validate planner %s`.",
             self.resolved.label, self.resolved.version, ctx.clock.time_step,
             "; ".join(problems), self.resolved.name,
         )
@@ -243,8 +243,8 @@ def build_runner_for_policy(
 
     from .profile import build_policy_tree, dispatch_node
 
-    spec = get_policy_spec("dispatch", name)
-    validated = spec.params_cls.from_mapping(params, where=f"dispatch params for {name}")
+    spec = get_policy_spec("planner", name)
+    validated = spec.params_cls.from_mapping(params, where=f"planner params for {name}")
     node = dispatch_node(spec.name, validated, timing="online", source="policies")
     return DispatchRunner(policy=build_policy_tree(node), resolved=node, capture=capture)
 

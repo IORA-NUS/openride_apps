@@ -60,7 +60,7 @@ Doc = dict[str, Any]
 
 
 @policy(
-    slot="dispatch",
+    slot="planner",
     name="PooledMarket",
     version="1",
     description="One planner per company; companies offer orders into shared pools, claim and "
@@ -109,7 +109,7 @@ class PooledMarket(CompositePolicy):
                                  help="Which planned pooled pairs each company bids on.")
         arbitration: PolicyRef = param(ref("LowestCost"), kind="market.arbitration",
                                        help="Who wins a contested order.")
-        inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True, help=_INNER_HELP)
+        inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True, help=_INNER_HELP)
 
     def __init__(self, params=None, **kw: Any) -> None:
         super().__init__(params, **kw)

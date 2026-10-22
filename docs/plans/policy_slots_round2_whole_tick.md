@@ -2327,3 +2327,17 @@ final review. New test file `tests/test_policy_verification_review_fixes.py`, 19
    KEPT: `ResolvedPolicy.to_profile` echoes it into every compiled profile entry, so it is
    bundle bytes. `SlotNotImplementedError` is kept for the battery's "no contract battery
    for slot" refusal. Adding a slot later is one `SlotSpec` entry.
+2. **The slot `dispatch` is renamed `planner` (2026-10-22, per user), with NO alias.**
+   Every user-facing and data surface: the slot table, `@policy(slot="planner")`, the ref
+   kind (`x-policy-ref`), spec/compiled `policies.planner`, `--policy planner=`,
+   `--policy-param planner.*`, `openride policy list|show|validate|bench planner`,
+   `known-policies` slot keys, `validate-run-policies`, the stamp
+   `run_config.meta.policies.planner`, `ORSIM_POLICY_OVERRIDES` keys, the
+   `PLANNER POLICY ...` / `PLANNER CAPTURE FAILED` log lines (message numbers unchanged).
+   The old name is refused with "(The slot was renamed to 'planner'.)" from one table,
+   `slots.RENAMED_SLOTS`. Deliberately NOT renamed: Python identifiers (`policies/dispatch/`,
+   `DispatchPolicy`, `DispatchContext`, `DispatchWorld`, `DispatchRunner`) -- churn that
+   risks the golden harness; `--capture-dispatch` and `<datahub>/fixtures/dispatch/`;
+   run-name segments (they carry policy names, not slot names); the legacy profile block
+   `planner.topology|market|deployment` (parent is the spec/profile, not `policies`; a test
+   locks that both coexist and a contradiction is still message 7).

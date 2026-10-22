@@ -43,7 +43,7 @@ def _compiled_block(**entry):
             "params": {"dual_cycle_bonus_km": 5.0}}
     base.update(entry)
     # policies_format 2: the compile-time marker every round-2 bundle carries (C4).
-    return {"strategy": "GreedyNearest", "policies": {"dispatch": base}, "policies_format": 2}
+    return {"strategy": "GreedyNearest", "policies": {"planner": base}, "policies_format": 2}
 
 
 # --- F4 -----------------------------------------------------------------------------
@@ -54,7 +54,7 @@ def test_runtime_resolver_refuses_unknown_entry_keys_and_slots():
     the defaults; skipping the slot check in ``resolve_policies_block`` resolved
     ``dispach``."""
     typo = _compiled_block()
-    typo["policies"]["dispatch"]["parms"] = {"dual_cycle_bonus_km": 0}
+    typo["policies"]["planner"]["parms"] = {"dual_cycle_bonus_km": 0}
     for fn in (P.resolve_dispatch_for_profile, SO.current_policies_for_profile):
         with pytest.raises(PolicyError, match="unknown key\\(s\\) 'parms'"):
             fn(typo)
@@ -76,7 +76,7 @@ def test_stamp_path_and_agent_share_one_resolver():
     assert source == "bundle" and P.resolve_dispatch_for_profile(prof).source == "policies"
     legacy, legacy_source = SO.current_policies_for_profile({"strategy": "GreedyNearest"})
     # Round 2: a legacy profile resolves to the tree Partitioned/<strategy>.
-    assert legacy_source == "legacy-profile" and legacy["dispatch"].label == "Partitioned/GreedyNearest"
+    assert legacy_source == "legacy-profile" and legacy["planner"].label == "Partitioned/GreedyNearest"
 
 
 def test_compiled_version_and_kind_are_ignored_not_trusted():
@@ -85,7 +85,7 @@ def test_compiled_version_and_kind_are_ignored_not_trusted():
     ``_authored_from_compiled``) raised "unknown key 'version'"."""
     prof = _compiled_block(version="999", kind="bogus")
     resolved, _ = P.resolve_profile_policies(prof)
-    assert (resolved["dispatch"].version, resolved["dispatch"].kind) == ("1", "operator")
+    assert (resolved["planner"].version, resolved["planner"].kind) == ("1", "operator")
 
 
 def test_non_executable_timing_is_refused_by_the_shared_resolver():
@@ -107,7 +107,7 @@ def test_legacy_drop_rule_is_implemented_once(caplog):
         entry = P.legacy_dispatch_from_profile(
             {"strategy": "RandomAssignment", "solver_params": {"dual_cycle_bonus_km": 5.0}})
     assert entry["params"] == {}
-    assert [r.levelno for r in caplog.records if "not declared by dispatch RandomAssignment" in r.getMessage()] \
+    assert [r.levelno for r in caplog.records if "not declared by planner RandomAssignment" in r.getMessage()] \
         == [logging.WARNING]
 
 
@@ -117,7 +117,7 @@ def test_executable_timings_and_kind_rule_have_one_source():
     from apps.container_logistics.policies.dispatch import resolved as RS
     from apps.container_logistics.policies.dispatch import runner
 
-    assert runner.EXECUTABLE_TIMINGS is SLOTS["dispatch"].executable_timings
+    assert runner.EXECUTABLE_TIMINGS is SLOTS["planner"].executable_timings
     assert not hasattr(P, "_KIND_WITHOUT_CANDIDATES_PARAM")
     random_runner = runner.build_runner_for_policy("RandomAssignment")
     assert random_runner.candidate_kind == RS.candidate_kind_for(random_runner.resolved.params)
@@ -160,10 +160,10 @@ def test_editform_fallback_logs_slug_and_error(caplog):
     ``policy_slots_from_spec`` failed the log assertion."""
     from apps.container_logistics.scenario.frontend_scenario_spec import policy_slots_from_spec
 
-    gs = {"slug": "broken_slug", "policies": {"dispatch": {"type": "NoSuchPolicy"}}}
+    gs = {"slug": "broken_slug", "policies": {"planner": {"type": "NoSuchPolicy"}}}
     with caplog.at_level(logging.WARNING):
         form = policy_slots_from_spec(gs)
-    assert form == {"dispatch": {"type": "NoSuchPolicy"}}, "display behaviour is unchanged"
+    assert form == {"planner": {"type": "NoSuchPolicy"}}, "display behaviour is unchanged"
     msgs = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert any(m.startswith("POLICY SLOTS EDITFORM FALLBACK") and "broken_slug" in m
                and "NoSuchPolicy" in m for m in msgs), msgs
@@ -178,19 +178,19 @@ def test_run_name_label_for_type_and_params_overrides():
     from apps.container_logistics.policies.framework import merge_policy_overrides, resolve_policies_block
     from apps.simulation.run_container_logistics_simulation import dispatch_override_label
 
-    base = resolve_policies_block({"dispatch": {"type": "GreedyNearest"}})
+    base = resolve_policies_block({"planner": {"type": "GreedyNearest"}})
 
     def label(overrides):
         return dispatch_override_label(overrides, merge_policy_overrides(base, overrides))
 
-    assert label({"dispatch": {"params": {"dual_cycle_bonus_km": 0}}}) == \
+    assert label({"planner": {"params": {"dual_cycle_bonus_km": 0}}}) == \
         "GreedyNearest(dual_cycle_bonus_km=0.0)"
-    assert label({"dispatch": {"params": {"dual_cycle_radius_km": 1, "candidates": "sampled"}}}) == \
+    assert label({"planner": {"params": {"dual_cycle_radius_km": 1, "candidates": "sampled"}}}) == \
         'GreedyNearest(candidates="sampled",dual_cycle_radius_km=1.0)'
-    assert label({"dispatch": {"type": "RandomAssignment"}}) == "RandomAssignment"
-    assert label({"dispatch": {"type": "RandomAssignment", "params": {"candidates": "spatial"}}}) == \
+    assert label({"planner": {"type": "RandomAssignment"}}) == "RandomAssignment"
+    assert label({"planner": {"type": "RandomAssignment", "params": {"candidates": "spatial"}}}) == \
         'RandomAssignment(candidates="spatial")'
-    assert label({"dispatch": {"timing": "online"}}) is None
+    assert label({"planner": {"timing": "online"}}) is None
 
 
 # --- F12 / F2 -----------------------------------------------------------------------
@@ -214,14 +214,14 @@ def test_validation_against_a_missing_scenario_says_so(smoke_slug):
     produced "params for RandomAssignment: unknown key" instead."""
     from openride_control.policies import validate_run_policy_args
 
-    flags = ["dispatch.inner.dual_cycle_bonus_km=3"]  # round 2: the solver is the inner
+    flags = ["planner.inner.dual_cycle_bonus_km=3"]  # round 2: the solver is the inner
     msg = validate_run_policy_args("does_not_exist_xyz", None, [], flags)
     assert msg.startswith("scenario 'does_not_exist_xyz' not found"), msg
     msg = validate_run_policy_args("empty_folder", None, [], flags)
     assert "has no compiled bundle (scenario.json)" in msg and "openride scenario compile empty_folder" in msg
     assert validate_run_policy_args("does_not_exist_xyz", None, [], []) == {}, "no flags: nothing to check"
     assert validate_run_policy_args(smoke_slug, None, [], flags) == {
-        "dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 3}}}}}
+        "planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 3}}}}}
 
 
 def test_policy_overrides_json_merges_with_flags_and_conflicts_are_refused():
@@ -229,21 +229,21 @@ def test_policy_overrides_json_merges_with_flags_and_conflicts_are_refused():
     ``_set_once`` failed the conflict assertions."""
     from openride_control.policies import build_run_policy_overrides
 
-    js = json.dumps({"dispatch": {"type": "GreedyNearest", "timing": "online",
+    js = json.dumps({"planner": {"type": "GreedyNearest", "timing": "online",
                                   "params": {"dual_cycle_bonus_km": 0}}})
     # Round 2 (C4): --solver is not folded in (it ships as ORSIM_SOLVER; its conflicts
     # are run_dispatch_overrides' message 12, tests/test_policy_run_overrides.py).
-    merged = build_run_policy_overrides([], ["dispatch.dual_cycle_radius_km=1"], js)
-    assert merged == {"dispatch": {"type": "GreedyNearest", "timing": "online",
+    merged = build_run_policy_overrides([], ["planner.dual_cycle_radius_km=1"], js)
+    assert merged == {"planner": {"type": "GreedyNearest", "timing": "online",
                                    "params": {"dual_cycle_bonus_km": 0, "dual_cycle_radius_km": 1}}}
     for policies, params, needle in [
-        (["dispatch=RandomAssignment"], [], "--policy sets dispatch.type"),
-        ([], ["dispatch.dual_cycle_bonus_km=2"], "--policy-param sets dispatch.params.dual_cycle_bonus_km"),
-        ([], ["dispatch.dual_cycle_bonus_km=false"], "--policy-param sets"),
+        (["planner=RandomAssignment"], [], "--policy sets planner.type"),
+        ([], ["planner.dual_cycle_bonus_km=2"], "--policy-param sets planner.params.dual_cycle_bonus_km"),
+        ([], ["planner.dual_cycle_bonus_km=false"], "--policy-param sets"),
     ]:
         with pytest.raises(PolicyError, match=needle):
             build_run_policy_overrides(policies, params, js)
-    for bad in ("{not json", "[1]", '{"dispatch": 3}'):
+    for bad in ("{not json", "[1]", '{"planner": 3}'):
         with pytest.raises(PolicyError, match="--policy-overrides"):
             build_run_policy_overrides([], [], bad)
 
@@ -269,15 +269,15 @@ def test_run_simulation_policy_overrides_validated_before_spawning(smoke_slug, m
 
     monkeypatch.setattr(ServiceManager, "run_simulation_background", _fake)
     for bad, needle in [
-        ({"dispatch": {"parms": {"dual_cycle_bonus_km": 0}}}, "unknown key(s) 'parms'"),
-        ({"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": -1}}}}}, "must be >= 0"),
+        ({"planner": {"parms": {"dual_cycle_bonus_km": 0}}}, "unknown key(s) 'parms'"),
+        ({"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": -1}}}}}, "must be >= 0"),
         ({"dispach": {"type": "GreedyNearest"}}, "Unknown policy slot 'dispach'"),
     ]:
         rc, payload = _run_command(["run-simulation", "--scenario", smoke_slug,
                                     "--policy-overrides", json.dumps(bad)], capsys)
         assert rc == 1 and not spawned, payload
         assert payload["ok"] is False and needle in payload["message"], payload
-    good = {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}
+    good = {"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}
     rc, payload = _run_command(["run-simulation", "--scenario", smoke_slug,
                                 "--policy-overrides", json.dumps(good)], capsys)
     assert rc == 0 and spawned[-1]["policy_overrides"] == good
@@ -293,13 +293,13 @@ def test_validate_run_policies_command(smoke_slug, monkeypatch, capsys):
     rc, payload = _run_command(["validate-run-policies", "--scenario", smoke_slug,
                                 "--solver", "RandomAssignment",
                                 "--policy-overrides", json.dumps(
-                                    {"dispatch": {"params": {"inner": {"params": {"candidates": "spatial"}}}}})],
+                                    {"planner": {"params": {"inner": {"params": {"candidates": "spatial"}}}}})],
                                capsys)
     assert rc == 0 and payload["ok"] is True and payload["action"] == "validate_run_policies", payload
     # Round 2 (C4): the payload's overrides are ORSIM_POLICY_OVERRIDES; --solver is not folded in.
-    assert payload["overrides"] == {"dispatch": {"params": {"inner": {"params": {"candidates": "spatial"}}}}}
+    assert payload["overrides"] == {"planner": {"params": {"inner": {"params": {"candidates": "spatial"}}}}}
     rc, payload = _run_command(["validate-run-policies", "--scenario", smoke_slug,
-                                "--policy-param", "dispatch.inner.candidates=near"], capsys)
+                                "--policy-param", "planner.inner.candidates=near"], capsys)
     assert rc == 1 and payload == {**payload, "ok": False, "action": "validate_run_policies"}
     assert "must be one of ['sampled', 'spatial']" in payload["message"]
     rc, payload = _run_command(["validate-run-policies", "--scenario", "nope_xyz",

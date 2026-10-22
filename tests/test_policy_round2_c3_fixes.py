@@ -4,7 +4,7 @@ What is locked (each test names its finding):
 
 - The pooled runtime instantiates market components only through the typed path;
   the fail-soft legacy getters are on no runtime path (C1 review #6). The framework
-  imports nothing from ``policies.dispatch`` (C1 review #5).
+  imports nothing from ``policies.planner`` (C1 review #5).
 - The catalog advertises a REGISTERED default and each composite's ``inner_param``,
   the one descent rule ``--solver`` follows (C1 review #4, #9).
 - The tick scope's sample cap applies per haulier, drawing from ``ctx.rng``
@@ -99,7 +99,7 @@ def test_catalog_default_is_one_of_its_own_policies():
     for slot, entry in catalog.items():
         if "policies" in entry and entry.get("default") is not None:
             assert entry["default"] in {p["name"] for p in entry["policies"]}, slot
-    assert catalog["dispatch"]["default"] == "Partitioned"
+    assert catalog["planner"]["default"] == "Partitioned"
 
 
 def test_catalog_exposes_inner_param_and_the_solver_override_descends_it():
@@ -108,8 +108,8 @@ def test_catalog_exposes_inner_param_and_the_solver_override_descends_it():
     Verified to have teeth: hardcoding ``"inner"`` in ``scenario_overrides.leaf_retargeted``
     is invisible here, but returning ``None`` from ``PolicySpec.inner_param`` failed both halves.
     """
-    entries = {p["name"]: p for p in policy_catalog()["dispatch"]["policies"]}
-    for spec in list_policies("dispatch"):
+    entries = {p["name"]: p for p in policy_catalog()["planner"]["policies"]}
+    for spec in list_policies("planner"):
         assert entries[spec.name]["inner_param"] == spec.inner_param
     assert (entries["Partitioned"]["inner_param"], entries["PooledMarket"]["inner_param"]) == ("inner", "inner")
     assert entries["GreedyNearest"]["inner_param"] is None and entries["RandomAssignment"]["inner_param"] is None
@@ -121,7 +121,7 @@ def test_catalog_exposes_inner_param_and_the_solver_override_descends_it():
     coll = {"a0": {"profile": {"strategy": "RandomAssignment"}}}
     run_dispatch_overrides(coll, solver="GreedyNearest")  # C4: --solver is its own channel
     resolved, _source = current_policies_for_profile(coll["a0"]["profile"])
-    assert resolved["dispatch"].label == "Partitioned/GreedyNearest", "--solver sets the innermost solver"
+    assert resolved["planner"].label == "Partitioned/GreedyNearest", "--solver sets the innermost solver"
 
 
 # --- explainer gap 1: the tick-scope sample cap -----------------------------------------
@@ -161,7 +161,7 @@ def test_tick_scope_samples_per_haulier_from_ctx_rng_and_partition_scope_is_unch
 @pytest.fixture
 def crashers():
     with isolated_registry():
-        @policy(slot="dispatch", name="TopCrasher", version="1", information_model="central",
+        @policy(slot="planner", name="TopCrasher", version="1", information_model="central",
                 description="raises")
         class TopCrasher(DispatchPolicy):
             @dataclass(frozen=True)
@@ -184,7 +184,7 @@ def test_a_crash_in_a_top_level_solver_or_a_group_propagates_out_of_assign(crash
     ``Exception`` swallowed the central case.
     """
     app = _app([_truck("t1", "acme", 103.85, 1.30)], [_order("o1", "acme", 103.85, 1.30)],
-               _base_profile(policies={"dispatch": dispatch}))
+               _base_profile(policies={"planner": dispatch}))
     with pytest.raises(KeyError, match="solver bug"):
         app.assign(_CLOCK, 1)
     assert app._share_tags == {}
@@ -196,7 +196,7 @@ def test_a_crash_in_a_top_level_solver_or_a_group_propagates_out_of_assign(crash
 @pytest.fixture
 def borax_double_booker():
     with isolated_registry():
-        @policy(slot="dispatch", name="BoraxDoubleBooker", version="1", information_model="central",
+        @policy(slot="planner", name="BoraxDoubleBooker", version="1", information_model="central",
                 description="double-books in borax's company scope")
         class BoraxDoubleBooker(DispatchPolicy):
             @dataclass(frozen=True)
@@ -219,13 +219,13 @@ def test_a_market_company_violation_is_message_19_and_drops_only_that_company(bo
     trucks = [_truck("t_acme", "acme", 103.85, 1.30), _truck("t_b1", "borax", 103.95, 1.30),
               _truck("t_b2", "borax", 103.951, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30), _order("o_borax", "borax", 103.95, 1.30)]
-    profile = _base_profile(policies={"dispatch": {"type": "PooledMarket", "params": {
+    profile = _base_profile(policies={"planner": {"type": "PooledMarket", "params": {
         "inner": {"type": "BoraxDoubleBooker"}}}})
     app = _app(trucks, orders, profile)
     with caplog.at_level(logging.ERROR):
         assert _ids(app.assign(_CLOCK, 4)) == [("t_acme", "o_acme")]
     msgs = [r.getMessage() for r in caplog.records if "CONTRACT VIOLATION" in r.getMessage()]
-    assert msgs and all(m.startswith("DISPATCH POLICY CONTRACT VIOLATION: inner BoraxDoubleBooker v1 in "
+    assert msgs and all(m.startswith("PLANNER POLICY CONTRACT VIOLATION: inner BoraxDoubleBooker v1 in "
                                      "scope company:borax at step 4") for m in msgs), msgs
     assert app._dispatch_runner(profile).stats["violations"] == len(msgs)
 
@@ -244,7 +244,7 @@ def test_check_mirrors_refuses_diverged_accounting_dials():
         tampered = deepcopy(profile)
         target = tampered["solver_params"] if where == "solver_params" else tampered["planner"]["deployment"]["params"]
         target["dual_cycle_bonus_km"] = 99.0
-        with pytest.raises(PolicyError, match=rf"^profile {where} disagrees with its compiled policies.dispatch "
+        with pytest.raises(PolicyError, match=rf"^profile {where} disagrees with its compiled policies.planner "
                                               r"\(Partitioned/GreedyNearest\): dual_cycle_bonus_km=99.0 vs 1.0"):
             check_mirrors(tampered, node)
     # A cost-blind leaf declares no dual-cycle dial: the accounting value is free.
@@ -253,15 +253,15 @@ def test_check_mirrors_refuses_diverged_accounting_dials():
 
 
 def test_changed_decomposition_keeps_the_solver_on_both_override_paths():
-    """C2 review finding 2: ``--policy dispatch=PooledMarket`` and ``ORSIM_PLANNER_TOPOLOGY``
+    """C2 review finding 2: ``--policy planner=PooledMarket`` and ``ORSIM_PLANNER_TOPOLOGY``
     are the same translation. Verified to have teeth: dropping ``_carried_inner`` made
     the ``--policy`` path run PooledMarket/RandomAssignment."""
     base = {"strategy": "GreedyNearest", "solver_params": {"dual_cycle_bonus_km": 2.0, "dual_cycle_radius_km": 0.5},
             "planner": {"topology": "partitioned"}}
     via_policy = {"a0": {"profile": deepcopy(base)}}
-    apply_policy_overrides(via_policy, {"dispatch": {"type": "PooledMarket"}})
+    apply_policy_overrides(via_policy, {"planner": {"type": "PooledMarket"}})
     via_env = {"a0": {"profile": deepcopy(base)}}
-    apply_policy_overrides(via_env, {"dispatch": {"params": {}}})  # compiled block, as a bundle has
+    apply_policy_overrides(via_env, {"planner": {"params": {}}})  # compiled block, as a bundle has
     apply_planner_topology_override(via_env, "pooled")
     for coll in (via_policy, via_env):
         prof = coll["a0"]["profile"]
@@ -276,7 +276,7 @@ def test_per_run_override_passes_the_run_start_check_with_the_leafs_accounting_d
     ``strategy = merged.name`` (the top) in ``apply_policy_overrides`` failed the check."""
     coll = {"a0": {"profile": {"strategy": "GreedyNearest", "solver_params": {
         "dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5}, "planner": {"topology": "partitioned"}}}}
-    apply_policy_overrides(coll, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0.0}}}}})
+    apply_policy_overrides(coll, {"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0.0}}}}})
     assert_assignment_profiles_resolvable(coll)
     prof = coll["a0"]["profile"]
     assert prof["strategy"] == "GreedyNearest"
@@ -308,14 +308,14 @@ def test_legacy_profile_errors_name_the_legacy_keys():
 
 def test_partitioned_and_pooled_market_params_are_the_shapes_the_frontend_uses():
     """The FE is built on exactly these param shapes (round-2 §3.1, §5 C3)."""
-    part = get_policy_spec("dispatch", "Partitioned").params_cls.json_schema()["properties"]
-    pooled = get_policy_spec("dispatch", "PooledMarket").params_cls.json_schema()["properties"]
+    part = get_policy_spec("planner", "Partitioned").params_cls.json_schema()["properties"]
+    pooled = get_policy_spec("planner", "PooledMarket").params_cls.json_schema()["properties"]
     assert list(part) == ["inner"]
     assert list(pooled) == ["max_rounds", "offer", "claim", "arbitration", "inner"]
     assert pooled["max_rounds"]["default"] == 20 and pooled["max_rounds"]["minimum"] == 1
     assert pooled["max_rounds"]["maximum"] == 100
     assert {k: pooled[k]["x-policy-ref"] for k in ("offer", "claim", "arbitration", "inner")} == {
-        "offer": "market.offer", "claim": "market.claim", "arbitration": "market.arbitration", "inner": "dispatch"}
+        "offer": "market.offer", "claim": "market.claim", "arbitration": "market.arbitration", "inner": "planner"}
     assert [pooled[k]["x-leaf-only"] for k in ("offer", "claim", "arbitration", "inner")] == [False, False, False, True]
     assert part["inner"]["x-leaf-only"] is True and part["inner"]["default"]["type"] == "RandomAssignment"
     assert [pooled[k]["default"]["type"] for k in ("offer", "claim", "arbitration", "inner")] == [

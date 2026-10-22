@@ -363,13 +363,14 @@ def cmd_policy_bench(
     Any refusal (bad slot, unknown policy, bad params, empty fixture set) gives
     ``{ok: false, code: "INVALID", message}``.
     """
-    from apps.container_logistics.policies.framework import PolicyError, get_policy_spec
+    from apps.container_logistics.policies.framework import PolicyError, get_policy_spec, slot_spec
     from apps.container_logistics.policies.testing.bench import bench, load_fixtures, parse_bench_entries, render_table
 
     action = "policy_bench"
     try:
-        if slot != "dispatch":
-            raise PolicyError(f"no bench for slot {slot!r}; only 'dispatch' has one.")
+        slot_spec(slot)  # an unknown (or renamed) slot gets the one unknown-slot refusal
+        if slot != "planner":
+            raise PolicyError(f"no bench for slot {slot!r}; only 'planner' has one.")
         names = [n.strip() for n in str(policies or "").split(",") if n.strip()]
         if not names:
             raise PolicyError("--policies needs at least one policy name, e.g. GreedyNearest,RandomAssignment.")

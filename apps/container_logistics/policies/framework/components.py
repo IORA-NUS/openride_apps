@@ -5,7 +5,7 @@ for every ref kind, and register those answers into the params hook
 (``params._REF_RESOLVERS``). Round 2 ``docs/plans/policy_slots_round2_whole_tick.md``
 §3.2, §4.
 
-- ``dispatch``: the policy registry (``registry.get_policy_spec``); a target whose
+- ``planner``: the policy registry (``registry.get_policy_spec``); a target whose
   ``requires`` are missing is refused with the top level's ``PolicyDependencyError``
   wording, prefixed by the ref path.
 - Component kinds (``market.offer``, ``market.claim``, ``market.arbitration`` today):
@@ -105,8 +105,8 @@ def register_component_kind(kind: str, registry_getter: Callable[[], Mapping[str
     """
     module = getattr(registry_getter, "__module__", None) or ""
     where = f"register_component_kind({kind!r}) from {module or '?'}"
-    if not isinstance(kind, str) or not kind.strip() or kind != kind.strip() or kind == "dispatch":
-        raise PolicyRegistrationError(f"{where}: kind must be a non-blank name other than 'dispatch'.")
+    if not isinstance(kind, str) or not kind.strip() or kind != kind.strip() or kind == "planner":
+        raise PolicyRegistrationError(f"{where}: kind must be a non-blank name other than 'planner'.")
     if not callable(registry_getter):
         raise PolicyRegistrationError(
             f"{where}: registry_getter must be a callable returning the live registry."
@@ -213,7 +213,7 @@ class RefTarget:
 
     @property
     def is_composite(self) -> bool:
-        return any(kind == "dispatch" for _name, kind, _leaf in self.refs)
+        return any(kind == "planner" for _name, kind, _leaf in self.refs)
 
 
 def live_registry(kind: str) -> Mapping[str, type]:
@@ -226,8 +226,8 @@ def live_registry(kind: str) -> Mapping[str, type]:
 
 def ref_names(kind: str) -> list[str]:
     """The sorted names a ref of ``kind`` may name, read live."""
-    if kind == "dispatch":
-        return [s.name for s in list_policies("dispatch")]
+    if kind == "planner":
+        return [s.name for s in list_policies("planner")]
     return sorted(live_registry(kind))
 
 
@@ -237,10 +237,10 @@ def ref_target(kind: str, name: str, *, where: str, leaf_only: bool = False) -> 
     Raises ``UnknownPolicyError`` for an unknown name (listing the registered ones and
     the CLI command), ``PolicyParamsError`` for a composite target where ``leaf_only``.
     """
-    target = _dispatch_target(name, where) if kind == "dispatch" else _component_target(kind, name, where)
+    target = _dispatch_target(name, where) if kind == "planner" else _component_target(kind, name, where)
     if leaf_only and target.is_composite:
-        own = ", ".join(repr(n) for n, k, _leaf in target.refs if k == "dispatch")
-        leaves = ", ".join(n for n in ref_names("dispatch") if not _dispatch_target(n, where).is_composite)
+        own = ", ".join(repr(n) for n, k, _leaf in target.refs if k == "planner")
+        leaves = ", ".join(n for n in ref_names("planner") if not _dispatch_target(n, where).is_composite)
         field = where.rpartition(".")[2]
         raise PolicyParamsError(
             f"{where}: {target.name!r} decomposes the tick itself (it has an {own} of its own); "
@@ -250,14 +250,14 @@ def ref_target(kind: str, name: str, *, where: str, leaf_only: bool = False) -> 
 
 
 def _dispatch_target(name: str, where: str) -> RefTarget:
-    names = ref_names("dispatch")
+    names = ref_names("planner")
     if name not in names:
         raise UnknownPolicyError(
-            f"{where}: unknown dispatch policy {name!r}. Registered dispatch policies: "
-            f"{', '.join(names) or '(none)'}. (List them: openride policy list dispatch)"
+            f"{where}: unknown planner policy {name!r}. Registered planner policies: "
+            f"{', '.join(names) or '(none)'}. (List them: openride policy list planner)"
         )
-    spec = get_policy_spec("dispatch", name)
-    return RefTarget(kind="dispatch", name=spec.name, version=spec.version,
+    spec = get_policy_spec("planner", name)
+    return RefTarget(kind="planner", name=spec.name, version=spec.version,
                      description=spec.description, cls=spec.cls,
                      params_cls=spec.params_cls, refs=spec.refs)
 
@@ -310,8 +310,8 @@ def instantiate_component(kind: str, value: PolicyRef) -> Any:
 def _resolver(kind: str):
     def resolve(name: str, *, where: str, leaf_only: bool = False) -> RefTarget:
         target = ref_target(kind, name, where=where, leaf_only=leaf_only)
-        if kind == "dispatch":  # a nested ref fails loud exactly like the top level
-            get_policy_spec("dispatch", target.name).require_available(where=where)
+        if kind == "planner":  # a nested ref fails loud exactly like the top level
+            get_policy_spec("planner", target.name).require_available(where=where)
         return target
     return resolve
 
@@ -319,5 +319,5 @@ def _resolver(kind: str):
 # The params hook (round-2 §3.2): registered here, so params.py never imports the
 # registry (no params <-> registry cycle). Component kinds add theirs in
 # register_component_kind; a kind not yet declared loads the built-in modules once.
-_params._REF_RESOLVERS["dispatch"] = _resolver("dispatch")
+_params._REF_RESOLVERS["planner"] = _resolver("planner")
 _params._REF_KIND_LOADER = _load_builtin_kinds

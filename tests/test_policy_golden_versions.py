@@ -38,7 +38,7 @@ from tests.golden.capture_policy_golden import (
     load_golden_file,
 )
 
-_NAMES = [spec.name for spec in list_policies("dispatch")]
+_NAMES = [spec.name for spec in list_policies("planner")]
 
 
 def test_golden_file_is_format_2_and_format_1_is_deleted():
@@ -56,7 +56,7 @@ def test_builtin_versions_in_the_v2_golden():
 def test_every_dispatch_policy_has_a_golden_entry():
     missing = sorted(set(_NAMES) - set(load_golden()))
     assert not missing, (
-        f"dispatch policies {missing} have no golden entry; capture one with "
+        f"planner policies {missing} have no golden entry; capture one with "
         f"{GENERATOR_COMMAND} --policy <NAME>"
     )
 
@@ -66,7 +66,7 @@ def test_policy_output_unchanged_or_version_bumped(name):
     entry = load_golden().get(name)
     if entry is None:
         pytest.skip(f"{name} has no golden entry (test_every_dispatch_policy_has_a_golden_entry fails)")
-    spec = next(s for s in list_policies("dispatch") if s.name == name)
+    spec = next(s for s in list_policies("planner") if s.name == name)
     if entry["version"] != spec.version:
         pytest.fail(
             f"{name} is v{spec.version} but its golden entry is v{entry['version']}: regenerate with "

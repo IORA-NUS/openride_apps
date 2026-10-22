@@ -2,7 +2,7 @@
 
 Single responsibility: the deterministic translation of the legacy spellings
 (``solver``/``strategy``, ``solverParams``/``solver_params``, ``planner.deployment``,
-``planner.topology``, ``planner.market``) into ``policies.dispatch``, and the reverse
+``planner.topology``, ``planner.market``) into ``policies.planner``, and the reverse
 echoes compile writes back into those keys. Plan
 ``docs/plans/policy_slots_round2_whole_tick.md`` §3.6, §4.
 
@@ -15,7 +15,7 @@ echoes compile writes back into those keys. Plan
 - :func:`wrap_legacy_leaf` wraps a leaf entry in ``Partitioned`` or ``PooledMarket``.
 - :func:`topology_echo` / :func:`market_echo` are the compile mirrors.
 - :func:`check_authored_planner` refuses an authored ``planner.topology`` /
-  ``planner.market`` that contradicts an authored ``policies.dispatch`` (messages 7, 8).
+  ``planner.market`` that contradicts an authored ``policies.planner`` (messages 7, 8).
 - :data:`POLICIES_FORMAT` / :func:`check_policies_format`: the bundle-format marker a
   round-2 compile (and per-run override) writes next to ``profile.policies``, so a
   round-1 flat block (whose ``{type: GreedyNearest}`` meant the per-scope solver, and
@@ -111,8 +111,8 @@ def legacy_topology(planner: Any, *, where: str = "assignment profile") -> str:
     if canonical is None:
         raise PolicyError(
             f"{where} planner.topology={topology!r} is not a legacy topology "
-            f"({', '.join(LEGACY_TOPOLOGIES)}). The decomposition is now the dispatch policy: "
-            f"policies.dispatch.type = {PARTITIONED} or {POOLED_MARKET}."
+            f"({', '.join(LEGACY_TOPOLOGIES)}). The decomposition is now the planner policy: "
+            f"policies.planner.type = {PARTITIONED} or {POOLED_MARKET}."
         )
     return canonical
 
@@ -263,10 +263,10 @@ def market_echo(params: Any) -> dict[str, Any]:
 
 
 def check_authored_planner(planner: Any, dispatch: Mapping[str, Any]) -> None:
-    """Refuse a legacy ``planner`` spelling that contradicts an authored ``policies.dispatch``.
+    """Refuse a legacy ``planner`` spelling that contradicts an authored ``policies.planner``.
 
     ``planner`` is the RAW authored block (never the compile-normalised one, which
-    fills a default topology); ``dispatch`` the authored ``policies.dispatch`` entry.
+    fills a default topology); ``dispatch`` the authored ``policies.planner`` entry.
     Round-2 §3.6:
 
     - an authored ``planner.topology`` (a non-empty value) must equal the echo of the
@@ -290,7 +290,7 @@ def check_authored_planner(planner: Any, dispatch: Mapping[str, Any]) -> None:
         canonical = LEGACY_TOPOLOGIES.get(topology) if isinstance(topology, str) else None
         if canonical is None or _TOP_FOR_TOPOLOGY[canonical] != top:
             raise PolicyError(
-                f"spec sets planner.topology={topology!r} but policies.dispatch.type={top!r}. "
+                f"spec sets planner.topology={topology!r} but policies.planner.type={top!r}. "
                 "planner.topology is the legacy spelling of the dispatch decomposition (pooled = "
                 f"{POOLED_MARKET}, partitioned = {PARTITIONED}); remove planner.topology."
             )
@@ -299,9 +299,9 @@ def check_authored_planner(planner: Any, dispatch: Mapping[str, Any]) -> None:
     disagree = _market_disagreements(planner, dispatch.get("params"))
     if disagree:
         raise PolicyError(
-            "spec sets planner.market that disagrees with policies.dispatch PooledMarket params "
+            "spec sets planner.market that disagrees with policies.planner PooledMarket params "
             f"({', '.join(disagree)}). planner.market is the legacy spelling of the PooledMarket "
-            "params; move the values into policies.dispatch.params and remove planner.market."
+            "params; move the values into policies.planner.params and remove planner.market."
         )
 
 
@@ -310,10 +310,10 @@ def _market_disagreements(planner: Mapping[str, Any], authored_params: Any) -> l
     # Local import: the registry discovers the policy library (agent-side modules).
     from apps.container_logistics.policies.framework.registry import get_policy_spec
 
-    params_cls = get_policy_spec("dispatch", POOLED_MARKET).params_cls
+    params_cls = get_policy_spec("planner", POOLED_MARKET).params_cls
     authored = dict(authored_params) if isinstance(authored_params, Mapping) else {}
     try:
-        ours = params_cls.from_mapping(authored, where="policies.dispatch.params").to_dict()
+        ours = params_cls.from_mapping(authored, where="policies.planner.params").to_dict()
     except PolicyError:
         return []  # the resolver names the bad policies value with its own path
     legacy = legacy_market_params(planner)
@@ -351,7 +351,7 @@ def check_policies_format(profile: Mapping[str, Any]) -> None:
     if marker is None:
         raise PolicyError(
             f"profile.policies has {POLICIES_FORMAT_KEY}={marker!r}, not {POLICIES_FORMAT}: it was "
-            "compiled before round 2, when a flat policies.dispatch {type: X} meant the per-scope "
+            "compiled before round 2, when a flat policies.planner {type: X} meant the per-scope "
             "solver X under planner.topology; it now means a CENTRAL X. Recompile the scenario "
             "(openride scenario compile <slug>); never hand-patch the bundle."
         )

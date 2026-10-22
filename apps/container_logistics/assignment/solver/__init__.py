@@ -1,7 +1,7 @@
 """Built-in dispatch solvers and the legacy ``get_solver`` lookup.
 
 The solvers register themselves into the policy registry with ``@policy`` (slot
-``dispatch``); the registry is the single source of names. :func:`get_solver` is a
+``planner``); the registry is the single source of names. :func:`get_solver` is a
 fail-loud lookup through it (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.5): an
 unknown name raises ``UnknownPolicyError`` listing the registered names, never a
 silent fallback.
@@ -22,7 +22,7 @@ SOLVER_REGISTRY: Dict[str, Type[BaseAssignmentSolver]] = {
     "RandomAssignment": RandomAssignmentSolver,
     "GreedyNearest": GreedyNearestSolver,
 }
-"""Frozen legacy view; read the policy registry (``list_policies("dispatch")``).
+"""Frozen legacy view; read the policy registry (``list_policies("planner")``).
 
 Kept for old importers only. New policies do NOT appear here.
 """
@@ -44,7 +44,7 @@ def get_solver(
     ``params`` is passed to the class as a plain dict copy. Raises
     ``UnknownPolicyError`` for an unregistered name; there is no fallback.
     """
-    spec = get_policy_spec("dispatch", name or DEFAULT_SOLVER)
+    spec = get_policy_spec("planner", name or DEFAULT_SOLVER)
     return spec.cls(params=dict(params or {}))
 
 

@@ -62,7 +62,7 @@ def _typed(kind: str, name: str, params=None) -> PolicyRef:
     """The resolved ref a PooledMarket would hold for ``kind``/``name``."""
     field = kind.rpartition(".")[2]
     parsed = _MarketParams.from_mapping({field: {"type": name, "params": params or {}}},
-                                        where="policies.dispatch.params for PooledMarket")
+                                        where="policies.planner.params for PooledMarket")
     return getattr(parsed, field)
 
 

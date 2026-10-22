@@ -164,7 +164,7 @@ def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
     unregistered ``strategy``.
     """
     name = prof.get("strategy") or LEGACY_LEAF_DEFAULT
-    spec = get_policy_spec("dispatch", name)
+    spec = get_policy_spec("planner", name)
     params = drop_undeclared_legacy_params(
         spec, prof.get("solver_params") or {}, "profile.strategy/solver_params"
     )
@@ -200,22 +200,22 @@ def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, Resolve
     if block is None:
         try:
             entry = wrap_legacy_leaf(legacy_dispatch_from_profile(prof), prof.get("planner"))
-            resolved = resolve_policies_block({"dispatch": entry}, where="profile.policies",
-                                              legacy_slots=("dispatch",))
+            resolved = resolve_policies_block({"planner": entry}, where="profile.policies",
+                                              legacy_slots=("planner",))
         except PolicyError as exc:
             # The paths above are the translation's; name the keys the author wrote.
             raise type(exc)(f"{exc} {_LEGACY_SOURCE_NOTE}") from exc
         return resolved, "legacy-profile"
-    if not isinstance(block, Mapping) or not isinstance(block.get("dispatch"), Mapping):
+    if not isinstance(block, Mapping) or not isinstance(block.get("planner"), Mapping):
         raise PolicyError(
-            f"assignment profile 'policies' must be an object with a 'dispatch' entry "
+            f"assignment profile 'policies' must be an object with a 'planner' entry "
             f"(got {block!r}). Recompile the scenario."
         )
     if "use_spatial_matching" in prof and prof["use_spatial_matching"] is not True:
         raise PolicyError(
             "assignment profile sets use_spatial_matching="
             f"{prof['use_spatial_matching']!r} next to a 'policies' block; it is superseded "
-            "by policies.dispatch.params.candidates. Remove use_spatial_matching."
+            "by policies.planner.params.candidates. Remove use_spatial_matching."
         )
     authored = {slot: _authored_from_compiled(slot, entry) for slot, entry in block.items()}
     resolved = resolve_policies_block(authored, where="profile.policies")
@@ -255,12 +255,12 @@ def dispatch_node(name: str, params: Any, *, timing: str, source: ResolvedSource
     timing belongs to the slot). Raises ``PolicyError`` for a composite that does
     not delegate through a param named ``inner`` (the ``CompositePolicy`` contract).
     """
-    spec = get_policy_spec("dispatch", name)
+    spec = get_policy_spec("planner", name)
     inner = None
     if spec.is_composite:
         if spec.inner_param is None:
             raise PolicyError(
-                f"dispatch policy {spec.name!r} references a dispatch policy but has no "
+                f"planner policy {spec.name!r} references a planner policy but has no "
                 f"'{INNER_PARAM}' param; a composite delegates each scope through '{INNER_PARAM}'."
             )
         ref = getattr(params, spec.inner_param)
@@ -281,9 +281,9 @@ def dispatch_node(name: str, params: Any, *, timing: str, source: ResolvedSource
 def _node_from_resolved(dispatch: ResolvedPolicy, source: ResolvedSource) -> ResolvedDispatch:
     typed = dispatch.typed
     if typed is None:  # a hand-built ResolvedPolicy: re-validate its plain params
-        spec = get_policy_spec("dispatch", dispatch.name)
+        spec = get_policy_spec("planner", dispatch.name)
         typed = spec.params_cls.from_mapping(
-            dispatch.params, where=f"profile.policies.dispatch.params for {spec.name}")
+            dispatch.params, where=f"profile.policies.planner.params for {spec.name}")
     return dispatch_node(dispatch.name, typed, timing=dispatch.timing, source=source)
 
 
@@ -296,7 +296,7 @@ def resolve_dispatch_for_profile(prof: Mapping[str, Any]) -> ResolvedDispatch:
     ``PolicyError``.
     """
     resolved, source = resolve_profile_policies(prof)
-    return _node_from_resolved(resolved["dispatch"],
+    return _node_from_resolved(resolved["planner"],
                                "policies" if source == "bundle" else "legacy-profile")
 
 
@@ -330,14 +330,14 @@ def build_policy_tree(node: ResolvedDispatch, reuse: DispatchPolicy | None = Non
             return reuse
         if node.source == "unregistered" or node.params is None:
             raise PolicyError(
-                f"cannot instantiate the unregistered dispatch policy {node.name!r}; "
+                f"cannot instantiate the unregistered planner policy {node.name!r}; "
                 "pass the instance as reuse."
             )
-        return get_policy_spec("dispatch", node.name).cls(params=node.params.to_dict())
-    spec = get_policy_spec("dispatch", node.name)
+        return get_policy_spec("planner", node.name).cls(params=node.params.to_dict())
+    spec = get_policy_spec("planner", node.name)
     if not issubclass(spec.cls, CompositePolicy):
         raise PolicyError(
-            f"dispatch policy {spec.name!r} has an '{INNER_PARAM}' but its class "
+            f"planner policy {spec.name!r} has an '{INNER_PARAM}' but its class "
             f"{spec.cls.__qualname__} does not subclass CompositePolicy (dispatch/composite.py)."
         )
     inner = build_policy_tree(node.inner, reuse)
@@ -464,7 +464,7 @@ def bind_instance(
     if isinstance(instance, CompositePolicy):
         raise PolicyError(
             f"{type(instance).__qualname__} is an unregistered CompositePolicy; register it "
-            "with @policy(slot='dispatch', ...) to select it."
+            "with @policy(slot='planner', ...) to select it."
         )
     leaf = _unregistered_node(instance, timing=node.timing, use_spatial_matching=use_spatial_matching)
     bound = _with_innermost(node, leaf)
@@ -476,8 +476,8 @@ def _refuse_unregistered_subclass(cls: type) -> None:
         spec = spec_for_class(ancestor)
         if spec is not None:
             raise PolicyError(
-                f"{cls.__qualname__} subclasses the registered dispatch policy {spec.name} "
-                "but is not registered itself; decorate it with @policy(slot='dispatch', ...)."
+                f"{cls.__qualname__} subclasses the registered planner policy {spec.name} "
+                "but is not registered itself; decorate it with @policy(slot='planner', ...)."
             )
 
 
@@ -568,11 +568,11 @@ def _check_strategy_mirror(strategy: Any, node: ResolvedDispatch) -> None:
     if strategy is None or strategy == node.leaf:
         return
     # Advise --solver only with a name it accepts (a registered per-scope solver).
-    leaves = {spec.name for spec in list_policies("dispatch") if not spec.is_composite}
+    leaves = {spec.name for spec in list_policies("planner") if not spec.is_composite}
     hint = (f"change a run's solver with --solver {strategy} (ORSIM_SOLVER is translated into "
             "exactly that). " if strategy in leaves else "")
     raise PolicyError(
-        f"profile strategy={strategy!r} disagrees with its compiled policies.dispatch "
+        f"profile strategy={strategy!r} disagrees with its compiled policies.planner "
         f"({node.label}, whose innermost solver is {node.leaf}). The compiled policies "
         f"block is authoritative; {hint}Fix the bundle or recompile."
     )
@@ -599,7 +599,7 @@ def _check_accounting_mirrors(profile: Mapping[str, Any], node: ResolvedDispatch
                 diffs.append(f"{key}={mirror[key]!r} vs {value!r}")
         if diffs:
             raise PolicyError(
-                f"profile {where} disagrees with its compiled policies.dispatch ({node.label}): "
+                f"profile {where} disagrees with its compiled policies.planner ({node.label}): "
                 f"{', '.join(diffs)}. The compiled policies block is authoritative and the "
                 f"framework's share accounting costs with solver_params, so the two must be "
                 "equal (one dial). Fix the bundle or recompile."
@@ -613,14 +613,14 @@ def _check_topology_mirror(planner: Mapping[str, Any], node: ResolvedDispatch) -
     wanted = PARTITIONED if topology == "partitioned" else POOLED_MARKET
     raise PolicyError(
         f"profile planner.topology={planner['topology']!r} disagrees with its compiled "
-        f"policies.dispatch ({node.name}). The compiled policies block is authoritative; "
-        f"change a run's decomposition with --policy dispatch={wanted} "
+        f"policies.planner ({node.name}). The compiled policies block is authoritative; "
+        f"change a run's decomposition with --policy planner={wanted} "
         "(ORSIM_PLANNER_TOPOLOGY is translated into exactly that). Fix the bundle or recompile."
     )
 
 
 def _check_market_mirror(planner: Mapping[str, Any], node: ResolvedDispatch) -> None:
-    spec = get_policy_spec("dispatch", node.name)
+    spec = get_policy_spec("planner", node.name)
     compiled = node.params.to_dict()
     authored = spec.params_cls.from_mapping(
         {**legacy_market_params(planner), spec.inner_param: compiled[spec.inner_param]},
@@ -629,9 +629,9 @@ def _check_market_mirror(planner: Mapping[str, Any], node: ResolvedDispatch) -> 
     diffs = [f"{k}={authored[k]!r} vs {compiled[k]!r}" for k in _MARKET_KEYS if authored[k] != compiled[k]]
     if diffs:
         raise PolicyError(
-            f"profile planner.market disagrees with its compiled policies.dispatch "
+            f"profile planner.market disagrees with its compiled policies.planner "
             f"({node.label}): {', '.join(diffs)}. The compiled policies block is "
-            "authoritative; change a run's market with --policy-param dispatch.<key>=<value> "
+            "authoritative; change a run's market with --policy-param planner.<key>=<value> "
             "(ORSIM_OFFER_POLICY, ORSIM_CLAIM_POLICY, ORSIM_ARBITRATION_RULE and "
             "ORSIM_MARKET_MAX_ROUNDS are translated into exactly that). Fix the bundle or recompile."
         )

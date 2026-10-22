@@ -94,12 +94,12 @@ def encode_golden(golden: dict[str, Any]) -> bytes:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--policy", action="append", help="dispatch policy to (re)capture; default: all")
+    parser.add_argument("--policy", action="append", help="planner policy to (re)capture; default: all")
     args = parser.parse_args(argv)
-    names = args.policy or [spec.name for spec in list_policies("dispatch")]
+    names = args.policy or [spec.name for spec in list_policies("planner")]
     golden = load_golden()
     for name in names:
-        spec = get_policy_spec("dispatch", name)
+        spec = get_policy_spec("planner", name)
         golden[name] = {"version": spec.version, "cases": golden_cases(name)}
         print(f"captured {name} v{spec.version}: {len(golden[name]['cases'])} cases")
     GOLDEN_PATH.write_bytes(encode_golden({"format": GOLDEN_FORMAT, "policies": golden}))

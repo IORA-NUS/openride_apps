@@ -169,13 +169,13 @@ def _policies_from_flags(args, current: Optional[dict[str, Any]] = None) -> Opti
     solver = (getattr(args, "solver", None) or "").strip()
     if not parsed and not solver:
         return None
-    if solver and "dispatch" in parsed and not parsed["dispatch"].get("type") \
-            and not ((current or {}).get("dispatch") or {}).get("type"):
-        # --solver X --policy-param dispatch.inner.k=v on a new scenario: the slot default
+    if solver and "planner" in parsed and not parsed["planner"].get("type") \
+            and not ((current or {}).get("planner") or {}).get("type"):
+        # --solver X --policy-param planner.inner.k=v on a new scenario: the slot default
         # (Partitioned) is the decomposition the solver and its params belong to.
         from apps.container_logistics.policies.framework import default_policy_name
 
-        parsed["dispatch"]["type"] = default_policy_name("dispatch")
+        parsed["planner"]["type"] = default_policy_name("planner")
     block = _rebase_policies(parsed, current) if parsed else {
         k: dict(v) for k, v in (current or {}).items() if isinstance(v, dict)}
     return _with_solver(block, solver, parsed) if solver else block
@@ -232,7 +232,7 @@ def _carried_inner(slot: str, spec: Any, cur: dict[str, Any], entry: dict[str, A
 
 
 def _with_solver(block: dict[str, Any], solver: str, flags: dict[str, Any]) -> dict[str, Any]:
-    """``block`` with ``solver`` as the innermost per-scope solver of ``policies.dispatch``.
+    """``block`` with ``solver`` as the innermost per-scope solver of ``policies.planner``.
 
     Descends the ``inner`` chain (``PolicySpec.inner_param``); a missing ``inner`` is set;
     a leaf at the top is replaced. A changed solver type starts from its defaults, the
@@ -242,21 +242,21 @@ def _with_solver(block: dict[str, Any], solver: str, flags: dict[str, Any]) -> d
     """
     from apps.container_logistics.policies.framework import default_policy_name, get_policy_spec
 
-    spec = get_policy_spec("dispatch", solver)
+    spec = get_policy_spec("planner", solver)
     if spec.is_composite:
         raise ValueError(
             f"--solver {spec.name!r} names a decomposition, not a per-scope solver; select it "
-            f"with --policy dispatch={spec.name} (--solver sets its inner solver)."
+            f"with --policy planner={spec.name} (--solver sets its inner solver)."
         )
     out = {k: dict(v) for k, v in block.items()}
-    node = out.setdefault("dispatch", {"type": default_policy_name("dispatch")})
-    stated, path = flags.get("dispatch") or {}, ["dispatch"]
+    node = out.setdefault("planner", {"type": default_policy_name("planner")})
+    stated, path = flags.get("planner") or {}, ["planner"]
     while True:
-        descend = get_policy_spec("dispatch", node["type"]).inner_param
+        descend = get_policy_spec("planner", node["type"]).inner_param
         if descend is None:  # a leaf at the top: --solver replaces it
             _refuse_solver_conflict(spec.name, stated, path)
-            if get_policy_spec("dispatch", node["type"]).name != spec.name:
-                out["dispatch"] = {**{k: v for k, v in node.items() if k == "timing"},
+            if get_policy_spec("planner", node["type"]).name != spec.name:
+                out["planner"] = {**{k: v for k, v in node.items() if k == "timing"},
                                    **_fresh(spec.name, stated)}
             return out
         params = node["params"] = dict(node.get("params") or {})
@@ -264,9 +264,9 @@ def _with_solver(block: dict[str, Any], solver: str, flags: dict[str, Any]) -> d
         child = {"type": child} if isinstance(child, str) else dict(child or {})
         sub = (stated.get("params") or {}).get(descend) if isinstance(stated, dict) else None
         stated, path = ({"type": sub} if isinstance(sub, str) else (sub or {})), [*path, descend]
-        if not child.get("type") or not get_policy_spec("dispatch", child["type"]).is_composite:
+        if not child.get("type") or not get_policy_spec("planner", child["type"]).is_composite:
             _refuse_solver_conflict(spec.name, stated, path)
-            same = child.get("type") and get_policy_spec("dispatch", child["type"]).name == spec.name
+            same = child.get("type") and get_policy_spec("planner", child["type"]).name == spec.name
             params[descend] = child if same else _fresh(spec.name, stated)
             return out
         params[descend] = node = child
@@ -733,7 +733,7 @@ def _known_solvers(domain: Optional[str] = None) -> list[str]:
     """Registered dispatch policy names from the engine. ``ControlError`` propagates."""
     solvers = control.known_solvers().get("solvers")
     if not solvers:
-        raise control.ControlError("the engine reported no registered dispatch policies")
+        raise control.ControlError("the engine reported no registered planner policies")
     return list(solvers)
 
 
@@ -849,7 +849,7 @@ def _spec_defaults(src: Optional[dict[str, Any]]) -> dict[str, Any]:
         "facilities": _count("facility") or 20,
         "days": src.get("simulationDays") or 1,
         "unit": src.get("orderCountUnit") or "per_day",
-        "solver": _innermost_type((src.get("policies") or {}).get("dispatch")) or src.get("solver"),
+        "solver": _innermost_type((src.get("policies") or {}).get("planner")) or src.get("solver"),
         "policies": src.get("policies"),
         "hauliers": src.get("hauliers"),
         "seed": src.get("seed"),
@@ -860,7 +860,7 @@ def _spec_defaults(src: Optional[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _innermost_type(entry: Any) -> Optional[str]:
-    """The innermost per-scope solver a ``policies.dispatch`` entry names (shape only), or ``None``."""
+    """The innermost per-scope solver a ``policies.planner`` entry names (shape only), or ``None``."""
     while isinstance(entry, dict):
         inner = (entry.get("params") or {}).get("inner") if isinstance(entry.get("params"), dict) else None
         if not isinstance(inner, (dict, str)):
@@ -876,7 +876,7 @@ def _preview_spec(spec: dict[str, Any], gen_file, inputs) -> None:
         f"days={spec.get('simulationDays')}  trucks={agents.get('truck', {}).get('count')}  "
         f"orders={agents.get('order', {}).get('count')} ({spec.get('orderCountUnit', 'per_day')})  "
         f"facilities={agents.get('facility', {}).get('count')}",
-        f"policies.dispatch={((spec.get('policies') or {}).get('dispatch') or {}).get('type') or spec.get('solver') or 'engine default'}  hauliers={len(spec.get('hauliers') or []) or 'default'}",
+        f"policies.planner={((spec.get('policies') or {}).get('planner') or {}).get('type') or spec.get('solver') or 'engine default'}  hauliers={len(spec.get('hauliers') or []) or 'default'}",
     ]
 
     def _pol(role):
@@ -971,7 +971,7 @@ def interactive_build_spec(domain: Optional[str], *, defaults: Optional[dict[str
             "order": order_agent,
             "facility": {"count": facilities, "policy": {"type": facility_policy}},
         },
-        # Sent as policies.dispatch, never the legacy `solver` key: a scenario that
+        # Sent as policies.planner, never the legacy `solver` key: a scenario that
         # already carries `policies` would refuse a solver naming another type.
         "policies": _with_solver(d.get("policies") or {}, solver, {}),
     }
@@ -1133,12 +1133,12 @@ def _add_authoring_flags(p, *, require_name: bool) -> None:
                         "solver; edit sets the inner solver of the current selection. Validated "
                         "by the engine; list: openride solver list")
     p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME",
-                   help="Policy selection, repeatable (e.g. dispatch=PooledMarket keeps the "
-                        "per-scope solver; a leaf such as dispatch=GreedyNearest is a CENTRAL solver)")
+                   help="Policy selection, repeatable (e.g. planner=PooledMarket keeps the "
+                        "per-scope solver; a leaf such as planner=GreedyNearest is a CENTRAL solver)")
     p.add_argument("--policy-param", dest="policy_param", action="append", default=[],
                    metavar="SLOT.PATH=VALUE",
                    help="Policy param, repeatable, nested through refs (e.g. "
-                        "dispatch.inner.dual_cycle_bonus_km=0, dispatch.offer=OfferSpare); VALUE is "
+                        "planner.inner.dual_cycle_bonus_km=0, planner.offer=OfferSpare); VALUE is "
                         "JSON when it parses; on edit, merged over the scenario's current params")
     p.add_argument("--haulier", action="append",
                    help="Haulier 'Name:fleet%%:order%%' (repeatable; shares must total 100)")

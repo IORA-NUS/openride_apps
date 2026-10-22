@@ -15,7 +15,7 @@ What is locked (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5
   either leaf and either candidate kind.
 - Format ``/1`` (one scope) is refused with message 22, and a tick captured with
   ``rebate_aware: true`` is refused on replay (the rebate book is not captured).
-- A failing write is logged with ``DISPATCH CAPTURE FAILED`` and the tick goes on.
+- A failing write is logged with ``PLANNER CAPTURE FAILED`` and the tick goes on.
 - ``bench`` decides whole ticks, accepts aliases, counts plans the invariants reject
   as violations, and reports the framework's accounting (``cross_company``,
   ``benefit_km_total`` from ``assignment.accounting.account_shares``) and the
@@ -228,7 +228,7 @@ def test_capture_write_failure_is_logged_and_does_not_block_the_tick(tmp_path, c
     with caplog.at_level(logging.ERROR):
         pairs = runner.run(fx.one_haulier().context(runner)).pairs
     assert len(pairs) == 6, "a failed capture must not change the committed pairs"
-    assert "DISPATCH CAPTURE FAILED" in caplog.text
+    assert "PLANNER CAPTURE FAILED" in caplog.text
 
 
 def test_bench_reports_both_policies_on_synthetic():
@@ -297,21 +297,21 @@ def test_bench_aliases_through_the_control_plane():
         "pr": {"inner": {"type": "GreedyNearest", "params": {"candidates": "sampled"}}},
         "pm": {"max_rounds": 3},
     }
-    result = cmd_policy_bench("dispatch", "pm=PooledMarket,pr=PooledMarket", synthetic="three_company_chain",
+    result = cmd_policy_bench("planner", "pm=PooledMarket,pr=PooledMarket", synthetic="three_company_chain",
                               params=["pr.inner=GreedyNearest"])
     assert result["ok"], result
     assert [(r["policy"], r["label"]) for r in result["report"]["rows"]] == [
         ("pm", "PooledMarket/RandomAssignment"), ("pr", "PooledMarket/GreedyNearest")]
-    bad = cmd_policy_bench("dispatch", "pm=PooledMarket", synthetic="tied_costs", params=["px.inner=GreedyNearest"])
+    bad = cmd_policy_bench("planner", "pm=PooledMarket", synthetic="tied_costs", params=["px.inner=GreedyNearest"])
     assert not bad["ok"] and "'px', which is not benched" in bad["message"]
-    dup = cmd_policy_bench("dispatch", "pm=PooledMarket,pm=Partitioned", synthetic="tied_costs")
+    dup = cmd_policy_bench("planner", "pm=PooledMarket,pm=Partitioned", synthetic="tied_costs")
     assert not dup["ok"] and "used twice" in dup["message"]
 
 
 def test_bench_counts_violations():
     """Verified to have teeth: reading ``violations`` as ``0`` in ``_bench_one`` failed this test."""
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="DoubleBooker", version="1", description="one order to every truck")
+        @policy(slot="planner", information_model="central", name="DoubleBooker", version="1", description="one order to every truck")
         class DoubleBooker(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -336,7 +336,7 @@ def test_capture_sees_the_raw_plan_before_the_invariants(tmp_path):
     Verified to have teeth: moving the capture call after ``check_plan`` in
     ``DispatchRunner.run`` failed this test."""
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="DoubleBooker2", version="1", description="one order to two trucks")
+        @policy(slot="planner", information_model="central", name="DoubleBooker2", version="1", description="one order to two trucks")
         class DoubleBooker2(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):

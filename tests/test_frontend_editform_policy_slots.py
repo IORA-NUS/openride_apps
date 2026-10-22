@@ -31,7 +31,7 @@ def _form(generation_spec):
 
 
 def test_editform_has_policy_slots_from_the_recipe():
-    block = {"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}
+    block = {"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}
     form = _form({"policies": block, "solver": "GreedyNearest"})
     assert form["policySlots"] == block
     assert form["solver"] == "GreedyNearest"
@@ -43,11 +43,11 @@ def test_editform_translates_a_legacy_spec():
     left the legacy form with no dispatch slot at all."""
     # Round 2 (C3 compile switch): the legacy solver is Partitioned's inner (nested slots).
     form = _form({"solver": "RandomAssignment", "solverParams": {"dual_cycle_bonus_km": 2.0}})
-    assert form["policySlots"] == {"dispatch": {"type": "Partitioned", "timing": "online",
+    assert form["policySlots"] == {"planner": {"type": "Partitioned", "timing": "online",
                                                 "params": {"inner": {"type": "RandomAssignment", "params": {}}}}}
     form = _form({"planner": {"deployment": {"type": "GreedyNearest",
                                              "params": {"dual_cycle_radius_km": 0.8}}}})
-    assert form["policySlots"]["dispatch"]["params"]["inner"]["params"] == {"dual_cycle_radius_km": 0.8}
+    assert form["policySlots"]["planner"]["params"]["inner"]["params"] == {"dual_cycle_radius_km": 0.8}
     assert form["solver"] == "GreedyNearest", "the editForm solver is the innermost per-scope solver"
 
 
@@ -58,13 +58,13 @@ def test_editform_solver_mirror_is_raw_text_not_coerced():
     assert form["solver"] == "GreedyNeerest"
     # Round 2 (C4): the display fallback is nested too (the editor reads policySlots nested).
     assert form["policySlots"] == {
-        "dispatch": {"type": "Partitioned", "params": {"inner": {"type": "GreedyNeerest", "params": {}}}}}
+        "planner": {"type": "Partitioned", "params": {"inner": {"type": "GreedyNeerest", "params": {}}}}}
 
 
 def test_editform_of_a_compiled_scenario_carries_policy_slots(tmp_path, monkeypatch):
     monkeypatch.setenv("ORSIM_SCENARIOS_DIR", str(tmp_path / "root"))
     spec = json.loads(SMOKE_SPEC.read_text())
-    spec["policies"] = {"dispatch": {"type": "Partitioned", "params": {"inner": {
+    spec["policies"] = {"planner": {"type": "Partitioned", "params": {"inner": {
         "type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 1.25}}}}}
     spec["solver"] = None
     # A body speaking policies must not also carry the legacy planner.deployment it

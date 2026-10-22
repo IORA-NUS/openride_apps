@@ -39,14 +39,14 @@ def _unknown_budget_keys(spec):
 
 
 def test_arm_budget_keys_name_real_arms():
-    bad = {spec.name: _unknown_budget_keys(spec) for spec in list_policies("dispatch") if _unknown_budget_keys(spec)}
+    bad = {spec.name: _unknown_budget_keys(spec) for spec in list_policies("planner") if _unknown_budget_keys(spec)}
     assert not bad, f"arm_budgets_ms keys that name no battery arm: {bad}"
 
 
 def test_a_ref_budget_key_naming_no_target_is_caught():
     """Registration accepts a ref-param key unchecked (discovery order); this check catches it."""
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="TypoBudget", version="1",
+        @policy(slot="planner", information_model="central", name="TypoBudget", version="1",
                 description="a ref-arm budget with a typo", arm_budgets_ms={"offer=OfferNoen": 900})
         class TypoBudget(DispatchPolicy):
             @dataclass(frozen=True)
@@ -56,7 +56,7 @@ def test_a_ref_budget_key_naming_no_target_is_caught():
             def decide(self, ctx):
                 return Plan(chains={})
 
-        assert _unknown_budget_keys(get_policy_spec("dispatch", "TypoBudget")) == ["offer=OfferNoen"]
+        assert _unknown_budget_keys(get_policy_spec("planner", "TypoBudget")) == ["offer=OfferNoen"]
 
 
 _MEASURED = {
@@ -70,15 +70,15 @@ _MEASURED = {
 
 @pytest.mark.parametrize("name", sorted(_MEASURED))
 def test_measured_arms_declare_a_budget(name):
-    spec = get_policy_spec("dispatch", name)
+    spec = get_policy_spec("planner", name)
     assert set(spec.arm_budgets_ms) == _MEASURED[name]
     assert all(ms >= 500 for ms in spec.arm_budgets_ms.values()), "the rule's floor is 500 ms"
 
 
 def test_the_battery_gates_an_arm_by_its_own_budget():
-    spec = get_policy_spec("dispatch", "GreedyNearest")
+    spec = get_policy_spec("planner", "GreedyNearest")
     budget, source = battery.arm_budget(spec, {"candidates": "sampled"})
     assert (budget, source) == (spec.arm_budgets_ms["candidates=sampled"], "arm_budgets_ms['candidates=sampled']")
     assert battery.arm_budget(spec, {})[0] == spec.perf_budget_ms
-    pooled = get_policy_spec("dispatch", "PooledMarket")
+    pooled = get_policy_spec("planner", "PooledMarket")
     assert battery.arm_budget(pooled, {"inner": {"type": "GreedyNearest"}})[0] == pooled.arm_budgets_ms["inner=GreedyNearest"]

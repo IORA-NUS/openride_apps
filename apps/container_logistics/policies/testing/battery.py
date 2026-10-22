@@ -232,8 +232,8 @@ def _ref_arm_targets(info: Any) -> list[str]:
     """Every other available target of ``info``'s kind (a leaf where ``leaf_only``), sorted."""
     kind, default = info.meta.kind, getattr(info.default, "type", None)
     names = []
-    if kind == "dispatch":
-        for spec in list_policies("dispatch"):
+    if kind == "planner":
+        for spec in list_policies("planner"):
             if spec.missing_requirements() or (info.meta.leaf_only and spec.is_composite):
                 continue
             names.append(spec.name)
@@ -273,7 +273,7 @@ def arm_budget(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[int, str]:
 
     1. the default arm: ``perf_budget_ms``;
     2. a MEASURED arm: ``arm_budgets_ms[<arm label>]`` (an explicit key always wins);
-    3. an unmeasured ``dispatch`` ref arm (a composite's ``inner=X``): X's own budget at
+    3. an unmeasured ``planner`` ref arm (a composite's ``inner=X``): X's own budget at
        the arm it runs at (X at its defaults, so ``arm_budget(X, {})`` =
        ``X.perf_budget_ms``) PLUS the composite's overhead, taken as the composite's
        default-arm budget. That default budget bounds the composite's own work plus one
@@ -307,16 +307,16 @@ def arm_budget(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[int, str]:
 
 
 def _dispatch_ref_target(spec: PolicySpec, arm: Mapping[str, Any]) -> tuple[PolicySpec, dict[str, Any]] | None:
-    """``(target spec, its params)`` when ``arm`` is one ``dispatch``-kind ref param set to a target; else ``None``."""
+    """``(target spec, its params)`` when ``arm`` is one ``planner``-kind ref param set to a target; else ``None``."""
     if len(arm) != 1:
         return None
     (key, value), = arm.items()
     if not isinstance(value, Mapping):
         return None
     info = next((i for i in declared_params(spec.params_cls) if i.name == key), None)
-    if info is None or not info.is_ref or info.meta.kind != "dispatch":
+    if info is None or not info.is_ref or info.meta.kind != "planner":
         return None
-    return get_policy_spec("dispatch", value["type"]), dict(value.get("params") or {})
+    return get_policy_spec("planner", value["type"]), dict(value.get("params") or {})
 
 
 def battery_check_ids(slot: str, name: str) -> list[str]:
@@ -348,7 +348,7 @@ def run_battery(slot: str, name: str) -> list[CheckResult]:
     """Run every check in :func:`battery_check_ids` on policy ``name`` of ``slot``.
 
     Raises ``UnknownPolicyError`` for an unregistered name and
-    ``SlotNotImplementedError`` for a slot without a battery (only ``dispatch`` has one).
+    ``SlotNotImplementedError`` for a slot without a battery (only ``planner`` has one).
     """
     spec = _dispatch_spec(slot, name)
     results: list[CheckResult] = []
@@ -362,8 +362,8 @@ def run_battery(slot: str, name: str) -> list[CheckResult]:
 
 def _dispatch_spec(slot: str, name: str) -> PolicySpec:
     spec = get_policy_spec(slot, name)
-    if slot != "dispatch":
-        raise SlotNotImplementedError(f"no contract battery for slot {slot!r}; only 'dispatch' has one")
+    if slot != "planner":
+        raise SlotNotImplementedError(f"no contract battery for slot {slot!r}; only 'planner' has one")
     return spec
 
 
@@ -418,7 +418,7 @@ def _timed(check_id: str, fn: Callable[[], tuple[bool, str]], arm: Mapping[str, 
 
 class _ViolationFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
-        return not str(record.msg).startswith("DISPATCH POLICY CONTRACT VIOLATION")
+        return not str(record.msg).startswith("PLANNER POLICY CONTRACT VIOLATION")
 
 
 @contextmanager
@@ -645,7 +645,7 @@ def _declared_on_selection(spec: PolicySpec, arm: Mapping[str, Any], attr: str) 
     node = build_runner_for_policy(spec.name, _arm_params(arm)).resolved
     reasons = []
     while node is not None:
-        reason = getattr(get_policy_spec("dispatch", node.name), attr)
+        reason = getattr(get_policy_spec("planner", node.name), attr)
         if reason is not None:
             reasons.append(f"{node.name}: {reason}")
         node = node.inner
@@ -658,7 +658,7 @@ def _own_battery_note(spec: PolicySpec, arm: Mapping[str, Any]) -> str:
     if target is None:
         return ""
     name = target[0].name
-    return f"; {name} itself is checked in {name}'s own battery (openride policy validate dispatch {name})"
+    return f"; {name} itself is checked in {name}'s own battery (openride policy validate planner {name})"
 
 
 def _no_module_rng(outcomes: _Outcomes) -> tuple[bool, str]:
@@ -869,7 +869,7 @@ def _scoped_module_rng(outcomes: _Outcomes, declared: str) -> tuple[bool, str]:
     """
     names = [node.name for _inst, node in _selection_instances(build_runner_for_policy(
         outcomes.spec.name, _arm_params(outcomes.arm)))]
-    declaring = {n for n in names if get_policy_spec("dispatch", n).module_rng is not None}
+    declaring = {n for n in names if get_policy_spec("planner", n).module_rng is not None}
     rogue: dict[str, list[str]] = {}
     declared_draws = {"direct": 0, "sample": 0}
     unseparable: list[str] = []
@@ -930,7 +930,7 @@ def _model_declared(spec: PolicySpec) -> tuple[bool, str]:
     resolved = build_runner_for_policy(spec.name).resolved.information_model
     if resolved != model:
         return False, f"the resolved selection carries information_model {resolved!r}, the registration {model!r}"
-    return True, f"information_model {model!r} (stamped as meta.policies.dispatch.information_model)"
+    return True, f"information_model {model!r} (stamped as meta.policies.planner.information_model)"
 
 
 def _group_key(world: Any, hid: Any) -> Any:
@@ -1070,7 +1070,7 @@ def _rejects_bad_choice(spec: PolicySpec) -> tuple[bool, str]:
 
 
 def _composite_targets() -> list[str]:
-    return [s.name for s in list_policies("dispatch") if s.is_composite]
+    return [s.name for s in list_policies("planner") if s.is_composite]
 
 
 def _rejects_bad_ref(spec: PolicySpec) -> tuple[bool, str]:
@@ -1080,7 +1080,7 @@ def _rejects_bad_ref(spec: PolicySpec) -> tuple[bool, str]:
         if not info.is_ref:
             continue
         bad = [{"type": _BAD_REF}]
-        if info.meta.kind == "dispatch" and info.meta.leaf_only:
+        if info.meta.kind == "planner" and info.meta.leaf_only:
             bad += [{"type": name} for name in _composite_targets()]
         for value in bad:
             tried.append(f"{info.name}={value['type']}")

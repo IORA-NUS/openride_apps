@@ -37,7 +37,7 @@ def normalize_solver(raw: Any) -> str:
     """
     name = str(raw or "").strip()
     # A strategy is a per-scope (leaf) solver: a decomposition is never one.
-    known = {spec.name for spec in list_policies("dispatch") if not spec.is_composite}
+    known = {spec.name for spec in list_policies("planner") if not spec.is_composite}
     return name if name in known else LEGACY_LEAF_DEFAULT
 
 
@@ -588,7 +588,7 @@ SPEC_KEY_NULL_POLICY: dict[str, NullPolicy] = {
     "overrides": NullPolicy.CLEARS,
     # CLEARS: solver and planner.deployment.type are ONE dial and `solver` wins when
     # both are given, so null is how an author says "defer to the planner" (and, next
-    # to a `policies` block, "defer to policies.dispatch", which supersedes both).
+    # to a `policies` block, "defer to policies.planner", which supersedes both).
     # No other spelling expresses that.
     "solver": NullPolicy.CLEARS,
     # UNSUPPLIED: a clear is `{}`, meaning all slot defaults; null is what a form
@@ -682,7 +682,7 @@ def drop_dispatch_dials_superseded_by(
     spellings of the per-scope solver and of the decomposition, round-2 §3.6; the rest
     of the carried ``planner`` stays). Asymmetric on purpose: a stale legacy client that sends
     only ``solver`` over a carried ``policies`` is NOT reconciled here and gets the
-    compile's loud "solver disagrees with policies.dispatch" error instead of being
+    compile's loud "solver disagrees with policies.planner" error instead of being
     silently ignored. Returns ``carried`` unchanged (same object) otherwise; never
     mutates it.
     """
@@ -872,10 +872,10 @@ def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
     )
     trip_matrix = parse_trip_matrix(maybe_parse_spec_file(raw.get("tripMatrix"), "matrix"))
     hauliers = scenario_config.normalize_hauliers(raw.get("hauliers"))
-    # policies.dispatch is the dial when present; this legacy path only knows the
+    # policies.planner is the dial when present; this legacy path only knows the
     # strategy/solver_params spelling, so it is translated here, in one place.
     policies = raw.get("policies") if isinstance(raw.get("policies"), dict) else None
-    dispatch = (policies or {}).get("dispatch")
+    dispatch = (policies or {}).get("planner")
     if isinstance(dispatch, dict):
         # The per-scope solver is the innermost one (round 2: dispatch may be a tree).
         from apps.container_logistics.datagen.preprocess import Preprocessor
@@ -1531,7 +1531,7 @@ def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
     the compiler would (``solver`` > ``planner.deployment.type`` > default, params from
     ``deployment.params`` and ``solverParams``), minus params the policy does not
     declare. A spec the compiler would refuse still yields a form: its authored block,
-    or ``{"dispatch": {"type": <raw solver>}}``, so the editor can show the error.
+    or ``{"planner": {"type": <raw solver>}}``, so the editor can show the error.
     That fallback is logged at WARNING (``POLICY SLOTS EDITFORM FALLBACK``, naming
     the slug and the error) so a display-only recovery is never invisible.
     """
@@ -1557,7 +1557,7 @@ def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
         )
         if isinstance(gs.get("policies"), dict) and gs["policies"]:
             return deepcopy(gs["policies"])
-        return {"dispatch": _legacy_fallback_selection(gs)}
+        return {"planner": _legacy_fallback_selection(gs)}
 
 
 def _legacy_fallback_selection(gs: dict[str, Any]) -> dict[str, Any]:
@@ -1582,7 +1582,7 @@ def _edit_form_solver(policy_slots: dict[str, Any]) -> Any:
     """The editForm ``solver``: the raw innermost solver name of ``policySlots.dispatch`` (or ``None``)."""
     from apps.container_logistics.datagen.preprocess import Preprocessor
 
-    dispatch = policy_slots.get("dispatch")
+    dispatch = policy_slots.get("planner")
     if not isinstance(dispatch, dict) or dispatch.get("type") is None:
         return None
     return Preprocessor.dispatch_leaf_entry(dispatch)["type"]
@@ -2243,13 +2243,13 @@ def known_solvers() -> dict[str, Any]:
     """The per-scope solvers ``--solver`` / ``ORSIM_SOLVER`` accept, and the default one.
 
     ``solvers`` are the registered dispatch LEAVES (a decomposition such as
-    ``Partitioned``/``PooledMarket`` is selected with ``--policy dispatch=...``, never
+    ``Partitioned``/``PooledMarket`` is selected with ``--policy planner=...``, never
     as a solver); ``default`` is ``LEGACY_LEAF_DEFAULT``, the slot default
     ``Partitioned``'s inner. Derived from the policy registry at call time (the single
     source of truth).
     """
     return {
-        "solvers": [spec.name for spec in list_policies("dispatch") if not spec.is_composite],
+        "solvers": [spec.name for spec in list_policies("planner") if not spec.is_composite],
         "default": LEGACY_LEAF_DEFAULT,
     }
 

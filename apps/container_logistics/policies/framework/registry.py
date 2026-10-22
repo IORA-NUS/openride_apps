@@ -67,7 +67,7 @@ BUILTIN_POLICY_PACKAGES = (
 # Per-slot required base class, as "module:QualName", imported lazily at registration
 # so this leaf never imports the slot's contract module at top.
 _SLOT_BASES: dict[str, str] = {
-    "dispatch": "apps.container_logistics.policies.dispatch.base:DispatchPolicy",
+    "planner": "apps.container_logistics.policies.dispatch.base:DispatchPolicy",
 }
 
 #: Whose private data a dispatch policy's decision may use (round-2 §2.4).
@@ -80,7 +80,7 @@ SHARE_TAG_FORMATS = ("v1", "audited")
 #: Keyed on the registered name, not the class: one class backs one name, and built-in
 #: discovery registers ``Partitioned`` first, so another class claiming the name fails
 #: loud in ``_store``. A new policy uses ``audited``; never add to this set.
-V1_SHARE_TAG_BUILTINS = frozenset({("dispatch", "Partitioned")})
+V1_SHARE_TAG_BUILTINS = frozenset({("planner", "Partitioned")})
 
 #: The dispatch-ref param a composite delegates each scope to (``dispatch/composite.py``).
 #: ``PolicySpec.inner_param`` is the one place the descent rule is read from: the
@@ -123,7 +123,7 @@ class PolicySpec:
     @property
     def is_composite(self) -> bool:
         """True when the policy references a dispatch policy of its own (an ``inner``)."""
-        return any(kind == "dispatch" for _name, kind, _leaf in self.refs)
+        return any(kind == "planner" for _name, kind, _leaf in self.refs)
 
     @property
     def inner_param(self) -> str | None:
@@ -133,7 +133,7 @@ class PolicySpec:
         (``dispatch/profile.dispatch_node`` refuses such a composite).
         """
         return next((name for name, kind, _leaf in self.refs
-                     if kind == "dispatch" and name == INNER_PARAM), None)
+                     if kind == "planner" and name == INNER_PARAM), None)
 
     def missing_requirements(self) -> list[str]:
         """Return the ``requires`` modules that cannot be found, in declared order.
@@ -278,7 +278,7 @@ def _check_reason(where: str, label: str, value) -> None:
 
 
 def _check_information_model(short: str, slot: str, model) -> None:
-    if model is None and slot != "dispatch":
+    if model is None and slot != "planner":
         return
     if model not in INFORMATION_MODELS:
         got = "" if model is None else f" (got {model!r})"
@@ -304,24 +304,24 @@ def _check_share_tag_format(short: str, slot: str, name: str, fmt) -> None:
 def _check_ref_default_cycles(short: str, slot: str, name: str, infos) -> None:
     """Refuse dispatch-ref DEFAULTS that lead back to the policy being registered.
 
-    Walks the default ``kind="dispatch"`` refs through the policies registered so far
+    Walks the default ``kind="planner"`` refs through the policies registered so far
     (plus this one, so a self-reference is caught). Every cycle is closed by the
     registration of its last member, whose targets are then all known, so each cycle
     is refused exactly there. Unregistered targets end the walk (resolution checks
     them; ``params._DEFAULT_STACK`` is the backstop for cycles this cannot see, e.g.
     through component kinds).
     """
-    if slot != "dispatch":
+    if slot != "planner":
         return
 
     def default_targets(policy_infos):
         return [(i.name, i.default.type) for i in policy_infos
-                if i.is_ref and i.meta.kind == "dispatch" and isinstance(i.default.type, str)]
+                if i.is_ref and i.meta.kind == "planner" and isinstance(i.default.type, str)]
 
     def infos_of(target: str):
         if target == name:
             return infos
-        other = _REGISTRY.get(("dispatch", target))
+        other = _REGISTRY.get(("planner", target))
         return declared_params(other.params_cls) if other is not None else None
 
     def walk(current: str, policy_infos, trail: list[str], seen: set[str]) -> None:

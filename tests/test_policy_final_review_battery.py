@@ -55,7 +55,7 @@ _SLEEP_S = 0.75  # a decide on the 1000-truck scale tick takes at least this lon
 def _register_slow_leaf(name: str, budget_ms: int):
     """A correct central leaf that is slow ONLY on the scale tick, declaring ``budget_ms``."""
 
-    @policy(slot="dispatch", name=name, version="1", description="slow by nature (a NetworkFlow stand-in)",
+    @policy(slot="planner", name=name, version="1", description="slow by nature (a NetworkFlow stand-in)",
             information_model="central", perf_budget_ms=budget_ms)
     class SlowLeaf(DispatchPolicy):
         @dataclass(frozen=True)
@@ -91,7 +91,7 @@ def test_an_unmeasured_inner_arm_is_held_to_the_inner_budget_plus_the_composite_
     with isolated_registry():
         _register_slow_leaf("SlowFlow", 4000)
         for top in ("Partitioned", "PooledMarket"):
-            spec = get_policy_spec("dispatch", top)
+            spec = get_policy_spec("planner", top)
             budget, source = arm_budget(spec, {"inner": {"type": "SlowFlow"}})
             assert budget == 4000 + spec.perf_budget_ms, (top, budget, source)
             assert "arm not measured" in source and "derived" in source and "SlowFlow" in source, source
@@ -99,7 +99,7 @@ def test_an_unmeasured_inner_arm_is_held_to_the_inner_budget_plus_the_composite_
             assert arm_budget(spec, {"inner": {"type": "GreedyNearest"}}) == (
                 spec.arm_budgets_ms["inner=GreedyNearest"], "arm_budgets_ms['inner=GreedyNearest']")
         # Component and str arms still inherit the default arm's budget.
-        pooled = get_policy_spec("dispatch", "PooledMarket")
+        pooled = get_policy_spec("planner", "PooledMarket")
         assert arm_budget(pooled, {"max_rounds": 2})[0] == pooled.perf_budget_ms
 
 
@@ -112,10 +112,10 @@ def test_a_slow_leaf_with_a_declared_budget_keeps_both_composites_green():
     """
     with isolated_registry():
         _register_slow_leaf("SlowFlow", 4000)
-        own = run_battery("dispatch", "SlowFlow")
+        own = run_battery("planner", "SlowFlow")
         assert [r.id for r in own if not r.ok] == []
         for top in ("Partitioned", "PooledMarket"):
-            results = run_battery("dispatch", top)
+            results = run_battery("planner", top)
             failed = [r.id for r in results if not r.ok]
             assert failed == [], (top, failed, _by_id(results).get("performance.scale[inner=SlowFlow]"))
             perf = _by_id(results)["performance.scale[inner=SlowFlow]"]
@@ -130,10 +130,10 @@ def test_a_leaf_slower_than_its_own_budget_still_fails_the_composites():
     """
     with isolated_registry():
         _register_slow_leaf("TooSlowFlow", 20)
-        ok, detail = battery._performance_scale(get_policy_spec("dispatch", "TooSlowFlow"), {})
+        ok, detail = battery._performance_scale(get_policy_spec("planner", "TooSlowFlow"), {})
         assert not ok and "budget 20 ms" in detail, detail
         for top in ("Partitioned", "PooledMarket"):
-            spec = get_policy_spec("dispatch", top)
+            spec = get_policy_spec("planner", top)
             ok, detail = battery._performance_scale(spec, {"inner": {"type": "TooSlowFlow"}})
             assert not ok, (top, detail)
             assert f"budget {20 + spec.perf_budget_ms} ms" in detail, detail
@@ -149,7 +149,7 @@ def test_check_result_status_names_skip_pass_and_fail():
 
 
 def _module_random_leaf(name: str = "ModuleRandom"):
-    @policy(slot="dispatch", name=name, version="1", description="draws from the random module",
+    @policy(slot="planner", name=name, version="1", description="draws from the random module",
             information_model="central")
     class ModuleRandom(DispatchPolicy):
         @dataclass(frozen=True)
@@ -176,7 +176,7 @@ def test_partitioned_reports_skip_and_its_inner_arms_are_really_checked():
     """
     with isolated_registry():
         _module_random_leaf()
-        results = _by_id(run_battery("dispatch", "Partitioned"))
+        results = _by_id(run_battery("planner", "Partitioned"))
     default = results["determinism.no_module_rng"]
     assert default.status == "SKIP" and default.ok, default.detail
     assert "module_rng declared by Partitioned" in default.detail and "scope cap sample" in default.detail
@@ -199,12 +199,12 @@ def _groups_composite(name: str, *, declare: bool, own_draw: bool):
     """
     extra = {"module_rng": "draws one module number per tick on purpose"} if declare else {}
 
-    @policy(slot="dispatch", name=name, version="1", description="groups via the shipped helpers",
+    @policy(slot="planner", name=name, version="1", description="groups via the shipped helpers",
             information_model="per_group", **extra)
     class Groups(CompositePolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
-            inner: PolicyRef = param(ref("GreedyNearest"), kind="dispatch", leaf_only=True, help="Inner.")
+            inner: PolicyRef = param(ref("GreedyNearest"), kind="planner", leaf_only=True, help="Inner.")
 
         def decide(self, ctx):
             if own_draw:
@@ -237,7 +237,7 @@ def test_a_declaration_covers_the_declaring_nodes_own_draws_only():
     with isolated_registry():
         _module_random_leaf()
         _groups_composite("OwnDraw", declare=True, own_draw=True)
-        spec = get_policy_spec("dispatch", "OwnDraw")
+        spec = get_policy_spec("planner", "OwnDraw")
         clean = battery._no_module_rng(battery._Outcomes(spec, {}))
         assert isinstance(clean, battery.Skip) and "direct draw(s) by the declaring node(s) OwnDraw" in clean.detail
         ok, detail = battery._no_module_rng(battery._Outcomes(spec, {"inner": {"type": "ModuleRandom"}}))
@@ -253,7 +253,7 @@ def test_control_payload_carries_status_and_counts_skips(monkeypatch):
     rows = [CheckResult("determinism", "no_module_rng", True, "skipped: declared", 0.1, skipped=True),
             CheckResult("structure", "returns_plan", True, "fine", 0.1)]
     monkeypatch.setattr(battery_mod, "run_battery", lambda slot, name: rows)
-    payload = control_policies.cmd_policy_validate("dispatch", "GreedyNearest")
+    payload = control_policies.cmd_policy_validate("planner", "GreedyNearest")
     assert payload["ok"] is True and payload["skipped"] == 1
     assert [r["status"] for r in payload["results"]] == ["SKIP", "PASS"]
     assert payload["results"][0]["ok"] is True and payload["results"][0]["skipped"] is True
@@ -271,7 +271,7 @@ def test_cli_renders_skip_and_exits_0(monkeypatch, capsys):
                {"id": "structure.returns_plan", "ok": True, "status": "PASS", "detail": "fine", "ms": 1.0}]
     monkeypatch.setattr(control, "policy_validate", lambda slot, name: {
         "ok": True, "results": results, "skipped": 1, "message": "1 passed, 1 skipped"})
-    assert cli.main(["policy", "validate", "dispatch", "Alpha"]) == 0
+    assert cli.main(["policy", "validate", "planner", "Alpha"]) == 0
     text = capsys.readouterr().out
     row = next(line for line in text.splitlines() if "determinism.no_module_rng[inner=GreedyNearest]" in line)
     assert "SKIP" in row and "PASS" not in row, row
@@ -280,7 +280,7 @@ def test_cli_renders_skip_and_exits_0(monkeypatch, capsys):
 # --- MINOR-7: name lists from the registry ----------------------------------------------
 
 def _extra_leaf(name: str = "ExtraLeafZ"):
-    @policy(slot="dispatch", name=name, version="1", description="an extra registered leaf",
+    @policy(slot="planner", name=name, version="1", description="an extra registered leaf",
             information_model="central")
     class Extra(DispatchPolicy):
         @dataclass(frozen=True)
@@ -355,7 +355,7 @@ def test_component_names_with_run_name_separators_are_refused(bad):
     OFFER_REGISTRY[bad] = OFFER_REGISTRY["OfferAll"]
     try:
         with pytest.raises(PolicyRegistrationError, match="must match"):
-            components.ref_target("market.offer", bad, where="policies.dispatch.params.offer")
+            components.ref_target("market.offer", bad, where="policies.planner.params.offer")
     finally:
         del OFFER_REGISTRY[bad]
     params_mod._REF_RESOLVERS.pop("test.badname", None)

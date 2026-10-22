@@ -1,7 +1,7 @@
 """The ``policies`` block in ``spec.json``: shape, legacy translation, mirrors, bundle.
 
 What is locked (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P2.1-P2.3):
-- ``policies.dispatch`` is the ONE dispatch dial. Without it the legacy keys
+- ``policies.planner`` is the ONE dispatch dial. Without it the legacy keys
   (``solver`` > ``planner.deployment.type`` > default; ``deployment.params`` then
   ``solverParams``) are translated, and ``profile.strategy`` / ``solver_params`` /
   ``planner.deployment`` are mirrors of whatever won.
@@ -77,8 +77,8 @@ def test_legacy_solver_translates_to_partitioned_inner():
     """Round 2 (§3.6): the legacy solver is the per-scope solver of the decomposition
     ``planner.topology`` names (absent: ``Partitioned``)."""
     compiled = _compile(_spec(solver="GreedyNearest", solverParams={"dual_cycle_bonus_km": 3.0}))
-    assert compiled.policies_provenance == {"dispatch": "legacy"}
-    assert compiled.recipe["policies"] == {"dispatch": {
+    assert compiled.policies_provenance == {"planner": "legacy"}
+    assert compiled.recipe["policies"] == {"planner": {
         "type": "Partitioned", "timing": "online",
         "params": {"inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 3.0}}}}}
     assert _profile(compiled)["strategy"] == "GreedyNearest"
@@ -96,7 +96,7 @@ def test_planner_topology_pooled_translates_to_pooled_market_with_market_block()
     for topology in ("pooled", "two-stage"):
         compiled = _compile(_spec(solver="GreedyNearest",
                                   planner={"topology": topology, "market": market}))
-        entry = compiled.recipe["policies"]["dispatch"]
+        entry = compiled.recipe["policies"]["planner"]
         assert entry == {"type": "PooledMarket", "timing": "online", "params": {
             "max_rounds": 5,
             "offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0}},
@@ -110,10 +110,10 @@ def test_planner_topology_pooled_translates_to_pooled_market_with_market_block()
 
 def _part(leaf="GreedyNearest", **params):
     inner = {"type": leaf, "params": params} if params else {"type": leaf}
-    return {"dispatch": {"type": "Partitioned", "params": {"inner": inner}}}
+    return {"planner": {"type": "Partitioned", "params": {"inner": inner}}}
 
 
-_POOLED = {"dispatch": {"type": "PooledMarket", "params": {
+_POOLED = {"planner": {"type": "PooledMarket", "params": {
     "max_rounds": 5, "offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0}},
     "inner": {"type": "GreedyNearest"}}}}
 
@@ -128,17 +128,17 @@ def test_authored_topology_disagreeing_with_policies_is_rejected():
     with pytest.raises(SpecValidationError) as exc:
         _compile(_spec(planner={"topology": "pooled"}, policies=_part()))
     assert str(exc.value) == (
-        "spec sets planner.topology='pooled' but policies.dispatch.type='Partitioned'. "
+        "spec sets planner.topology='pooled' but policies.planner.type='Partitioned'. "
         "planner.topology is the legacy spelling of the dispatch decomposition (pooled = "
         "PooledMarket, partitioned = Partitioned); remove planner.topology.")
-    with pytest.raises(SpecValidationError, match="planner.topology='partitioned' but policies.dispatch.type='GreedyNearest'"):
-        _compile(_spec(planner={"topology": "partitioned"}, policies={"dispatch": {"type": "GreedyNearest"}}))
-    with pytest.raises(SpecValidationError, match="planner.topology='partitioned' but policies.dispatch.type='PooledMarket'"):
+    with pytest.raises(SpecValidationError, match="planner.topology='partitioned' but policies.planner.type='GreedyNearest'"):
+        _compile(_spec(planner={"topology": "partitioned"}, policies={"planner": {"type": "GreedyNearest"}}))
+    with pytest.raises(SpecValidationError, match="planner.topology='partitioned' but policies.planner.type='PooledMarket'"):
         _compile(_spec(planner={"topology": "partitioned"}, policies=_POOLED))
     _compile(_spec(planner={"topology": "partitioned"}, policies=_part()))
     _compile(_spec(planner={"topology": "two-stage"}, policies=_POOLED))
-    _compile(_spec(policies={"dispatch": {"type": "GreedyNearest"}}))  # no planner: central is fine
-    _compile(_spec(planner={"timing": {"mode": "online"}}, policies={"dispatch": {"type": "GreedyNearest"}}))
+    _compile(_spec(policies={"planner": {"type": "GreedyNearest"}}))  # no planner: central is fine
+    _compile(_spec(planner={"timing": {"mode": "online"}}, policies={"planner": {"type": "GreedyNearest"}}))
 
 
 def test_authored_market_disagreeing_with_pooled_market_is_rejected():
@@ -150,15 +150,15 @@ def test_authored_market_disagreeing_with_pooled_market_is_rejected():
     with pytest.raises(SpecValidationError) as exc:
         _compile(_spec(planner={"market": {"offer": {"type": "OfferAll"}, "max_rounds": 9}}, policies=_POOLED))
     assert str(exc.value) == (
-        "spec sets planner.market that disagrees with policies.dispatch PooledMarket params "
+        "spec sets planner.market that disagrees with policies.planner PooledMarket params "
         "(offer.type='OfferAll' vs 'OfferSpare', offer.params.keep_below_km=None vs 3.0, "
         "offer.params.only_when_short=None vs True, max_rounds=9 vs 5). planner.market is the "
-        "legacy spelling of the PooledMarket params; move the values into policies.dispatch.params "
+        "legacy spelling of the PooledMarket params; move the values into policies.planner.params "
         "and remove planner.market.")
     agreeing = {"offer": {"type": "OfferSpare", "params": {"keep_below_km": 3.0, "only_when_short": True}},
                 "claim": {"type": "ClaimAllPlanned", "params": {}}, "max_rounds": 5}
     _compile(_spec(planner={"topology": "pooled", "market": agreeing}, policies=_POOLED))
-    defaults_only = {"dispatch": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
+    defaults_only = {"planner": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
     _compile(_spec(planner={"market": {}}, policies=defaults_only))
     # Inert next to another top (the pooled-arm configuration ORSIM_PLANNER_TOPOLOGY reads).
     compiled = _compile(_spec(planner={"market": {"offer": {"type": "OfferNone"}}}, policies=_part()))
@@ -173,7 +173,7 @@ def test_recipe_echoes_an_authored_planner_verbatim(tmp_path, monkeypatch):
 
     Verified to have teeth: echoing ``deepcopy(planner_cfg)`` for an authored block in
     ``Preprocessor._recipe_planner`` made both recompiles raise message 7."""
-    for policies in ({"dispatch": {"type": "GreedyNearest"}}, _POOLED):
+    for policies in ({"planner": {"type": "GreedyNearest"}}, _POOLED):
         first = _bundle(tmp_path, monkeypatch, _spec(policies=policies), "a")
         assert first["recipe"]["planner"] is None
         second = _bundle(tmp_path, monkeypatch, first["recipe"], "b")
@@ -207,7 +207,7 @@ def test_compiled_profile_carries_the_round2_format_marker(tmp_path, monkeypatch
     assert prof["policies_format"] == 2
     assert_assignment_profiles_resolvable({"a0": {"profile": prof}})
     round1 = {k: v for k, v in prof.items() if k != "policies_format"}
-    round1["policies"] = {"dispatch": {"type": "GreedyNearest", "version": "1", "kind": "operator",
+    round1["policies"] = {"planner": {"type": "GreedyNearest", "version": "1", "kind": "operator",
                                        "timing": "online", "params": {}}}
     round1.pop("planner", None)  # the hand-deleted topology echo C2 review #7 describes
     with pytest.raises(Exception, match="policies_format=None, not 2: it was compiled before round 2"):
@@ -217,58 +217,58 @@ def test_compiled_profile_carries_the_round2_format_marker(tmp_path, monkeypatch
     assert stop.value.code == 2
     coll = {"a0": {"profile": {"strategy": "GreedyNearest"}}}
     check_policies_format(coll["a0"]["profile"])  # legacy: translated, no marker needed
-    apply_policy_overrides(coll, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 1.0}}}}})
+    apply_policy_overrides(coll, {"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 1.0}}}}})
     assert coll["a0"]["profile"]["policies_format"] == 2
 
 
 def test_planner_deployment_translates_when_no_solver():
     compiled = _compile(_spec(planner={"deployment": {
         "type": "GreedyNearest", "params": {"dual_cycle_radius_km": 0.9}}}))
-    entry = compiled.recipe["policies"]["dispatch"]
+    entry = compiled.recipe["policies"]["planner"]
     assert entry["type"] == "Partitioned"  # round 2: the leaf is wrapped (§3.6)
     assert entry["params"]["inner"] == {"type": "GreedyNearest", "params": {"dual_cycle_radius_km": 0.9}}
     # And with neither, the slot default (the defaults.py strategy) as the inner.
-    default = _compile(_spec()).recipe["policies"]["dispatch"]
+    default = _compile(_spec()).recipe["policies"]["planner"]
     assert (default["type"], default["params"]["inner"]["type"]) == ("Partitioned", "RandomAssignment")
 
 
 def test_policies_block_wins_and_is_mirrored_into_strategy_and_deployment():
     """Verified to have teeth: mirroring the legacy ``deployment.type`` instead of
-    ``policies.dispatch.type`` into ``strategy`` failed the first assertion.
+    ``policies.planner.type`` into ``strategy`` failed the first assertion.
 
     Preprocessor level only (shape, no registry): the full compile REFUSES this
     contradicting ``planner.deployment`` (review F1;
     ``test_policy_override_equals_compiled_edit.py``)."""
     compiled = _compile(_spec(
         planner={"deployment": {"type": "RandomAssignment", "params": {"dual_cycle_bonus_km": 9.0}}},
-        policies={"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 1.5}}},
+        policies={"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 1.5}}},
     ))
     prof = _profile(compiled)
     assert prof["strategy"] == "GreedyNearest"
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 1.5, "authored params beat deployment"
     assert prof["planner"]["deployment"] == {"type": "GreedyNearest", "params": prof["solver_params"]}
     assert compiled.recipe["solver"] == "GreedyNearest" and compiled.recipe["solverParams"] is None
-    assert compiled.policies_provenance == {"dispatch": "authored"}
+    assert compiled.policies_provenance == {"planner": "authored"}
 
 
 def test_solver_disagreeing_with_policies_dispatch_is_rejected():
     """Verified to have teeth: deleting the solver-vs-type check let this compile."""
     with pytest.raises(SpecValidationError) as exc:
-        _compile(_spec(solver="RandomAssignment", policies={"dispatch": {"type": "GreedyNearest"}}))
-    assert "solver='RandomAssignment' but policies.dispatch.type='GreedyNearest'" in str(exc.value)
+        _compile(_spec(solver="RandomAssignment", policies={"planner": {"type": "GreedyNearest"}}))
+    assert "solver='RandomAssignment' but policies.planner.type='GreedyNearest'" in str(exc.value)
     assert "legacy spelling" in str(exc.value)
     # An AGREEING solver is fine (a carried spec holds both spellings).
-    _compile(_spec(solver="GreedyNearest", policies={"dispatch": {"type": "GreedyNearest"}}))
+    _compile(_spec(solver="GreedyNearest", policies={"planner": {"type": "GreedyNearest"}}))
 
 
 def test_solverparams_with_policies_block_is_rejected():
     """Verified to have teeth: deleting the solverParams check let this compile."""
     with pytest.raises(SpecValidationError, match="solverParams is the legacy spelling"):
         _compile(_spec(solverParams={"dual_cycle_bonus_km": 2.0},
-                       policies={"dispatch": {"type": "GreedyNearest"}}))
+                       policies={"planner": {"type": "GreedyNearest"}}))
     # Deviation (agreeing values tolerated, symmetric with `solver`): see preprocess.
     _compile(_spec(solverParams={"dual_cycle_bonus_km": 2.0},
-                   policies={"dispatch": {"type": "GreedyNearest",
+                   policies={"planner": {"type": "GreedyNearest",
                                           "params": {"dual_cycle_bonus_km": 2.0}}}))
 
 
@@ -280,35 +280,35 @@ def _resolve_error(tmp_path, monkeypatch, policies):
 
 def test_unknown_slot_rejected(tmp_path, monkeypatch):
     msg = _resolve_error(tmp_path, monkeypatch, {"dispach": {"type": "GreedyNearest"}})
-    assert msg.startswith("Unknown policy slot 'dispach' in 'policies'. Known slots: dispatch.")
+    assert msg.startswith("Unknown policy slot 'dispach' in 'policies'. Known slots: planner.")
 
 
 @pytest.mark.parametrize("slot", ["idle", "queue", "world.shedding", "world.duration"])
 def test_removed_slot_rejected_as_unknown(tmp_path, monkeypatch, slot):
     """The four former planned slots are gone: naming one is the normal fail-loud refusal."""
     msg = _resolve_error(tmp_path, monkeypatch, {slot: {"type": "Stay"}})
-    assert msg.startswith(f"Unknown policy slot {slot!r} in 'policies'. Known slots: dispatch.")
+    assert msg.startswith(f"Unknown policy slot {slot!r} in 'policies'. Known slots: planner.")
 
 
 def test_market_component_is_not_a_slot(tmp_path, monkeypatch):
     """Round 2: offer/claim are PooledMarket components, no longer (legacy) slots."""
     msg = _resolve_error(tmp_path, monkeypatch, {"market.offer": {"type": "OfferAll"}})
-    assert msg.startswith("Unknown policy slot 'market.offer' in 'policies'. Known slots: dispatch.")
+    assert msg.startswith("Unknown policy slot 'market.offer' in 'policies'. Known slots: planner.")
 
 
 def test_unknown_entry_key_rejected():
-    with pytest.raises(SpecValidationError, match=r"policies.dispatch: unknown key\(s\) 'parms'"):
-        _compile(_spec(policies={"dispatch": {"type": "GreedyNearest", "parms": {}}}))
+    with pytest.raises(SpecValidationError, match=r"policies.planner: unknown key\(s\) 'parms'"):
+        _compile(_spec(policies={"planner": {"type": "GreedyNearest", "parms": {}}}))
 
 
 def test_plan_timing_rejected_with_p4_message(tmp_path, monkeypatch):
     msg = _resolve_error(tmp_path, monkeypatch,
-                         {"dispatch": {"type": "GreedyNearest", "timing": "plan"}})
-    assert msg == ("policies.dispatch.timing='plan' is defined but not executable yet: the "
+                         {"planner": {"type": "GreedyNearest", "timing": "plan"}})
+    assert msg == ("policies.planner.timing='plan' is defined but not executable yet: the "
                    "held-plan dispatcher lands with P4. Use 'online'.")
     msg = _resolve_error(tmp_path, monkeypatch,
-                         {"dispatch": {"type": "GreedyNearest", "timing": "weekly"}})
-    assert msg == "policies.dispatch.timing='weekly' is not a dispatch timing. Allowed: online, plan."
+                         {"planner": {"type": "GreedyNearest", "timing": "weekly"}})
+    assert msg == "policies.planner.timing='weekly' is not a planner timing. Allowed: online, plan."
 
 
 def test_planner_timing_static_rejected_with_translation():
@@ -318,13 +318,13 @@ def test_planner_timing_static_rejected_with_translation():
             _compile(_spec(planner={"timing": {"mode": mode}}))
         assert str(exc.value) == (
             f"planner.timing.mode={mode!r} has never had a runtime reader; dispatch timing "
-            "is now policies.dispatch.timing ('online'; 'plan' lands with P4).")
+            "is now policies.planner.timing ('online'; 'plan' lands with P4).")
     _compile(_spec(planner={"timing": {"mode": "online"}}))
 
 
 def test_unknown_param_rejected_in_policies_block(tmp_path, monkeypatch):
     msg = _resolve_error(tmp_path, monkeypatch,
-                         {"dispatch": {"type": "GreedyNearest", "params": {"bonus_km": 1}}})
+                         {"planner": {"type": "GreedyNearest", "params": {"bonus_km": 1}}})
     assert "unknown key 'bonus_km'" in msg and "Declared params: candidates" in msg
 
 
@@ -337,19 +337,19 @@ def test_undeclared_param_dropped_with_warning_in_legacy_translation(tmp_path, m
     with caplog.at_level(logging.WARNING):
         bundle = _bundle(tmp_path, monkeypatch, _spec(
             solver="RandomAssignment", solverParams={"dual_cycle_bonus_km": 7.0}))
-    assert any("not declared by dispatch RandomAssignment" in r.getMessage() for r in caplog.records)
+    assert any("not declared by planner RandomAssignment" in r.getMessage() for r in caplog.records)
     # Round 2: the legacy solver is Partitioned's inner; its undeclared params are dropped there.
-    assert bundle["recipe"]["policies"]["dispatch"]["params"] == {"inner": {"type": "RandomAssignment", "params": {}}}
+    assert bundle["recipe"]["policies"]["planner"]["params"] == {"inner": {"type": "RandomAssignment", "params": {}}}
     prof = _assignment_profile(bundle)
-    assert prof["policies"]["dispatch"]["params"]["inner"]["params"] == {"candidates": "sampled"}
+    assert prof["policies"]["planner"]["params"]["inner"]["params"] == {"candidates": "sampled"}
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 7.0, "accounting keeps the legacy value"
 
 
 def test_bundle_profile_carries_resolved_policies_with_version_and_defaults(tmp_path, monkeypatch):
     bundle = _bundle(tmp_path, monkeypatch, _spec(
-        policies={"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}))
+        policies={"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}))
     prof = _assignment_profile(bundle)
-    assert prof["policies"] == {"dispatch": {
+    assert prof["policies"] == {"planner": {
         "type": "GreedyNearest", "version": "1", "kind": "operator", "timing": "online",
         "params": {"candidates": "spatial", "dual_cycle_bonus_km": 0.0, "dual_cycle_radius_km": 0.5}}}
     assert prof["strategy"] == "GreedyNearest"
@@ -378,11 +378,11 @@ def test_stale_deployment_mirror_never_outlives_an_authored_param(tmp_path, monk
     from apps.container_logistics.scenario import frontend_scenario_spec as F
 
     first = _bundle(tmp_path, monkeypatch, _spec(
-        policies={"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}), "a")
+        policies={"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}), "a")
     hand_edited = deepcopy(first["recipe"])
-    hand_edited["policies"] = {"dispatch": {"type": "GreedyNearest"}}
+    hand_edited["policies"] = {"planner": {"type": "GreedyNearest"}}
     prof = _assignment_profile(_bundle(tmp_path, monkeypatch, hand_edited, "b"))
-    assert prof["policies"]["dispatch"]["params"]["dual_cycle_bonus_km"] == 5.0
+    assert prof["policies"]["planner"]["params"]["dual_cycle_bonus_km"] == 5.0
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 5.0
 
     legacy_first = _bundle(tmp_path, monkeypatch, _spec(
@@ -390,15 +390,15 @@ def test_stale_deployment_mirror_never_outlives_an_authored_param(tmp_path, monk
     assert legacy_first["recipe"]["planner"]["deployment"]["params"]["dual_cycle_bonus_km"] == 0
     stale = deepcopy(legacy_first["recipe"])
     # Round 2: the legacy recipe's planner.topology='partitioned' agrees with Partitioned.
-    stale["policies"] = {"dispatch": {"type": "Partitioned", "params": {"inner": {"type": "GreedyNearest"}}}}
+    stale["policies"] = {"planner": {"type": "Partitioned", "params": {"inner": {"type": "GreedyNearest"}}}}
     with pytest.raises(SpecValidationError, match="planner.deployment.params that disagree"):
         _bundle(tmp_path, monkeypatch, stale, "d")
 
     saved = F.assemble_spec({"name": "Policies Test", "slug": "policies_test",
-                             "policies": {"dispatch": {"type": "GreedyNearest"}}},
+                             "policies": {"planner": {"type": "GreedyNearest"}}},
                             DOMAIN, previous=deepcopy(legacy_first["recipe"]))
     prof = _assignment_profile(_bundle(tmp_path, monkeypatch, saved, "e"))
-    assert prof["policies"]["dispatch"]["params"]["dual_cycle_bonus_km"] == 5.0
+    assert prof["policies"]["planner"]["params"]["dual_cycle_bonus_km"] == 5.0
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 5.0
 
 
@@ -412,11 +412,11 @@ def test_legacy_use_spatial_false_in_a_profile_is_folded_and_removed(tmp_path, m
     from apps.container_logistics.policies.dispatch.profile import resolve_dispatch_for_profile
     from apps.container_logistics.scenario import spec_compile as SC
 
-    resolved = R.resolve_policies_block({"dispatch": {"type": "GreedyNearest"}})
+    resolved = R.resolve_policies_block({"planner": {"type": "GreedyNearest"}})
     prof = {"strategy": "GreedyNearest", "use_spatial_matching": False}
     SC._patch_assignment_profiles({"a0": {"profile": prof}}, resolved, "legacy")
     assert "use_spatial_matching" not in prof
-    assert prof["policies"]["dispatch"]["params"]["candidates"] == "sampled"
+    assert prof["policies"]["planner"]["params"]["candidates"] == "sampled"
     assert resolve_dispatch_for_profile(prof).candidate_kind == "sampled"
     authored = {"strategy": "GreedyNearest", "use_spatial_matching": False}
     with pytest.raises(SpecValidationError, match="candidates='sampled' instead"):
@@ -424,7 +424,7 @@ def test_legacy_use_spatial_false_in_a_profile_is_folded_and_removed(tmp_path, m
 
 
 def test_recipe_echoes_authored_not_resolved(tmp_path, monkeypatch):
-    authored = {"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}
+    authored = {"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}
     bundle = _bundle(tmp_path, monkeypatch, _spec(policies=authored))
     assert bundle["recipe"]["policies"] == authored, "defaults/version must not leak into the recipe"
     assert bundle["settings"]["GENERATION_SPEC"]["policies"] == authored
@@ -447,7 +447,7 @@ def test_policies_block_never_perturbs_generated_agents(tmp_path, monkeypatch):
         legacy = _bundle(tmp_path, monkeypatch, spec, f"legacy_{topology}")
         with_block = deepcopy(spec)
         with_block["policies"] = deepcopy(legacy["recipe"]["policies"])
-        assert with_block["policies"]["dispatch"]["params"]["inner"]["type"] == "GreedyNearest"
+        assert with_block["policies"]["planner"]["params"]["inner"]["type"] == "GreedyNearest"
         with_block["solver"] = None
         for key in ("deployment", "topology", "market"):
             with_block["planner"].pop(key)
@@ -467,6 +467,54 @@ def test_every_shipped_spec_translates_to_partitioned_with_its_solver(path):
     planner_cfg = Preprocessor._normalize_planner(raw.get("planner"))
     expected = raw.get("solver") or (planner_cfg.get("deployment") or {}).get("type") or "RandomAssignment"
     authored, provenance = Preprocessor._normalize_policies(raw, planner_cfg)
-    assert provenance["dispatch"] == ("authored" if "policies" in raw else "legacy")
-    assert authored["dispatch"]["type"] == "Partitioned"
-    assert authored["dispatch"]["params"]["inner"]["type"] == expected
+    assert provenance["planner"] == ("authored" if "policies" in raw else "legacy")
+    assert authored["planner"]["type"] == "Partitioned"
+    assert authored["planner"]["params"]["inner"]["type"] == expected
+
+
+def test_the_old_dispatch_slot_name_fails_loud_with_the_rename_hint(tmp_path, monkeypatch):
+    """The slot was renamed ``dispatch`` -> ``planner`` with NO alias: the old key is an
+    unknown slot, and the refusal says what it became."""
+    msg = _resolve_error(tmp_path, monkeypatch, {"dispatch": {"type": "GreedyNearest"}})
+    assert msg.startswith("Unknown policy slot 'dispatch' in 'policies'. Known slots: planner. "
+                          "(The slot was renamed to 'planner'.)")
+
+
+def test_the_old_dispatch_slot_name_is_refused_on_every_cli_path():
+    from apps.container_logistics.policies.framework import (
+        UnknownSlotError, get_policy_spec, merge_policy_overrides, parse_policy_cli_args,
+        resolve_policies_block)
+    from apps.container_logistics.policies.framework.errors import PolicyError
+
+    hint = r"\(The slot was renamed to 'planner'\.\)"
+    with pytest.raises(UnknownSlotError, match=hint):
+        get_policy_spec("dispatch", "GreedyNearest")
+    with pytest.raises(PolicyError, match=r"\(The slot 'dispatch' was renamed to 'planner'\.\)"):
+        parse_policy_cli_args([], ["dispatch.inner=GreedyNearest"])
+    with pytest.raises(UnknownSlotError, match=hint):
+        merge_policy_overrides(resolve_policies_block({}),
+                               parse_policy_cli_args(["dispatch=GreedyNearest"], []))
+
+
+def test_legacy_planner_keys_and_policies_planner_do_not_collide(tmp_path, monkeypatch):
+    """``planner.topology`` / ``planner.market`` (the legacy profile block, parent =
+    the spec) and ``policies.planner`` (the slot, parent = ``policies``) share a word,
+    not a key: both are read, from their own parents, in one spec."""
+    spec = _spec(
+        planner={"topology": "pooled", "market": {"max_rounds": 5}},
+        policies={"planner": {"type": "PooledMarket",
+                              "params": {"max_rounds": 5, "inner": {"type": "GreedyNearest"}}}})
+    compiled = _compile(spec)
+    assert compiled.policies_provenance == {"planner": "authored"}
+    entry = compiled.recipe["policies"]["planner"]
+    assert entry["type"] == "PooledMarket" and entry["params"]["inner"]["type"] == "GreedyNearest"
+    prof = _assignment_profile(_bundle(tmp_path, monkeypatch, spec))
+    assert prof["planner"]["topology"] == "pooled" and prof["planner"]["market"]["max_rounds"] == 5
+    assert set(prof["policies"]) == {"planner"} and prof["policies"]["planner"]["type"] == "PooledMarket"
+    assert "topology" not in prof["policies"]["planner"]
+    assert prof["strategy"] == "GreedyNearest"
+    # A contradiction between the two is still caught (message 7), so they are not merged.
+    with pytest.raises(SpecValidationError, match=r"spec sets planner.topology='partitioned' but "
+                                                  r"policies.planner.type='PooledMarket'"):
+        _compile(_spec(planner={"topology": "partitioned"},
+                       policies={"planner": {"type": "PooledMarket"}}))

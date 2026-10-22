@@ -5,7 +5,7 @@ Single responsibility: render the control plane's policy surface (``known-polici
 Every name, schema and default comes from the engine's catalog through
 :mod:`openride.control`; nothing here hand-copies a policy list
 (``tests/test_cli_no_hardcoded_policy_lists.py``). ``openride solver list`` is
-``policy list dispatch`` restricted to the per-scope solvers (leaves;
+``policy list planner`` restricted to the per-scope solvers (leaves;
 :func:`render_policy_list`). Authoring guide: ``docs/policy_authoring.md``.
 """
 
@@ -40,9 +40,12 @@ def _pick(catalog: dict[str, Any], components: dict[str, Any], name: str | None)
         return {name: catalog[name]}, {}
     if name in components:
         return {}, {name: components[name]}
+    from apps.container_logistics.policies.framework.slots import RENAMED_SLOTS  # stdlib-only leaf
+
     raise ValueError(
         f"unknown policy slot or component kind {name!r}; slots: {', '.join(catalog)}"
         + (f"; component kinds: {', '.join(components)}" if components else "")
+        + (f" (the slot {name!r} was renamed to {RENAMED_SLOTS[name]!r})" if name in RENAMED_SLOTS else "")
     )
 
 
@@ -108,8 +111,8 @@ def render_policy_list(name: str | None = None, *, as_json: bool = False, leaves
         _component_rows(tbl, kind, entry)
     console.print(tbl)
     console.print(
-        "[dim]Select per run with[/] [bold]openride run <slug> --policy dispatch=<name>[/] "
-        "[dim](nested params: --policy-param dispatch.inner.<key>=<value>; the per-scope solver:[/] "
+        "[dim]Select per run with[/] [bold]openride run <slug> --policy planner=<name>[/] "
+        "[dim](nested params: --policy-param planner.inner.<key>=<value>; the per-scope solver:[/] "
         "[bold]--solver <name>[/][dim]); details:[/] [bold]openride policy show <slot|kind> <name>[/]"
     )
     return 0

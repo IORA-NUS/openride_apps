@@ -4,7 +4,7 @@ What is locked (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P2 tests): one ord
 a truck 3 km away whose last drop-off is the order's pickup facility (a dual cycle),
 and a truck 0.5 km away with no dual cycle. Through the REAL ``AssignmentApp``
 (``__init__``'s resolution path, then ``assign``), a profile whose
-``policies.dispatch.params.dual_cycle_bonus_km`` is 5.0 awards the dual-cycle truck,
+``policies.planner.params.dual_cycle_bonus_km`` is 5.0 awards the dual-cycle truck,
 and 0.0 awards the near truck. The profiles are produced by the per-run override
 path, the same one the dashboard/CLI params take.
 
@@ -73,7 +73,7 @@ def _awards(bonus_km, monkeypatch):
                                      "respect_truck_online_state": True,
                                      "reject_if_active_haul_trip": True}}}
     # Round 2: the legacy profile is Partitioned/GreedyNearest; the dial is the inner's.
-    apply_policy_overrides(collection, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": bonus_km}}}}})
+    apply_policy_overrides(collection, {"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": bonus_km}}}}})
     behavior = deepcopy(collection["a0"])
 
     def _stub(self, **kwargs):

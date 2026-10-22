@@ -40,7 +40,7 @@ from .errors import (
 )
 from .params import PolicyParams, declared_params
 from .registry import INNER_PARAM, PolicySpec, default_policy_name, get_policy_spec, list_policies
-from .slots import SLOTS
+from .slots import RENAMED_SLOTS, SLOTS, unknown_slot_message
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ ENTRY_KEYS = ("type", "timing", "params")
 
 # Why a declared-but-not-executable timing cannot run yet, per (slot, timing).
 _TIMING_NOT_EXECUTABLE_REASON = {
-    ("dispatch", "plan"): "the held-plan dispatcher lands with P4",
+    ("planner", "plan"): "the held-plan dispatcher lands with P4",
 }
 
 
@@ -121,9 +121,7 @@ class ResolvedPolicy:
 def _check_selectable_slot(slot: Any, where: str) -> None:
     """Raise unless ``slot`` is a slot a ``policies`` block may select."""
     if not isinstance(slot, str) or slot not in SLOTS:
-        raise UnknownSlotError(
-            f"Unknown policy slot {slot!r} in {where!r}. Known slots: {', '.join(SLOTS)}."
-        )
+        raise UnknownSlotError(unknown_slot_message(slot, where))
 
 
 def selection_chain(slot: str, name: str, typed: PolicyParams | None) -> list[str]:
@@ -138,7 +136,7 @@ def selection_chain(slot: str, name: str, typed: PolicyParams | None) -> list[st
     while typed is not None and spec.inner_param is not None:
         inner = getattr(typed, spec.inner_param)
         chain.append(inner.type)
-        spec, typed = get_policy_spec("dispatch", inner.type), inner.params
+        spec, typed = get_policy_spec("planner", inner.type), inner.params
     return chain
 
 
@@ -237,7 +235,7 @@ def _resolve_entry(slot: str, entry: Mapping[str, Any], *, where: str, legacy: b
                           timing=timing, params=params.to_dict(),
                           label="/".join(selection_chain(slot, spec.name, params)),
                           information_model=spec.information_model,
-                          share_tag_format=spec.share_tag_format if slot == "dispatch" else None,
+                          share_tag_format=spec.share_tag_format if slot == "planner" else None,
                           typed=params)
 
 
@@ -261,7 +259,7 @@ def _inner_key_hint(slot: str, spec: PolicySpec, raw: Mapping[str, Any]) -> str:
     if not stated:
         inner_name = getattr(spec.params_cls, "__dataclass_fields__")[inner_param].default.type
     try:
-        inner_spec = get_policy_spec("dispatch", inner_name.strip())
+        inner_spec = get_policy_spec("planner", inner_name.strip())
     except PolicyError:
         return ""
     inner_declared = {info.name for info in declared_params(inner_spec.params_cls)}
@@ -405,14 +403,14 @@ def _carried_inner(spec: PolicySpec, current: ResolvedPolicy | None, entry: Mapp
     When the new type delegates through ``inner_param`` and the override does not name
     its type (it may set its params), the current selection's per-scope solver (its inner, or the current top itself
     when that is a leaf) is carried over with its params, so changing the
-    decomposition (``--policy dispatch=PooledMarket``) never silently swaps the
+    decomposition (``--policy planner=PooledMarket``) never silently swaps the
     solver: the same rule ``ORSIM_PLANNER_TOPOLOGY`` follows (round-2 §3.6, review C2
     finding 2). Every other param resets to the new type's defaults.
     """
     descend = spec.inner_param
     stated = (entry.get("params") or {}).get(descend) if descend is not None else None
     # An override that names the inner's TYPE replaces it; one that only sets the
-    # inner's params (``--policy-param dispatch.inner.k=v``) merges into the carried one.
+    # inner's params (``--policy-param planner.inner.k=v``) merges into the carried one.
     names_type = isinstance(stated, str) or (isinstance(stated, Mapping) and stated.get("type") is not None)
     if current is None or descend is None or names_type:
         return {}
@@ -429,7 +427,7 @@ def merge_params(
 
     ``spec`` is a ``PolicySpec`` or a component ``RefTarget`` (anything with
     ``params_cls``). A non-ref key is replaced. A ref key takes a mapping ``{type?,
-    params?, version?}`` or a bare string (the CLI's ``dispatch.inner=X``, meaning
+    params?, version?}`` or a bare string (the CLI's ``planner.inner=X``, meaning
     ``{type: X}``): a type that differs from the current ref's resets the ref's params
     to the override's; otherwise the override's params merge into the current ref's,
     recursively. Keys the policy does not declare pass through for the resolver to
@@ -469,7 +467,7 @@ def check_named_overrides(overrides: Mapping[str, Any]) -> None:
     component: ``UnknownPolicyError``; a decomposition where a leaf is required:
     message 2) and the params given for it validate against it, defaults filled
     (unknown keys, bounds, types; timing too). A reference whose type is NOT named
-    (``dispatch.inner.k=v``) is left out: its params belong to whatever the profile
+    (``planner.inner.k=v``) is left out: its params belong to whatever the profile
     selects there, which only the merge (:func:`merge_policy_overrides`) can know.
     For the control plane's dry run before any bundle is read (round-2 §5 C4).
     Raises ``PolicyError`` subclasses with the merge's paths
@@ -529,9 +527,9 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
     Returns ``{slot: {"type"?: name, "params"?: {...}}}`` for
     :func:`merge_policy_overrides`. The slot is the longest dotted prefix that names a
     known slot (slot names may contain dots, e.g. a future ``world.x``); every further
-    non-final segment is a policy reference (``dispatch.inner.k=v`` ->
-    ``{"dispatch": {"params": {"inner": {"params": {"k": v}}}}}``) and a value given
-    to a reference itself sets its type (``dispatch.inner=RandomAssignment``). A value
+    non-final segment is a policy reference (``planner.inner.k=v`` ->
+    ``{"planner": {"params": {"inner": {"params": {"k": v}}}}}``) and a value given
+    to a reference itself sets its type (``planner.inner=RandomAssignment``). A value
     is ``json.loads(value)`` when that parses (``5`` -> int, ``true`` -> bool, ``"5"``
     -> str), else the raw string. Shape only: names and values are validated by the
     merge. Raises ``PolicyError`` for a malformed or contradictory argument (message 21
@@ -542,7 +540,7 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
         slot, sep, name = str(arg).partition("=")
         slot, name = slot.strip(), name.strip()
         if not sep or not slot or not name:
-            raise PolicyError(f"--policy {arg!r} must be SLOT=NAME, e.g. dispatch=GreedyNearest.")
+            raise PolicyError(f"--policy {arg!r} must be SLOT=NAME, e.g. planner=GreedyNearest.")
         entry = out.setdefault(slot, {})
         if entry.get("type") not in (None, name):
             raise PolicyError(
@@ -570,7 +568,7 @@ def parse_policy_cli_args(policies: Sequence[str], params: Sequence[str]) -> dic
 
 
 def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]]:
-    """``"dispatch.inner.k"`` -> ``("dispatch", ["inner", "k"])``: the slot is the longest known prefix.
+    """``"planner.inner.k"`` -> ``("planner", ["inner", "k"])``: the slot is the longest known prefix.
 
     Slot names may contain dots (e.g. a future ``world.x``). Raises ``PolicyError`` (message
     21) for a missing ``=``/path, or when no known slot is a prefix.
@@ -578,7 +576,7 @@ def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]
     if not sep or not key_part:
         raise PolicyError(
             f"--policy-param {arg!r} must be SLOT.PATH=VALUE with a non-empty path, e.g. "
-            "dispatch.inner.dual_cycle_bonus_km=0."
+            "planner.inner.dual_cycle_bonus_km=0."
         )
     segments = key_part.split(".")
     for cut in range(len(segments) - 1, 0, -1):
@@ -588,11 +586,13 @@ def _split_param_path(key_part: str, arg: str, sep: str) -> tuple[str, list[str]
     if key_part in SLOTS:
         raise PolicyError(
             f"--policy-param {arg!r} must be SLOT.PATH=VALUE with a non-empty path, e.g. "
-            "dispatch.inner.dual_cycle_bonus_km=0."
+            "planner.inner.dual_cycle_bonus_km=0."
         )
     known = ", ".join(SLOTS)
+    renamed = RENAMED_SLOTS.get(segments[0])
+    hint = f" (The slot {segments[0]!r} was renamed to {renamed!r}.)" if renamed else ""
     raise PolicyError(
-        f"--policy-param {arg!r}: no known slot is a prefix of {key_part!r}. Known slots: {known}."
+        f"--policy-param {arg!r}: no known slot is a prefix of {key_part!r}. Known slots: {known}.{hint}"
     )
 
 
@@ -621,7 +621,7 @@ def policies_stamp(
         entry = {"name": r.name, "version": r.version, "kind": r.kind, "timing": r.timing,
                  "label": r.label, "leaf": r.leaf, "information_model": r.information_model,
                  "params": r.profile_params(), "source": source}
-        if slot == "dispatch":
+        if slot == "planner":
             entry["share_tag_format"] = r.share_tag_format
             entry["candidate_settings"] = dict(candidate_settings)
             entry["accounting_params"] = dict(accounting_params)

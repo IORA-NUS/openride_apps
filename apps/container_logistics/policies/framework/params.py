@@ -6,7 +6,7 @@ A policy author writes::
     class Params(PolicyParams):
         dual_cycle_bonus_km: float = param(5.0, ge=0, help="...")
         keep_below_km: float | None = param(None, ge=0, help="... None = no threshold")
-        inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True,
+        inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True,
                                  help="...")
 
 and gets strict parsing (:meth:`PolicyParams.from_mapping`), a plain-dict view
@@ -29,7 +29,7 @@ registration (its target may register later in discovery); it is resolved lazily
 the first ``from_mapping``/``json_schema``/``to_dict`` that needs it.
 
 Refs are resolved through the hook :data:`_REF_RESOLVERS` (kind -> resolver), filled
-by ``framework/components.py`` (``dispatch`` at its import, each component kind when
+by ``framework/components.py`` (``planner`` at its import, each component kind when
 its module calls ``register_component_kind``), so this module never imports the
 registry. A kind not yet registered triggers :data:`_REF_KIND_LOADER` once (the
 components module's lazy import of the built-in component modules).
@@ -188,7 +188,7 @@ def param(
     ``help`` is mandatory (it becomes the schema ``description``). ``ge/gt/le/lt``
     are inclusive/exclusive bounds for numeric fields; ``choices`` is an allowed set
     for ``str`` fields. ``kind`` (required on, and only allowed on, a ``PolicyRef``
-    field) names what the ref points at: ``dispatch`` or a component kind such as
+    field) names what the ref points at: ``planner`` or a component kind such as
     ``market.offer``; ``leaf_only`` refuses a composite target (one with a dispatch
     ref of its own). Returns a ``dataclasses.field``. Consistency against the
     annotation is checked later by :func:`declared_params`.
@@ -324,7 +324,7 @@ class PolicyParams:
     def from_mapping(cls, raw: Mapping[str, Any] | None, *, where: str, path: str | None = None) -> Self:
         """Parse ``raw`` strictly into an instance; ``None`` means all defaults.
 
-        ``where`` prefixes every message (e.g. ``policies.dispatch.params for
+        ``where`` prefixes every message (e.g. ``policies.planner.params for
         GreedyNearest``). ``path`` is the dotted location of this params object, used
         to name a nested ref (``<path>.inner``); it defaults to ``where`` up to `` for ``.
         Raises ``PolicyParamsError`` for a non-mapping, an unknown or non-string key, a
@@ -478,7 +478,7 @@ def _ref_resolver(kind: Any) -> Callable[..., Any] | None:
 
 
 def _cli_path(path: str) -> str | None:
-    """``policies.dispatch.params.inner`` -> ``dispatch.inner`` (the --policy-param spelling).
+    """``policies.planner.params.inner`` -> ``planner.inner`` (the --policy-param spelling).
 
     The root (:data:`_CLI_ROOTS`, ``profile.policies.``, ``policy overrides.`` or
     ``policies.``) is matched by string prefix. ``None`` for a path under any other

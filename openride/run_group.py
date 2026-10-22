@@ -198,12 +198,12 @@ def register(sub) -> None:
                         "decomposition (e.g. Partitioned/<solver>), validated by the engine; "
                         "list: openride solver list")
     p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME",
-                   help="Per-run policy override, repeatable (e.g. dispatch=PooledMarket keeps the "
-                        "per-scope solver; a leaf such as dispatch=GreedyNearest is a CENTRAL solver)")
+                   help="Per-run policy override, repeatable (e.g. planner=PooledMarket keeps the "
+                        "per-scope solver; a leaf such as planner=GreedyNearest is a CENTRAL solver)")
     p.add_argument("--policy-param", dest="policy_param", action="append", default=[],
                    metavar="SLOT.PATH=VALUE",
                    help="Per-run policy param override, repeatable, nested through refs (e.g. "
-                        "dispatch.inner.dual_cycle_bonus_km=0, dispatch.offer=OfferSpare); VALUE is "
+                        "planner.inner.dual_cycle_bonus_km=0, planner.offer=OfferSpare); VALUE is "
                         "JSON when it parses")
     p.add_argument("--capture-dispatch", dest="capture_dispatch", metavar="every=N,max=M",
                    help="Capture dispatch contexts every N-th dispatch tick (not sim step; at most M files) under "

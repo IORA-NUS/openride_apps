@@ -55,7 +55,7 @@ def _sentinel_for(key: str):
         # that does not speak it must keep the authored dispatch policy and params.
         # Round 2 (§3.6): the same selection spelled as a tree, so it agrees with the
         # sentinel planner's topology 'pooled' / market (messages 7, 8) and solver.
-        "policies": {"dispatch": {"type": "PooledMarket", "timing": "online", "params": {
+        "policies": {"planner": {"type": "PooledMarket", "timing": "online", "params": {
             "max_rounds": 7, "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 3.25}}}}},
         "roleSettings": {"truck": {"speed": 42}},
         "overrides": {"facility": {"gate_count": 8}},
@@ -261,10 +261,10 @@ def test_no_warning_when_the_scenario_actually_resolves_pooled(caplog):
 
 
 def test_pools_warning_reads_the_resolved_dispatch_selection(caplog):
-    """Final review MINOR-5: the warning decides on the RESOLVED ``policies.dispatch``
+    """Final review MINOR-5: the warning decides on the RESOLVED ``policies.planner``
     top, not on ``planner.topology`` (which defaults to partitioned): an authored
     ``PooledMarket`` block with no ``planner`` is NOT warned, an authored
-    ``Partitioned`` one is, in ``policies.dispatch`` terms.
+    ``Partitioned`` one is, in ``policies.planner`` terms.
 
     Verified to have teeth: restoring the old ``planner_cfg["topology"] ==
     "partitioned"`` condition warned the authored PooledMarket spec."""
@@ -276,12 +276,12 @@ def test_pools_warning_reads_the_resolved_dispatch_selection(caplog):
     for top, warned in (("PooledMarket", False), ("Partitioned", True)):
         caplog.clear()
         spec = {**base, **_uncompilable_sentinels(), "policies": {
-            "dispatch": {"type": top, "params": {"inner": {"type": "GreedyNearest"}}}}}
+            "planner": {"type": top, "params": {"inner": {"type": "GreedyNearest"}}}}}
         spec.pop("solver", None)
         with caplog.at_level(logging.WARNING):
             Preprocessor.compile(spec, domain="container_logistics")
         msgs = [r.getMessage() for r in caplog.records if "cooperation pool(s)" in r.getMessage()]
         assert bool(msgs) is warned, (top, msgs)
         if warned:
-            assert "policies.dispatch resolves to Partitioned" in msgs[0]
-            assert "set policies.dispatch.type='PooledMarket'" in msgs[0], msgs[0]
+            assert "policies.planner resolves to Partitioned" in msgs[0]
+            assert "set policies.planner.type='PooledMarket'" in msgs[0], msgs[0]

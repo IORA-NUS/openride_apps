@@ -35,7 +35,7 @@ from apps.container_logistics.policies.framework.params import check_defaults
 from apps.container_logistics.policies.framework.registry import isolated_registry
 from tests.policy_registry_names import component_names, dispatch_names, leaf_names
 
-WHERE = "policies.dispatch.params for GreedyNearest"
+WHERE = "policies.planner.params for GreedyNearest"
 
 
 @dataclass(frozen=True)
@@ -288,12 +288,12 @@ def test_to_dict_roundtrips_through_from_mapping():
 
 # --- round 2: refs and nullable numbers (docs/plans/policy_slots_round2_whole_tick.md §3.2) ---
 
-COMPOSITE_WHERE = "policies.dispatch.params for Partitioned"
+COMPOSITE_WHERE = "policies.planner.params for Partitioned"
 
 
 @dataclass(frozen=True)
 class _CompositeLike(PolicyParams):
-    inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True, help="Inner solver.")
+    inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True, help="Inner solver.")
     offer: PolicyRef = param(ref("OfferAll"), kind="market.offer", help="Offer component.")
 
 
@@ -324,7 +324,7 @@ def _named_dispatch_registry():
                                         ("RandomAssignment", LeafParams, "central"),
                                         ("Partitioned", _CompositeLike, "per_group"),
                                         ("PooledMarket", _CompositeLike, "per_company")):
-            policy(slot="dispatch", name=name, version="1", description="x", information_model=model)(
+            policy(slot="planner", name=name, version="1", description="x", information_model=model)(
                 type(name, (_Base,), {"Params": params_cls}))
         yield
 
@@ -364,14 +364,14 @@ def test_ref_param_rejects_unknown_target_listing_registered():
             _composite_parse({"inner": {"type": "GreedyNeerest"}})
         names = dispatch_names()  # read inside: the registry the message was built from (MINOR-7)
     assert str(exc.value) == (
-        "policies.dispatch.params.inner: unknown dispatch policy 'GreedyNeerest'. Registered "
-        f"dispatch policies: {names}. "
-        "(List them: openride policy list dispatch)"
+        "policies.planner.params.inner: unknown planner policy 'GreedyNeerest'. Registered "
+        f"planner policies: {names}. "
+        "(List them: openride policy list planner)"
     )
     with pytest.raises(UnknownPolicyError) as exc:
         _composite_parse({"offer": {"type": "OfferAl"}})
     assert str(exc.value) == (
-        "policies.dispatch.params.offer: unknown market.offer component 'OfferAl'. Registered: "
+        "policies.planner.params.offer: unknown market.offer component 'OfferAl'. Registered: "
         f"{component_names('market.offer')}. (List them: openride policy list market.offer)"
     )
 
@@ -386,7 +386,7 @@ def test_ref_param_rejects_composite_where_leaf_only():
         with pytest.raises(PolicyParamsError) as exc:
             _composite_parse({"inner": {"type": "PooledMarket"}})
         assert str(exc.value) == (
-            "policies.dispatch.params.inner: 'PooledMarket' decomposes the tick itself (it has an "
+            "policies.planner.params.inner: 'PooledMarket' decomposes the tick itself (it has an "
             f"'inner' of its own); an inner must be a per-scope solver: {leaf_names()}."
         )
         assert _composite_parse({"inner": {"type": "GreedyNearest"}}).inner.type == "GreedyNearest"
@@ -402,15 +402,15 @@ def test_ref_value_must_be_object_with_type_and_params_only():
     with pytest.raises(PolicyParamsError) as exc:
         _composite_parse({"inner": "GreedyNearest"})
     assert str(exc.value) == (
-        "policies.dispatch.params.inner must be an object {type, params?} (got 'GreedyNearest'). "
+        "policies.planner.params.inner must be an object {type, params?} (got 'GreedyNearest'). "
         'In spec.json write {"type": "GreedyNearest"}; on the CLI --policy-param '
-        "dispatch.inner=GreedyNearest is accepted."
+        "planner.inner=GreedyNearest is accepted."
     )
     with pytest.raises(PolicyParamsError, match=r"unknown key\(s\) 'parms' in a policy reference"):
         _composite_parse({"inner": {"type": "GreedyNearest", "parms": {}}})
-    with pytest.raises(PolicyParamsError, match=r"policies\.dispatch\.params\.inner\.type must name"):
+    with pytest.raises(PolicyParamsError, match=r"policies\.planner\.params\.inner\.type must name"):
         _composite_parse({"inner": {"params": {}}})
-    with pytest.raises(PolicyParamsError, match=r"policies\.dispatch\.params\.inner\.params must be an object"):
+    with pytest.raises(PolicyParamsError, match=r"policies\.planner\.params\.inner\.params must be an object"):
         _composite_parse({"inner": {"type": "GreedyNearest", "params": [1]}})
     echoed = _composite_parse({"inner": {"type": "GreedyNearest", "version": "9", "params": {}}})
     assert echoed.inner.version == "1", "a stamped version is ignored on read"
@@ -425,13 +425,13 @@ def test_nested_param_error_names_full_path():
     with pytest.raises(PolicyParamsError) as exc:
         _composite_parse({"inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": -1}}})
     assert str(exc.value) == (
-        "policies.dispatch.params.inner.params for GreedyNearest: 'dual_cycle_bonus_km' "
+        "policies.planner.params.inner.params for GreedyNearest: 'dual_cycle_bonus_km' "
         "must be >= 0 (got -1.0)."
     )
     with pytest.raises(PolicyParamsError) as exc:
         _composite_parse({"offer": {"type": "OfferSpare", "params": {"keep_below": 3}}})
     assert str(exc.value) == (
-        "policies.dispatch.params.offer.params for OfferSpare: unknown key 'keep_below'. "
+        "policies.planner.params.offer.params for OfferSpare: unknown key 'keep_below'. "
         "Declared params: keep_below_km, only_when_short."
     )
 
@@ -471,7 +471,7 @@ def test_json_schema_for_ref_and_nullable_uses_only_supported_keywords():
     """
     schema = _CompositeLike.json_schema()
     assert schema["properties"]["inner"] == {
-        "type": "object", "x-policy-ref": "dispatch", "x-leaf-only": True,
+        "type": "object", "x-policy-ref": "planner", "x-leaf-only": True,
         "default": {"type": "RandomAssignment", "params": {"candidates": "sampled"}},
         "description": "Inner solver.",
     }
@@ -522,16 +522,16 @@ def test_ref_declaration_errors_are_registration_errors():
     @dataclass(frozen=True)
     class NoKind(PolicyParams):
         inner: PolicyRef = param(ref("GreedyNearest"), help="x")
-    cases.append((NoKind, "needs kind= one of dispatch, market.arbitration, market.claim, market.offer"))
+    cases.append((NoKind, "needs kind= one of market.arbitration, market.claim, market.offer, planner"))
 
     @dataclass(frozen=True)
     class BareDefault(PolicyParams):
-        inner: PolicyRef = param("GreedyNearest", kind="dispatch", help="x")
+        inner: PolicyRef = param("GreedyNearest", kind="planner", help="x")
     cases.append((BareDefault, r"must be ref\('<name>'\)"))
 
     @dataclass(frozen=True)
     class KindOnFloat(PolicyParams):
-        k: float = param(1.0, kind="dispatch", help="x")
+        k: float = param(1.0, kind="planner", help="x")
     cases.append((KindOnFloat, "only allowed on PolicyRef params"))
 
     for cls, message in cases:

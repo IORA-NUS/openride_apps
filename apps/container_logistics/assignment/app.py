@@ -56,7 +56,7 @@ class AssignmentApp(ORSimApp):
             messenger=messenger,
             agent_helper=agent_helper,
         )
-        # Plug-and-play dispatch selection: the compiled ``policies.dispatch`` block,
+        # Plug-and-play dispatch selection: the compiled ``policies.planner`` block,
         # or the legacy keys (``strategy``/``solver_params``/``planner.topology``/
         # ``planner.market``), resolves to a selection TREE of registered dispatch
         # policies (e.g. Partitioned/GreedyNearest). An unknown name raises (no

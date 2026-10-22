@@ -10,7 +10,7 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
 
 
 @policy(
-    slot="dispatch",
+    slot="planner",
     name="RandomAssignment",
     version="1",
     description="Baseline: shuffled orders, each given a random feasible free truck; ignores cost.",

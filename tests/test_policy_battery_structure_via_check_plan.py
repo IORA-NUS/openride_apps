@@ -104,8 +104,8 @@ def test_a_problem_check_plan_reports_fails_the_battery(monkeypatch):
     # Both references, so the runner discards exactly what the battery reports.
     monkeypatch.setattr(battery, "check_plan", stricter)
     monkeypatch.setattr(runner_module, "check_plan", stricter)
-    results = run_battery("dispatch", "RandomAssignment")
-    assert [r.id for r in results] == battery_check_ids("dispatch", "RandomAssignment")
+    results = run_battery("planner", "RandomAssignment")
+    assert [r.id for r in results] == battery_check_ids("planner", "RandomAssignment")
     failing = {r.id for r in results if not r.ok}
     assert failing == {"structure.returns_plan", "structure.returns_plan[candidates=spatial]"}, sorted(failing)
     for r in results:

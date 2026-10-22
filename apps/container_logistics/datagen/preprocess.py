@@ -100,7 +100,7 @@ class Compiled:
     policies_provenance: dict = field(default_factory=dict)
     #: ``planner.deployment`` exactly as the spec authored it, captured BEFORE the
     #: one-dial mirror overwrites it. ``spec_compile`` checks it against an authored
-    #: ``policies.dispatch`` (it needs the registry, which datagen cannot import).
+    #: ``policies.planner`` (it needs the registry, which datagen cannot import).
     authored_deployment: dict = field(default_factory=dict)
 
 
@@ -246,7 +246,7 @@ class Preprocessor:
 
         Under a LEGACY dispatch translation the normalised block (with the compiled
         ``deployment`` mirror) is echoed, as before. Under an AUTHORED
-        ``policies.dispatch`` the authored ``planner`` is echoed VERBATIM (absent stays
+        ``policies.planner`` the authored ``planner`` is echoed VERBATIM (absent stays
         absent; round-2 §5 C4): ``policies`` is the round-trip source, and a normalised
         block written back into ``spec.json`` would carry a defaulted
         ``topology='partitioned'`` (refused next to any other top, message 7) and the
@@ -254,7 +254,7 @@ class Preprocessor:
         disagrees). An authored deployment's accounting-only keys therefore survive a
         recompile.
         """
-        if provenance.get("dispatch") != "authored":
+        if provenance.get("planner") != "authored":
             return deepcopy(planner_cfg)
         return deepcopy(raw_planner)
 
@@ -279,29 +279,29 @@ class Preprocessor:
         while its pools sit visibly intact in the editor -- the state CRITICAL-1 leaves
         behind when a save drops the ``planner`` key. Deliberately NOT an error:
         partitioned + cooperation is legitimate (and the default). Decided on the
-        RESOLVED ``policies.dispatch`` top (authored or translated from the legacy
+        RESOLVED ``policies.planner`` top (authored or translated from the legacy
         ``planner.topology``), never on the legacy dial alone: an authored
         ``PooledMarket`` block used to be told shared-pool planning was OFF (final
         review MINOR-5).
         """
         try:
-            top = (authored.get("dispatch") or {}).get("type")
+            top = (authored.get("planner") or {}).get("type")
             if top != _legacy_dispatch.PARTITIONED:
                 return
             active = H.active_structure(cooperation)
             pools = active.get("pools") or []
             if not pools:
                 return
-            if provenance.get("dispatch") == "legacy":
-                fix = ("set planner.topology='pooled' (or run with --policy dispatch=PooledMarket / "
+            if provenance.get("planner") == "legacy":
+                fix = ("set planner.topology='pooled' (or run with --policy planner=PooledMarket / "
                        "ORSIM_PLANNER_TOPOLOGY=pooled). A dropped 'planner' key silently produces "
                        "this state.")
             else:
-                fix = ("set policies.dispatch.type='PooledMarket' (keeping params.inner), or run "
-                       "with --policy dispatch=PooledMarket.")
+                fix = ("set policies.planner.type='PooledMarket' (keeping params.inner), or run "
+                       "with --policy planner=PooledMarket.")
             logging.warning(
                 "Scenario %r declares %d cooperation pool(s) on structure %r but "
-                "policies.dispatch resolves to %s (per-haulier scopes), so the shared-pool "
+                "policies.planner resolves to %s (per-haulier scopes), so the shared-pool "
                 "decomposition (%s) is OFF for this scenario. If that is not intended, %s",
                 slug, len(pools), active.get("id"), _legacy_dispatch.PARTITIONED,
                 _legacy_dispatch.POOLED_MARKET, fix,
@@ -314,10 +314,10 @@ class Preprocessor:
         """Shape-check the ``policies`` block; translate the legacy dispatch keys.
 
         Returns ``(authored, provenance)``: ``authored`` is the block as it will be
-        echoed into the recipe, always carrying ``dispatch``; ``provenance`` maps each
+        echoed into the recipe, always carrying ``planner``; ``provenance`` maps each
         slot to ``"authored"`` or ``"legacy"``. SHAPE ONLY (no registry) except the legacy
         planner checks: slot names, policy names and params are validated by
-        ``spec_compile`` via ``policies.framework.resolve``. Without ``policies.dispatch`` the legacy dial is
+        ``spec_compile`` via ``policies.framework.resolve``. Without ``policies.planner`` the legacy dial is
         translated: the per-scope solver ``type = solver or planner.deployment.type or
         default``, ``params = {**deployment.params, **solverParams}``, wrapped in the
         decomposition ``planner.topology`` names (``legacy.wrap_legacy_leaf``:
@@ -347,12 +347,12 @@ class Preprocessor:
         if mode != "online":
             raise SpecValidationError(
                 f"planner.timing.mode={mode!r} has never had a runtime reader; dispatch "
-                f"timing is now policies.dispatch.timing ('online'; 'plan' lands with P4)."
+                f"timing is now policies.planner.timing ('online'; 'plan' lands with P4)."
             )
         deployment = planner_cfg.get("deployment") or {}
         solver = raw.get("solver")
         solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
-        if "dispatch" not in block:
+        if "planner" not in block:
             dp = deployment.get("params") if isinstance(deployment.get("params"), dict) else {}
             leaf = {
                 "type": str(solver or deployment.get("type")
@@ -363,23 +363,23 @@ class Preprocessor:
             # The legacy dial names the per-scope solver; planner.topology names the
             # decomposition around it (round-2 §3.6): Partitioned or PooledMarket.
             try:
-                authored["dispatch"] = _legacy_dispatch.wrap_legacy_leaf(leaf, planner_cfg)
+                authored["planner"] = _legacy_dispatch.wrap_legacy_leaf(leaf, planner_cfg)
             except ValueError as exc:  # PolicyError: an unknown market component / bad rounds
                 raise SpecValidationError(str(exc)) from exc
-            provenance["dispatch"] = "legacy"
+            provenance["planner"] = "legacy"
             return authored, provenance
         # The RAW planner: ``planner_cfg`` has a default topology filled in, which would
         # read as an authored ``partitioned`` next to every non-Partitioned block.
         try:
-            _legacy_dispatch.check_authored_planner(raw.get("planner"), authored["dispatch"])
+            _legacy_dispatch.check_authored_planner(raw.get("planner"), authored["planner"])
         except ValueError as exc:  # PolicyError: messages 7 / 8, or a malformed planner.market
             raise SpecValidationError(str(exc)) from exc
-        dispatch, path = Preprocessor._dispatch_leaf_and_path(authored["dispatch"])
+        dispatch, path = Preprocessor._dispatch_leaf_and_path(authored["planner"])
         if solver not in (None, "") and str(solver) != dispatch["type"]:
             raise SpecValidationError(
                 f"spec sets solver={solver!r} but {path}.type={dispatch['type']!r}. "
                 f"'solver' is the legacy spelling of {path}.type (the innermost per-scope "
-                "solver); send only policies.dispatch (the dashboard and CLI do)."
+                "solver); send only policies.planner (the dashboard and CLI do)."
             )
         if solver_params:
             params = dispatch.get("params") or {}
@@ -390,15 +390,15 @@ class Preprocessor:
                 raise SpecValidationError(
                     f"spec sets solverParams={solver_params!r} next to a policies block "
                     f"(disagreeing keys: {', '.join(disagree)}). solverParams is the legacy "
-                    "spelling of policies.dispatch.params; it cannot be combined with a "
-                    "policies block. Move the values into policies.dispatch.params and "
+                    "spelling of policies.planner.params; it cannot be combined with a "
+                    "policies block. Move the values into policies.planner.params and "
                     "drop solverParams."
                 )
         return authored, provenance
 
     @staticmethod
     def dispatch_leaf_entry(entry: dict) -> dict:
-        """The innermost per-scope solver of a ``policies.dispatch`` entry, SHAPE ONLY.
+        """The innermost per-scope solver of a ``policies.planner`` entry, SHAPE ONLY.
 
         Descends ``params.inner`` (the composite contract) while it is an object with a
         ``type``. A built-in decomposition (``Partitioned``/``PooledMarket``) without an
@@ -409,8 +409,8 @@ class Preprocessor:
 
     @staticmethod
     def _dispatch_leaf_and_path(entry: dict) -> tuple[dict, str]:
-        """:meth:`dispatch_leaf_entry` and its spec path (``policies.dispatch[.params.inner]``)."""
-        node, path = entry, "policies.dispatch"
+        """:meth:`dispatch_leaf_entry` and its spec path (``policies.planner[.params.inner]``)."""
+        node, path = entry, "policies.planner"
         while True:
             params = node.get("params") if isinstance(node.get("params"), dict) else {}
             inner = params.get("inner")
@@ -752,7 +752,7 @@ class Preprocessor:
             slug=slug, reference_time=reference_time,
         )
         fac_profile["facilities"] = sites
-        # Dispatch selection: ``policies.dispatch`` (or its legacy translation) is the
+        # Dispatch selection: ``policies.planner`` (or its legacy translation) is the
         # ONE dial; ``profile.strategy``, ``profile.solver_params`` and
         # ``planner.deployment`` are mirrors, so runtime, recipe and UI never drift.
         # solver_params keeps the one-dial rule (defaults <- deployment.params <-
@@ -762,7 +762,7 @@ class Preprocessor:
                                                 policies_provenance)
         # The mirrors carry the innermost per-scope solver (round-2 §3.6); spec_compile
         # re-mirrors from the resolved tree and asserts strategy == leaf.
-        dispatch_entry = cls.dispatch_leaf_entry(policies_authored["dispatch"])
+        dispatch_entry = cls.dispatch_leaf_entry(policies_authored["planner"])
         strategy = dispatch_entry["type"]
         settings["assignment"]["profile"]["strategy"] = strategy
         authored_deployment = deepcopy(planner_cfg.get("deployment") or {})
@@ -849,8 +849,8 @@ class Preprocessor:
             },
             "planner": cls._recipe_planner(planner_cfg, raw.get("planner"), policies_provenance),
             # The authored block (legacy translations included) is the round-trip
-            # source; ``solver`` is a read-only mirror of policies.dispatch.type and
-            # ``solverParams`` is retired (its values now live in policies.dispatch.params).
+            # source; ``solver`` is a read-only mirror of policies.planner.type and
+            # ``solverParams`` is retired (its values now live in policies.planner.params).
             "policies": deepcopy(policies_authored),
             "solver": strategy,
             "solverParams": None,

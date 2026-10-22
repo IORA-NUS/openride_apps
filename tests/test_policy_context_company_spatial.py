@@ -4,7 +4,7 @@ What is locked: on the pooled topology (``Scope.kind == "company"``) spatial pai
 exist only as the round's prebuilt slice, built only when the resolved candidate
 kind is ``spatial``. ``ctx.candidate_pairs("spatial")`` on a company scope of any
 other kind raises ``DispatchContractViolation`` naming the fix, so the runner logs
-DISPATCH POLICY CONTRACT VIOLATION and discards the plan; a spatial-kind company
+PLANNER POLICY CONTRACT VIOLATION and discards the plan; a spatial-kind company
 scope whose prebuilt slice is empty still returns ``[]``; partition scopes build
 spatial pairs on demand and are unaffected.
 
@@ -45,7 +45,7 @@ from apps.container_logistics.policies.testing import fixtures as fx
 def asks_spatial():
     """A policy whose ``candidates`` defaults to ``sampled`` but whose decide asks for spatial pairs."""
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="AsksSpatial", version="1", description="always reads spatial pairs")
+        @policy(slot="planner", information_model="central", name="AsksSpatial", version="1", description="always reads spatial pairs")
         class AsksSpatial(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -88,7 +88,7 @@ def test_the_runner_discards_the_plan_and_logs_the_violation(asks_spatial, caplo
     with caplog.at_level(logging.ERROR):
         committed = runner.run(_company_ctx(runner)).pairs
     assert committed == [] and runner.stats["violations"] == 1
-    assert any("DISPATCH POLICY CONTRACT VIOLATION" in r.getMessage()
+    assert any("PLANNER POLICY CONTRACT VIOLATION" in r.getMessage()
                and "candidate_pairs('spatial')" in r.getMessage() for r in caplog.records), (
         "the violation must reach the greppable ERROR line"
     )

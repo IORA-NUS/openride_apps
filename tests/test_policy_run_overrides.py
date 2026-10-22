@@ -49,7 +49,7 @@ def _collection(profile):
 
 
 def _greedy(**params):
-    return resolve_policies_block({"dispatch": {"type": "GreedyNearest", "params": params}})
+    return resolve_policies_block({"planner": {"type": "GreedyNearest", "params": params}})
 
 
 def test_parse_policy_cli_args_dotted_slot_name(monkeypatch):
@@ -60,7 +60,7 @@ def test_parse_policy_cli_args_dotted_slot_name(monkeypatch):
     from types import MappingProxyType
 
     from apps.container_logistics.policies.framework import resolve as resolve_mod
-    monkeypatch.setattr(resolve_mod, "SLOTS", MappingProxyType({"dispatch": None, "world": None, "world.x": None}))
+    monkeypatch.setattr(resolve_mod, "SLOTS", MappingProxyType({"planner": None, "world": None, "world.x": None}))
     out = parse_policy_cli_args([], ["world.x.k=1", "world.y=2"])
     assert out == {"world.x": {"params": {"k": 1}}, "world": {"params": {"y": 2}}}
 
@@ -73,57 +73,57 @@ def test_parse_policy_cli_args_json_coercion():
     (no nesting) failed the ``offer``/``inner`` assertions. Dotted slot names are
     locked by :func:`test_parse_policy_cli_args_dotted_slot_name`."""
     out = parse_policy_cli_args(
-        ["dispatch=GreedyNearest"],
-        ["dispatch.dual_cycle_bonus_km=0", "dispatch.candidates=sampled", "dispatch.flag=true",
-         "dispatch.quoted=\"60\"", "dispatch.offer.keep_below_km=1.5", "dispatch.eq=a=b",
-         "dispatch.inner=RandomAssignment", "dispatch.inner.candidates=spatial"],
+        ["planner=GreedyNearest"],
+        ["planner.dual_cycle_bonus_km=0", "planner.candidates=sampled", "planner.flag=true",
+         "planner.quoted=\"60\"", "planner.offer.keep_below_km=1.5", "planner.eq=a=b",
+         "planner.inner=RandomAssignment", "planner.inner.candidates=spatial"],
     )
-    assert out["dispatch"]["type"] == "GreedyNearest"
-    p = out["dispatch"]["params"]
+    assert out["planner"]["type"] == "GreedyNearest"
+    p = out["planner"]["params"]
     assert p["dual_cycle_bonus_km"] == 0 and isinstance(p["dual_cycle_bonus_km"], int)
     assert p["candidates"] == "sampled" and p["flag"] is True and p["quoted"] == "60"
     assert p["eq"] == "a=b"
     assert p["offer"] == {"params": {"keep_below_km": 1.5}}
     assert p["inner"] == {"type": "RandomAssignment", "params": {"candidates": "spatial"}}
     with pytest.raises(PolicyError, match=r"^--policy-param 'dispach.inner=X': no known slot is a prefix "
-                                          r"of 'dispach.inner'. Known slots: dispatch.$"):
+                                          r"of 'dispach.inner'. Known slots: planner.$"):
         parse_policy_cli_args([], ["dispach.inner=X"])
-    for bad_policy, bad_param in ((["dispatch"], []), ([], ["dispatch=1"]), ([], ["dispatch.k"])):
+    for bad_policy, bad_param in ((["planner"], []), ([], ["planner=1"]), ([], ["planner.k"])):
         with pytest.raises(PolicyError):
             parse_policy_cli_args(bad_policy, bad_param)
     with pytest.raises(PolicyError, match="twice"):
-        parse_policy_cli_args(["dispatch=A", "dispatch=B"], [])
+        parse_policy_cli_args(["planner=A", "planner=B"], [])
 
 
 def test_type_change_resets_params_to_new_defaults():
     current = _greedy(dual_cycle_bonus_km=0, candidates="sampled")
-    merged = merge_policy_overrides(current, {"dispatch": {"type": "RandomAssignment"}})
-    assert merged["dispatch"].name == "RandomAssignment"
-    assert merged["dispatch"].params == {"candidates": "sampled"}
+    merged = merge_policy_overrides(current, {"planner": {"type": "RandomAssignment"}})
+    assert merged["planner"].name == "RandomAssignment"
+    assert merged["planner"].params == {"candidates": "sampled"}
     # Greedy's own param on the new type is not inherited; override params are applied.
     merged = merge_policy_overrides(
-        current, {"dispatch": {"type": "RandomAssignment", "params": {"candidates": "spatial"}}})
-    assert merged["dispatch"].params == {"candidates": "spatial"}
+        current, {"planner": {"type": "RandomAssignment", "params": {"candidates": "spatial"}}})
+    assert merged["planner"].params == {"candidates": "spatial"}
 
 
 def test_same_type_merges_params():
     """Verified to have teeth: resetting params on every override lost candidates."""
     current = _greedy(dual_cycle_bonus_km=0, candidates="sampled")
-    merged = merge_policy_overrides(current, {"dispatch": {"params": {"dual_cycle_radius_km": 1}}})
-    assert merged["dispatch"].params == {
+    merged = merge_policy_overrides(current, {"planner": {"params": {"dual_cycle_radius_km": 1}}})
+    assert merged["planner"].params == {
         "candidates": "sampled", "dual_cycle_bonus_km": 0.0, "dual_cycle_radius_km": 1.0}
-    same = merge_policy_overrides(current, {"dispatch": {"type": "GreedyNearest"}})
-    assert same["dispatch"].params == current["dispatch"].params
+    same = merge_policy_overrides(current, {"planner": {"type": "GreedyNearest"}})
+    assert same["planner"].params == current["planner"].params
 
 
 def test_invalid_override_param_raises():
     current = _greedy()
     with pytest.raises(PolicyParamsError, match=">= 0"):
-        merge_policy_overrides(current, {"dispatch": {"params": {"dual_cycle_bonus_km": -1}}})
+        merge_policy_overrides(current, {"planner": {"params": {"dual_cycle_bonus_km": -1}}})
     with pytest.raises(PolicyParamsError, match="Values are not coerced from strings"):
-        merge_policy_overrides(current, {"dispatch": {"params": {"dual_cycle_bonus_km": "5"}}})
+        merge_policy_overrides(current, {"planner": {"params": {"dual_cycle_bonus_km": "5"}}})
     with pytest.raises(UnknownPolicyError):
-        merge_policy_overrides(current, {"dispatch": {"type": "GreedyNeerest"}})
+        merge_policy_overrides(current, {"planner": {"type": "GreedyNeerest"}})
     with pytest.raises(PolicyError, match="Unknown policy slot"):
         merge_policy_overrides(current, {"dispach": {"type": "GreedyNearest"}})
 
@@ -144,20 +144,20 @@ def test_orsim_solver_still_works(monkeypatch):
     monkeypatch.setenv("ORSIM_SOLVER", "GreedyNearest")
     coll = _collection({"strategy": "RandomAssignment"})
     merged, labels = launcher._apply_dispatch_overrides_or_exit(coll)
-    assert labels == {"dispatch": "GreedyNearest", "topology": None} and merged
+    assert labels == {"planner": "GreedyNearest", "topology": None} and merged
     assert coll["assignment_0"]["profile"]["strategy"] == "GreedyNearest"
     assert apply_solver_override(_collection({}), "RandomAssignment") == "RandomAssignment"
     # A params-only override labels the policy with exactly the overridden params
     # (review F7; format in ``dispatch_override_label``).
     monkeypatch.delenv("ORSIM_SOLVER")
     monkeypatch.setenv("ORSIM_POLICY_OVERRIDES",  # round 2: the solver's params are the inner's
-                       json.dumps({"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}))
+                       json.dumps({"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}))
     coll = _collection({"strategy": "GreedyNearest"})
-    assert launcher._apply_dispatch_overrides_or_exit(coll)[1]["dispatch"] == \
+    assert launcher._apply_dispatch_overrides_or_exit(coll)[1]["planner"] == \
         "GreedyNearest(dual_cycle_bonus_km=0.0)"
     monkeypatch.delenv("ORSIM_POLICY_OVERRIDES")
     untouched = _collection({})
-    assert launcher._apply_dispatch_overrides_or_exit(untouched) == ({}, {"dispatch": None, "topology": None})
+    assert launcher._apply_dispatch_overrides_or_exit(untouched) == ({}, {"planner": None, "topology": None})
     assert untouched == _collection({}), "nothing requested mutates nothing"
 
 
@@ -173,24 +173,24 @@ def test_orsim_solver_conflicting_with_policy_override_raises(monkeypatch, capsy
     _clean_env(monkeypatch)
     monkeypatch.setenv("ORSIM_SOLVER", "RandomAssignment")
     monkeypatch.setenv("ORSIM_POLICY_OVERRIDES",
-                       json.dumps({"dispatch": {"params": {"inner": {"type": "GreedyNearest"}}}}))
+                       json.dumps({"planner": {"params": {"inner": {"type": "GreedyNearest"}}}}))
     with pytest.raises(SystemExit) as stop:
         launcher._apply_dispatch_overrides_or_exit(_collection({}))
     assert stop.value.code == 2
     out = capsys.readouterr().out
     assert out.startswith("Policy configuration invalid; refusing to start the run:")
-    assert ("--solver 'RandomAssignment' conflicts with dispatch.inner.type='GreedyNearest' from "
+    assert ("--solver 'RandomAssignment' conflicts with planner.inner.type='GreedyNearest' from "
             "--policy/--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, "
             "pass one of them.") in out
     with pytest.raises(PolicyError) as exc:  # a central top: --solver would replace it
-        run_dispatch_overrides(_collection({}), overrides={"dispatch": {"type": "GreedyNearest"}},
+        run_dispatch_overrides(_collection({}), overrides={"planner": {"type": "GreedyNearest"}},
                                solver="RandomAssignment")
-    assert str(exc.value).startswith("--solver 'RandomAssignment' conflicts with dispatch.type='GreedyNearest'")
+    assert str(exc.value).startswith("--solver 'RandomAssignment' conflicts with planner.type='GreedyNearest'")
     # Agreeing is fine, and a decomposition top keeps its own params.
     merged, labels = run_dispatch_overrides(
-        _collection({}), overrides={"dispatch": {"params": {"inner": {"type": "GreedyNearest"}}}},
+        _collection({}), overrides={"planner": {"params": {"inner": {"type": "GreedyNearest"}}}},
         solver="GreedyNearest")
-    assert labels["dispatch"] == "GreedyNearest"
+    assert labels["planner"] == "GreedyNearest"
 
 
 def test_solver_is_innermost_leaf():
@@ -205,20 +205,20 @@ def test_solver_is_innermost_leaf():
     def label(profile, **kw):
         coll = _collection(profile)
         run_dispatch_overrides(coll, **kw)
-        return current_policies_for_profile(coll["assignment_0"]["profile"])[0]["dispatch"]
+        return current_policies_for_profile(coll["assignment_0"]["profile"])[0]["planner"]
 
     assert label({"strategy": "GreedyNearest"}, solver="RandomAssignment").label == \
         "Partitioned/RandomAssignment"
     pooled = label({"strategy": "GreedyNearest", "planner": {"topology": "pooled", "market": {"max_rounds": 7}}},
                    solver="RandomAssignment")
     assert pooled.label == "PooledMarket/RandomAssignment" and pooled.params["max_rounds"] == 7
-    central = label({}, overrides={"dispatch": {"type": "GreedyNearest"}}, solver=None)
+    central = label({}, overrides={"planner": {"type": "GreedyNearest"}}, solver=None)
     assert central.label == "GreedyNearest", "a leaf --policy is a CENTRAL arm (round 2)"
     same = label({"strategy": "GreedyNearest", "solver_params": {"dual_cycle_bonus_km": 2.0}},
                  solver="GreedyNearest")
     assert same.params["inner"]["params"]["dual_cycle_bonus_km"] == 2.0, "the same type keeps its params"
     swapped = label({"strategy": "GreedyNearest", "solver_params": {"dual_cycle_bonus_km": 2.0}},
-                    overrides={"dispatch": {"type": "PooledMarket"}}, solver="RandomAssignment")
+                    overrides={"planner": {"type": "PooledMarket"}}, solver="RandomAssignment")
     assert swapped.label == "PooledMarket/RandomAssignment"
 
 
@@ -232,9 +232,9 @@ def test_solver_naming_a_composite_is_rejected():
             run_dispatch_overrides(coll, solver=name)
         assert str(exc.value) == (
             f"--solver {name!r} names a decomposition, not a per-scope solver. --solver sets the inner "
-            f"solver ({leaf_names()}); select a decomposition with --policy dispatch={name}.")
+            f"solver ({leaf_names()}); select a decomposition with --policy planner={name}.")
     assert coll == _collection({"strategy": "GreedyNearest"}), "nothing mutated"
-    with pytest.raises(UnknownPolicyError, match="^--solver 'Nope': Unknown dispatch policy 'Nope'"):
+    with pytest.raises(UnknownPolicyError, match="^--solver 'Nope': Unknown planner policy 'Nope'"):
         run_dispatch_overrides(coll, solver="Nope")
 
 
@@ -246,12 +246,12 @@ def test_override_patches_profile_policies_and_strategy_mirror():
     legacy = {"strategy": "GreedyNearest", "use_spatial_matching": False,
               "solver_params": {"dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 0.5}}
     coll = _collection(legacy)
-    inner = {"dispatch": {"params": {"inner": {"params": {"dual_cycle_radius_km": 1.0}}}}}
+    inner = {"planner": {"params": {"inner": {"params": {"dual_cycle_radius_km": 1.0}}}}}
     resolved = apply_policy_overrides(coll, inner)  # round 2: Partitioned/GreedyNearest's inner
     prof = coll["assignment_0"]["profile"]
     assert prof["strategy"] == "GreedyNearest"
-    assert prof["policies"]["dispatch"] == resolved["dispatch"].to_profile()
-    assert prof["policies"]["dispatch"]["params"]["inner"]["params"] == {
+    assert prof["policies"]["planner"] == resolved["planner"].to_profile()
+    assert prof["policies"]["planner"]["params"]["inner"]["params"] == {
         "candidates": "sampled", "dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 1.0}
     assert prof["solver_params"] == {"dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 1.0}, (
         "the overridden param must be re-mirrored into the accounting solver_params (F1)")
@@ -260,7 +260,7 @@ def test_override_patches_profile_policies_and_strategy_mirror():
     # Validation happens before mutation.
     coll = _collection(legacy)
     with pytest.raises(PolicyParamsError):
-        apply_policy_overrides(coll, {"dispatch": {"params": {"inner": {"params": {"dual_cycle_radius_km": -1}}}}})
+        apply_policy_overrides(coll, {"planner": {"params": {"inner": {"params": {"dual_cycle_radius_km": -1}}}}})
     assert coll["assignment_0"]["profile"] == legacy
 
 
@@ -270,7 +270,7 @@ def test_stamp_shape():
     stamp = policies_stamp(_greedy(), source="bundle",
                            candidate_settings=CandidateSettings.from_profile({}).to_dict(),
                            accounting_params={"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5})
-    assert stamp == {"dispatch": {
+    assert stamp == {"planner": {
         "name": "GreedyNearest", "version": "1", "kind": "operator", "timing": "online",
         "label": "GreedyNearest", "leaf": "GreedyNearest", "information_model": "central",
         "share_tag_format": "audited",
@@ -300,12 +300,12 @@ def test_run_config_meta_mirrors_policies(capsys):
     mgr.orsim_settings = {}
     launcher._stamp_effective_policies(mgr, overridden=False)
     stamp = mgr.orsim_settings["POLICIES"]
-    assert stamp["dispatch"]["source"] == "legacy-profile"
-    assert stamp["dispatch"]["candidate_settings"]["max_trucks_per_scope"] == 40
+    assert stamp["planner"]["source"] == "legacy-profile"
+    assert stamp["planner"]["candidate_settings"]["max_trucks_per_scope"] == 40
     # Round 2 (C4): the line prints the selection label and its information model.
-    assert ("Policies effective: dispatch=Partitioned/GreedyNearest v1 timing=online "
+    assert ("Policies effective: planner=Partitioned/GreedyNearest v1 timing=online "
             "information_model=per_group params=") in capsys.readouterr().out
-    assert stamp["dispatch"]["candidate_settings"]["sample_scope"] == "per_group"
+    assert stamp["planner"]["candidate_settings"]["sample_scope"] == "per_group"
     assert mgr.get_run_config_meta()["policies"] == stamp
 
 
@@ -337,16 +337,16 @@ def test_run_simulation_command_rejects_bad_policy_without_spawning(tmp_path, mo
     monkeypatch.setattr(ServiceManager, "run_simulation_background",
                         lambda self, **kw: spawned.append(kw))
     rc = command._run(["run-simulation", "--scenario", slug,
-                       "--policy", "dispatch=GreedyNearest",
-                       "--policy-param", "dispatch.dual_cycle_bonus_km=-1"])
+                       "--policy", "planner=GreedyNearest",
+                       "--policy-param", "planner.dual_cycle_bonus_km=-1"])
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     assert rc == 1 and not spawned
     assert payload["ok"] is False and payload["action"] == "run_simulation"
     assert "'dual_cycle_bonus_km' must be >= 0" in payload["message"]
     rc = command._run(["run-simulation", "--scenario", slug,
-                       "--solver", "RandomAssignment", "--policy", "dispatch=GreedyNearest"])
+                       "--solver", "RandomAssignment", "--policy", "planner=GreedyNearest"])
     assert rc == 1 and not spawned
-    assert "conflicts with dispatch.type='GreedyNearest'" in json.loads(
+    assert "conflicts with planner.type='GreedyNearest'" in json.loads(
         capsys.readouterr().out.strip().splitlines()[-1])["message"]
 
 
@@ -364,10 +364,10 @@ def test_run_simulation_command_ships_validated_overrides(tmp_path, monkeypatch,
     monkeypatch.setattr(ServiceManager, "run_simulation_background", _fake)
     slug = _compiled_smoke_scenario(tmp_path, monkeypatch)
     rc = command._run(["run-simulation", "--scenario", slug,
-                       "--policy-param", "dispatch.inner.candidates=sampled", "--solver", "RandomAssignment"])
+                       "--policy-param", "planner.inner.candidates=sampled", "--solver", "RandomAssignment"])
     assert rc == 0, capsys.readouterr().out
     # Round 2 (C4): --solver travels separately (ORSIM_SOLVER), never folded into the overrides.
-    assert seen["policy_overrides"] == {"dispatch": {"params": {"inner": {"params": {"candidates": "sampled"}}}}}
+    assert seen["policy_overrides"] == {"planner": {"params": {"inner": {"params": {"candidates": "sampled"}}}}}
     assert seen["solver"] == "RandomAssignment"
 
 
@@ -393,9 +393,9 @@ def test_validation_dry_runs_against_the_scenario_bundle_including_old_bundles(t
     folder.mkdir(parents=True)
     compile_spec_to_bundle(spec, domain="container-logistics-sim", scenario_dir=str(folder),
                            slug=spec["slug"])
-    ok = validate_run_policy_args(spec["slug"], None, [], ["dispatch.inner.dual_cycle_bonus_km=0"])
-    assert ok == {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}
-    bad = validate_run_policy_args(spec["slug"], None, [], ["dispatch.inner.candidates=near"])
+    ok = validate_run_policy_args(spec["slug"], None, [], ["planner.inner.dual_cycle_bonus_km=0"])
+    assert ok == {"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0}}}}}
+    bad = validate_run_policy_args(spec["slug"], None, [], ["planner.inner.candidates=near"])
     assert isinstance(bad, str) and "must be one of ['sampled', 'spatial']" in bad
 
     bundle_path = folder / "scenario.json"
@@ -426,31 +426,31 @@ def test_cli_solver_writes_the_innermost_solver_never_a_flat_leaf():
     def flags(solver=None, policy=(), param=()):
         return argparse.Namespace(solver=solver, policy=list(policy), policy_param=list(param))
 
-    spec = S._spec_from_flags(flags("GreedyNearest", param=["dispatch.inner.dual_cycle_bonus_km=0"]))
+    spec = S._spec_from_flags(flags("GreedyNearest", param=["planner.inner.dual_cycle_bonus_km=0"]))
     assert "solver" not in spec
-    assert spec["policies"] == {"dispatch": {"type": "Partitioned", "params": {
+    assert spec["policies"] == {"planner": {"type": "Partitioned", "params": {
         "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}}}
-    current = {"dispatch": {"type": "PooledMarket", "timing": "online", "params": {
+    current = {"planner": {"type": "PooledMarket", "timing": "online", "params": {
         "max_rounds": 5, "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2.0}}}}}
     edited = S._policies_from_flags(flags("RandomAssignment"), current)
-    assert edited["dispatch"] == {"type": "PooledMarket", "timing": "online", "params": {
+    assert edited["planner"] == {"type": "PooledMarket", "timing": "online", "params": {
         "max_rounds": 5, "inner": {"type": "RandomAssignment"}}}, "edit sets the innermost solver"
     kept = S._policies_from_flags(flags("GreedyNearest"), current)
     assert kept == current, "the same solver keeps its params"
-    only_param = S._policies_from_flags(flags(param=["dispatch.inner.dual_cycle_radius_km=1"]), current)
-    assert only_param["dispatch"]["params"]["inner"] == {
+    only_param = S._policies_from_flags(flags(param=["planner.inner.dual_cycle_radius_km=1"]), current)
+    assert only_param["planner"]["params"]["inner"] == {
         "type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2.0, "dual_cycle_radius_km": 1}}
-    to_part = S._policies_from_flags(flags(policy=["dispatch=Partitioned"]), current)
-    assert to_part["dispatch"]["params"] == {"inner": current["dispatch"]["params"]["inner"]}, (
+    to_part = S._policies_from_flags(flags(policy=["planner=Partitioned"]), current)
+    assert to_part["planner"]["params"] == {"inner": current["planner"]["params"]["inner"]}, (
         "changing the decomposition keeps the per-scope solver")
-    central = S._policies_from_flags(flags("RandomAssignment"), {"dispatch": {"type": "GreedyNearest"}})
-    assert central == {"dispatch": {"type": "RandomAssignment"}}, "a central leaf top is replaced"
+    central = S._policies_from_flags(flags("RandomAssignment"), {"planner": {"type": "GreedyNearest"}})
+    assert central == {"planner": {"type": "RandomAssignment"}}, "a central leaf top is replaced"
     with pytest.raises(ValueError, match="names a decomposition"):
         S._policies_from_flags(flags("PooledMarket"), None)
-    with pytest.raises(ValueError, match=r"conflicts with dispatch\.inner\.type='GreedyNearest'"):
-        S._policies_from_flags(flags("RandomAssignment", param=["dispatch.inner=GreedyNearest"]), None)
+    with pytest.raises(ValueError, match=r"conflicts with planner\.inner\.type='GreedyNearest'"):
+        S._policies_from_flags(flags("RandomAssignment", param=["planner.inner=GreedyNearest"]), None)
     with pytest.raises(ValueError, match="needs a policy"):
-        S._rebase_policies({"dispatch": {"params": {"k": 1}}}, None)
+        S._rebase_policies({"planner": {"params": {"k": 1}}}, None)
 
 
 def test_openride_run_accepts_policy_flags():
@@ -460,10 +460,10 @@ def test_openride_run_accepts_policy_flags():
 
     parser = argparse.ArgumentParser()
     run_group.register(parser.add_subparsers())
-    args = parser.parse_args(["run", "s", "--policy", "dispatch=GreedyNearest",
-                              "--policy-param", "dispatch.dual_cycle_bonus_km=0"])
-    assert args.policy == ["dispatch=GreedyNearest"]
-    assert args.policy_param == ["dispatch.dual_cycle_bonus_km=0"]
+    args = parser.parse_args(["run", "s", "--policy", "planner=GreedyNearest",
+                              "--policy-param", "planner.dual_cycle_bonus_km=0"])
+    assert args.policy == ["planner=GreedyNearest"]
+    assert args.policy_param == ["planner.dual_cycle_bonus_km=0"]
     solver_help = next(a.help for a in parser._subparsers._group_actions[0].choices["run"]._actions
                        if "--solver" in a.option_strings)
     assert "innermost per-scope solver" in solver_help.lower(), solver_help
@@ -482,10 +482,10 @@ def test_stamp_candidate_settings_names_the_sample_scope():
 
     import apps.simulation.run_container_logistics_simulation as launcher
 
-    for overrides, want in (({}, "per_group"), ({"dispatch": {"type": "PooledMarket"}}, "per_company"),
-                            ({"dispatch": {"type": "GreedyNearest"}}, "per_haulier")):
+    for overrides, want in (({}, "per_group"), ({"planner": {"type": "PooledMarket"}}, "per_company"),
+                            ({"planner": {"type": "GreedyNearest"}}, "per_haulier")):
         coll = _collection({"strategy": "GreedyNearest"})
         run_dispatch_overrides(coll, overrides=overrides, solver="GreedyNearest" if not overrides else None)
         sm = types.SimpleNamespace(orsim_settings={}, get_agent_collection=lambda role, c=coll: c)
         launcher._stamp_effective_policies(sm, True)
-        assert sm.orsim_settings["POLICIES"]["dispatch"]["candidate_settings"]["sample_scope"] == want, overrides
+        assert sm.orsim_settings["POLICIES"]["planner"]["candidate_settings"]["sample_scope"] == want, overrides

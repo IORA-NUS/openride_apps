@@ -77,14 +77,14 @@ def _first_feasible(ctx, trucks=None, allowed=None):
 
 
 def _failing(name):
-    results = run_battery("dispatch", name)
-    assert [r.id for r in results] == battery_check_ids("dispatch", name)
+    results = run_battery("planner", name)
+    assert [r.id for r in results] == battery_check_ids("planner", name)
     return {r.id for r in results if not r.ok}
 
 
 def test_twice_assigner_fails_only_no_order_twice():
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="TwiceAssigner", version="1", description="puts one order in two chains")
+        @policy(slot="planner", information_model="central", name="TwiceAssigner", version="1", description="puts one order in two chains")
         class TwiceAssigner(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -102,7 +102,7 @@ def test_twice_assigner_fails_only_no_order_twice():
 
 def test_disallowed_pair_policy_fails_only_only_allowed_pairs():
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="DisallowedPairPolicy", version="1", description="assigns infeasible pairs")
+        @policy(slot="planner", information_model="central", name="DisallowedPairPolicy", version="1", description="assigns infeasible pairs")
         class DisallowedPairPolicy(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -128,7 +128,7 @@ def test_slow_policy_fails_only_performance_scale():
     budget_ms = 50
 
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="SlowPolicy", version="1", description="sleeps past its budget at scale",
+        @policy(slot="planner", information_model="central", name="SlowPolicy", version="1", description="sleeps past its budget at scale",
                 perf_budget_ms=budget_ms)
         class SlowPolicy(DispatchPolicy):
             @dataclass(frozen=True)
@@ -145,7 +145,7 @@ def test_slow_policy_fails_only_performance_scale():
 
 def test_crash_on_empty_policy_fails_only_the_empty_robustness_checks():
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="CrashOnEmptyPolicy", version="1", description="raises on an empty scope")
+        @policy(slot="planner", information_model="central", name="CrashOnEmptyPolicy", version="1", description="raises on an empty scope")
         class CrashOnEmptyPolicy(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -161,7 +161,7 @@ def test_crash_on_empty_policy_fails_only_the_empty_robustness_checks():
 
 def test_clock_seeded_policy_fails_determinism_reproducible():
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="ClockSeededPolicy", version="1", description="seeds its RNG from the clock",
+        @policy(slot="planner", information_model="central", name="ClockSeededPolicy", version="1", description="seeds its RNG from the clock",
                 # Declared, so order_independent is skipped and only the defect under test shows.
                 order_sensitive="seeded from the wall clock")
         class ClockSeededPolicy(DispatchPolicy):
@@ -181,7 +181,7 @@ def test_clock_seeded_policy_fails_determinism_reproducible():
 
 def test_double_truck_from_pairs_fails_only_no_truck_twice():
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="DoubleTruckPolicy", version="1", description="gives one truck two orders")
+        @policy(slot="planner", information_model="central", name="DoubleTruckPolicy", version="1", description="gives one truck two orders")
         class DoubleTruckPolicy(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -201,7 +201,7 @@ def test_double_truck_from_pairs_fails_only_no_truck_twice():
 def test_policy_broken_only_under_a_non_default_choice_fails_that_arm():
     """The reviewer's ``battery_defaults_only.py`` case (review F3): only ``candidates=sampled`` is broken."""
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="BrokenWhenSampled", version="1", description="double-assigns when sampled")
+        @policy(slot="planner", information_model="central", name="BrokenWhenSampled", version="1", description="double-assigns when sampled")
         class BrokenWhenSampled(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -223,7 +223,7 @@ def test_policy_broken_only_under_a_non_default_choice_fails_that_arm():
 
 def test_module_rng_policy_fails_only_no_module_rng():
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="ModuleRngPolicy", version="1", description="draws from the random module")
+        @policy(slot="planner", information_model="central", name="ModuleRngPolicy", version="1", description="draws from the random module")
         class ModuleRngPolicy(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -239,7 +239,7 @@ def test_module_rng_policy_fails_only_no_module_rng():
 def test_registering_bad_param_defaults_raises():
     with isolated_registry():
         with pytest.raises(PolicyRegistrationError, match="defaults fail their own validation"):
-            @policy(slot="dispatch", information_model="central", name="BadDefaults", version="1", description="default below its bound")
+            @policy(slot="planner", information_model="central", name="BadDefaults", version="1", description="default below its bound")
             class BadDefaults(DispatchPolicy):
                 @dataclass(frozen=True)
                 class Params(PolicyParams):
@@ -256,7 +256,7 @@ def test_leaky_market_fails_only_scopes_respect_model():
     of the scopes it built can see the leak.
     """
     with isolated_registry():
-        @policy(slot="dispatch", information_model="per_company", name="LeakyMarket", version="1",
+        @policy(slot="planner", information_model="per_company", name="LeakyMarket", version="1",
                 description="company scopes that leak other companies' trucks")
         class LeakyMarket(DispatchPolicy):
             @dataclass(frozen=True)
@@ -287,7 +287,7 @@ def test_cross_company_central_fails_only_only_allowed_pairs():
     partners); the framework's world rule on the tick scope is what refuses it.
     """
     with isolated_registry():
-        @policy(slot="dispatch", information_model="central", name="CrossCompanyCentral", version="1",
+        @policy(slot="planner", information_model="central", name="CrossCompanyCentral", version="1",
                 description="serves across every company pair")
         class CrossCompanyCentral(DispatchPolicy):
             @dataclass(frozen=True)
@@ -307,7 +307,7 @@ def test_cross_company_central_fails_only_only_allowed_pairs():
 def _slow_undeclared_arm(budgets=None):
     budget_ms = 500
 
-    @policy(slot="dispatch", information_model="central", name="SlowUndeclaredArm", version="1",
+    @policy(slot="planner", information_model="central", name="SlowUndeclaredArm", version="1",
             description="fast by default, slow on one arm", perf_budget_ms=budget_ms, arm_budgets_ms=budgets)
     class SlowUndeclaredArm(DispatchPolicy):
         @dataclass(frozen=True)
@@ -333,7 +333,7 @@ def test_slow_undeclared_arm_fails_only_its_performance_scale():
         _slow_undeclared_arm()
         failing = _failing("SlowUndeclaredArm")
         assert failing == {"performance.scale[variant=x]"}, sorted(failing)
-        detail = next(r.detail for r in run_battery("dispatch", "SlowUndeclaredArm")
+        detail = next(r.detail for r in run_battery("planner", "SlowUndeclaredArm")
                       if r.id == "performance.scale[variant=x]")
         assert "arm not measured" in detail and "budget 500 ms" in detail
     with isolated_registry():

@@ -4,7 +4,7 @@ What is locked (``docs/plans/policy_slots_round2_whole_tick.md`` §5 C4, S19): t
 control plane's dry run calls ``scenario_overrides.precheck_override_names`` (every
 named slot, policy and component registered; the params of every NAMED type valid)
 BEFORE it loads the scenario, so a typo is reported as itself even for a scenario that
-does not exist; params whose type is not named (``dispatch.inner.k=v``) are left for
+does not exist; params whose type is not named (``planner.inner.k=v``) are left for
 the dry run against the bundle, which alone knows what they belong to. The payload
 shape is ``{ok: true, action: "validate_run_policies", overrides}`` /
 ``{ok: false, action, message}``; ``overrides`` never carries ``--solver``.
@@ -33,11 +33,11 @@ def test_bad_solver_reported_even_without_a_bundle(capsys):
     "scenario 'nope' not found" instead (all three cases)."""
     rc, payload = _payload(["validate-run-policies", "--scenario", "nope", "--solver", "Nope"], capsys)
     assert rc == 1 and payload["ok"] is False and payload["action"] == "validate_run_policies"
-    assert payload["message"].startswith("--solver 'Nope': Unknown dispatch policy 'Nope'"), payload
+    assert payload["message"].startswith("--solver 'Nope': Unknown planner policy 'Nope'"), payload
     msg = validate_run_policy_args("nope", "PooledMarket", [], [])
     assert msg.startswith("--solver 'PooledMarket' names a decomposition"), msg
-    msg = validate_run_policy_args("nope", None, ["dispatch=GreedyNeerest"], [])
-    assert "Unknown dispatch policy 'GreedyNeerest'" in msg, msg
+    msg = validate_run_policy_args("nope", None, ["planner=GreedyNeerest"], [])
+    assert "Unknown planner policy 'GreedyNeerest'" in msg, msg
     # A good name with no flags-only error reaches the bundle lookup.
     msg = validate_run_policy_args("nope", "GreedyNearest", [], [])
     assert msg.startswith("scenario 'nope' not found"), msg
@@ -48,29 +48,29 @@ def test_bad_nested_ref_reported_before_bundle_lookup(capsys):
     type checked) reported the missing scenario for the inner/offer typos; validating
     an UNNAMED ref's params against its default type refused the inner bonus."""
     for flags, needle in [
-        (["--policy", "dispatch=PooledMarket", "--policy-param", "dispatch.inner=Nope"],
-         "policy overrides.dispatch.params.inner: unknown dispatch policy 'Nope'"),
-        (["--policy", "dispatch=PooledMarket", "--policy-param", "dispatch.offer=OfferAl"],
-         "policy overrides.dispatch.params.offer: unknown market.offer component 'OfferAl'"),
-        (["--policy", "dispatch=Partitioned", "--policy-param", "dispatch.inner=PooledMarket"],
+        (["--policy", "planner=PooledMarket", "--policy-param", "planner.inner=Nope"],
+         "policy overrides.planner.params.inner: unknown planner policy 'Nope'"),
+        (["--policy", "planner=PooledMarket", "--policy-param", "planner.offer=OfferAl"],
+         "policy overrides.planner.params.offer: unknown market.offer component 'OfferAl'"),
+        (["--policy", "planner=Partitioned", "--policy-param", "planner.inner=PooledMarket"],
          "'PooledMarket' decomposes the tick itself"),
-        (["--policy", "dispatch=PooledMarket", "--policy-param", "dispatch.max_rounds=0"], "must be >= 1"),
-        (["--policy", "dispatch=PooledMarket", "--policy-param", "dispatch.inner=GreedyNearest",
-          "--policy-param", "dispatch.inner.dual_cycle_bonus_km=-1"], "must be >= 0"),
+        (["--policy", "planner=PooledMarket", "--policy-param", "planner.max_rounds=0"], "must be >= 1"),
+        (["--policy", "planner=PooledMarket", "--policy-param", "planner.inner=GreedyNearest",
+          "--policy-param", "planner.inner.dual_cycle_bonus_km=-1"], "must be >= 0"),
         (["--policy-param", "dispach.inner=X"], "no known slot is a prefix"),
     ]:
         rc, payload = _payload(["validate-run-policies", "--scenario", "nope", *flags], capsys)
         assert rc == 1 and needle in payload["message"], (flags, payload)
     # Unnamed ref params belong to the bundle's selection: only the bundle lookup can judge them.
-    msg = validate_run_policy_args("nope", None, ["dispatch=PooledMarket"],
-                                   ["dispatch.inner.dual_cycle_bonus_km=0"])
+    msg = validate_run_policy_args("nope", None, ["planner=PooledMarket"],
+                                   ["planner.inner.dual_cycle_bonus_km=0"])
     assert msg.startswith("scenario 'nope' not found"), msg
 
 
 def test_payload_ships_overrides_without_the_solver(tmp_path, monkeypatch, capsys):
     """The ok payload's ``overrides`` is ORSIM_POLICY_OVERRIDES (``--solver`` ships as
     ORSIM_SOLVER). Verified to have teeth: returning ``run_dispatch_overrides``' merged
-    overrides (which carry the solver as ``dispatch.inner.type``) from
+    overrides (which carry the solver as ``planner.inner.type``) from
     ``validate_run_policy_args`` failed the equality."""
     from pathlib import Path
 
@@ -84,10 +84,10 @@ def test_payload_ships_overrides_without_the_solver(tmp_path, monkeypatch, capsy
     compile_spec_to_bundle(spec, domain="container-logistics-sim", scenario_dir=str(root / spec["slug"]),
                            slug=spec["slug"])
     rc, payload = _payload(["validate-run-policies", "--scenario", spec["slug"], "--solver", "RandomAssignment",
-                            "--policy", "dispatch=PooledMarket",
-                            "--policy-param", "dispatch.inner.candidates=spatial"], capsys)
+                            "--policy", "planner=PooledMarket",
+                            "--policy-param", "planner.inner.candidates=spatial"], capsys)
     assert rc == 0, payload
     assert set(payload) == {"ok", "action", "overrides", "commandId"}
     assert payload["ok"] is True and payload["action"] == "validate_run_policies"
-    assert payload["overrides"] == {"dispatch": {"type": "PooledMarket",
+    assert payload["overrides"] == {"planner": {"type": "PooledMarket",
                                                  "params": {"inner": {"params": {"candidates": "spatial"}}}}}

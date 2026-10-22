@@ -34,7 +34,7 @@ class StandInPartitioned(CompositePolicy):
 
     @dataclass(frozen=True)
     class Params(PolicyParams):
-        inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True, help=_INNER_HELP)
+        inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True, help=_INNER_HELP)
 
     def decide(self, ctx):  # pragma: no cover - resolution/binding only
         raise NotImplementedError("test stand-in")
@@ -50,7 +50,7 @@ class StandInPooledMarket(CompositePolicy):
         claim: PolicyRef = param(ref("ClaimAllPlanned"), kind="market.claim", help="Claim component.")
         arbitration: PolicyRef = param(ref("LowestCost"), kind="market.arbitration",
                                        help="Arbitration component.")
-        inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True, help=_INNER_HELP)
+        inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True, help=_INNER_HELP)
 
     def decide(self, ctx):  # pragma: no cover - resolution/binding only
         raise NotImplementedError("test stand-in")
@@ -69,8 +69,8 @@ def decompositions() -> Iterator[None]:
     A real registration (C3 on) is left alone; a missing one gets the stand-in.
     """
     with isolated_registry():
-        names = {spec.name for spec in list_policies("dispatch")}
+        names = {spec.name for spec in list_policies("planner")}
         for cls, meta in _STANDINS:
             if meta["name"] not in names:
-                policy(slot="dispatch", version="1", description=cls.__doc__, **meta)(cls)
+                policy(slot="planner", version="1", description=cls.__doc__, **meta)(cls)
         yield

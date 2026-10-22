@@ -52,7 +52,7 @@ def _dummy(name: str = "TestDummy", **policy_kwargs):
         k: float = param(1.0, ge=0, help="A knob.")
 
     cls = type(name, (_TestPolicyBase,), {"Params": Params})
-    kwargs = {"slot": "dispatch", "name": name, "version": "1", "description": "A test dummy.",
+    kwargs = {"slot": "planner", "name": name, "version": "1", "description": "A test dummy.",
               "information_model": "central"}
     kwargs.update(policy_kwargs)
     return policy(**kwargs)(cls)
@@ -67,12 +67,12 @@ def test_policy_decorator_registers_and_returns_the_class():
     with isolated_registry():
         cls = _dummy("TestDummyA")
         assert isinstance(cls, type) and cls.__name__ == "TestDummyA"
-        spec = get_policy_spec("dispatch", "TestDummyA")
+        spec = get_policy_spec("planner", "TestDummyA")
         assert spec.cls is cls
         assert spec.params_cls is cls.Params
         assert spec.version == "1" and spec.kind() == "operator"
         assert spec_for_class(cls) is spec
-        assert spec in list_policies("dispatch")
+        assert spec in list_policies("planner")
 
 
 def test_same_class_reregistration_is_idempotent():
@@ -84,7 +84,7 @@ def test_same_class_reregistration_is_idempotent():
     with isolated_registry():
         cls = _dummy("TestDummyB")
         before = len(list_policies())
-        policy(slot="dispatch", information_model="central", name="TestDummyB", version="1", description="A test dummy.")(cls)
+        policy(slot="planner", information_model="central", name="TestDummyB", version="1", description="A test dummy.")(cls)
         assert len(list_policies()) == before
 
 
@@ -96,7 +96,7 @@ def test_same_class_reregistered_with_different_metadata_raises():
     with isolated_registry():
         cls = _dummy("TestDummyB2")
         with pytest.raises(PolicyRegistrationError, match="registered twice"):
-            policy(slot="dispatch", information_model="central", name="TestDummyB2", version="2", description="A test dummy.")(cls)
+            policy(slot="planner", information_model="central", name="TestDummyB2", version="2", description="A test dummy.")(cls)
 
 
 def test_duplicate_name_with_a_different_class_raises():
@@ -119,7 +119,7 @@ def test_one_class_cannot_back_two_policies():
     with isolated_registry():
         cls = _dummy("TestDummyD")
         with pytest.raises(PolicyRegistrationError, match="one class backs exactly one policy"):
-            policy(slot="dispatch", information_model="central", name="TestDummyD2", version="1", description="x")(cls)
+            policy(slot="planner", information_model="central", name="TestDummyD2", version="1", description="x")(cls)
 
 
 def test_registering_into_an_unknown_slot_raises():
@@ -129,7 +129,7 @@ def test_registering_into_an_unknown_slot_raises():
     ``_check_slot_registrable`` with ``SLOTS.get`` + early return let it register.
     """
     with isolated_registry():
-        with pytest.raises(PolicyRegistrationError, match=r"Unknown policy slot 'dispatchh'.*Known slots: dispatch"):
+        with pytest.raises(PolicyRegistrationError, match=r"Unknown policy slot 'dispatchh'.*Known slots: planner"):
             _dummy("TestDummyE", slot="dispatchh")
 
 
@@ -138,7 +138,7 @@ def test_registering_into_a_removed_slot_is_an_unknown_slot():
     ordinary unknown-slot refusal."""
     with isolated_registry():
         with pytest.raises(PolicyRegistrationError,
-                           match=r"Unknown policy slot 'idle'\. Known slots: dispatch\.$"):
+                           match=r"Unknown policy slot 'idle'\. Known slots: planner\.$"):
             _dummy("TestDummyF", slot="idle")
 
 
@@ -161,7 +161,7 @@ def test_params_must_be_a_frozen_dataclass_subclass():
     dataclass register.
     """
     def register(cls):
-        return policy(slot="dispatch", information_model="central", name=cls.__name__, version="1", description="x")(cls)
+        return policy(slot="planner", information_model="central", name=cls.__name__, version="1", description="x")(cls)
 
     @dataclass
     class NotFrozen(PolicyParams):
@@ -199,7 +199,7 @@ def test_defaults_violating_their_own_bounds_fail_registration():
 
     with isolated_registry():
         with pytest.raises(PolicyRegistrationError, match=r"defaults fail their own validation.*'k' must be >= 0"):
-            policy(slot="dispatch", information_model="central", name="TestBadDefault", version="1", description="x")(
+            policy(slot="planner", information_model="central", name="TestBadDefault", version="1", description="x")(
                 type("TestBadDefault", (_TestPolicyBase,), {"Params": Params}))
 
 
@@ -213,11 +213,11 @@ def test_unknown_policy_error_lists_registered_names():
         _dummy("TestZed")
         _dummy("TestAlpha")
         with pytest.raises(UnknownPolicyError) as exc:
-            get_policy_spec("dispatch", "GreedyNeerest")
+            get_policy_spec("planner", "GreedyNeerest")
     message = str(exc.value)
-    assert message.startswith("Unknown dispatch policy 'GreedyNeerest'. Registered dispatch policies: ")
+    assert message.startswith("Unknown planner policy 'GreedyNeerest'. Registered planner policies: ")
     assert "TestAlpha, TestZed" in message, message
-    assert message.endswith(". (List them: openride policy list dispatch)")
+    assert message.endswith(". (List them: openride policy list planner)")
 
 
 def test_unknown_policy_error_format_is_exact():
@@ -227,10 +227,10 @@ def test_unknown_policy_error_format_is_exact():
         _dummy("GreedyNearest")
         _dummy("RandomAssignment")
         with pytest.raises(UnknownPolicyError) as exc:
-            get_policy_spec("dispatch", "GreedyNeerest")
+            get_policy_spec("planner", "GreedyNeerest")
     assert str(exc.value) == (
-        "Unknown dispatch policy 'GreedyNeerest'. Registered dispatch policies: "
-        "GreedyNearest, RandomAssignment. (List them: openride policy list dispatch)"
+        "Unknown planner policy 'GreedyNeerest'. Registered planner policies: "
+        "GreedyNearest, RandomAssignment. (List them: openride policy list planner)"
     )
 
 
@@ -239,13 +239,13 @@ def test_lookups_in_unknown_or_removed_slots_raise():
     ``UnknownSlotError`` naming the known slots; never a fallback."""
     with pytest.raises(UnknownSlotError):
         get_policy_spec("nope", "X")
-    with pytest.raises(UnknownSlotError, match=r"^Unknown policy slot 'queue'\. Known slots: dispatch\.$"):
+    with pytest.raises(UnknownSlotError, match=r"^Unknown policy slot 'queue'\. Known slots: planner\.$"):
         get_policy_spec("queue", "Fifo")
     with pytest.raises(UnknownSlotError):
         get_policy_spec("market.claim", "ClaimNone")
-    with pytest.raises(UnknownSlotError, match=r"^Unknown policy slot 'idle'\. Known slots: dispatch\.$"):
+    with pytest.raises(UnknownSlotError, match=r"^Unknown policy slot 'idle'\. Known slots: planner\.$"):
         default_policy_name("idle")
-    assert default_policy_name("dispatch") == "Partitioned"
+    assert default_policy_name("planner") == "Partitioned"
     with pytest.raises(UnknownSlotError):
         list_policies("nope")
 
@@ -258,7 +258,7 @@ def test_list_policies_is_sorted_by_slot_then_name():
     with isolated_registry():
         for name in ("TestM", "TestB", "TestY"):
             _dummy(name)
-        names = [s.name for s in list_policies("dispatch") if s.name in {"TestM", "TestB", "TestY"}]
+        names = [s.name for s in list_policies("planner") if s.name in {"TestM", "TestB", "TestY"}]
         assert names == ["TestB", "TestM", "TestY"]
 
 
@@ -270,7 +270,7 @@ def test_missing_requirements_are_reported():
     with isolated_registry():
         cls = _dummy("TestNeedsDeps",
                      requires=("definitely_not_a_module_xyz", "json", "definitely_not_a_pkg_xyz.sub"))
-        spec = get_policy_spec("dispatch", "TestNeedsDeps")
+        spec = get_policy_spec("planner", "TestNeedsDeps")
     assert spec.cls is cls
     assert spec.missing_requirements() == ["definitely_not_a_module_xyz", "definitely_not_a_pkg_xyz.sub"]
 
@@ -285,7 +285,7 @@ def test_slot_base_class_table_is_enforced():
 
     with isolated_registry():
         saved = dict(registry._SLOT_BASES)
-        registry._SLOT_BASES["dispatch"] = f"{__name__}:_BaseForSlotTest"
+        registry._SLOT_BASES["planner"] = f"{__name__}:_BaseForSlotTest"
         globals()["_BaseForSlotTest"] = Base
         try:
             with pytest.raises(PolicyRegistrationError, match="must subclass"):
@@ -311,7 +311,7 @@ def test_isolated_registry_restores_global_state():
     assert list_policies() == before
     assert registry._DISCOVERY == discovery_before
     with pytest.raises(UnknownPolicyError):
-        get_policy_spec("dispatch", "TestLeak")
+        get_policy_spec("planner", "TestLeak")
 
 
 def _fake_policy_package(tmp_path, monkeypatch) -> str:
@@ -401,7 +401,7 @@ def test_discovery_finds_both_builtins_with_version_1():
         RandomAssignmentSolver,
     )
 
-    specs = {s.name: s for s in list_policies("dispatch")}
+    specs = {s.name: s for s in list_policies("planner")}
     assert {"GreedyNearest", "RandomAssignment"} <= set(specs), sorted(specs)
     greedy, rand = specs["GreedyNearest"], specs["RandomAssignment"]
     assert (greedy.version, rand.version) == ("1", "1")
@@ -428,7 +428,7 @@ def test_dispatch_slot_rejects_a_class_that_is_not_a_dispatch_policy():
 
     with isolated_registry():
         with pytest.raises(PolicyRegistrationError, match="must subclass .*DispatchPolicy"):
-            policy(slot="dispatch", information_model="central", name="TestPlainClass", version="1", description="x")(
+            policy(slot="planner", information_model="central", name="TestPlainClass", version="1", description="x")(
                 type("TestPlainClass", (), {"Params": Params}))
 
 
@@ -441,7 +441,7 @@ def _leaf_with_choices(name: str, **policy_kwargs):
     class Params(PolicyParams):
         candidates: str = param("spatial", choices=("spatial", "sampled"), help="Candidates.")
 
-    kwargs = {"slot": "dispatch", "name": name, "version": "1", "description": "x",
+    kwargs = {"slot": "planner", "name": name, "version": "1", "description": "x",
               "information_model": "central"}
     kwargs.update(policy_kwargs)
     return policy(**kwargs)(type(name, (_TestPolicyBase,), {"Params": Params}))
@@ -451,10 +451,10 @@ def _composite(name: str, **policy_kwargs):
     """A dummy with an ``inner`` dispatch ref (and a market.offer component ref)."""
     @dataclass(frozen=True)
     class Params(PolicyParams):
-        inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True, help="Inner.")
+        inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True, help="Inner.")
         offer: PolicyRef = param(ref("OfferAll"), kind="market.offer", help="Offer.")
 
-    kwargs = {"slot": "dispatch", "name": name, "version": "1", "description": "x",
+    kwargs = {"slot": "planner", "name": name, "version": "1", "description": "x",
               "information_model": "per_group"}
     kwargs.update(policy_kwargs)
     return policy(**kwargs)(type(name, (_TestPolicyBase,), {"Params": Params}))
@@ -470,14 +470,14 @@ def test_dispatch_policy_must_declare_information_model():
         with pytest.raises(PolicyRegistrationError) as exc:
             _dummy("X", information_model=None)
         assert str(exc.value) == (
-            "@policy(slot='dispatch', name='X'): declare information_model= one of central, "
+            "@policy(slot='planner', name='X'): declare information_model= one of central, "
             "per_group, per_company (whose private data this policy's decision may use)."
         )
         with pytest.raises(PolicyRegistrationError, match=r"one of central, per_group, per_company .*\(got 'global'\)"):
             _dummy("TestBadModel", information_model="global")
         for model in ("central", "per_group", "per_company"):
             assert _dummy(f"TestModel_{model}", information_model=model)
-            assert get_policy_spec("dispatch", f"TestModel_{model}").information_model == model
+            assert get_policy_spec("planner", f"TestModel_{model}").information_model == model
 
 
 def test_share_tag_format_v1_reserved_for_partitioned():
@@ -490,16 +490,16 @@ def test_share_tag_format_v1_reserved_for_partitioned():
         with pytest.raises(PolicyRegistrationError) as exc:
             _dummy("X", share_tag_format="v1")
         assert str(exc.value) == (
-            "@policy(slot='dispatch', name='X'): share_tag_format='v1' is reserved for the "
+            "@policy(slot='planner', name='X'): share_tag_format='v1' is reserved for the "
             "Partitioned built-in (the pre-v2 wire format, kept only for byte identity); new "
             "policies use the default 'audited'."
         )
         with pytest.raises(PolicyRegistrationError, match="share_tag_format must be one of v1, audited"):
             _dummy("TestBadFormat", share_tag_format="v2")
-        assert get_policy_spec("dispatch", _dummy("TestDefaultFormat").__name__).share_tag_format == "audited"
-        registry._REGISTRY.pop(("dispatch", "Partitioned"), None)  # the real one, from C3 on
+        assert get_policy_spec("planner", _dummy("TestDefaultFormat").__name__).share_tag_format == "audited"
+        registry._REGISTRY.pop(("planner", "Partitioned"), None)  # the real one, from C3 on
         _composite("Partitioned", share_tag_format="v1")
-        assert get_policy_spec("dispatch", "Partitioned").share_tag_format == "v1"
+        assert get_policy_spec("planner", "Partitioned").share_tag_format == "v1"
 
 
 def test_arm_budget_keys_must_name_arms():
@@ -515,7 +515,7 @@ def test_arm_budget_keys_must_name_arms():
         with pytest.raises(PolicyRegistrationError) as exc:
             _leaf_with_choices("GreedyNearest", arm_budgets_ms={"candidate=sampled": 5000})
         assert str(exc.value) == (
-            "@policy(slot='dispatch', name='GreedyNearest'): arm_budgets_ms key "
+            "@policy(slot='planner', name='GreedyNearest'): arm_budgets_ms key "
             "'candidate=sampled' is not an arm of this policy. Arms: candidates=sampled."
         )
         with pytest.raises(PolicyRegistrationError, match="'candidates=spatial' is not an arm"):
@@ -524,9 +524,9 @@ def test_arm_budget_keys_must_name_arms():
             with pytest.raises(PolicyRegistrationError, match="must be a positive integer"):
                 _leaf_with_choices("TestBadMs", arm_budgets_ms={"candidates=sampled": bad})
         _leaf_with_choices("TestGoodArm", arm_budgets_ms={"candidates=sampled": 5000})
-        assert dict(get_policy_spec("dispatch", "TestGoodArm").arm_budgets_ms) == {"candidates=sampled": 5000}
+        assert dict(get_policy_spec("planner", "TestGoodArm").arm_budgets_ms) == {"candidates=sampled": 5000}
         _composite("TestRefArm", arm_budgets_ms={"inner=GreedyNearest": 800})
-        assert dict(get_policy_spec("dispatch", "TestRefArm").arm_budgets_ms) == {"inner=GreedyNearest": 800}
+        assert dict(get_policy_spec("planner", "TestRefArm").arm_budgets_ms) == {"inner=GreedyNearest": 800}
 
 
 def test_composite_flag_from_a_dispatch_ref():
@@ -543,19 +543,19 @@ def test_composite_flag_from_a_dispatch_ref():
 
     @dataclass(frozen=True)
     class LaterInner(PolicyParams):
-        inner: PolicyRef = param(ref("TestRegisteredLater"), kind="dispatch", help="Inner.")
+        inner: PolicyRef = param(ref("TestRegisteredLater"), kind="planner", help="Inner.")
 
     with isolated_registry():
-        spec = get_policy_spec("dispatch", _composite("TestComposite").__name__)
-        assert spec.refs == (("inner", "dispatch", True), ("offer", "market.offer", False))
+        spec = get_policy_spec("planner", _composite("TestComposite").__name__)
+        assert spec.refs == (("inner", "planner", True), ("offer", "market.offer", False))
         assert spec.is_composite
-        policy(slot="dispatch", name="TestOfferOnly", version="1", description="x",
+        policy(slot="planner", name="TestOfferOnly", version="1", description="x",
                information_model="central")(type("TestOfferOnly", (_TestPolicyBase,), {"Params": OfferOnly}))
-        offer_only = get_policy_spec("dispatch", "TestOfferOnly")
+        offer_only = get_policy_spec("planner", "TestOfferOnly")
         assert offer_only.refs == (("offer", "market.offer", False),) and not offer_only.is_composite
-        policy(slot="dispatch", name="TestLaterInner", version="1", description="x",
+        policy(slot="planner", name="TestLaterInner", version="1", description="x",
                information_model="per_group")(type("TestLaterInner", (_TestPolicyBase,), {"Params": LaterInner}))
-        with pytest.raises(UnknownPolicyError, match="unknown dispatch policy 'TestRegisteredLater'"):
+        with pytest.raises(UnknownPolicyError, match="unknown planner policy 'TestRegisteredLater'"):
             LaterInner.from_mapping(None, where="t")
         _dummy("TestRegisteredLater")
         assert LaterInner.from_mapping(None, where="t").inner.type == "TestRegisteredLater"
@@ -566,7 +566,7 @@ def test_every_policy_default_tree_resolves():
     only checks a ref default's shape), and render in both dict forms.
 
     Verified to have teeth: adding ``inner: PolicyRef = param(ref("NoSuchPolicy"),
-    kind="dispatch", ...)`` to ``GreedyNearestSolver.Params`` still registered (shape
+    kind="planner", ...)`` to ``GreedyNearestSolver.Params`` still registered (shape
     only) and failed here with UnknownPolicyError.
     """
     for spec in list_policies():

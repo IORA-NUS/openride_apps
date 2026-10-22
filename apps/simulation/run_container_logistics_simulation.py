@@ -93,7 +93,7 @@ def _apply_dispatch_overrides_or_exit(assignment_collection) -> tuple[dict, dict
     and ``ORSIM_SOLVER``, in that order, through
     ``scenario_overrides.run_dispatch_overrides`` (the function the control plane's
     dry run calls too). Returns ``(merged_overrides, labels)``: ``labels`` holds the
-    ``dispatch`` and ``topology`` run-name segments (or ``None``).
+    ``planner`` and ``topology`` run-name segments (or ``None``).
     """
     env = {key: os.environ.get(name, "").strip() or None for key, name in (
         ("topology", "ORSIM_PLANNER_TOPOLOGY"), ("offer", "ORSIM_OFFER_POLICY"),
@@ -165,16 +165,16 @@ def _stamp_effective_policies(scenario_manager, overridden: bool) -> None:
             # Where the max_trucks_per_scope cap applies: per haulier on a central
             # leaf's tick scope, per cooperation group / per company under the
             # decompositions (so a central arm can see more candidates; C3 deviation 6).
-            "sample_scope": sample_scope_for(resolved["dispatch"].information_model),
+            "sample_scope": sample_scope_for(resolved["planner"].information_model),
         },
         # What AssignmentApp._solver_params will cost with (same ``or {}`` read).
         accounting_params=profile.get("solver_params") or {},
         source="override" if overridden else source,
     )
     scenario_manager.orsim_settings["POLICIES"] = stamp
-    d = stamp["dispatch"]
+    d = stamp["planner"]
     print(
-        f"Policies effective: dispatch={d['label']} v{d['version']} timing={d['timing']} "
+        f"Policies effective: planner={d['label']} v{d['version']} timing={d['timing']} "
         f"information_model={d['information_model']} "
         f"params={json.dumps(d['params'], sort_keys=True)} "
         f"accounting_params={json.dumps(d['accounting_params'], sort_keys=True)}"
@@ -351,7 +351,7 @@ def main():
         scenario_manager.get_agent_collection("assignment")
     )
     policies_overridden = bool(dispatch_overrides)
-    dispatch_label = dispatch_labels["dispatch"]
+    dispatch_label = dispatch_labels["planner"]
     if dispatch_label:
         print(f"Assignment dispatch override: {dispatch_label}")
         # Surface the chosen policy (and overridden params) in run lists with zero
@@ -384,7 +384,7 @@ def main():
 
     # Per-run PLANNER TOPOLOGY (shared-pool plan §6.12), applied above with the other
     # dispatch inputs (ORSIM_PLANNER_TOPOLOGY is translated into --policy
-    # dispatch=PooledMarket / Partitioned, keeping the per-scope solver; the ORSIM_*
+    # planner=PooledMarket / Partitioned, keeping the per-scope solver; the ORSIM_*
     # market variables into its params). The DEFAULT TOPOLOGY IS NOT FLIPPED —
     # selection is per run, on purpose: pooled and partitioned produce different
     # numbers and their runs are NOT comparable (plan §8). The segment stays here so

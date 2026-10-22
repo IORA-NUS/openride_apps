@@ -64,14 +64,14 @@ class _Base(DispatchPolicy):
 
 
 def _register(name: str, params_cls: type, *, model: str = "central", **kwargs) -> type:
-    return policy(slot="dispatch", name=name, version="1", description="x",
+    return policy(slot="planner", name=name, version="1", description="x",
                   information_model=model, **kwargs)(type(name, (_Base,), {"Params": params_cls}))
 
 
 def _wrapper_params(default: str, *, leaf_only: bool = True) -> type:
     @dataclass(frozen=True)
     class Params(PolicyParams):
-        inner: PolicyRef = param(ref(default), kind="dispatch", leaf_only=leaf_only, help="Inner.")
+        inner: PolicyRef = param(ref(default), kind="planner", leaf_only=leaf_only, help="Inner.")
     return Params
 
 
@@ -98,16 +98,16 @@ def test_nested_ref_to_a_policy_with_missing_requirements_fails_loud_like_the_to
         _register("NeedsMissing", _Empty, requires=(MISSING,))
         wrap = _register("Wrap", _wrapper_params("GreedyNearest"), model="per_group")
         with pytest.raises(PolicyDependencyError) as top:
-            resolve_policies_block({"dispatch": {"type": "NeedsMissing"}})
+            resolve_policies_block({"planner": {"type": "NeedsMissing"}})
         with pytest.raises(PolicyDependencyError) as nested:
             wrap.Params.from_mapping({"inner": {"type": "NeedsMissing"}},
-                                     where="policies.dispatch.params for Wrap")
-        assert str(nested.value) == f"policies.dispatch.params.inner: {top.value}"
+                                     where="policies.planner.params for Wrap")
+        assert str(nested.value) == f"policies.planner.params.inner: {top.value}"
         assert str(top.value) == (
-            f"Dispatch policy 'NeedsMissing' requires module(s) not importable in this "
+            f"Planner policy 'NeedsMissing' requires module(s) not importable in this "
             f"environment: {MISSING}. Install them or pick another policy.")
-        with pytest.raises(PolicyDependencyError, match=r"^policies\.dispatch\.params\.inner: Dispatch"):
-            resolve_policies_block({"dispatch": {"type": "Partitioned",
+        with pytest.raises(PolicyDependencyError, match=r"^policies\.planner\.params\.inner: Planner"):
+            resolve_policies_block({"planner": {"type": "Partitioned",
                                                  "params": {"inner": {"type": "NeedsMissing"}}}})
 
 
@@ -121,9 +121,9 @@ def test_a_self_referencing_ref_default_is_refused_at_registration():
         with pytest.raises(PolicyRegistrationError) as exc:
             _register("SelfR", _wrapper_params("SelfR", leaf_only=False), model="per_group")
         assert str(exc.value).startswith(
-            "@policy(slot='dispatch', name='SelfR'): ref param defaults form a cycle "
+            "@policy(slot='planner', name='SelfR'): ref param defaults form a cycle "
             "(SelfR.inner -> SelfR)"), exc.value
-        assert "SelfR" not in [s.name for s in registry.list_policies("dispatch")]
+        assert "SelfR" not in [s.name for s in registry.list_policies("planner")]
 
 
 def test_a_two_policy_default_cycle_is_refused_by_the_registration_that_closes_it():
@@ -178,11 +178,11 @@ def test_a_cycle_that_bypassed_registration_is_a_named_params_error_and_the_cata
 
     with isolated_registry():
         _register("SneakyR", _wrapper_params("GreedyNearest", leaf_only=False), model="per_group")
-        key = ("dispatch", "SneakyR")
+        key = ("planner", "SneakyR")
         registry._REGISTRY[key] = replace(registry._REGISTRY[key],
                                           params_cls=_wrapper_params("SneakyR", leaf_only=False))
         with pytest.raises(PolicyParamsError, match=r"cycle \(SneakyR -> SneakyR\)"):
-            resolve_policies_block({"dispatch": {"type": "SneakyR"}})
+            resolve_policies_block({"planner": {"type": "SneakyR"}})
 
 
 def test_one_bad_policy_entry_is_reported_and_never_blanks_the_catalog():
@@ -194,9 +194,9 @@ def test_one_bad_policy_entry_is_reported_and_never_blanks_the_catalog():
     """
     with isolated_registry():
         _register("BadDefault", _wrapper_params("NoSuchLeaf"), model="per_group")
-        entries = {p["name"]: p for p in policy_catalog()["dispatch"]["policies"]}
+        entries = {p["name"]: p for p in policy_catalog()["planner"]["policies"]}
         bad = entries["BadDefault"]
-        assert bad["available"] is False and "unknown dispatch policy 'NoSuchLeaf'" in bad["error"]
+        assert bad["available"] is False and "unknown planner policy 'NoSuchLeaf'" in bad["error"]
         assert "error" not in entries["GreedyNearest"] and entries["GreedyNearest"]["available"]
         assert json.loads(json.dumps(entries)) == entries
 
@@ -231,15 +231,15 @@ def test_a_solver_side_module_declares_its_own_component_kind():
 
         with isolated_registry():
             _register("UsesWidget", UsesWidget)
-            spec = get_policy_spec("dispatch", "UsesWidget")
+            spec = get_policy_spec("planner", "UsesWidget")
             assert spec.params_cls.from_mapping(None, where="w").widget.version == "1"
         assert [p["name"] for p in component_catalog()["test.widget"]["policies"]] == ["Plain"]
         assert isinstance(instantiate_component("test.widget", PolicyRef(type="Plain")), Widget)
 
         with pytest.raises(PolicyRegistrationError, match="default 'Nope' is not in the registry"):
             register_component_kind("test.other", lambda: widgets, "Nope", "x")
-        with pytest.raises(PolicyRegistrationError, match="other than 'dispatch'"):
-            register_component_kind("dispatch", lambda: widgets, "Plain", "x")
+        with pytest.raises(PolicyRegistrationError, match="other than 'planner'"):
+            register_component_kind("planner", lambda: widgets, "Plain", "x")
         foreign = eval("lambda: widgets", {"__name__": "some.other.module", "widgets": widgets})
         with pytest.raises(PolicyRegistrationError, match=r"already declared by \S*test_policy_framework_review_fixes"):
             register_component_kind("test.widget", foreign, "Plain", "Widgets.")
@@ -292,11 +292,11 @@ def test_the_v1_reservation_is_the_one_allowlist():
         with pytest.raises(PolicyRegistrationError) as exc:
             _register("X", _Empty, share_tag_format="v1")
         assert str(exc.value) == (
-            "@policy(slot='dispatch', name='X'): share_tag_format='v1' is reserved for the "
+            "@policy(slot='planner', name='X'): share_tag_format='v1' is reserved for the "
             "Partitioned built-in (the pre-v2 wire format, kept only for byte identity); new "
             "policies use the default 'audited'.")
     original = registry.V1_SHARE_TAG_BUILTINS
-    registry.V1_SHARE_TAG_BUILTINS = original | {("dispatch", "X")}
+    registry.V1_SHARE_TAG_BUILTINS = original | {("planner", "X")}
     try:
         with isolated_registry():
             assert _register("X", _Empty, share_tag_format="v1")
@@ -358,36 +358,36 @@ def test_version_drift_is_logged_nested_and_at_the_top_level(caplog):
     assert drift and "m.offer names market.offer 'OfferAll' at version '999'" in drift[0], drift
 
     caplog.clear()
-    compiled = resolve_policies_block({"dispatch": {"type": "Partitioned"}})["dispatch"].to_profile()
-    resolve_profile_policies({"policies": {"dispatch": compiled}})
+    compiled = resolve_policies_block({"planner": {"type": "Partitioned"}})["planner"].to_profile()
+    resolve_profile_policies({"policies": {"planner": compiled}})
     assert not [r for r in caplog.records if VERSION_DRIFT_PREFIX in r.getMessage()], "no drift, no log"
-    resolve_profile_policies({"policies": {"dispatch": {**compiled, "version": "7"}}})
+    resolve_profile_policies({"policies": {"planner": {**compiled, "version": "7"}}})
     drift = [r.getMessage() for r in caplog.records if r.getMessage().startswith(VERSION_DRIFT_PREFIX)]
-    assert len(drift) == 1 and "profile.policies.dispatch names dispatch 'Partitioned' at version '7'" \
+    assert len(drift) == 1 and "profile.policies.planner names planner 'Partitioned' at version '7'" \
         in drift[0], drift
-    with pytest.raises(PolicyParamsError, match=r"^profile\.policies\.dispatch\.version must be"):
-        resolve_profile_policies({"policies": {"dispatch": {**compiled, "version": 7}}})
+    with pytest.raises(PolicyParamsError, match=r"^profile\.policies\.planner\.version must be"):
+        resolve_profile_policies({"policies": {"planner": {**compiled, "version": 7}}})
 
 
 # --- #11 ------------------------------------------------------------------------------
 
 
 def test_the_cli_hint_is_right_for_every_root_and_absent_without_a_cli_spelling():
-    """The reviewer's repro: ``profile.policies.dispatch.params.inner`` gave
-    ``--policy-param profile.policies.dispatch.inner``.
+    """The reviewer's repro: ``profile.policies.planner.params.inner`` gave
+    ``--policy-param profile.policies.planner.inner``.
 
     Verified to have teeth: restoring the first-segment match failed the
     ``profile.policies`` cases; always emitting a hint failed the no-hint case.
     """
-    assert _cli_path("profile.policies.dispatch.params.inner") == "dispatch.inner"
-    assert _cli_path("policies.dispatch.params.inner.params.offer") == "dispatch.inner.offer"
-    assert _cli_path("policy overrides.dispatch.params.inner") == "dispatch.inner"
+    assert _cli_path("profile.policies.planner.params.inner") == "planner.inner"
+    assert _cli_path("policies.planner.params.inner.params.offer") == "planner.inner.offer"
+    assert _cli_path("policy overrides.planner.params.inner") == "planner.inner"
     assert _cli_path("planner.market.offer") is None and _cli_path("defaults of X.inner") is None
     wrap = _wrapper_params("GreedyNearest")
     with pytest.raises(PolicyParamsError) as exc:
-        wrap.from_mapping({"inner": "GreedyNearest"}, where="profile.policies.dispatch.params for W")
+        wrap.from_mapping({"inner": "GreedyNearest"}, where="profile.policies.planner.params for W")
     assert str(exc.value).endswith(
-        '{"type": "GreedyNearest"}; on the CLI --policy-param dispatch.inner=GreedyNearest is accepted.')
+        '{"type": "GreedyNearest"}; on the CLI --policy-param planner.inner=GreedyNearest is accepted.')
     assert "--policy-param profile" not in str(exc.value)
     with pytest.raises(PolicyParamsError) as exc:
         wrap.from_mapping({"inner": "GreedyNearest"}, where="defaults of W")

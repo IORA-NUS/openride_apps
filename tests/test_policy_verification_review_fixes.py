@@ -100,7 +100,7 @@ def moving_composite():
     truck at its order's pickup for the sub-solve and restores it afterwards."""
     script: dict[str, str] = {}
     with isolated_registry():
-        @policy(slot="dispatch", name="Scripted", version="1", information_model="central",
+        @policy(slot="planner", name="Scripted", version="1", information_model="central",
                 description="returns the composite's script")
         class Scripted(DispatchPolicy):
             @dataclass(frozen=True)
@@ -110,14 +110,14 @@ def moving_composite():
             def decide(self, ctx):
                 return Plan(chains={t: (o,) for t, o in script.items()})
 
-        @policy(slot="dispatch", name="MoveForSubSolve", version="1", information_model="per_group",
+        @policy(slot="planner", name="MoveForSubSolve", version="1", information_model="per_group",
                 description="moves trucks during a sub-solve (out of contract)")
         class MoveForSubSolve(CompositePolicy):
             move = False
 
             @dataclass(frozen=True)
             class Params(PolicyParams):
-                inner: PolicyRef = param(ref("Scripted"), kind="dispatch", leaf_only=True, help="inner")
+                inner: PolicyRef = param(ref("Scripted"), kind="planner", leaf_only=True, help="inner")
 
             def decide(self, ctx):
                 chains = {}
@@ -189,12 +189,12 @@ def test_mutating_documents_during_a_sub_solve_is_outside_the_contract(moving_co
 
 
 def _recipe_composite(name: str, *, tiebreak: bool):
-    @policy(slot="dispatch", name=name, version="1", information_model="per_group",
+    @policy(slot="planner", name=name, version="1", information_model="per_group",
             description="per-group composite following the recipe")
     class Recipe(CompositePolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
-            inner: PolicyRef = param(ref("GreedyNearest"), kind="dispatch", leaf_only=True, help="inner")
+            inner: PolicyRef = param(ref("GreedyNearest"), kind="planner", leaf_only=True, help="inner")
 
         def decide(self, ctx):
             self.inner.set_rng(ctx.rng)
@@ -223,12 +223,12 @@ def test_the_composite_recipe_needs_the_tiebreak_for_order_independence():
     with isolated_registry():
         _recipe_composite("FullRecipe", tiebreak=True)
         _recipe_composite("NoTiebreak", tiebreak=False)
-        full = get_policy_spec("dispatch", "FullRecipe")
+        full = get_policy_spec("planner", "FullRecipe")
         ok, detail = battery._order_independent(full, {})
         assert ok and not isinstance(ok, battery.Skip), detail
         ok, detail = battery._no_module_rng(battery._Outcomes(full, {}))
         assert ok and not isinstance(battery._no_module_rng(battery._Outcomes(full, {})), battery.Skip), detail
-        ok, detail = battery._order_independent(get_policy_spec("dispatch", "NoTiebreak"), {})
+        ok, detail = battery._order_independent(get_policy_spec("planner", "NoTiebreak"), {})
         assert not ok and "changed the plan" in detail, detail
 
 
@@ -239,7 +239,7 @@ def _probe_leaf(name: str, draw, *, declare: bool = False):
     """A central leaf that calls ``draw(self)`` then plans greedily."""
     extra = {"module_rng": "declared on purpose"} if declare else {}
 
-    @policy(slot="dispatch", name=name, version="1", description="probe", information_model="central", **extra)
+    @policy(slot="planner", name=name, version="1", description="probe", information_model="central", **extra)
     class Leaf(DispatchPolicy):
         @dataclass(frozen=True)
         class Params(PolicyParams):
@@ -253,7 +253,7 @@ def _probe_leaf(name: str, draw, *, declare: bool = False):
 
 
 def _under_partitioned(name: str):
-    return battery._no_module_rng(battery._Outcomes(get_policy_spec("dispatch", "Partitioned"),
+    return battery._no_module_rng(battery._Outcomes(get_policy_spec("planner", "Partitioned"),
                                                     {"inner": {"type": name}}))
 
 
@@ -272,7 +272,7 @@ def test_a_renamed_self_is_still_attributed_to_its_node():
     again in ``_attribute_frame`` gave that SKIP.
     """
     with isolated_registry():
-        @policy(slot="dispatch", name="RenamedSelf", version="1", description="probe", information_model="central")
+        @policy(slot="planner", name="RenamedSelf", version="1", description="probe", information_model="central")
         class RenamedSelf(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -317,7 +317,7 @@ def test_a_thread_a_node_starts_is_attributed_to_that_node():
     with isolated_registry():
         _probe_leaf("ThreadDeclared", _thread_draw, declare=True)
         _probe_leaf("ThreadUndeclared", _thread_draw)
-        own = battery._no_module_rng(battery._Outcomes(get_policy_spec("dispatch", "ThreadDeclared"), {}))
+        own = battery._no_module_rng(battery._Outcomes(get_policy_spec("planner", "ThreadDeclared"), {}))
         assert isinstance(own, battery.Skip) and "direct draw(s) by the declaring node(s) ThreadDeclared" in own.detail, own
         nested = _under_partitioned("ThreadDeclared")
         assert isinstance(nested, battery.Skip), nested
@@ -338,7 +338,7 @@ def test_a_draw_from_a_thread_no_node_started_is_unseparable_not_a_failure():
     try:
         with isolated_registry():
             _probe_leaf("PoolDeclared", lambda self, ctx: pool.submit(random.random).result(), declare=True)
-            res = battery._no_module_rng(battery._Outcomes(get_policy_spec("dispatch", "PoolDeclared"), {}))
+            res = battery._no_module_rng(battery._Outcomes(get_policy_spec("planner", "PoolDeclared"), {}))
     finally:
         pool.shutdown()
     assert isinstance(res, battery.Skip), res
@@ -353,11 +353,11 @@ def test_a_marker_other_than_the_int_2_is_an_unknown_format(marker):
     """Verified to have teeth: the old ``isinstance(marker, bool) or marker != 2`` accepted 2.0
     (and said "compiled before round 2" for the others)."""
     with pytest.raises(PolicyError, match=re.escape(f"policies_format={marker!r}: unknown format")):
-        check_policies_format({"policies": {"dispatch": {"type": "GreedyNearest"}}, "policies_format": marker})
+        check_policies_format({"policies": {"planner": {"type": "GreedyNearest"}}, "policies_format": marker})
 
 
 def test_an_absent_marker_is_a_round1_bundle_and_the_int_2_is_accepted():
-    profile = {"policies": {"dispatch": {"type": "GreedyNearest"}}}
+    profile = {"policies": {"planner": {"type": "GreedyNearest"}}}
     with pytest.raises(PolicyError, match="policies_format=None, not 2: it was compiled before round 2"):
         check_policies_format(profile)
     check_policies_format({**profile, "policies_format": 2})
@@ -372,4 +372,4 @@ def test_the_control_message_counts_passes_and_skips_apart(monkeypatch, skipped,
     rows = [CheckResult("determinism", "no_module_rng", True, "d", 0.1, skipped=bool(skipped)),
             CheckResult("structure", "returns_plan", True, "fine", 0.1)]
     monkeypatch.setattr(battery_mod, "run_battery", lambda slot, name: rows)
-    assert control_policies.cmd_policy_validate("dispatch", "GreedyNearest")["message"] == want
+    assert control_policies.cmd_policy_validate("planner", "GreedyNearest")["message"] == want

@@ -208,7 +208,7 @@ def _chain_abc():
 def cross_pairer():
     """A central policy that hands the cargo truck the acme order (cargo-acme is not an edge)."""
     with isolated_registry():
-        @policy(slot="dispatch", name="CrossPairer", version="1", information_model="central",
+        @policy(slot="planner", name="CrossPairer", version="1", information_model="central",
                 description="pairs cargo with acme")
         class CrossPairer(DispatchPolicy):
             @dataclass(frozen=True)
@@ -226,7 +226,7 @@ def test_disallowed_cross_company_head_is_discarded_by_the_framework(cross_paire
     True`` (instead of ``world.allowed``) in ``scopes.tick_context`` committed the pair."""
     trucks = [_truck("t_cargo", "cargo", 103.85, 1.30), _truck("t_acme", "acme", 103.95, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
-    profile = _base_profile(policies={"dispatch": {"type": "CrossPairer"}}, cooperation=_chain_abc())
+    profile = _base_profile(policies={"planner": {"type": "CrossPairer"}}, cooperation=_chain_abc())
     app = _app(trucks, orders, profile)
     with caplog.at_level(logging.ERROR):
         assert app.assign(_CLOCK, 7) == []
@@ -234,16 +234,16 @@ def test_disallowed_cross_company_head_is_discarded_by_the_framework(cross_paire
     assert app._dispatch_runner(profile).stats["violations"] == 1
     msg = next(r.getMessage() for r in caplog.records if "CONTRACT VIOLATION" in r.getMessage())
     assert msg.startswith(
-        "DISPATCH POLICY CONTRACT VIOLATION: CrossPairer v1 at step 7 returned an invalid tick plan: "
+        "PLANNER POLICY CONTRACT VIOLATION: CrossPairer v1 at step 7 returned an invalid tick plan: "
         "head pair ('t_cargo', 'o_acme') is not allowed. The plan was DISCARDED (nothing committed "
-        "this tick). This is a policy bug: run `openride policy validate dispatch CrossPairer`."), msg
+        "this tick). This is a policy bug: run `openride policy validate planner CrossPairer`."), msg
 
 
 @pytest.fixture
 def acme_breaker():
     """A leaf that double-books an order in acme's scope only, and is honest elsewhere."""
     with isolated_registry():
-        @policy(slot="dispatch", name="AcmeBreaker", version="1", information_model="central",
+        @policy(slot="planner", name="AcmeBreaker", version="1", information_model="central",
                 description="breaks acme's scope")
         class AcmeBreaker(DispatchPolicy):
             @dataclass(frozen=True)
@@ -267,14 +267,14 @@ def test_scope_violation_discards_only_that_group(acme_breaker, caplog):
     trucks = [_truck("t_a1", "acme", 103.85, 1.30), _truck("t_a2", "acme", 103.86, 1.30),
               _truck("t_b1", "borax", 103.95, 1.30)]
     orders = [_order("o_a1", "acme", 103.85, 1.30), _order("o_b1", "borax", 103.95, 1.30)]
-    profile = _base_profile(policies={"dispatch": {"type": "Partitioned",
+    profile = _base_profile(policies={"planner": {"type": "Partitioned",
                                                    "params": {"inner": {"type": "AcmeBreaker"}}}})
     app = _app(trucks, orders, profile)
     with caplog.at_level(logging.ERROR):
         assert _ids(app.assign(_CLOCK, 3)) == [("t_b1", "o_b1")]
     assert app._dispatch_runner(profile).stats["violations"] == 1
     msg = next(r.getMessage() for r in caplog.records if "CONTRACT VIOLATION" in r.getMessage())
-    assert msg.startswith("DISPATCH POLICY CONTRACT VIOLATION: inner AcmeBreaker v1 in scope "
+    assert msg.startswith("PLANNER POLICY CONTRACT VIOLATION: inner AcmeBreaker v1 in scope "
                           "partition:haulier:acme at step 3 returned an invalid plan: order 'o_a1' "
                           "appears twice in the plan. The scope's plan was DISCARDED"), msg
 
@@ -295,10 +295,10 @@ def test_pooled_market_selection_equals_legacy_topology_path(case_id):
     prof = selected["profile"]
     node = resolve_dispatch_for_profile(prof)
     assert node.label.startswith("PooledMarket/")
-    prof["policies"] = {"dispatch": {"type": "PooledMarket", "params": node.params.to_dict()}}
+    prof["policies"] = {"planner": {"type": "PooledMarket", "params": node.params.to_dict()}}
     prof.pop("use_spatial_matching", None)
     if not case["profile"].get("use_spatial_matching", True):
-        prof["policies"]["dispatch"]["params"]["inner"]["params"]["candidates"] = "sampled"
+        prof["policies"]["planner"]["params"]["inner"]["params"]["candidates"] = "sampled"
     via_policies = run_case(selected, _TICKS)
     assert legacy["pairs"], "vacuous: the tick awarded nothing"
     for field in ("pairs", "share_tags", "published", "round_stats", "rng_probe"):
@@ -326,7 +326,7 @@ def test_central_greedy_serves_only_world_allowed_cross_pairs_and_renders_audite
     world rule. Verified to have teeth: rendering the central leaf's tags with
     ``fmt="v1"`` failed the key assertion."""
     trucks, orders = _central_world()
-    profile = _base_profile(policies={"dispatch": {"type": "GreedyNearest"}},
+    profile = _base_profile(policies={"planner": {"type": "GreedyNearest"}},
                             cooperation=_coop([("acme", "borax")], active="s1"))
     app = _app(trucks, orders, profile)
     pairs = _ids(app.assign(_CLOCK, 1))
@@ -354,7 +354,7 @@ def test_central_leaves_draw_no_module_rng(name, params):
     """
     trucks = [_truck(f"t_{h}{i}", h, 103.85 + 0.01 * i, 1.30) for h in ("acme", "borax") for i in range(3)]
     orders = [_order(f"o_{h}{i}", h, 103.85 + 0.01 * i, 1.30) for h in ("acme", "borax") for i in range(2)]
-    profile = _base_profile(policies={"dispatch": {"type": name, "params": params}}, max_trucks_per_haulier=1)
+    profile = _base_profile(policies={"planner": {"type": name, "params": params}}, max_trucks_per_haulier=1)
     app = _app(trucks, orders, profile)
     random.seed(5)
     before = random.getstate()
@@ -368,7 +368,7 @@ def test_central_leaves_draw_no_module_rng(name, params):
 @pytest.fixture
 def borax_crasher():
     with isolated_registry():
-        @policy(slot="dispatch", name="BoraxCrasher", version="1", information_model="central",
+        @policy(slot="planner", name="BoraxCrasher", version="1", information_model="central",
                 description="raises for borax")
         class BoraxCrasher(DispatchPolicy):
             @dataclass(frozen=True)
@@ -391,16 +391,16 @@ def test_market_crash_logs_crashed_prefix_counts_and_skips_company(borax_crasher
     stats assertion."""
     trucks = [_truck("t_acme", "acme", 103.85, 1.30), _truck("t_borax", "borax", 103.95, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30), _order("o_borax", "borax", 103.95, 1.30)]
-    profile = _base_profile(policies={"dispatch": {"type": "PooledMarket", "params": {
+    profile = _base_profile(policies={"planner": {"type": "PooledMarket", "params": {
         "inner": {"type": "BoraxCrasher"}}}})
     app = _app(trucks, orders, profile)
     with caplog.at_level(logging.ERROR):
         assert _ids(app.assign(_CLOCK, 9)) == [("t_acme", "o_acme")]
     stats = app._dispatch_runner(profile).stats
     assert stats["crashes"] >= 1 and stats["violations"] == 0
-    rec = next(r for r in caplog.records if "DISPATCH POLICY CRASHED" in r.getMessage())
+    rec = next(r for r in caplog.records if "PLANNER POLICY CRASHED" in r.getMessage())
     assert rec.getMessage().startswith(
-        "DISPATCH POLICY CRASHED: inner BoraxCrasher raised for company 'borax' in round 1 at step 9; "
+        "PLANNER POLICY CRASHED: inner BoraxCrasher raised for company 'borax' in round 1 at step 9; "
         "that company commits nothing this round (pooled-market behaviour, unchanged). Traceback "
         "follows. (celery journal, not sim.log)")
     assert rec.exc_info is not None, "the traceback must follow"
@@ -412,7 +412,7 @@ def test_market_crash_logs_crashed_prefix_counts_and_skips_company(borax_crasher
 @pytest.fixture
 def rebate_reader():
     with isolated_registry():
-        @policy(slot="dispatch", name="RebateReader", version="1", information_model="central",
+        @policy(slot="planner", name="RebateReader", version="1", information_model="central",
                 description="records ctx.rebates")
         class RebateReader(DispatchPolicy):
             seen: list = []
@@ -446,7 +446,7 @@ def test_rebate_book_reaches_the_leaf_through_a_composite(rebate_reader, top):
     trucks = [_truck("t_acme", "acme", 103.85, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
     profile = _base_profile(planner={"rebate_aware": True},
-                            policies={"dispatch": {"type": top, "params": {"inner": {"type": "RebateReader"}}}})
+                            policies={"planner": {"type": top, "params": {"inner": {"type": "RebateReader"}}}})
     app = _app(trucks, orders, profile)
     app.manager = _RebateManager(trucks, orders)
     app.assign(_CLOCK, 1)

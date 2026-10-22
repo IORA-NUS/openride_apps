@@ -109,7 +109,7 @@ def test_legacy_profile_translates(row, profile, label, params):
         resolved, source = resolve_profile_policies(profile)
     assert (node.label, node.source, source) == (label, "legacy-profile", "legacy-profile"), node
     assert node.params.to_dict() == params, f"[{row}] {node.params.to_dict()}"
-    assert resolved["dispatch"].params == params and resolved["dispatch"].label == label
+    assert resolved["planner"].params == params and resolved["planner"].label == label
     assert node.inner is not None and node.inner.name == label.split("/")[1]
 
 
@@ -122,7 +122,7 @@ def test_unknown_topology_is_loud():
         legacy.legacy_topology({"topology": "nonsense"})
     assert str(exc.value) == (
         "assignment profile planner.topology='nonsense' is not a legacy topology (partitioned, "
-        "pooled, two-stage). The decomposition is now the dispatch policy: policies.dispatch.type "
+        "pooled, two-stage). The decomposition is now the planner policy: policies.planner.type "
         "= Partitioned or PooledMarket."
     )
     for bad in ("", "Pooled", 3, ["pooled"]):

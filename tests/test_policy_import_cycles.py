@@ -101,7 +101,7 @@ def test_the_walk_found_the_dispatch_modules():
 
 def test_app_imports_the_dispatch_package_only_locally():
     """Round-2 §4: ``assignment/app.py`` may import ``assignment.accounting`` at top, but
-    ``policies.dispatch`` only inside functions (it reaches back into ``assignment``).
+    ``policies.planner`` only inside functions (it reaches back into ``assignment``).
 
     Verified to have teeth: moving ``app._dispatch_world``'s ``DispatchWorld`` import to the
     module top failed this test.

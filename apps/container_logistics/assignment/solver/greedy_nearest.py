@@ -13,7 +13,7 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
 
 
 @policy(
-    slot="dispatch",
+    slot="planner",
     name="GreedyNearest",
     version="1",
     description="Globally greedy nearest-pair sweep, dual-cycle aware.",

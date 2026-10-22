@@ -26,7 +26,7 @@ def known_solvers():
     assignment agent resolves against)."""
     from apps.container_logistics.policies.framework import list_policies
 
-    return tuple(spec.name for spec in list_policies("dispatch") if not spec.is_composite)
+    return tuple(spec.name for spec in list_policies("planner") if not spec.is_composite)
 
 
 def current_policies_for_profile(profile):
@@ -47,9 +47,9 @@ def apply_policy_overrides(assignment_collection, overrides):
     """Apply per-run policy ``overrides`` to every assignment behavior, in memory.
 
     ``overrides`` is ``{slot: {type?, timing?, params?}}`` (see
-    ``framework.resolve.merge_policy_overrides``), applied LITERALLY: ``{"dispatch":
+    ``framework.resolve.merge_policy_overrides``), applied LITERALLY: ``{"planner":
     {"type": "GreedyNearest"}}`` selects a CENTRAL GreedyNearest (round-2 §3.6); the
-    per-scope solver of a decomposition is ``dispatch.params.inner`` (or ``--solver``,
+    per-scope solver of a decomposition is ``planner.params.inner`` (or ``--solver``,
     :func:`run_dispatch_overrides`). Each profile gets ``profile["policies"]``
     (resolved, ``to_profile`` form) and -- exactly as compile does -- the selection's
     legacy mirrors (``strategy`` = the innermost solver, the keys ``solver_params`` and
@@ -89,7 +89,7 @@ def _profiles_with_current(assignment_collection):
     Each SOURCE profile's format marker is checked first (``legacy.check_policies_format``,
     the agent id prefixed), BEFORE anything is resolved or committed: an override must
     never manufacture the round-2 marker on a round-1 flat bundle, whose
-    ``policies.dispatch {type: X}`` meant the per-scope solver X and would otherwise
+    ``policies.planner {type: X}`` meant the per-scope solver X and would otherwise
     run as a CENTRAL X (final review MAJOR-1). Raises ``PolicyError``.
     """
     from apps.container_logistics.policies.dispatch import legacy
@@ -131,7 +131,7 @@ def _commit(planned):
         profile["policies"] = {slot: r.to_profile() for slot, r in merged.items()}
         profile[legacy.POLICIES_FORMAT_KEY] = legacy.POLICIES_FORMAT
         profile.pop("use_spatial_matching", None)
-        mirror_dispatch_selection(profile, merged["dispatch"])
+        mirror_dispatch_selection(profile, merged["planner"])
 
 
 def precheck_override_names(overrides, solver=None):
@@ -177,7 +177,7 @@ def run_dispatch_overrides(
     (:func:`apply_policy_overrides`' write):
 
     1. ``overrides`` (``ORSIM_POLICY_OVERRIDES``; ``--policy``/``--policy-param``),
-       literally: ``dispatch.type`` is the TOP of the selection;
+       literally: ``planner.type`` is the TOP of the selection;
     2. ``topology`` (``ORSIM_PLANNER_TOPOLOGY``: ``partitioned``, ``pooled`` or
        ``two-stage``): the top becomes ``Partitioned`` / ``PooledMarket`` keeping the
        current per-scope solver; a new ``PooledMarket`` takes its market from the
@@ -195,21 +195,21 @@ def run_dispatch_overrides(
     Every behavior is validated before any is mutated; nothing requested mutates
     nothing. Returns ``(merged_overrides, labels)``: the override object actually
     merged into the first behavior (``{}`` when nothing was requested), and
-    ``{"dispatch": <run-name segment or None>, "topology": <canonical topology or
+    ``{"planner": <run-name segment or None>, "topology": <canonical topology or
     None>}`` (:func:`dispatch_override_label`; the market variables add no segment,
     as before). Raises ``PolicyError`` (unknown names are ``UnknownPolicyError``).
     """
     from apps.container_logistics.policies.framework import PolicyError
 
     overrides = dict(overrides or {})
-    if not isinstance(overrides.get("dispatch", {}), dict):
-        raise PolicyError(f"policy overrides.dispatch must be an object (got {overrides['dispatch']!r}).")
-    explicit = overrides.get("dispatch") or {}
+    if not isinstance(overrides.get("planner", {}), dict):
+        raise PolicyError(f"policy overrides.planner must be an object (got {overrides['planner']!r}).")
+    explicit = overrides.get("planner") or {}
     want_top = _topology_top(topology)
     market = _market_request(offer=offer, claim=claim, arbitration=arbitration, max_rounds=max_rounds)
     leaf = _checked_solver(solver)
     if want_top is None and not market and leaf is None and not overrides:
-        return {}, {"dispatch": None, "topology": None}
+        return {}, {"planner": None, "topology": None}
 
     pairs = _profiles_with_current(assignment_collection)
     if not pairs:
@@ -222,9 +222,9 @@ def run_dispatch_overrides(
                                 topology=topology, want_top=want_top, market=market, leaf=leaf)
         merged_overrides = dict(overrides)
         if entry:
-            merged_overrides["dispatch"] = entry
+            merged_overrides["planner"] = entry
         else:
-            merged_overrides.pop("dispatch", None)
+            merged_overrides.pop("planner", None)
         merged = _merged(current, merged_overrides)
         if first is None:
             first = (merged_overrides, merged)
@@ -233,7 +233,7 @@ def run_dispatch_overrides(
     _commit(planned)
     merged_overrides, merged = first
     labels = {
-        "dispatch": dispatch_override_label(overrides, merged, solver=leaf),
+        "planner": dispatch_override_label(overrides, merged, solver=leaf),
         "topology": legacy_topology_name(topology),
     }
     return merged_overrides, labels
@@ -255,7 +255,7 @@ def legacy_topology_name(topology):
         raise PolicyError(
             f"ORSIM_PLANNER_TOPOLOGY={topology!r} is not a legacy topology "
             f"({', '.join(legacy.LEGACY_TOPOLOGIES)}). The decomposition is now the dispatch "
-            f"policy: --policy dispatch={legacy.PARTITIONED} or --policy dispatch={legacy.POOLED_MARKET}."
+            f"policy: --policy planner={legacy.PARTITIONED} or --policy planner={legacy.POOLED_MARKET}."
         )
     return canonical
 
@@ -310,15 +310,15 @@ def _checked_solver(solver):
     if solver is None or not str(solver).strip():
         return None
     try:
-        spec = get_policy_spec("dispatch", str(solver).strip())
+        spec = get_policy_spec("planner", str(solver).strip())
     except UnknownPolicyError as exc:
         raise UnknownPolicyError(f"--solver {str(solver).strip()!r}: {exc}") from exc
     if spec.is_composite:
-        leaves = ", ".join(s.name for s in list_policies("dispatch") if not s.is_composite)
+        leaves = ", ".join(s.name for s in list_policies("planner") if not s.is_composite)
         raise PolicyError(
             f"--solver {spec.name!r} names a decomposition, not a per-scope solver. --solver "
             f"sets the inner solver ({leaves}); select a decomposition with --policy "
-            f"dispatch={spec.name}."
+            f"planner={spec.name}."
         )
     return spec.name
 
@@ -330,12 +330,12 @@ def _dispatch_entry(current, planner, explicit, *, topology, want_top, market, l
 
     entry = copy.deepcopy(explicit)
     named_top = entry.get("type").strip() if isinstance(entry.get("type"), str) else None
-    top = named_top or current["dispatch"].name
+    top = named_top or current["planner"].name
     if want_top is not None:
         if named_top is not None and named_top != want_top:
             raise PolicyError(
                 f"ORSIM_PLANNER_TOPOLOGY={topology!r} selects {want_top} but ORSIM_POLICY_OVERRIDES "
-                f"sets dispatch.type={entry['type']!r}; pass one of them."
+                f"sets planner.type={entry['type']!r}; pass one of them."
             )
         if top != want_top:
             entry["type"] = top = want_top
@@ -346,11 +346,11 @@ def _dispatch_entry(current, planner, explicit, *, topology, want_top, market, l
     if market:
         if top != legacy.POOLED_MARKET:
             key, env = next((k, e) for k, e in MARKET_ENV if k in market)
-            label = _merged(current, {"dispatch": entry})["dispatch"].label if entry else current["dispatch"].label
+            label = _merged(current, {"planner": entry})["planner"].label if entry else current["planner"].label
             raise PolicyError(
                 f"{env}={market[key]!r} configures the PooledMarket dispatch, but this run's dispatch "
                 f"is {label}. Add ORSIM_PLANNER_TOPOLOGY=pooled, or select --policy "
-                f"dispatch=PooledMarket --policy-param dispatch.{key}={market[key]}."
+                f"planner=PooledMarket --policy-param planner.{key}={market[key]}."
             )
         params = entry.setdefault("params", {})
         stated = explicit.get("params") if isinstance(explicit.get("params"), dict) else {}
@@ -391,7 +391,7 @@ def _refuse_market_conflict(key, value, stated):
     if have is None or (key != "max_rounds" and isinstance(have, str) and have.strip() == value) \
             or (key == "max_rounds" and not isinstance(have, bool) and have == value):
         return
-    path = f"dispatch.{key}" if key == "max_rounds" else f"dispatch.{key}.type"
+    path = f"planner.{key}" if key == "max_rounds" else f"planner.{key}.type"
     raise PolicyError(
         f"{env}={value!r} conflicts with {path}={have!r} from ORSIM_POLICY_OVERRIDES "
         "(--policy-param/--policy-overrides); pass one of them."
@@ -402,13 +402,13 @@ def _set_innermost(entry, explicit, current, leaf):
     """Point ``entry`` at ``leaf`` as the innermost per-scope solver (in place); message 12 on a conflict."""
     from apps.container_logistics.policies.framework import PolicyError
 
-    trial = _merged(current, {"dispatch": entry})["dispatch"] if entry else current["dispatch"]
+    trial = _merged(current, {"planner": entry})["planner"] if entry else current["planner"]
     path, innermost = innermost_path(trial)
     if innermost == leaf:
         return
     stated = _type_at(explicit, path)
     if stated is not None and stated != leaf:
-        where = ".".join(["dispatch", *path, "type"])
+        where = ".".join(["planner", *path, "type"])
         raise PolicyError(
             f"--solver {leaf!r} conflicts with {where}={stated!r} from --policy/--policy-param/"
             "--policy-overrides; --solver is shorthand for the innermost solver, pass one of them."
@@ -433,7 +433,7 @@ def innermost_path(resolved):
 
     path, name, params = [], resolved.name, resolved.params
     while True:
-        descend = get_policy_spec("dispatch", name).inner_param
+        descend = get_policy_spec("planner", name).inner_param
         child = params.get(descend) if descend is not None else None
         if not isinstance(child, dict):
             return path, name
@@ -442,7 +442,7 @@ def innermost_path(resolved):
 
 
 def _type_at(entry, path):
-    """The type ``entry`` states at ``path`` (``dispatch.params.<p>...``), or ``None``."""
+    """The type ``entry`` states at ``path`` (``planner.params.<p>...``), or ``None``."""
     node = entry
     for name in path:
         params = node.get("params") if isinstance(node, dict) else None
@@ -479,13 +479,13 @@ def dispatch_override_label(overrides, resolved, *, solver=None):
     """
     from apps.container_logistics.policies.framework import get_policy_spec
 
-    entry = overrides.get("dispatch") if isinstance(overrides, dict) else None
+    entry = overrides.get("planner") if isinstance(overrides, dict) else None
     entry = entry if isinstance(entry, dict) else {}
-    node = resolved["dispatch"]
+    node = resolved["planner"]
     levels = []  # (name, resolved params, stated entry, inner param)
     name, params, stated = node.name, node.params, entry
     while True:
-        descend = get_policy_spec("dispatch", name).inner_param
+        descend = get_policy_spec("planner", name).inner_param
         levels.append((name, params, stated, descend))
         child = params.get(descend) if descend is not None else None
         if not isinstance(child, dict):

@@ -90,8 +90,8 @@ def _run(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="SLOT=NAME",
-        help="Per-run policy override, repeatable (e.g. dispatch=PooledMarket; a leaf such as "
-        "dispatch=GreedyNearest is a CENTRAL solver). Validated before spawning.",
+        help="Per-run policy override, repeatable (e.g. planner=PooledMarket; a leaf such as "
+        "planner=GreedyNearest is a CENTRAL solver). Validated before spawning.",
     )
     run_p.add_argument(
         "--policy-param",
@@ -99,8 +99,8 @@ def _run(argv: list[str] | None = None) -> int:
         default=[],
         metavar="SLOT.PATH=VALUE",
         help="Per-run policy param override, repeatable, nested through refs (e.g. "
-        "dispatch.inner.dual_cycle_bonus_km=0, dispatch.inner=RandomAssignment, "
-        "dispatch.offer=OfferSpare); VALUE is JSON when it parses, else a string.",
+        "planner.inner.dual_cycle_bonus_km=0, planner.inner=RandomAssignment, "
+        "planner.offer=OfferSpare); VALUE is JSON when it parses, else a string.",
     )
     run_p.add_argument(
         "--policy-overrides",

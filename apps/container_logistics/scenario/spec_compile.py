@@ -95,8 +95,8 @@ def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
     except PolicyError as exc:
         raise SpecValidationError(str(exc)) from exc
     compiled.recipe["policies"] = authored_after_resolution(block, resolved, legacy)
-    if compiled.policies_provenance.get("dispatch") == "authored":
-        node = as_dispatch_node(resolved["dispatch"])
+    if compiled.policies_provenance.get("planner") == "authored":
+        node = as_dispatch_node(resolved["planner"])
         _refuse_deployment_contradicting_policies(compiled.authored_deployment, _innermost_with_path(node))
         # The recipe echoes an authored deployment verbatim (preprocess
         # ``_recipe_planner``), which the check above proved agrees with the leaf.
@@ -105,10 +105,10 @@ def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
 
 
 def _innermost_with_path(node: Any) -> tuple[Any, str]:
-    """``(innermost node, its spec path)``: ``policies.dispatch`` plus ``.params.<inner>`` per level."""
-    path = "policies.dispatch"
+    """``(innermost node, its spec path)``: ``policies.planner`` plus ``.params.<inner>`` per level."""
+    path = "policies.planner"
     while node.inner is not None:
-        path += f".params.{get_policy_spec('dispatch', node.name).inner_param}"
+        path += f".params.{get_policy_spec('planner', node.name).inner_param}"
         node = node.inner
     return node, path
 
@@ -123,7 +123,7 @@ def _refuse_deployment_contradicting_policies(deployment: dict, leaf: tuple[Any,
 
     ``planner.deployment`` is the legacy spelling (and the compiled mirror) of the
     per-scope solver: ``leaf`` is ``(node, path)``, the innermost ``ResolvedDispatch``
-    of ``policies.dispatch`` and its spec path (:func:`_innermost_with_path`). Next to an authored block it is tolerated only where it
+    of ``policies.planner`` and its spec path (:func:`_innermost_with_path`). Next to an authored block it is tolerated only where it
     AGREES, symmetric with the ``solver``/``solverParams`` rule (deviation 17), so a
     recompiled recipe -- whose deployment mirror carries the solver's resolved
     params -- still compiles:
@@ -142,7 +142,7 @@ def _refuse_deployment_contradicting_policies(deployment: dict, leaf: tuple[Any,
     dtype = deployment.get("type")
     if dtype not in (None, ""):
         try:
-            canonical = get_policy_spec("dispatch", str(dtype).strip()).name
+            canonical = get_policy_spec("planner", str(dtype).strip()).name
         except PolicyError:
             canonical = None
         if canonical != leaf.name:
@@ -158,7 +158,7 @@ def _refuse_deployment_contradicting_policies(deployment: dict, leaf: tuple[Any,
             f"{k}={params[k]!r} vs {where}.params.{k}={leaf_params[k]!r}" for k in conflicts
         )
         raise SpecValidationError(
-            f"spec sets planner.deployment.params that disagree with policies.dispatch "
+            f"spec sets planner.deployment.params that disagree with policies.planner "
             f"({detail}). planner.deployment.params is the legacy spelling of {where}.params "
             "and would otherwise be silently overwritten: move the values into "
             f"{where}.params and remove planner.deployment."
@@ -185,16 +185,16 @@ def _profile_policies(prof: dict, resolved: dict[str, ResolvedPolicy], provenanc
         return block
     if provenance != "legacy":
         raise SpecValidationError(
-            "assignment profile sets use_spatial_matching=false next to policies.dispatch; "
-            "it is superseded. Set policies.dispatch.params.candidates='sampled' instead "
+            "assignment profile sets use_spatial_matching=false next to policies.planner; "
+            "it is superseded. Set policies.planner.params.candidates='sampled' instead "
             "and remove use_spatial_matching."
         )
     # The per-scope solver is the one that declares ``candidates`` (round-2: the
     # translated top is a decomposition, whose own params carry only the ``inner``).
-    node, spec = block["dispatch"], get_policy_spec("dispatch", block["dispatch"]["type"])
+    node, spec = block["planner"], get_policy_spec("planner", block["planner"]["type"])
     while spec.inner_param is not None and isinstance(node["params"].get(spec.inner_param), dict):
         node = node["params"][spec.inner_param]
-        spec = get_policy_spec("dispatch", node["type"])
+        spec = get_policy_spec("planner", node["type"])
     if "candidates" in node["params"]:
         node["params"]["candidates"] = "sampled"
     return block
@@ -214,12 +214,12 @@ def _patch_assignment_profiles(assignment: dict, resolved: dict[str, ResolvedPol
         if prof is None or id(prof) in seen:
             continue
         seen.add(id(prof))
-        if prof.get("strategy") != resolved["dispatch"].leaf:
+        if prof.get("strategy") != resolved["planner"].leaf:
             raise SpecValidationError(
                 f"assignment agent {agent_id!r}: profile.strategy={prof.get('strategy')!r} "
-                f"disagrees with the innermost solver {resolved['dispatch'].leaf!r} of the "
-                f"resolved policies.dispatch {resolved['dispatch'].label!r} (a scenario_gen.py "
-                "override must not set strategy; set policies.dispatch)."
+                f"disagrees with the innermost solver {resolved['planner'].leaf!r} of the "
+                f"resolved policies.planner {resolved['planner'].label!r} (a scenario_gen.py "
+                "override must not set strategy; set policies.planner)."
             )
         prof["policies"] = _profile_policies(prof, resolved, provenance)
         prof[_legacy.POLICIES_FORMAT_KEY] = _legacy.POLICIES_FORMAT
@@ -281,7 +281,7 @@ def compile_spec_to_bundle(
 
     _assert_generation_consistent(result, compiled, has_gen_override=overrides is not None)
     _patch_assignment_profiles(
-        result.assignment, resolved_policies, compiled.policies_provenance.get("dispatch", "legacy")
+        result.assignment, resolved_policies, compiled.policies_provenance.get("planner", "legacy")
     )
 
     orsim_settings = dict(compiled.orsim_settings)

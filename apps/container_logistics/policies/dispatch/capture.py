@@ -29,7 +29,7 @@ Surfaces:
   after ``decide`` and before the invariants, honouring ``every_n_ticks`` (every N-th
   whole dispatch TICK this recorder sees, counted from its first, which is always
   captured -- NOT every N-th sim step; final review MINOR-4) and ``max_files``. Sub-scope calls (``compose.decide_in_scope``) are ignored: the whole
-  tick replays them. A write failure is logged (``DISPATCH CAPTURE FAILED``) and
+  tick replays them. A write failure is logged (``PLANNER CAPTURE FAILED``) and
   never raised.
 - :func:`parse_capture_spec` parses the ``every=N,max=M`` text that
   ``ORSIM_CAPTURE_DISPATCH`` / ``--capture-dispatch`` carry (the one parser).
@@ -176,7 +176,7 @@ def _module_state() -> list[Any]:
 
 
 def selection_stamp(node: Any) -> dict[str, Any]:
-    """The bound ``ResolvedDispatch`` tree in stamp form (``run_config.meta.policies.dispatch`` shape)."""
+    """The bound ``ResolvedDispatch`` tree in stamp form (``run_config.meta.policies.planner`` shape)."""
     params = node.params
     return {
         "name": node.name,
@@ -309,7 +309,7 @@ class CaptureRecorder:
             if self._wants(tick_index):
                 self._pending = (id(ctx), _module_state())
         except Exception:  # noqa: BLE001 - capture must never break a tick
-            logger.exception("DISPATCH CAPTURE FAILED: RNG snapshot at step %d (celery journal)",
+            logger.exception("PLANNER CAPTURE FAILED: RNG snapshot at step %d (celery journal)",
                              ctx.clock.time_step)
 
     def __call__(self, *, ctx: DispatchContext, plan: Any, problems: list[str]) -> None:
@@ -326,7 +326,7 @@ class CaptureRecorder:
             self.written = (self.written or 0) + 1
         except Exception:  # noqa: BLE001 - logged loudly, never blocks the tick
             logger.exception(
-                "DISPATCH CAPTURE FAILED: could not write %s at step %d; the tick continues "
+                "PLANNER CAPTURE FAILED: could not write %s at step %d; the tick continues "
                 "uncaptured (agent-side: see celery's journal, not sim.log).",
                 path, ctx.clock.time_step,
             )

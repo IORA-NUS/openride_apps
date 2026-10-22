@@ -29,7 +29,7 @@ DOMAIN = "container-logistics-sim"
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SMOKE_SPEC = REPO_ROOT / "scenarios" / "collab_smoke_12t" / "spec.json"
 
-GREEDY_0 = {"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}
+GREEDY_0 = {"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0}}}
 
 
 def _legacy_previous():
@@ -71,7 +71,7 @@ def test_stale_legacy_client_gets_a_loud_disagreement():
     out = F.assemble_spec({"name": "n", "slug": "prev", "solver": "RandomAssignment"},
                           DOMAIN, previous=prev)
     assert out["policies"] == GREEDY_0 and out["solver"] == "RandomAssignment"
-    with pytest.raises(SpecValidationError, match="solver='RandomAssignment' but policies.dispatch"):
+    with pytest.raises(SpecValidationError, match="solver='RandomAssignment' but policies.planner"):
         Preprocessor.compile(out, domain=DOMAIN)
 
 
@@ -111,7 +111,7 @@ def test_edit_with_policies_patch_over_legacy_spec_compiles(tmp_path, monkeypatc
     assert saved["solver"] == "GreedyNearest" and saved["solverParams"] is None
     bundle = json.loads((target / "scenario.json").read_text())
     prof = next(iter(bundle["agents"]["assignment"].values()))["profile"]
-    assert prof["policies"]["dispatch"]["params"]["dual_cycle_bonus_km"] == 0.0
+    assert prof["policies"]["planner"]["params"]["dual_cycle_bonus_km"] == 0.0
 
 
 def test_body_with_policies_drops_carried_topology_and_market(tmp_path, monkeypatch):
@@ -129,7 +129,7 @@ def test_body_with_policies_drops_carried_topology_and_market(tmp_path, monkeypa
         "topology": "partitioned", "timing": {"mode": "online"}, "rebate_aware": False,
         "deployment": {"type": "GreedyNearest", "params": {}},
         "market": {"offer": {"type": "OfferSpare", "params": {}}, "max_rounds": 3}}}
-    pooled = {"dispatch": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
+    pooled = {"planner": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
     out = F.drop_dispatch_dials_superseded_by({"policies": pooled}, prev)
     assert out["planner"] == {"timing": {"mode": "online"}, "rebate_aware": False}
     assert prev["planner"]["topology"] == "partitioned", "the carried spec is never mutated"
@@ -145,5 +145,5 @@ def test_body_with_policies_drops_carried_topology_and_market(tmp_path, monkeypa
     target = Path(F.scenario_dir(str(tmp_path / "datahub"), DOMAIN, smoke["slug"]))
     bundle = json.loads((target / "scenario.json").read_text())
     prof = next(iter(bundle["agents"]["assignment"].values()))["profile"]
-    assert prof["policies"]["dispatch"]["type"] == "PooledMarket"
+    assert prof["policies"]["planner"]["type"] == "PooledMarket"
     assert prof["planner"]["topology"] == "pooled", "the compiled mirror follows the selection"

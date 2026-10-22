@@ -111,9 +111,9 @@ def report_scope_violation(
     """Log message 19 for a discarded sub-scope plan and count it in ``stats["violations"]``."""
     stats["violations"] = stats.get("violations", 0) + 1
     logger.error(
-        "DISPATCH POLICY CONTRACT VIOLATION: inner %s v%s in scope %s at step %d returned an "
+        "PLANNER POLICY CONTRACT VIOLATION: inner %s v%s in scope %s at step %d returned an "
         "invalid plan: %s. The scope's plan was DISCARDED (nothing committed for this scope "
-        "this tick). This is a policy bug: run `openride policy validate dispatch %s`.",
+        "this tick). This is a policy bug: run `openride policy validate planner %s`.",
         name, version, ctx.scope.key, ctx.clock.time_step, "; ".join(problems), name,
     )
 
@@ -214,7 +214,7 @@ class ScopeDecider:
         """Log message 20 with the traceback (call it inside ``except``) and count it."""
         self.stats["crashes"] = self.stats.get("crashes", 0) + 1
         logger.exception(
-            "DISPATCH POLICY CRASHED: inner %s raised for company %r in round %d at step %d; "
+            "PLANNER POLICY CRASHED: inner %s raised for company %r in round %d at step %d; "
             "that company commits nothing this round (pooled-market behaviour, unchanged). "
             "Traceback follows. (celery journal, not sim.log)",
             self.node.name, haulier_id, round, self.parent.clock.time_step,

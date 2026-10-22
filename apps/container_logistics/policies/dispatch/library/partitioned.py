@@ -45,7 +45,7 @@ _INNER_HELP = (
 
 
 @policy(
-    slot="dispatch",
+    slot="planner",
     name="Partitioned",
     version="1",
     description="One planner per cooperation group (a partnered component, else one company), "
@@ -70,7 +70,7 @@ class Partitioned(CompositePolicy):
 
     @dataclass(frozen=True)
     class Params(PolicyParams):
-        inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True, help=_INNER_HELP)
+        inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True, help=_INNER_HELP)
 
     def set_rng(self, rng) -> None:
         """Recorded here only, NOT forwarded: the groups keep the inner's own RNG (byte identity, S12)."""

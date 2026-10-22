@@ -4,7 +4,7 @@ What is locked: with ``params.candidates == "spatial"``, RandomAssignment matche
 only among the spatial index's candidate pairs (never a pair outside them), never
 gives a truck or an order twice, and draws only from the RNG it was handed, so a
 seeded RNG reproduces the match exactly. End to end, an ``AssignmentApp`` whose
-profile selects ``policies.dispatch: {type: RandomAssignment, params: {candidates:
+profile selects ``policies.planner: {type: RandomAssignment, params: {candidates:
 spatial}}`` commits only pairs that ``spatial.iter_candidate_pairs`` emitted.
 
 Why: ``RandomAssignmentSolver.solve_pairs`` is NEW behaviour (the default stays
@@ -32,7 +32,7 @@ from tests.test_assignment_cooperation import _app, _order, _truck
 
 _CLOCK = DispatchClock(sim_clock="Wed, 01 Jan 2020 08:00:00 GMT", time_step=42)
 _SPATIAL_PROFILE = {
-    "policies": {"dispatch": {"type": "RandomAssignment", "timing": "online",
+    "policies": {"planner": {"type": "RandomAssignment", "timing": "online",
                               "params": {"candidates": "spatial"}}},
     "respect_truck_online_state": True,
     "reject_if_active_haul_trip": True,

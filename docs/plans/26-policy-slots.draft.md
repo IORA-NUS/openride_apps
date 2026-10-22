@@ -24,7 +24,7 @@ meant to be byte-identical (scope in §5). The default dispatch is
 ## 1. What was built
 
 Every simulation decision is meant to become a **slot** with registered, typed, validated
-**policies**. Only `dispatch` (which free truck serves which unassigned order) is implemented.
+**policies**. Only `planner` (which free truck serves which unassigned order) is implemented.
 
 | Item | Commit(s) | What |
 |---|---|---|
@@ -80,7 +80,18 @@ is the top policy's. **Components** (`market.offer`, `market.claim`, `market.arb
 longer slots: `PooledMarket` params, validated against the live `OFFER_REGISTRY` /
 `CLAIM_REGISTRY` / `ARBITRATION_REGISTRY`, each with typed `Params`, `version="1"`.
 `OfferSpare.keep_below_km` is a nullable number (`None` = the class's `inf`). Slots:
-`dispatch` only. The four planned slots (`idle`, `queue`, `world.shedding`,
+`planner` only (named `dispatch` until 2026-10-22; renamed with NO alias -- `policies.dispatch`,
+`--policy dispatch=`, `--policy-param dispatch.*`, an `ORSIM_POLICY_OVERRIDES` `dispatch` key
+and `openride policy validate dispatch` all fail loud with "(The slot was renamed to
+'planner'.)", one table `slots.RENAMED_SLOTS`. Renamed with it: the ref kind
+(`x-policy-ref: "planner"`), the stamp key `run_config.meta.policies.planner`, the
+`known-policies` slot key and the `PLANNER POLICY CONTRACT VIOLATION|CRASHED` /
+`PLANNER CAPTURE FAILED` log lines (message numbers unchanged). NOT renamed, deliberately:
+Python identifiers (`policies/dispatch/`, `DispatchPolicy`, `DispatchContext`,
+`DispatchWorld`, `DispatchRunner`), the legacy profile block `planner.topology|market|deployment`
+(different parent, locked by a test), `--capture-dispatch` and the
+`<datahub>/fixtures/dispatch/<run>` capture dir, and run-name segments (policy names only).
+Runs stamped before the rename carry `meta.policies.dispatch`.) The four planned slots (`idle`, `queue`, `world.shedding`,
 `world.duration`) were REMOVED (2026-10-22, per user): that behaviour lives in the
 simulation itself (truck state machine + `idle_trip_manager`, `facility_queue_sm.py`, the
 order lifecycle, OSRM + `haul_trip_duration.py`) and they never had a runtime reader. The
@@ -117,7 +128,7 @@ chain tick at cap 40: 160 vs 80 trucks). Stamped as `candidate_settings.sample_s
 
 ### 3.2 Selection
 
-`policies.dispatch` is the only dial; a ref is `{type, params?}` in JSON (`version` too when
+`policies.planner` is the only dial; a ref is `{type, params?}` in JSON (`version` too when
 compiled/stamped, ignored on read). Compiled profiles carry **`policies_format: 2`** next to
 `policies`; a profile with `policies` and without the marker is refused at run start (it is a
 round-1 compile, where a flat `{type: GreedyNearest}` meant the per-scope solver and now means a
@@ -130,10 +141,10 @@ central one). The marker is checked on the **source** profile before any overrid
 |---|---|
 | `scenario new --solver X` | `Partitioned{inner: X}` (never a flat central `{type: X}`) |
 | `scenario edit <slug> --solver X` | the innermost leaf of the current selection becomes X |
-| `--solver X` / `ORSIM_SOLVER` (run) | innermost leaf = X, params reset; a decomposition name refused (message 11); conflict with an explicit `dispatch.inner.type` refused (12, naming `--policy/--policy-param/--policy-overrides`) |
-| `--policy dispatch=GreedyNearest` | a **central** leaf over the whole tick |
-| `--policy dispatch=PooledMarket` | top = PooledMarket; a type change resets params, except that a new decomposition keeps the current per-scope solver (current `inner`, or a leaf top) as `inner`, with its params, unless the request names the inner's type (spec §3.3) |
-| `--policy-param dispatch.inner=R` / `dispatch.inner.k=v` / `dispatch.offer.keep_below_km=3` | ref type / nested param |
+| `--solver X` / `ORSIM_SOLVER` (run) | innermost leaf = X, params reset; a decomposition name refused (message 11); conflict with an explicit `planner.inner.type` refused (12, naming `--policy/--policy-param/--policy-overrides`) |
+| `--policy planner=GreedyNearest` | a **central** leaf over the whole tick |
+| `--policy planner=PooledMarket` | top = PooledMarket; a type change resets params, except that a new decomposition keeps the current per-scope solver (current `inner`, or a leaf top) as `inner`, with its params, unless the request names the inner's type (spec §3.3) |
+| `--policy-param planner.inner=R` / `planner.inner.k=v` / `planner.offer.keep_below_km=3` | ref type / nested param |
 
 One application point, `scenario_overrides.run_dispatch_overrides` (sim main and control dry
 run): overrides → `ORSIM_PLANNER_TOPOLOGY` → market env → `--solver`. The control plane ships
@@ -150,17 +161,17 @@ chain ` · PooledMarket/GreedyNearest`, ` · PooledMarket(max_rounds=5)/GreedyNe
 Label values are compact JSON with `ensure_ascii=True` (escaped, never raw ` · `).
 Policy and component names must match `[A-Za-z_][A-Za-z0-9_.-]*` (`registry.check_policy_name`,
 at registration and on component lookup), so no name contains a separator, `=`, `,` or `:`.
-**Known limit (documented, not changed):** a central `--policy dispatch=GreedyNearest` and
+**Known limit (documented, not changed):** a central `--policy planner=GreedyNearest` and
 `--solver GreedyNearest` both read ` · GreedyNearest`. Use the stamp (`label` +
 `information_model`). The proposed ` · central:<Leaf>` prefix is **not implemented**.
 
 ### 3.3 The stamp
 
-`run_config.meta.policies.dispatch`: `name`, `version`, `kind` (`operator`), `timing`, `source`
+`run_config.meta.policies.planner`: `name`, `version`, `kind` (`operator`), `timing`, `source`
 (`bundle` / `legacy-profile` / `override`), **`label`** (`PooledMarket/GreedyNearest`), `leaf`,
 **`information_model`**, `share_tag_format`, `params` (nested; refs `{type, version, params}`),
 `candidate_settings` (+ `sample_scope` `per_haulier` | `per_group` | `per_company`),
-`accounting_params`. Console: `Policies effective: dispatch=<label> v<v> timing=<t>
+`accounting_params`. Console: `Policies effective: planner=<label> v<v> timing=<t>
 information_model=<m> params=<json> accounting_params=<json>`. `meta.market` is written only on
 the pooled path. The information model is enforced structurally (sub-scopes built by
 `scopes.py`) and audited by `information.scopes_respect_model`; a tripwire, not a proof.
@@ -196,7 +207,7 @@ Equal today (every claim bids `float(cost)`).
 | bundle profile without `policies` | same; `use_spatial_matching: false` → `inner.candidates = "sampled"`; no `strategy` → `RandomAssignment` |
 | undeclared leaf/component params | dropped at WARNING |
 | unknown topology (6) / component (3) / `max_rounds` not int in 1..100 | **loud** `PolicyError` / `SpecValidationError` |
-| `ORSIM_PLANNER_TOPOLOGY` | top = PooledMarket / Partitioned, inner kept; market from current PooledMarket else `profile.planner.market`; conflict with explicit `dispatch.type` (10) |
+| `ORSIM_PLANNER_TOPOLOGY` | top = PooledMarket / Partitioned, inner kept; market from current PooledMarket else `profile.planner.market`; conflict with explicit `planner.type` (10) |
 | `ORSIM_OFFER_POLICY` / `_CLAIM_POLICY` / `_ARBITRATION_RULE` / `_MARKET_MAX_ROUNDS` | component (params reset) / `max_rounds` 1..100; top must be PooledMarket after the topology step (9) |
 | `policies` without `policies_format: 2` | refused at run start: recompile |
 
@@ -206,7 +217,7 @@ Compile writes mirrors through `mirror_dispatch_selection` (`strategy` = leaf; e
 (message 13) and `validate_cooperation_world` (14) check, never read. Compile writes only the
 `policies` slots the input spec authored back into `spec.json`: a legacy spec keeps its
 `solver`/`planner` keys and gains no derived block (the bundle's `$.recipe` still carries the
-full block). The pools warning reads the resolved `policies.dispatch` top.
+full block). The pools warning reads the resolved `policies.planner` top.
 
 ---
 
@@ -220,7 +231,7 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
   are comparable.
 - **Selecting the old pooled topology is the same arm, where `planner.market` is the default**:
   `ORSIM_PLANNER_TOPOLOGY=pooled` takes the market from `planner.market` and equals the old
-  pooled path (tested); `--policy dispatch=PooledMarket` resets the components to their
+  pooled path (tested); `--policy planner=PooledMarket` resets the components to their
   defaults. Both give label `PooledMarket/<leaf>`, and they are equal only where
   `planner.market` is the default, which holds for every shipped spec (the `--policy` arm's
   equality is the pending live gate in §7).
@@ -236,9 +247,9 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
 
 ## 6. Traps
 
-1. **`--policy dispatch=GreedyNearest` is a CENTRAL planner.** In round 1 it meant
+1. **`--policy planner=GreedyNearest` is a CENTRAL planner.** In round 1 it meant
    "GreedyNearest per partition". To change only the matcher use `--solver X` or
-   `--policy-param dispatch.inner=X`. Check `label`.
+   `--policy-param planner.inner=X`. Check `label`.
 2. **Round-1-compiled bundles are refused** (`policies_format` missing). Recompile
    (`openride scenario compile <slug>`); never hand-patch.
 3. **`v1` tags are reserved to `Partitioned`.** Do not "clean up" the `-inf` rendering.
@@ -262,7 +273,7 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
 7. **Crashes.** A top-level leaf's, `Partitioned`'s inner's, a custom composite's or a
    `PooledMarket` arbitration rule's exception propagates out of the tick; ORSim's step
    handler catches it (`Exception in step for Agent …`), the tick commits nothing and the
-   agent lives on. A `PooledMarket` inner crash is logged `DISPATCH POLICY CRASHED` (20),
+   agent lives on. A `PooledMarket` inner crash is logged `PLANNER POLICY CRASHED` (20),
    counted, and that company commits nothing that round. An offer or claim crash is swallowed
    (`Offer/Claim policy failed for haulier …`: that company contributes / bids nothing), not
    counted and not message 20. The run still finishes `ok: true`. Neither violations nor crashes are stamped in `run_config`.
@@ -310,7 +321,7 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
 - 16/16 shipped specs: compile writes no `policies` into a legacy `spec.json`, the profile is
   `Partitioned{inner: GreedyNearest}` with marker 2, and compile / recompile / compile from
   `$.recipe` give identical agents.
-- `openride policy validate dispatch X`, all exit 0: `Partitioned` PASS 47 (3 SKIP),
+- `openride policy validate planner X`, all exit 0: `Partitioned` PASS 47 (3 SKIP),
   `PooledMarket` PASS 187 (8 SKIP), `GreedyNearest` PASS 47, `RandomAssignment` PASS 47
   (2 SKIP). `Partitioned`'s default `no_module_rng` is a SKIP (its own scope-cap draw);
   `[inner=GreedyNearest]` is a real PASS.
@@ -332,9 +343,9 @@ full block). The pools warning reads the resolved `policies.dispatch` top.
 
 **Live — PENDING (needs merge + celery restart):**
 - [ ] `multi_haulier_greedy_solver_500_trucks` n=3 interleaved: `empty_ratio`,
-      `dual_cycle_rate` in band, 100% `osrm`, 0 `DISPATCH POLICY` lines, stamp `label` and
+      `dual_cycle_rate` in band, 100% `osrm`, 0 `PLANNER POLICY` lines, stamp `label` and
       `information_model` present, run name unchanged.
-- [ ] `collab_scale_500t_v2 --structure chain --policy dispatch=PooledMarket` n=3: as above,
+- [ ] `collab_scale_500t_v2 --structure chain --policy planner=PooledMarket` n=3: as above,
       plus `meta.market` present and `benefit == reserve − awarded` (to the 0.001 km rounding)
       on every tag that carries all three values.
 - [ ] One `ORSIM_PLANNER_TOPOLOGY=pooled` run whose stamp equals the `--policy` arm.

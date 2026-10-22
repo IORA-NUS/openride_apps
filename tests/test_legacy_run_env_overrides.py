@@ -54,7 +54,7 @@ def _coll(profile: dict) -> dict:
 
 
 def _dispatch(coll: dict):
-    return current_policies_for_profile(coll["assignment_0"]["profile"])[0]["dispatch"]
+    return current_policies_for_profile(coll["assignment_0"]["profile"])[0]["planner"]
 
 
 GREEDY_BONUS_2 = {"strategy": "GreedyNearest", "solver_params": {"dual_cycle_bonus_km": 2.0},
@@ -73,7 +73,7 @@ def test_topology_env_pooled_keeps_inner_and_market_block():
     assert node.params["inner"]["params"]["dual_cycle_bonus_km"] == 2.0, "the per-scope solver is kept"
     assert node.params["offer"] == {"type": "OfferSpare", "params": {"keep_below_km": 4.0, "only_when_short": True}}
     assert node.params["max_rounds"] == 6
-    assert labels == {"dispatch": None, "topology": "pooled"}, "the env adds only its own segment"
+    assert labels == {"planner": None, "topology": "pooled"}, "the env adds only its own segment"
     prof = coll["assignment_0"]["profile"]
     assert prof["planner"]["topology"] == "pooled" and prof["planner"]["market"]["max_rounds"] == 6
     # And back: partitioned keeps the solver too; two-stage is pooled.
@@ -141,7 +141,7 @@ def test_market_env_without_pooled_market_is_loud():
     assert str(exc.value) == (
         "ORSIM_OFFER_POLICY='OfferSpare' configures the PooledMarket dispatch, but this run's dispatch "
         "is Partitioned/GreedyNearest. Add ORSIM_PLANNER_TOPOLOGY=pooled, or select --policy "
-        "dispatch=PooledMarket --policy-param dispatch.offer=OfferSpare.")
+        "planner=PooledMarket --policy-param planner.offer=OfferSpare.")
     with pytest.raises(PolicyError, match=r"^ORSIM_MARKET_MAX_ROUNDS=5 configures"):
         run_dispatch_overrides(coll, max_rounds=5)
     assert coll == _coll(GREEDY_BONUS_2), "nothing mutated"
@@ -162,21 +162,21 @@ def test_env_conflicts_are_loud():
     let ORSIM_OFFER_POLICY silently replace the override's offer."""
     with pytest.raises(PolicyError) as exc:
         run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="pooled",
-                               overrides={"dispatch": {"type": "Partitioned"}})
+                               overrides={"planner": {"type": "Partitioned"}})
     assert str(exc.value) == (
         "ORSIM_PLANNER_TOPOLOGY='pooled' selects PooledMarket but ORSIM_POLICY_OVERRIDES sets "
-        "dispatch.type='Partitioned'; pass one of them.")
+        "planner.type='Partitioned'; pass one of them.")
     run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="pooled",
-                           overrides={"dispatch": {"type": "PooledMarket"}})  # agreeing is fine
+                           overrides={"planner": {"type": "PooledMarket"}})  # agreeing is fine
     with pytest.raises(PolicyError) as exc:
         run_dispatch_overrides(_coll(GREEDY_BONUS_2), solver="RandomAssignment",
-                               overrides={"dispatch": {"params": {"inner": {"type": "GreedyNearest"}}}})
+                               overrides={"planner": {"params": {"inner": {"type": "GreedyNearest"}}}})
     assert str(exc.value) == (
-        "--solver 'RandomAssignment' conflicts with dispatch.inner.type='GreedyNearest' from "
+        "--solver 'RandomAssignment' conflicts with planner.inner.type='GreedyNearest' from "
         "--policy/--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, pass one of them.")
-    with pytest.raises(PolicyError, match=r"ORSIM_OFFER_POLICY='OfferSpare' conflicts with dispatch.offer.type='OfferAll'"):
+    with pytest.raises(PolicyError, match=r"ORSIM_OFFER_POLICY='OfferSpare' conflicts with planner.offer.type='OfferAll'"):
         run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="pooled", offer="OfferSpare",
-                               overrides={"dispatch": {"params": {"offer": {"type": "OfferAll"}}}})
+                               overrides={"planner": {"params": {"offer": {"type": "OfferAll"}}}})
 
 
 def test_market_max_rounds_env_range_1_to_100():
@@ -277,4 +277,4 @@ def test_run_name_segments_unchanged_for_legacy_inputs(case, legacy_bundle, monk
             behavior["profile"].pop("policies_format")
     assert _run_name(monkeypatch, tmp_path, assignment, env) == expected
     out = capsys.readouterr().out
-    assert "Policies effective: dispatch=" in out and "information_model=" in out
+    assert "Policies effective: planner=" in out and "information_model=" in out

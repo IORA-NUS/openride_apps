@@ -23,7 +23,7 @@ from .errors import UnknownSlotError
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["SlotSpec", "SLOTS", "slot_spec"]
+__all__ = ["SlotSpec", "SLOTS", "RENAMED_SLOTS", "slot_spec", "unknown_slot_message"]
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ class SlotSpec:
 
 _TABLE = (
     SlotSpec(
-        name="dispatch",
+        name="planner",
         kind="operator",
         # The whole-tick default: per-cooperation-group decomposition whose inner
         # defaults to RandomAssignment (the pre-v2 no-strategy behaviour). The flat
@@ -73,6 +73,20 @@ _TABLE = (
 
 SLOTS: Mapping[str, SlotSpec] = MappingProxyType({s.name: s for s in _TABLE})
 
+#: Former slot names -> current ones. NOT aliases: a renamed name is still refused;
+#: the refusal just says what it became (``dispatch`` was renamed 2026-10-22).
+RENAMED_SLOTS: Mapping[str, str] = MappingProxyType({"dispatch": "planner"})
+
+
+def unknown_slot_message(name: object, where: str | None = None) -> str:
+    """The one unknown-slot refusal: names the value, every known slot, and a rename hint."""
+    loc = f" in {where!r}" if where else ""
+    msg = f"Unknown policy slot {name!r}{loc}. Known slots: {', '.join(SLOTS)}."
+    renamed = RENAMED_SLOTS.get(name) if isinstance(name, str) else None
+    if renamed:
+        msg += f" (The slot was renamed to {renamed!r}.)"
+    return msg
+
 
 def slot_spec(name: str) -> SlotSpec:
     """Return the declaration of slot ``name``.
@@ -81,7 +95,5 @@ def slot_spec(name: str) -> SlotSpec:
     """
     spec = SLOTS.get(name) if isinstance(name, str) else None
     if spec is None:
-        raise UnknownSlotError(
-            f"Unknown policy slot {name!r}. Known slots: {', '.join(SLOTS)}."
-        )
+        raise UnknownSlotError(unknown_slot_message(name))
     return spec

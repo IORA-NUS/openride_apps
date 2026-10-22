@@ -69,7 +69,7 @@ def test_get_solver_none_is_the_legacy_leaf_default():
     """``None``/empty means the default LEAF solver (round 2: the slot default is the
     ``Partitioned`` decomposition, whose inner defaults to this leaf)."""
     assert DEFAULT_SOLVER == LEGACY_LEAF_DEFAULT == "RandomAssignment"
-    assert SLOTS["dispatch"].default == "Partitioned"
+    assert SLOTS["planner"].default == "Partitioned"
     assert type(get_solver(None, None)) is SOLVER_REGISTRY[DEFAULT_SOLVER]
     assert type(get_solver("", None)) is SOLVER_REGISTRY[DEFAULT_SOLVER]
 

@@ -178,7 +178,7 @@ def _entries(items: Sequence[str | BenchEntry]) -> list[BenchEntry]:
 
 def _validated_params(entry: BenchEntry, override: Mapping[str, Any] | None) -> dict[str, Any]:
     """The entry's override merged over its policy's defaults, validated (refs resolved)."""
-    spec = get_policy_spec("dispatch", entry.name)
+    spec = get_policy_spec("planner", entry.name)
     where = f"bench params for {entry.alias} ({spec.name})"
     defaults = spec.params_cls.from_mapping(None, where=where).to_dict()
     merged = merge_params(spec, defaults, dict(override or {}), path=f"{entry.alias}")

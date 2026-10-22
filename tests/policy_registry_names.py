@@ -21,12 +21,12 @@ __all__ = ["dispatch_names", "leaf_names", "component_names"]
 
 def dispatch_names() -> str:
     """Every registered dispatch policy, sorted, comma-separated (message 1)."""
-    return ", ".join(sorted(spec.name for spec in list_policies("dispatch")))
+    return ", ".join(sorted(spec.name for spec in list_policies("planner")))
 
 
 def leaf_names() -> str:
     """Every registered per-scope solver (no ``inner`` of its own), sorted (messages 2 and 11)."""
-    return ", ".join(sorted(spec.name for spec in list_policies("dispatch") if not spec.is_composite))
+    return ", ".join(sorted(spec.name for spec in list_policies("planner") if not spec.is_composite))
 
 
 def component_names(kind: str) -> str:

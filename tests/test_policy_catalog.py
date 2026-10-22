@@ -26,7 +26,7 @@ class _TestPolicyBase(DispatchPolicy):
         return Plan(chains={})
 
 
-EXPECTED_SLOTS = {"dispatch": "operator"}
+EXPECTED_SLOTS = {"planner": "operator"}
 
 
 def _register_dummies():
@@ -39,10 +39,10 @@ def _register_dummies():
     class NoParams(PolicyParams):
         pass
 
-    policy(slot="dispatch", information_model="central", name="TestCatalogA", version="3", description="Dummy A.",
+    policy(slot="planner", information_model="central", name="TestCatalogA", version="3", description="Dummy A.",
            order_sensitive="shuffles on purpose",
            arm_budgets_ms={"candidates=sampled": 900})(type("TestCatalogA", (_TestPolicyBase,), {"Params": Params}))
-    policy(slot="dispatch", information_model="central", name="TestCatalogB", version="1", description="Dummy B.",
+    policy(slot="planner", information_model="central", name="TestCatalogB", version="1", description="Dummy B.",
            requires=("definitely_not_a_module_xyz",))(type("TestCatalogB", (_TestPolicyBase,), {"Params": NoParams}))
 
 
@@ -56,7 +56,7 @@ def test_the_one_slot_declared_with_kind():
     assert list(catalog) == list(SLOTS), "catalog must keep SLOTS order"
     assert {n: e["kind"] for n, e in catalog.items()} == EXPECTED_SLOTS
     assert all("status" not in e and "lands_in" not in e for e in catalog.values())
-    dispatch = catalog["dispatch"]
+    dispatch = catalog["planner"]
     assert dispatch["default"] == "Partitioned", "round 2: the slot default is the decomposition"
     assert dispatch["timings"] == ["online", "plan"] and dispatch["executable_timings"] == ["online"]
 
@@ -106,7 +106,7 @@ def test_catalog_is_json_serialisable_and_has_schema_per_dispatch_policy():
         catalog = policy_catalog()
     roundtrip = json.loads(json.dumps(catalog))
     assert roundtrip == catalog
-    entries = {p["name"]: p for p in catalog["dispatch"]["policies"]}
+    entries = {p["name"]: p for p in catalog["planner"]["policies"]}
     a, b = entries["TestCatalogA"], entries["TestCatalogB"]
     assert a == {
         "name": "TestCatalogA", "version": "3", "description": "Dummy A.",
@@ -122,9 +122,9 @@ def test_catalog_is_json_serialisable_and_has_schema_per_dispatch_policy():
     assert a["params_schema"]["additionalProperties"] is False
     assert b["missing"] == ["definitely_not_a_module_xyz"] and b["available"] is False
     assert b["params_schema"]["properties"] == {} and b["defaults"] == {}
-    names = [p["name"] for p in catalog["dispatch"]["policies"]]
+    names = [p["name"] for p in catalog["planner"]["policies"]]
     assert names == sorted(names), "policies are listed by name"
-    for entry in catalog["dispatch"]["policies"]:
+    for entry in catalog["planner"]["policies"]:
         assert {"params_schema", "defaults"} <= set(entry)
 
 
@@ -148,7 +148,7 @@ def test_known_policies_command_keeps_datagen_keys_and_adds_slots_and_components
     assert set(payload["policies"]) == {"truck", "order", "facility"}
     assert payload["slots"] == policy_catalog()
     assert payload["components"] == component_catalog()
-    assert list(payload["slots"]) == ["dispatch"] and len(payload["components"]) == 3
+    assert list(payload["slots"]) == ["planner"] and len(payload["components"]) == 3
     json.dumps(payload)
 
 
@@ -168,7 +168,7 @@ def test_known_solvers_is_derived_from_the_registry():
     )
 
     info = known_solvers()
-    assert info == {"solvers": [p.name for p in list_policies("dispatch") if not p.is_composite],
+    assert info == {"solvers": [p.name for p in list_policies("planner") if not p.is_composite],
                     "default": "RandomAssignment"}
     assert "Partitioned" not in info["solvers"] and "GreedyNearest" in info["solvers"]
     with isolated_registry():
@@ -192,6 +192,6 @@ def test_legacy_solver_registry_agrees_with_policy_registry():
     from apps.container_logistics.policies.framework import get_policy_spec
 
     for name, cls in SOLVER_REGISTRY.items():
-        assert get_policy_spec("dispatch", name).cls is cls, name
+        assert get_policy_spec("planner", name).cls is cls, name
     assert DEFAULT_SOLVER == LEGACY_LEAF_DEFAULT == "RandomAssignment"
     assert DEFAULT_SOLVER in SOLVER_REGISTRY

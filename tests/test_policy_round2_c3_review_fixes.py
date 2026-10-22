@@ -56,11 +56,11 @@ _CHAIN_CASE = "A-greedy-partitioned-chain-spatial-cap500"
 
 
 def _selection_profile(selection, *, case_id=_CHAIN_CASE, **extra):
-    """The golden case's profile with ``policies.dispatch = selection`` (legacy selection keys removed)."""
+    """The golden case's profile with ``policies.planner = selection`` (legacy selection keys removed)."""
     prof = copy.deepcopy(_CASES[case_id]["profile"])
     prof.pop("strategy", None)
     prof.pop("planner", None)
-    prof["policies"] = {"dispatch": copy.deepcopy(selection)}
+    prof["policies"] = {"planner": copy.deepcopy(selection)}
     prof.update(extra)
     return prof
 
@@ -181,7 +181,7 @@ def wide_scope_composite():
     """A composite that decides ONE sub-scope under a caller-chosen ``PartitionRule``, with a
     leaf that pairs every truck with the first order (honest under that rule)."""
     with isolated_registry():
-        @policy(slot="dispatch", name="FirstOrder", version="1", information_model="central",
+        @policy(slot="planner", name="FirstOrder", version="1", information_model="central",
                 description="every truck takes the first order it is allowed")
         class FirstOrder(DispatchPolicy):
             @dataclass(frozen=True)
@@ -195,14 +195,14 @@ def wide_scope_composite():
                             return Plan(chains={str(t["_id"]): (str(o["_id"]),)})
                 return Plan(chains={})
 
-        @policy(slot="dispatch", name="OwnRuleScope", version="1", information_model="per_group",
+        @policy(slot="planner", name="OwnRuleScope", version="1", information_model="per_group",
                 description="one sub-scope under OwnRuleScope.rule")
         class OwnRuleScope(CompositePolicy):
             rule = None
 
             @dataclass(frozen=True)
             class Params(PolicyParams):
-                inner: PolicyRef = param(ref("FirstOrder"), kind="dispatch", leaf_only=True, help="inner")
+                inner: PolicyRef = param(ref("FirstOrder"), kind="planner", leaf_only=True, help="inner")
 
             def decide(self, ctx):
                 sub = scopes.partition_context(
@@ -226,7 +226,7 @@ def test_a_sub_scope_with_a_wider_structure_cannot_widen_the_tick(wide_scope_com
     """
     trucks = [_truck("t_cargo", "cargo", 103.85, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
-    profile = _base_profile(policies={"dispatch": {"type": "OwnRuleScope"}},
+    profile = _base_profile(policies={"planner": {"type": "OwnRuleScope"}},
                             cooperation=_coop([("acme", "borax")], active="s1"))
     wide_scope_composite.rule = PartitionRule(max_travel_time_pickup=None,
                                               adjacency={"cargo": {"acme"}, "acme": {"cargo"}})
@@ -245,7 +245,7 @@ def test_a_sub_scope_with_another_pickup_limit_does_not_vouch_for_the_physical_h
     """
     trucks = [_truck("t_acme", "acme", 103.35, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
-    profile = _base_profile(policies={"dispatch": {"type": "OwnRuleScope"}}, max_travel_time_pickup=60)
+    profile = _base_profile(policies={"planner": {"type": "OwnRuleScope"}}, max_travel_time_pickup=60)
     wide_scope_composite.rule = PartitionRule(max_travel_time_pickup=None, adjacency={})
     app = _plain_app(trucks, orders, profile)
     world = app._dispatch_world(profile)
@@ -322,8 +322,8 @@ def test_a_patched_market_profile_runs_the_patched_market():
     book = object()
     old_top._rebate_book = book  # what set_rebate_book records on the top
 
-    profile["policies"]["dispatch"]["params"]["max_rounds"] = 9
-    profile["policies"]["dispatch"]["params"]["offer"] = {"type": "OfferNone"}
+    profile["policies"]["planner"]["params"]["max_rounds"] = 9
+    profile["policies"]["planner"]["params"]["offer"] = {"type": "OfferNone"}
     random.seed(1)
     pairs = app.assign(_CLOCK, 2)
     runner = app._dispatch_runner(profile)
@@ -345,7 +345,7 @@ def test_a_patched_inner_selection_decides_like_a_fresh_app():
     """
     spatial = _selection_profile(_PARTITIONED, max_trucks_per_haulier=5)
     sampled = copy.deepcopy(spatial)
-    sampled["policies"]["dispatch"]["params"]["inner"]["params"] = {"candidates": "sampled"}
+    sampled["policies"]["planner"]["params"]["inner"]["params"] = {"candidates": "sampled"}
 
     def decide(profile, app=None):
         app = app or _tick_a_app(profile)
@@ -413,7 +413,7 @@ def test_solve_in_thread_reaches_every_top_level_solver_once_per_decision(select
 @pytest.fixture
 def rule_blind():
     with isolated_registry():
-        @policy(slot="dispatch", name="RuleBlind", version="1", information_model="central",
+        @policy(slot="planner", name="RuleBlind", version="1", information_model="central",
                 description="pairs the first truck with the first order, ignoring the rule")
         class RuleBlind(DispatchPolicy):
             @dataclass(frozen=True)
@@ -432,7 +432,7 @@ def test_a_violation_tick_does_not_spend_the_haulier_scoping_warning(rule_blind,
     swallowed the real block on the next tick."""
     trucks = [_truck("t_cargo", "cargo", 103.85, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
-    profile = _base_profile(policies={"dispatch": {"type": "RuleBlind"}})
+    profile = _base_profile(policies={"planner": {"type": "RuleBlind"}})
     app = _plain_app(trucks, orders, profile)
     with caplog.at_level(logging.ERROR):
         assert app.assign("Wed, 01 Jan 2020 08:00:00 GMT", 1) == []
@@ -442,7 +442,7 @@ def test_a_violation_tick_does_not_spend_the_haulier_scoping_warning(rule_blind,
     assert app._warned_haulier_block is False
 
     caplog.clear()
-    app.behavior["profile"]["policies"] = {"dispatch": _PARTITIONED}
+    app.behavior["profile"]["policies"] = {"planner": _PARTITIONED}
     app._solver = build_policy_tree(resolve_dispatch_for_profile(app.behavior["profile"]))
     with caplog.at_level(logging.ERROR):
         assert app.assign("Wed, 01 Jan 2020 08:00:00 GMT", 2) == []

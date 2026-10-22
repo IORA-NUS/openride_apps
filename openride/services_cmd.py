@@ -1,6 +1,6 @@
 """``openride services ...`` and ``openride solver list`` — host services + solver discovery.
 
-``solver list`` is ``openride policy list dispatch`` restricted to the per-scope solvers
+``solver list`` is ``openride policy list planner`` restricted to the per-scope solvers
 (the leaves ``--solver`` accepts; ``policy_cmd``).
 
 Thin, friendly wrappers over the same control-plane the dashboard's Services page uses.
@@ -61,11 +61,11 @@ def _cmd_services_stop(args) -> int:
 
 
 def _cmd_solver_list(args) -> int:
-    # `solver list` is `policy list dispatch` restricted to the leaves (one renderer, one
+    # `solver list` is `policy list planner` restricted to the leaves (one renderer, one
     # catalog): the per-scope solvers --solver accepts.
     from .policy_cmd import render_policy_list
 
-    return render_policy_list("dispatch", as_json=args.json, leaves_only=True)
+    return render_policy_list("planner", as_json=args.json, leaves_only=True)
 
 
 def register(sub) -> None:
@@ -89,6 +89,6 @@ def register(sub) -> None:
 
     sol = sub.add_parser("solver", help="Per-scope assignment solvers (the leaves --solver accepts)")
     solsub = sol.add_subparsers(dest="solver_cmd", required=True)
-    sl = solsub.add_parser("list", help="`openride policy list dispatch` restricted to the per-scope solvers")
-    sl.add_argument("--json", action="store_true", help="Emit the dispatch slot's catalog JSON")
+    sl = solsub.add_parser("list", help="`openride policy list planner` restricted to the per-scope solvers")
+    sl.add_argument("--json", action="store_true", help="Emit the planner slot's catalog JSON")
     sl.set_defaults(func=_cmd_solver_list)

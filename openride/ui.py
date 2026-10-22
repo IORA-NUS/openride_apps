@@ -46,7 +46,7 @@ def render_scenario_detail(detail: dict[str, Any]) -> None:
     agents = detail.get("agents") or {}
     hauliers = detail.get("hauliers") or form.get("hauliers") or []
     slots = form.get("policySlots") if isinstance(form.get("policySlots"), dict) else {}
-    dispatch = slots.get("dispatch") if isinstance(slots.get("dispatch"), dict) else {}
+    dispatch = slots.get("planner") if isinstance(slots.get("planner"), dict) else {}
     solver = dispatch.get("type") or detail.get("solver") or form.get("solver")
     params = dispatch.get("params") if isinstance(dispatch.get("params"), dict) else {}
     param_text = ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
@@ -55,7 +55,7 @@ def render_scenario_detail(detail: dict[str, Any]) -> None:
         f"days={detail.get('simulationDays', '?')}  "
         f"trucks={agents.get('truck', '?')}  orders={agents.get('order', '?')}  "
         f"facilities={agents.get('facility', '?')}",
-        f"policies.dispatch={solver or 'scenario default'}"
+        f"policies.planner={solver or 'scenario default'}"
         + (f" timing={dispatch['timing']}" if dispatch.get("timing") else "")
         + (f"  [dim]({param_text})[/]" if param_text else ""),
     ]

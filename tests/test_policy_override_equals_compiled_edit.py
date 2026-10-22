@@ -7,12 +7,12 @@ the fix-round deviations):
   compile does, through the ONE helper ``dispatch/profile.py::mirror_dispatch_selection``.
   So pairs, share tags (``benefit_km``), published strings and pooled round stats of
   a per-run override equal those of the compiled edit, on both topologies.
-- The run stamp records the accounting params (``dispatch.accounting_params``).
+- The run stamp records the accounting params (``planner.accounting_params``).
 - A dispatch TYPE change resets the policy params to the new policy's defaults and the
   mirror rewrites the shared keys when the new policy declares them; a policy that
   does not declare them (Random) leaves the bundle's accounting values alone.
 - Compile refuses a ``planner.deployment`` that contradicts an authored
-  ``policies.dispatch`` (type, or a DECLARED param's value), tolerates agreeing
+  ``policies.planner`` (type, or a DECLARED param's value), tolerates agreeing
   values and undeclared accounting-only keys, and a compiled recipe recompiles.
 
 Why: a per-run arm whose ranking and accounting disagree is a hybrid run nobody
@@ -43,7 +43,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DOMAIN = "container-logistics-sim"
 WORLD = "collab_scale_500t_v2"  # tick states A and B of the golden fixture come from it
 # Round 2: the per-scope solver is the selection's inner (the decomposition is the top).
-BONUS_0 = {"dispatch": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0.0}}}}}
+BONUS_0 = {"planner": {"params": {"inner": {"params": {"dual_cycle_bonus_km": 0.0}}}}}
 
 
 def _spec(slug: str = WORLD) -> dict:
@@ -78,7 +78,7 @@ def _with_policies(spec: dict, policies: dict) -> dict:
 def _part(leaf: str, **params) -> dict:
     """A ``policies`` block selecting ``Partitioned`` around ``leaf`` (the round-2 legacy shape)."""
     inner = {"type": leaf, "params": params} if params else {"type": leaf}
-    return {"dispatch": {"type": "Partitioned", "params": {"inner": inner}}}
+    return {"planner": {"type": "Partitioned", "params": {"inner": inner}}}
 
 
 @pytest.fixture(scope="module")
@@ -96,7 +96,7 @@ def profiles(tmp_path_factory):
     try:
         spec = _spec()
         edit = _with_policies(spec, _part("GreedyNearest", dual_cycle_bonus_km=0.0))
-        pooled_edit = _with_policies(spec, {"dispatch": {"type": "PooledMarket", "params": {"inner": {
+        pooled_edit = _with_policies(spec, {"planner": {"type": "PooledMarket", "params": {"inner": {
             "type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0.0}}}}})
         return {"base": _profile(_compile(spec, root)),
                 "compiled_edit": _profile(_compile(edit, root)),
@@ -150,7 +150,7 @@ def test_per_run_override_equals_the_compiled_edit(profiles, tick_states, topolo
 
 
 def test_per_run_pooled_market_override_equals_the_compiled_pooled_market_edit(profiles, tick_states):
-    """``--policy dispatch=PooledMarket --policy-param dispatch.inner.dual_cycle_bonus_km=0``
+    """``--policy planner=PooledMarket --policy-param planner.inner.dual_cycle_bonus_km=0``
     over the partitioned bundle runs the same experiment as that selection compiled
     into ``spec.json`` (round-2 §5 C4).
 
@@ -158,10 +158,10 @@ def test_per_run_pooled_market_override_equals_the_compiled_pooled_market_edit(p
     ``scenario_overrides._commit`` failed it (the accounting ``solver_params`` kept bonus
     5.0); resetting the carried inner on the top-type change (``resolve._carried_inner``
     returning ``{}``) failed it too."""
-    override = {"dispatch": {"type": "PooledMarket",
+    override = {"planner": {"type": "PooledMarket",
                              "params": {"inner": {"params": {"dual_cycle_bonus_km": 0.0}}}}}
     prof = _overridden(profiles["base"], override)
-    assert current_policies_for_profile(prof)[0]["dispatch"].label == "PooledMarket/GreedyNearest"
+    assert current_policies_for_profile(prof)[0]["planner"].label == "PooledMarket/GreedyNearest"
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 0.0
     got = run_case(_case(prof, None), tick_states)
     want = run_case(_case(profiles["compiled_pooled_edit"], None), tick_states)
@@ -183,7 +183,7 @@ def test_stamp_records_accounting_params_equal_to_the_policy(profiles):
     resolved, _source = current_policies_for_profile(override)
     stamp = policies_stamp(resolved, candidate_settings={},
                            accounting_params=override["solver_params"], source="override")
-    d = stamp["dispatch"]
+    d = stamp["planner"]
     assert d["accounting_params"] == {"dual_cycle_bonus_km": 0.0, "dual_cycle_radius_km": 0.5}
     shared = {k: d["params"]["inner"]["params"][k] for k in d["accounting_params"]}
     assert shared == d["accounting_params"], "accounting must equal what the policy ranks with"
@@ -200,7 +200,7 @@ def test_run_main_stamp_carries_the_effective_solver_params(profiles, capsys):
     sm = types.SimpleNamespace(orsim_settings={},
                                get_agent_collection=lambda role: {"a0": {"profile": prof}})
     launcher._stamp_effective_policies(sm, True)
-    stamp = sm.orsim_settings["POLICIES"]["dispatch"]
+    stamp = sm.orsim_settings["POLICIES"]["planner"]
     assert stamp["accounting_params"] == prof["solver_params"]
     assert "accounting_params=" in capsys.readouterr().out
 
@@ -218,7 +218,7 @@ def test_type_change_resets_policy_params_and_mirrors_only_declared_keys():
     coll = {"assignment_0": {"profile": copy.deepcopy(random_bundle)}}
     apply_solver_override(coll, "GreedyNearest")  # round 2: --solver sets Partitioned's inner
     to_greedy = coll["assignment_0"]["profile"]
-    assert to_greedy["policies"]["dispatch"]["params"]["inner"]["params"]["dual_cycle_bonus_km"] == 5.0
+    assert to_greedy["policies"]["planner"]["params"]["inner"]["params"]["dual_cycle_bonus_km"] == 5.0
     assert to_greedy["solver_params"] == {"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5}
     assert to_greedy["planner"]["deployment"]["params"] == {"dual_cycle_bonus_km": 5.0}
 
@@ -257,7 +257,7 @@ def test_deployment_type_disagreeing_with_policies_is_a_compile_error(root):
         _compile(spec, root)
     msg = str(exc.value)
     assert "planner.deployment.type='RandomAssignment'" in msg and "'GreedyNearest'" in msg
-    assert "policies.dispatch.params.inner.type" in msg, "the message names the innermost solver's path"
+    assert "policies.planner.params.inner.type" in msg, "the message names the innermost solver's path"
     assert "remove planner.deployment" in msg
     with pytest.raises(SpecValidationError, match="planner.deployment.type='Nope'"):
         _compile(_smoke_with({"type": "Nope"}, _part("GreedyNearest")), root)
@@ -271,9 +271,9 @@ def test_deployment_params_disagreeing_with_policies_are_a_compile_error(root):
     with pytest.raises(SpecValidationError) as exc:
         _compile(spec, root)
     msg = str(exc.value)
-    assert ("dual_cycle_bonus_km=9.0 vs policies.dispatch.params.inner.params.dual_cycle_bonus_km=5.0"
+    assert ("dual_cycle_bonus_km=9.0 vs policies.planner.params.inner.params.dual_cycle_bonus_km=5.0"
             in msg), msg
-    assert "move the values into policies.dispatch.params.inner.params" in msg
+    assert "move the values into policies.planner.params.inner.params" in msg
     # A bool never "agrees" with a number.
     with pytest.raises(SpecValidationError, match="disagree"):
         _compile(_smoke_with({"params": {"dual_cycle_bonus_km": True}},
@@ -283,7 +283,7 @@ def test_deployment_params_disagreeing_with_policies_are_a_compile_error(root):
 def test_agreeing_and_accounting_only_deployment_params_compile(root):
     """Agreeing values (the recipe mirror) and keys the policy does not declare (Random:
     accounting-only) are tolerated; the accounting-only value reaches solver_params.
-    Verified to have teeth: refusing every key not in ``policies.dispatch.params``
+    Verified to have teeth: refusing every key not in ``policies.planner.params``
     failed the Random compile."""
     agree = _smoke_with({"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2, "dual_cycle_radius_km": 0.5}},
                         _part("GreedyNearest", dual_cycle_bonus_km=2.0))
@@ -293,7 +293,7 @@ def test_agreeing_and_accounting_only_deployment_params_compile(root):
                       _part("RandomAssignment"))
     prof = _profile(_compile(rnd, root))
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 7.0
-    assert prof["policies"]["dispatch"]["params"]["inner"]["params"] == {"candidates": "sampled"}
+    assert prof["policies"]["planner"]["params"]["inner"]["params"] == {"candidates": "sampled"}
 
 
 _RANDOM_ACCOUNTING = {"type": "RandomAssignment", "params": {"dual_cycle_bonus_km": 7.0}}
@@ -303,8 +303,8 @@ _RANDOM_ACCOUNTING = {"type": "RandomAssignment", "params": {"dual_cycle_bonus_k
     (None, "shipped"),  # legacy spec, translated; recipe echoes the mirror
     (_part("GreedyNearest", dual_cycle_bonus_km=0.0), None),
     (_part("RandomAssignment"), _RANDOM_ACCOUNTING),  # accounting-only dial
-    ({"dispatch": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0.0}}}, None),  # central
-    ({"dispatch": {"type": "PooledMarket", "params": {"max_rounds": 5, "offer": {"type": "OfferSpare"},
+    ({"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 0.0}}}, None),  # central
+    ({"planner": {"type": "PooledMarket", "params": {"max_rounds": 5, "offer": {"type": "OfferSpare"},
                                                       "inner": {"type": "GreedyNearest"}}}}, None),
 ])
 def test_a_compiled_recipe_recompiles_to_the_same_agents(root, policies, deployment):
@@ -344,7 +344,7 @@ def test_compile_mirror_puts_the_policy_default_into_accounting(root, monkeypatc
                         {**sp, "dual_cycle_bonus_km": 8.0})
     bundle = _compile(_smoke_with(None, _part("GreedyNearest")), root)
     prof = _profile(bundle)
-    assert prof["policies"]["dispatch"]["params"]["inner"]["params"]["dual_cycle_bonus_km"] == 5.0
+    assert prof["policies"]["planner"]["params"]["inner"]["params"]["dual_cycle_bonus_km"] == 5.0
     assert prof["solver_params"]["dual_cycle_bonus_km"] == 5.0, "accounting must equal the policy"
     assert "deployment" not in bundle["recipe"]["planner"], "no mirror echoed next to policies"
     assert prof["planner"]["deployment"]["params"]["dual_cycle_bonus_km"] == 5.0

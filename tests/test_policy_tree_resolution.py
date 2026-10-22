@@ -1,11 +1,11 @@
 """Nested selection resolution, merge and stamp (plan round 2 §3.2, §3.5, §3.7; §5 C2).
 
 What is locked:
-- a ``policies.dispatch`` TREE resolves through refs with the spec's exact messages
+- a ``policies.planner`` TREE resolves through refs with the spec's exact messages
   1 (unknown inner), 2 (a composite where a leaf is required), 4 (a ref that is not an
   object) and 5 (an inner's param written on the composite);
 - ``merge_policy_overrides`` merges nested params ref by ref: same ref type merges,
-  a changed ref type (or a bare string, the CLI's ``dispatch.inner=X``) resets that
+  a changed ref type (or a bare string, the CLI's ``planner.inner=X``) resets that
   ref's params;
 - the compiled form (``to_profile``) carries each ref's ``version``, reads back
   unchanged (the ``version`` echo is ignored), and the stamp carries ``label``,
@@ -43,7 +43,7 @@ _GREEDY = {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 2.0}}
 
 
 def _block(top, **params):
-    return {"dispatch": {"type": top, "params": params}}
+    return {"planner": {"type": top, "params": params}}
 
 
 def test_unknown_inner_is_message_1():
@@ -55,9 +55,9 @@ def test_unknown_inner_is_message_1():
             resolve_policies_block(_block("Partitioned", inner={"type": "GreedyNeerest"}))
         # The list is the registry's (MINOR-7): a new leaf changes it on both sides.
         assert str(exc.value) == (
-            "policies.dispatch.params.inner: unknown dispatch policy 'GreedyNeerest'. Registered dispatch "
+            "policies.planner.params.inner: unknown planner policy 'GreedyNeerest'. Registered planner "
             f"policies: {dispatch_names()}. (List them: openride "
-            "policy list dispatch)")
+            "policy list planner)")
 
 
 def test_composite_inner_is_message_2():
@@ -67,7 +67,7 @@ def test_composite_inner_is_message_2():
         with pytest.raises(PolicyParamsError) as exc:
             resolve_policies_block(_block("Partitioned", inner={"type": "PooledMarket"}))
         assert str(exc.value) == (
-            "policies.dispatch.params.inner: 'PooledMarket' decomposes the tick itself (it has an "
+            "policies.planner.params.inner: 'PooledMarket' decomposes the tick itself (it has an "
             f"'inner' of its own); an inner must be a per-scope solver: {leaf_names()}.")
 
 
@@ -77,9 +77,9 @@ def test_string_ref_is_message_4():
     with decompositions(), pytest.raises(PolicyParamsError) as exc:
         resolve_policies_block(_block("Partitioned", inner="GreedyNearest"))
     assert str(exc.value) == (
-        "policies.dispatch.params.inner must be an object {type, params?} (got 'GreedyNearest'). "
+        "policies.planner.params.inner must be an object {type, params?} (got 'GreedyNearest'). "
         'In spec.json write {"type": "GreedyNearest"}; on the CLI --policy-param '
-        "dispatch.inner=GreedyNearest is accepted.")
+        "planner.inner=GreedyNearest is accepted.")
 
 
 def test_inner_param_on_the_composite_is_message_5():
@@ -88,14 +88,14 @@ def test_inner_param_on_the_composite_is_message_5():
     with decompositions():
         current = resolve_policies_block(_block("Partitioned", inner=_GREEDY))
         with pytest.raises(PolicyParamsError) as exc:
-            merge_policy_overrides(current, {"dispatch": {"params": {"dual_cycle_bonus_km": 0}}})
+            merge_policy_overrides(current, {"planner": {"params": {"dual_cycle_bonus_km": 0}}})
         assert str(exc.value) == (
-            "policy overrides.dispatch.params for Partitioned: unknown key 'dual_cycle_bonus_km'. "
+            "policy overrides.planner.params for Partitioned: unknown key 'dual_cycle_bonus_km'. "
             "Declared params: inner. 'dual_cycle_bonus_km' is a param of the inner GreedyNearest: "
-            "use dispatch.inner.dual_cycle_bonus_km.")
+            "use planner.inner.dual_cycle_bonus_km.")
         random_inner = resolve_policies_block(_block("Partitioned"))
         with pytest.raises(PolicyParamsError) as exc:
-            merge_policy_overrides(random_inner, {"dispatch": {"params": {"dual_cycle_bonus_km": 0}}})
+            merge_policy_overrides(random_inner, {"planner": {"params": {"dual_cycle_bonus_km": 0}}})
         assert "is a param of the inner" not in str(exc.value)
 
 
@@ -106,24 +106,24 @@ def test_nested_merge_same_ref_type_merges_changed_type_resets():
     ``_carried_inner`` (C3) reset the top-change's inner to RandomAssignment."""
     with decompositions():
         current = resolve_policies_block(_block("PooledMarket", inner=_GREEDY, max_rounds=5))
-        same = merge_policy_overrides(current, {"dispatch": {"params": {
+        same = merge_policy_overrides(current, {"planner": {"params": {
             "inner": {"params": {"candidates": "sampled"}}}}})
-        assert same["dispatch"].params["inner"] == {"type": "GreedyNearest", "params": {
+        assert same["planner"].params["inner"] == {"type": "GreedyNearest", "params": {
             "candidates": "sampled", "dual_cycle_bonus_km": 2.0, "dual_cycle_radius_km": 0.5}}
-        assert same["dispatch"].params["max_rounds"] == 5
-        assert same["dispatch"].params["offer"] == {"type": "OfferAll", "params": {}}
-        changed = merge_policy_overrides(current, {"dispatch": {"params": {"inner": "RandomAssignment",
+        assert same["planner"].params["max_rounds"] == 5
+        assert same["planner"].params["offer"] == {"type": "OfferAll", "params": {}}
+        changed = merge_policy_overrides(current, {"planner": {"params": {"inner": "RandomAssignment",
                                                                            "offer": {"type": "OfferSpare"}}}})
-        assert changed["dispatch"].params["inner"] == {"type": "RandomAssignment", "params": {"candidates": "sampled"}}
-        assert changed["dispatch"].params["offer"] == {"type": "OfferSpare", "params": {
+        assert changed["planner"].params["inner"] == {"type": "RandomAssignment", "params": {"candidates": "sampled"}}
+        assert changed["planner"].params["offer"] == {"type": "OfferSpare", "params": {
             "keep_below_km": None, "only_when_short": True}}
-        assert changed["dispatch"].label == "PooledMarket/RandomAssignment"
+        assert changed["planner"].label == "PooledMarket/RandomAssignment"
         # C3 (C2 review finding 2): a changed decomposition keeps the current solver.
-        top = merge_policy_overrides(current, {"dispatch": {"type": "Partitioned"}})
-        assert top["dispatch"].params == {"inner": current["dispatch"].params["inner"]}
-        assert top["dispatch"].label == "Partitioned/GreedyNearest"
-        with pytest.raises(UnknownPolicyError, match=r"^policy overrides.dispatch.params.inner: unknown dispatch"):
-            merge_policy_overrides(current, {"dispatch": {"params": {"inner": "Nope"}}})
+        top = merge_policy_overrides(current, {"planner": {"type": "Partitioned"}})
+        assert top["planner"].params == {"inner": current["planner"].params["inner"]}
+        assert top["planner"].label == "Partitioned/GreedyNearest"
+        with pytest.raises(UnknownPolicyError, match=r"^policy overrides.planner.params.inner: unknown planner"):
+            merge_policy_overrides(current, {"planner": {"params": {"inner": "Nope"}}})
 
 
 def test_offer_param_of_a_component_merges_into_its_current_type():
@@ -134,8 +134,8 @@ def test_offer_param_of_a_component_merges_into_its_current_type():
     with decompositions():
         current = resolve_policies_block(_block("PooledMarket", offer={"type": "OfferSpare",
                                                                        "params": {"only_when_short": False}}))
-        merged = merge_policy_overrides(current, {"dispatch": {"params": {"offer": {"params": {"keep_below_km": 3}}}}})
-    assert merged["dispatch"].params["offer"] == {"type": "OfferSpare", "params": {
+        merged = merge_policy_overrides(current, {"planner": {"params": {"offer": {"params": {"keep_below_km": 3}}}}})
+    assert merged["planner"].params["offer"] == {"type": "OfferSpare", "params": {
         "keep_below_km": 3.0, "only_when_short": False}}
 
 
@@ -144,13 +144,13 @@ def test_compiled_form_carries_versions_and_reads_back():
     nested versions."""
     with decompositions():
         resolved = resolve_policies_block(_block("PooledMarket", inner=_GREEDY))
-        compiled = resolved["dispatch"].to_profile()
+        compiled = resolved["planner"].to_profile()
         assert compiled["params"]["inner"] == {"type": "GreedyNearest", "version": "1", "params": {
             "candidates": "spatial", "dual_cycle_bonus_km": 2.0, "dual_cycle_radius_km": 0.5}}
         assert compiled["params"]["offer"] == {"type": "OfferAll", "version": "1", "params": {}}
-        again, source = resolve_profile_policies({"policies": {"dispatch": compiled}})
+        again, source = resolve_profile_policies({"policies": {"planner": compiled}})
     assert source == "bundle" and again == resolved, "the version echo must be ignored on read"
-    assert again["dispatch"].label == "PooledMarket/GreedyNearest"
+    assert again["planner"].label == "PooledMarket/GreedyNearest"
 
 
 def test_stamp_is_nested_and_labelled():
@@ -158,7 +158,7 @@ def test_stamp_is_nested_and_labelled():
     with decompositions():
         resolved = resolve_policies_block(_block("Partitioned", inner=_GREEDY))
         stamp = policies_stamp(resolved, candidate_settings={}, accounting_params={"dual_cycle_bonus_km": 2.0},
-                               source="override")["dispatch"]
+                               source="override")["planner"]
     assert (stamp["name"], stamp["label"], stamp["leaf"], stamp["information_model"],
             stamp["share_tag_format"]) == ("Partitioned", "Partitioned/GreedyNearest", "GreedyNearest",
                                            "per_group", "v1")
@@ -173,9 +173,9 @@ def test_legacy_params_are_filtered_recursively(caplog):
     block = _block("PooledMarket", inner={"type": "RandomAssignment", "params": {"dual_cycle_bonus_km": 5.0}},
                    offer={"type": "OfferAll", "params": {"bogus": 1}})
     with decompositions(), caplog.at_level(logging.WARNING, logger="apps.container_logistics.policies.framework.resolve"):
-        resolved = resolve_policies_block(block, legacy_slots=("dispatch",))
-    assert resolved["dispatch"].params["inner"] == {"type": "RandomAssignment", "params": {"candidates": "sampled"}}
-    assert resolved["dispatch"].params["offer"] == {"type": "OfferAll", "params": {}}
+        resolved = resolve_policies_block(block, legacy_slots=("planner",))
+    assert resolved["planner"].params["inner"] == {"type": "RandomAssignment", "params": {"candidates": "sampled"}}
+    assert resolved["planner"].params["offer"] == {"type": "OfferAll", "params": {}}
     messages = " ".join(r.getMessage() for r in caplog.records)
     assert "dual_cycle_bonus_km" in messages and "bogus" in messages
 
@@ -188,4 +188,4 @@ def test_unnamed_dispatch_is_the_slot_default():
     Verified to have teeth: making ``merge_policy_overrides``/``resolve_policies_block``
     fall back to ``legacy.LEGACY_LEAF_DEFAULT`` (the deleted C2 branch) failed this test.
     """
-    assert resolve_policies_block({})["dispatch"].label == "Partitioned/RandomAssignment"
+    assert resolve_policies_block({})["planner"].label == "Partitioned/RandomAssignment"

@@ -2,13 +2,13 @@
 
 What is locked:
 - the legacy keys (``strategy``, ``solver_params``, ``use_spatial_matching``) translate
-  to a validated ``policies.dispatch`` entry, keeping only declared params;
+  to a validated ``policies.planner`` entry, keeping only declared params;
 - an injected solver the registry does not know gets the legacy candidate rule
   (spatial iff ``use_spatial_matching`` and it has ``solve_pairs``) and runs through
   ``PairSolver``'s default ``decide``;
 - every wiring error fails loud: a registered solver of the wrong class, an
   unregistered subclass of a registered policy, ``use_spatial_matching: false`` next
-  to a ``policies`` block, bad ``policies.dispatch.params``, a non-executable timing
+  to a ``policies`` block, bad ``policies.planner.params``, a non-executable timing
   at run start;
 - the harness profile of ``tests/test_container_logistics_hauliers.py`` (no
   ``strategy``) resolves to the slot default, RandomAssignment;
@@ -69,7 +69,7 @@ _LEGACY_DC = {"dual_cycle_bonus_km": 2.5, "dual_cycle_radius_km": 1.0}
 
 def _policies(type_, params=None, timing="online"):
     # policies_format 2: the compile-time marker every round-2 bundle carries (C4).
-    return {"policies": {"dispatch": {"type": type_, "timing": timing, "params": params or {}}},
+    return {"policies": {"planner": {"type": type_, "timing": timing, "params": params or {}}},
             "policies_format": 2}
 
 
@@ -308,7 +308,7 @@ def test_policies_block_params_are_validated():
         with pytest.raises(PolicyParamsError, match=key):
             resolve_dispatch_for_profile(_policies("GreedyNearest", params))
     with pytest.raises(PolicyParamsError):
-        resolve_dispatch_for_profile({"policies": {"dispatch": {"type": "GreedyNearest", "params": [1]}}})
+        resolve_dispatch_for_profile({"policies": {"planner": {"type": "GreedyNearest", "params": [1]}}})
     with pytest.raises(PolicyParamsError, match="dual_cycle_bonus_km"):
         resolve_dispatch_for_profile(_policies("RandomAssignment", {"dual_cycle_bonus_km": 5.0}))
 
@@ -402,8 +402,8 @@ def test_unknown_dispatch_timing_is_named_as_such(timing):
     from apps.container_logistics.policies.dispatch.profile import resolve_dispatch_for_profile
     from apps.container_logistics.policies.framework import PolicyTimingError
 
-    prof = {"policies": {"dispatch": {"type": "GreedyNearest", "timing": timing, "params": {}}}}
-    with pytest.raises(PolicyTimingError, match="is not a dispatch timing. Allowed: online, plan"):
+    prof = {"policies": {"planner": {"type": "GreedyNearest", "timing": timing, "params": {}}}}
+    with pytest.raises(PolicyTimingError, match="is not a planner timing. Allowed: online, plan"):
         resolve_dispatch_for_profile(prof)
 
 
@@ -515,7 +515,7 @@ def test_unregistered_leaf_uses_legacy_kind_rule():
         class _TweakedGreedy(GreedyNearestSolver):
             pass
 
-        with pytest.raises(PolicyError, match="_TweakedGreedy subclasses the registered dispatch policy"):
+        with pytest.raises(PolicyError, match="_TweakedGreedy subclasses the registered planner policy"):
             bind_instance(node, _TweakedGreedy())
 
 
@@ -555,9 +555,9 @@ def test_mirrors_written_and_checked():
         with pytest.raises(PolicyError) as exc:
             check_mirrors({**profile, "planner": {**profile["planner"], "topology": "partitioned"}}, node)
         assert str(exc.value) == (
-            "profile planner.topology='partitioned' disagrees with its compiled policies.dispatch "
+            "profile planner.topology='partitioned' disagrees with its compiled policies.planner "
             "(PooledMarket). The compiled policies block is authoritative; change a run's "
-            "decomposition with --policy dispatch=Partitioned (ORSIM_PLANNER_TOPOLOGY is translated "
+            "decomposition with --policy planner=Partitioned (ORSIM_PLANNER_TOPOLOGY is translated "
             "into exactly that). Fix the bundle or recompile.")
 
         # A central top has no legacy topology: the mirror removes the key ...
@@ -570,7 +570,7 @@ def test_mirrors_written_and_checked():
         check_mirrors(mirrored, central)
         # ... and a round-1 flat bundle (central leaf + topology) is refused at run start.
         with pytest.raises(PolicyError, match=r"^assignment agent 'a0': profile planner.topology='partitioned' "
-                                              r"disagrees with its compiled policies.dispatch \(GreedyNearest\)"):
+                                              r"disagrees with its compiled policies.planner \(GreedyNearest\)"):
             assert_assignment_profiles_resolvable({"a0": {"profile": flat}})
 
 
@@ -580,7 +580,7 @@ def test_run_start_check_refuses_a_policies_block_without_the_format_marker():
     Verified to have teeth: removing the ``check_policies_format`` call from it let the
     unmarked block resolve as a central GreedyNearest.
     """
-    unmarked = {"policies": {"dispatch": {"type": "GreedyNearest", "timing": "online", "params": {}}}}
+    unmarked = {"policies": {"planner": {"type": "GreedyNearest", "timing": "online", "params": {}}}}
     with pytest.raises(PolicyError, match=r"assignment agent 'a0': profile.policies has policies_format=None"):
         assert_assignment_profiles_resolvable({"a0": {"profile": unmarked}})
     assert_assignment_profiles_resolvable({"a0": {"profile": {**unmarked, "policies_format": 2}}})

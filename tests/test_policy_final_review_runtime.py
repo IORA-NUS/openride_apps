@@ -55,14 +55,14 @@ def group_composite():
     tick ``ctx.rng``, also injected into the inner) or ``"module"`` (the ``random``
     module, as ``Partitioned`` must for byte identity)."""
     with isolated_registry():
-        @policy(slot="dispatch", name="GroupsVia", version="1", information_model="per_group",
+        @policy(slot="planner", name="GroupsVia", version="1", information_model="per_group",
                 description="one decision per cooperation group, drawing from the tick RNG")
         class GroupsVia(CompositePolicy):
             sample_with = "decision"
 
             @dataclass(frozen=True)
             class Params(PolicyParams):
-                inner: PolicyRef = param(ref("RandomAssignment"), kind="dispatch", leaf_only=True,
+                inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True,
                                          help="the per-group solver")
 
             def decide(self, ctx):
@@ -87,7 +87,7 @@ def group_composite():
 
 
 def _no_module_rng(name):
-    spec = get_policy_spec("dispatch", name)
+    spec = get_policy_spec("planner", name)
     with battery._quiet_runner_violations():
         return battery._no_module_rng(battery._Outcomes(spec, {}))
 
@@ -101,7 +101,7 @@ def test_a_composite_passing_its_decision_rng_passes_no_module_rng_undeclared(gr
     sample from the ``random`` module (the pre-fix hardcoding) failed the decision case
     (``decide drew from the random MODULE on scale``).
     """
-    assert get_policy_spec("dispatch", "GroupsVia").module_rng is None
+    assert get_policy_spec("planner", "GroupsVia").module_rng is None
     group_composite.sample_with = "decision"
     ok, detail = _no_module_rng("GroupsVia")
     assert ok and not detail.startswith("skipped"), detail

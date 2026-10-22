@@ -15,20 +15,20 @@ from apps.container_logistics.scenario import scenario_overrides as so
 
 # --- MAJOR-1: an override never manufactures the policies_format marker -------------
 
-#: A round-1 bundle profile: flat ``policies.dispatch``, no ``policies_format`` marker.
+#: A round-1 bundle profile: flat ``policies.planner``, no ``policies_format`` marker.
 ROUND1 = {
     "strategy": "GreedyNearest",
     "planner": {},
-    "policies": {"dispatch": {"type": "GreedyNearest", "version": "1", "kind": "operator",
+    "policies": {"planner": {"type": "GreedyNearest", "version": "1", "kind": "operator",
                               "timing": "online", "params": {}}},
 }
 
 OVERRIDE_CASES = [
     ("--solver GreedyNearest", {"solver": "GreedyNearest"}),
     ("--solver RandomAssignment", {"solver": "RandomAssignment"}),
-    ("--policy-param dispatch.dual_cycle_bonus_km=0",
-     {"overrides": {"dispatch": {"params": {"dual_cycle_bonus_km": 0}}}}),
-    ("--policy dispatch=PooledMarket", {"overrides": {"dispatch": {"type": "PooledMarket"}}}),
+    ("--policy-param planner.dual_cycle_bonus_km=0",
+     {"overrides": {"planner": {"params": {"dual_cycle_bonus_km": 0}}}}),
+    ("--policy planner=PooledMarket", {"overrides": {"planner": {"type": "PooledMarket"}}}),
     ("ORSIM_PLANNER_TOPOLOGY=pooled", {"topology": "pooled"}),
 ]
 
@@ -76,10 +76,10 @@ def test_major1_control_dry_run_refuses_override_on_unmarked_bundle(monkeypatch)
 
     monkeypatch.setattr(cp, "load_assignment_collection",
                         lambda scenario: {"a0": {"profile": copy.deepcopy(ROUND1)}})
-    for solver, flags in [("RandomAssignment", []), (None, ["dispatch=PooledMarket"])]:
+    for solver, flags in [("RandomAssignment", []), (None, ["planner=PooledMarket"])]:
         msg = cp.validate_run_policy_args("x", solver, flags, [])
         assert isinstance(msg, str) and "policies_format=None" in msg, msg
-    msg = cp.validate_run_policy_args("x", None, [], ["dispatch.dual_cycle_bonus_km=0"])
+    msg = cp.validate_run_policy_args("x", None, [], ["planner.dual_cycle_bonus_km=0"])
     assert isinstance(msg, str) and "policies_format=None" in msg, msg
 
 
@@ -87,7 +87,7 @@ def test_major1_control_dry_run_refuses_override_on_unmarked_bundle(monkeypatch)
 
 
 def test_minor9_message12_names_policy_flag_too():
-    """``--policy dispatch=GreedyNearest --solver RandomAssignment``: the conflicting
+    """``--policy planner=GreedyNearest --solver RandomAssignment``: the conflicting
     type came from ``--policy``, so the message must name it (it used to blame
     ``--policy-param/--policy-overrides`` only).
 
@@ -95,10 +95,10 @@ def test_minor9_message12_names_policy_flag_too():
     failed this equality."""
     with pytest.raises(PolicyError) as exc:
         so.run_dispatch_overrides({"a0": {"profile": {"strategy": "GreedyNearest"}}},
-                                  overrides={"dispatch": {"type": "GreedyNearest"}},
+                                  overrides={"planner": {"type": "GreedyNearest"}},
                                   solver="RandomAssignment")
     assert str(exc.value) == (
-        "--solver 'RandomAssignment' conflicts with dispatch.type='GreedyNearest' from "
+        "--solver 'RandomAssignment' conflicts with planner.type='GreedyNearest' from "
         "--policy/--policy-param/--policy-overrides; --solver is shorthand for the innermost "
         "solver, pass one of them.")
 
@@ -107,7 +107,7 @@ def test_minor9_message12_names_policy_flag_too():
 
 
 def test_minor10_message5_hint_when_top_named_and_inner_unstated():
-    """``--policy dispatch=Partitioned --policy-param dispatch.dual_cycle_bonus_km=0``
+    """``--policy planner=Partitioned --policy-param planner.dual_cycle_bonus_km=0``
     is prechecked before the bundle names the inner, i.e. against the DEFAULT inner
     (RandomAssignment), which lacks the key: the hint now names the registered leaves
     that declare it. A STATED inner that lacks the key gets no hint (it would mislead).
@@ -117,19 +117,19 @@ def test_minor10_message5_hint_when_top_named_and_inner_unstated():
     from openride_control.policies import validate_run_policy_args
 
     for top in ("Partitioned", "PooledMarket"):
-        msg = validate_run_policy_args("nope", None, [f"dispatch={top}"], ["dispatch.dual_cycle_bonus_km=0"])
+        msg = validate_run_policy_args("nope", None, [f"planner={top}"], ["planner.dual_cycle_bonus_km=0"])
         assert msg.endswith("'dual_cycle_bonus_km' is a param of an inner solver (e.g. GreedyNearest): "
-                            "use dispatch.inner.dual_cycle_bonus_km."), msg
-    msg = validate_run_policy_args("nope", None, ["dispatch=Partitioned"],
-                                   ["dispatch.inner=RandomAssignment", "dispatch.dual_cycle_bonus_km=0"])
+                            "use planner.inner.dual_cycle_bonus_km."), msg
+    msg = validate_run_policy_args("nope", None, ["planner=Partitioned"],
+                                   ["planner.inner=RandomAssignment", "planner.dual_cycle_bonus_km=0"])
     assert msg.endswith("Declared params: inner."), msg
-    msg = validate_run_policy_args("nope", None, ["dispatch=Partitioned"], ["dispatch.nope_key=0"])
+    msg = validate_run_policy_args("nope", None, ["planner=Partitioned"], ["planner.nope_key=0"])
     assert msg.endswith("Declared params: inner."), msg
     # The stated-inner hint (spec message 5) is unchanged.
-    msg = validate_run_policy_args("nope", None, ["dispatch=Partitioned"],
-                                   ["dispatch.inner=GreedyNearest", "dispatch.dual_cycle_bonus_km=0"])
+    msg = validate_run_policy_args("nope", None, ["planner=Partitioned"],
+                                   ["planner.inner=GreedyNearest", "planner.dual_cycle_bonus_km=0"])
     assert msg.endswith("'dual_cycle_bonus_km' is a param of the inner GreedyNearest: "
-                        "use dispatch.inner.dual_cycle_bonus_km."), msg
+                        "use planner.inner.dual_cycle_bonus_km."), msg
 
 
 # --- MINOR-3: names cannot carry run-name separators; values are escaped -----------
@@ -142,7 +142,7 @@ def _register_leaf(name, *, str_param=False):
     from apps.container_logistics.policies.dispatch.plan import Plan
     from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
-    @policy(slot="dispatch", name=name, version="1", description="test leaf", information_model="central")
+    @policy(slot="planner", name=name, version="1", description="test leaf", information_model="central")
     class Leaf(DispatchPolicy):
         if str_param:
             @dataclass(frozen=True)
@@ -200,11 +200,11 @@ def test_minor3_param_values_are_json_escaped_in_the_label():
             "ü": 'StrLeaf(tag="\\u00fc")',
         }
         for value, want in cases.items():
-            ov = parse_policy_cli_args([], ["dispatch.inner=StrLeaf", f"dispatch.inner.tag={value}"])
+            ov = parse_policy_cli_args([], ["planner.inner=StrLeaf", f"planner.inner.tag={value}"])
             _, labels = so.run_dispatch_overrides({"a0": {"profile": {"strategy": "GreedyNearest"}}},
                                                   overrides=ov)
-            assert labels["dispatch"] == want, (value, labels)
-            assert " · " not in labels["dispatch"] and labels["dispatch"].isascii()
+            assert labels["planner"] == want, (value, labels)
+            assert " · " not in labels["planner"] and labels["planner"].isascii()
 
 
 # --- MINOR-4: --capture-dispatch every=N counts dispatch TICKS, not sim steps ------
@@ -274,8 +274,8 @@ def test_minor6_legacy_spec_keeps_its_legacy_keys_and_recompiles_identically(tmp
     written = json.loads((folder / "spec.json").read_text())
     assert "policies" not in written and written["solver"] == "GreedyNearest"
     prof = next(iter(json.loads((folder / "scenario.json").read_text())["agents"]["assignment"].values()))["profile"]
-    assert prof["policies"]["dispatch"]["type"] == "Partitioned" and prof["policies_format"] == 2
-    assert json.loads((folder / "scenario.json").read_text())["recipe"]["policies"]["dispatch"]["type"] == "Partitioned"
+    assert prof["policies"]["planner"]["type"] == "Partitioned" and prof["policies_format"] == 2
+    assert json.loads((folder / "scenario.json").read_text())["recipe"]["policies"]["planner"]["type"] == "Partitioned"
     first = _agents(folder)
     from apps.container_logistics.scenario.frontend_scenario_spec import compile_scenario
     import os
@@ -293,8 +293,8 @@ def test_minor6_authored_policies_block_is_still_echoed(tmp_path, monkeypatch):
                                        "scenarios", "collab_smoke_12t", "spec.json")).read())
     src.pop("solver", None)
     src["planner"] = {k: v for k, v in (src.get("planner") or {}).items() if k not in ("topology", "deployment", "market")}
-    src["policies"] = {"dispatch": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
+    src["policies"] = {"planner": {"type": "PooledMarket", "params": {"inner": {"type": "GreedyNearest"}}}}
     folder = _compile_folder(tmp_path, monkeypatch, "collab_smoke_12t", spec=src)
     written = json.loads((folder / "spec.json").read_text())
-    assert written["policies"]["dispatch"]["type"] == "PooledMarket"
-    assert written["policies"]["dispatch"]["params"]["inner"]["type"] == "GreedyNearest"
+    assert written["policies"]["planner"]["type"] == "PooledMarket"
+    assert written["policies"]["planner"]["params"]["inner"]["type"] == "GreedyNearest"

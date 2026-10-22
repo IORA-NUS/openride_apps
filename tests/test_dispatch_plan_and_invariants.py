@@ -173,10 +173,10 @@ def test_runner_discards_violating_plan_and_logs_error(caplog):
     msg = rec.getMessage()
     # A sub-scope context: message 19 (round 2 §3.7), logged by dispatch/compose.py.
     assert msg.startswith(
-        "DISPATCH POLICY CONTRACT VIOLATION: inner Dup v1 in scope partition:haulier:acme at step 42 "
+        "PLANNER POLICY CONTRACT VIOLATION: inner Dup v1 in scope partition:haulier:acme at step 42 "
         "returned an invalid plan: order 'o1' appears twice in the plan. The scope's plan was DISCARDED"
     ), msg
-    assert msg.endswith("run `openride policy validate dispatch Dup`."), msg
+    assert msg.endswith("run `openride policy validate planner Dup`."), msg
 
 
 def test_runner_counts_violations():
