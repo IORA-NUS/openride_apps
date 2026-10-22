@@ -4,16 +4,20 @@ What is locked:
 - the legacy keys (``strategy``, ``solver_params``, ``use_spatial_matching``) translate
   to a validated ``policies.planner`` entry, keeping only declared params;
 - an injected solver the registry does not know gets the legacy candidate rule
-  (spatial iff ``use_spatial_matching`` and it has ``solve_pairs``) and runs through
-  ``PairSolver``'s default ``decide``;
+  (spatial iff ``use_spatial_matching`` and it has ``solve_pairs``,
+  ``compat.unregistered``) and runs through ``PairSolver``'s default decision
+  (``compat.unregistered.UnregisteredPairLeaf``); the candidate kind a caller reads is
+  the bound leaf's ``Declaration.candidate_hint``;
 - every wiring error fails loud: a registered solver of the wrong class, an
   unregistered subclass of a registered policy, ``use_spatial_matching: false`` next
   to a ``policies`` block, bad ``policies.planner.params``, a non-executable timing
   at run start;
 - the harness profile of ``tests/test_container_logistics_hauliers.py`` (no
   ``strategy``) resolves to the slot default, RandomAssignment;
-- ``AssignmentApp._dispatch_runner`` caches on its inputs and rebuilds when any of
-  them changes;
+- ``AssignmentApp._dispatch_runner`` caches on its inputs (including the world keys
+  the bound tree's binds read) and rebuilds when any of them changes;
+- ``build_policy_tree`` refuses, with ``PolicyError``, a class with an ``inner`` ref
+  that rejects the construction keywords;
 - round 2 (C2): ``bind_instance`` fits a built policy into the selection tree (leaf at
   the innermost, composite at the top, an unregistered leaf under the legacy kind
   rule) or names both trees; ``mirror_dispatch_selection`` writes the legacy mirrors
@@ -31,17 +35,20 @@ import random
 
 import pytest
 
-from apps.container_logistics.assignment import constraints as assign_constraints
+from dataclasses import dataclass
+
 from apps.container_logistics.assignment.solver import (
     GreedyNearestSolver,
     RandomAssignmentSolver,
     get_solver,
 )
-from apps.container_logistics.policies.dispatch import scopes
-from apps.container_logistics.policies.dispatch.allowed import PartitionRule
-from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
-from apps.container_logistics.policies.dispatch.composite import CompositePolicy, innermost_policy
+from apps.container_logistics.policies.compat.unregistered import UnregisteredPairLeaf
+from apps.container_logistics.policies.dispatch.bind import bind_profile, bind_tree
+from apps.container_logistics.policies.dispatch.composite import CompositePolicy
+from apps.container_logistics.policies.dispatch.tick import DispatchClock
+from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
+from apps.container_logistics.policies.framework.registry import isolated_registry
+from apps.container_logistics.policies.solver_lib import candidates as C
 from apps.container_logistics.policies.solver_lib.pair_solver import PairSolver
 from apps.container_logistics.policies.dispatch.profile import (
     assert_assignment_profiles_resolvable,
@@ -53,7 +60,7 @@ from apps.container_logistics.policies.dispatch.profile import (
     resolve_dispatch_for_profile,
     bind_profile_instance,
 )
-from apps.container_logistics.policies.dispatch.runner import DispatchRunner, build_runner_for_app
+from apps.container_logistics.policies.dispatch.runner import build_runner_for_app
 from apps.container_logistics.policies.framework import (
     PolicyError,
     PolicyParamsError,
@@ -119,14 +126,20 @@ def _leaf_node(policy, prof):
     return bind_profile_instance(prof, policy)[1].innermost
 
 
-def _partition_ctx(runner, trucks, orders):
-    return scopes.partition_context(
-        policy=runner.policy, params=runner.resolved.params, candidate_kind=runner.candidate_kind,
-        trucks=trucks, orders=orders, partition_key=("haulier", "acme"),
-        rule=PartitionRule(max_travel_time_pickup=None, adjacency={}),
-        settings=CandidateSettings.from_profile({}),
-        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
-    )
+def _kind(prof, instance=None):
+    """The leaf's candidate kind as a caller reads it: the bound leaf's hint, else ``sampled``."""
+    return bind_profile(prof, instance).leaf.declaration.candidate_hint or "sampled"
+
+
+def _innermost(policy):
+    """Follow ``inner`` down a built tree (the construction protocol)."""
+    while getattr(policy, "inner", None) is not None:
+        policy = policy.inner
+    return policy
+
+
+def _whole_tick(runner, trucks, orders, prof):
+    return runner.tick(candidates=trucks, orders=orders, profile=prof, clock=_CLOCK, seed=1)
 
 
 def test_legacy_profile_translates_strategy_params_and_use_spatial():
@@ -148,16 +161,18 @@ def test_legacy_profile_translates_strategy_params_and_use_spatial():
     assert tree.label == "Partitioned/GreedyNearest"
     resolved = tree.innermost
     assert (resolved.name, resolved.timing, resolved.source) == ("GreedyNearest", "online", "legacy-profile")
-    assert resolved.candidate_kind == "sampled", "use_spatial_matching: false must give the sampled kind"
+    assert resolved.params.candidates == "sampled" and _kind(prof) == "sampled", (
+        "use_spatial_matching: false must give the sampled kind")
     assert resolved.params.to_dict() == {"candidates": "sampled", **_LEGACY_DC}, (
         "the legacy solver_params must reach the validated GreedyNearest params unchanged"
     )
 
     for spatial_on in ({"use_spatial_matching": True}, {}):
         r = resolve_dispatch_for_profile({"strategy": "GreedyNearest", **spatial_on}).innermost
-        assert r.candidate_kind == "spatial", (
+        kind = _kind({"strategy": "GreedyNearest", **spatial_on})
+        assert r.params.candidates == "spatial" and kind == "spatial", (
             f"GreedyNearest with {spatial_on or 'no use_spatial_matching'} must keep its "
-            f"default spatial candidates, got {r.candidate_kind!r}"
+            f"default spatial candidates, got {kind!r}"
         )
         assert r.params.dual_cycle_bonus_km == 5.0 and r.params.dual_cycle_radius_km == 0.5
 
@@ -185,15 +200,14 @@ def test_random_drops_undeclared_legacy_dual_cycle_keys(caplog):
     assert resolved.params.to_dict() == {"candidates": "sampled"}
     # use_spatial_matching never turns RandomAssignment spatial: its default is sampled.
     for flag in (True, False):
-        r = resolve_dispatch_for_profile({**prof, "use_spatial_matching": flag}).innermost
-        assert r.candidate_kind == "sampled", (
+        assert _kind({**prof, "use_spatial_matching": flag}) == "sampled", (
             f"RandomAssignment with use_spatial_matching={flag} must stay sampled (golden baseline)"
         )
 
 
 def test_unregistered_pair_solver_uses_the_legacy_kind_rule_and_default_decide():
-    """Verified to have teeth: replacing ``hasattr(policy, 'solve_pairs')`` with
-    ``True`` in ``resolve_for_instance`` failed this test."""
+    """Verified to have teeth: replacing ``hasattr(instance, "solve_pairs")`` with
+    ``True`` in ``compat.unregistered.legacy_spatial_rule`` failed this test."""
     plain, paired = _FirstFree(), _FirstFreeWithPairs()
     cases = [
         (plain, {}, "sampled"),
@@ -203,28 +217,30 @@ def test_unregistered_pair_solver_uses_the_legacy_kind_rule_and_default_decide()
     ]
     for policy, prof, kind in cases:
         r = _leaf_node(policy, prof)
-        assert r.candidate_kind == kind, (
-            f"{type(policy).__name__} under {prof}: legacy rule says {kind!r}, got {r.candidate_kind!r}"
-        )
+        leaf = bind_profile(prof, policy).leaf
+        assert isinstance(leaf.solver, UnregisteredPairLeaf) and leaf.instance is policy
+        got = leaf.declaration.candidate_hint or "sampled"
+        assert got == kind, f"{type(policy).__name__} under {prof}: legacy rule says {kind!r}, got {got!r}"
         assert (r.source, r.params, r.timing, r.name) == (
             "unregistered", None, "online", type(policy).__name__
         )
 
-    # Default PairSolver.decide on the sampled kind -> solve(sampled trucks, orders, allowed_raw).
+    # Default PairSolver decision on the sampled kind -> solve(sampled trucks, orders, permitted),
+    # here as the inner of the profile's Partitioned (one group: the acme haulier).
     trucks, orders = _acme_world()
-    runner = DispatchRunner(policy=plain, resolved=_leaf_node(plain, {}))
-    ctx = _partition_ctx(runner, trucks, orders)
-    result = runner.run(ctx).pairs
+    runner = build_runner_for_app(plain, {})
+    tick = _whole_tick(runner, trucks, orders, {})
+    result = runner.run(tick).pairs
     assert [(t["_id"], o["_id"]) for t, o in result] == [("t1", "o1"), ("t2", "o2")]
     (call,) = plain.calls
     assert call[0] == "solve" and call[1] == ["t1", "t2"] and call[2] == ["o1", "o2"]
-    assert call[3] == ctx.allowed_raw, "solve must receive the framework's feasibility"
+    assert call[3] is tick.permitted, "solve must receive the framework's feasibility"
 
     # ... and on the spatial kind -> solve_pairs(spatial candidates), never solve.
-    runner = DispatchRunner(policy=paired, resolved=_leaf_node(paired, {}))
-    ctx = _partition_ctx(runner, trucks, orders)
-    expected_pairs = [(t["_id"], o["_id"]) for t, o in ctx.candidate_pairs("spatial")]
-    result = runner.run(ctx).pairs
+    runner = build_runner_for_app(paired, {})
+    tick = _whole_tick(runner, trucks, orders, {})
+    expected_pairs = [(t["_id"], o["_id"]) for t, o in C.spatial_pairs(tick, C.CandidateSettings.from_world({}))]
+    result = runner.run(tick).pairs
     assert [c[0] for c in paired.calls] == ["solve_pairs"], f"spatial kind must call only solve_pairs: {paired.calls}"
     assert paired.calls[0][1] == expected_pairs, "solve_pairs must get exactly the spatial candidates"
     assert result and runner.stats["violations"] == 0
@@ -277,7 +293,8 @@ def test_policies_block_with_use_spatial_false_is_refused():
     # Explicit True is a no-op, and the block's own candidates param is what counts.
     ok = resolve_dispatch_for_profile({**_policies("GreedyNearest", {"candidates": "sampled"}),
                                        "use_spatial_matching": True})
-    assert (ok.source, ok.candidate_kind) == ("policies", "sampled")
+    assert (ok.source, ok.params.candidates) == ("policies", "sampled")
+    assert _kind({**_policies("GreedyNearest", {"candidates": "sampled"}), "use_spatial_matching": True}) == "sampled"
 
 
 def test_unregistered_subclass_of_a_registered_policy_is_refused():
@@ -336,18 +353,18 @@ def test_run_start_check_refuses_plan_timing():
 
 def test_dispatch_runner_cache_rebuilds_when_the_solver_is_swapped():
     """Verified to have teeth: dropping ``id(self._solver)`` from the cache key,
-    dropping ``solver_params``, and dropping ``planner`` (round 2 C3), each failed
-    this test."""
+    dropping ``solver_params``, dropping ``planner`` (round 2 C3), and dropping
+    ``runner.tree.digest(prof)`` (WS1: the bound world reads), each failed this test."""
     app = _app([], [], strategy="GreedyNearest")
     prof = app.behavior["profile"]
     first = app._dispatch_runner(prof)
     assert app._dispatch_runner(prof) is first, "same inputs must return the cached runner"
     # Round 2: the runner holds the tree; the app's leaf instance is its innermost solver.
-    assert innermost_policy(first.policy) is app._solver
+    assert first.tree.leaf.instance is app._solver
 
     app._solver = get_solver("GreedyNearest", None)
     swapped = app._dispatch_runner(prof)
-    assert swapped is not first and innermost_policy(swapped.policy) is app._solver, (
+    assert swapped is not first and swapped.tree.leaf.instance is app._solver, (
         "a replaced _solver must get a new runner holding the new solver"
     )
 
@@ -373,10 +390,19 @@ def test_dispatch_runner_cache_rebuilds_when_the_solver_is_swapped():
         app._dispatch_runner(prof)  # strategy changed but the solver did not: mismatch
     app._solver = RandomAssignmentSolver()
     restrat = app._dispatch_runner(prof)
-    assert restrat.resolved.leaf == "RandomAssignment" and innermost_policy(restrat.policy) is app._solver
+    assert restrat.resolved.leaf == "RandomAssignment" and restrat.tree.leaf.instance is app._solver
 
     prof["use_spatial_matching"] = False
-    assert app._dispatch_runner(prof) is not restrat, "use_spatial_matching is part of the key"
+    respatial = app._dispatch_runner(prof)
+    assert respatial is not restrat, "use_spatial_matching is part of the key"
+
+    # WS1: a world key the bound tree's binds read (the cooperation arm) is part of the key,
+    # so the top's declared cross-company pairs follow a patched structure.
+    assert "cooperation" in respatial.tree.world_reads
+    prof["cooperation"] = {"active": "s", "structures": [{"id": "s", "adjacency": {"a": ["b"], "b": ["a"]}}]}
+    recoop = app._dispatch_runner(prof)
+    assert recoop is not respatial and recoop.tree.declaration.cross_company == {("a", "b"), ("b", "a")}
+    assert app._dispatch_runner(prof) is recoop
 
 
 @pytest.mark.parametrize("value", [0, None, "", "false", 1])
@@ -429,7 +455,7 @@ def test_bind_leaf_instance_at_innermost():
         leaf = GreedyNearestSolver({"dual_cycle_bonus_km": 2.5})
         policy, bound = bind_instance(node, leaf)
     assert node.label == "Partitioned/GreedyNearest"
-    assert isinstance(policy, CompositePolicy) and policy.inner is leaf and innermost_policy(policy) is leaf
+    assert isinstance(policy, CompositePolicy) and policy.inner is leaf and _innermost(policy) is leaf
     assert bound is node and policy.inner_node is node.inner
     assert policy.params == {"inner": {"type": "GreedyNearest", "params": node.inner.params.to_dict()}}
     pooled_leaf = GreedyNearestSolver({"dual_cycle_bonus_km": 2.5})
@@ -495,22 +521,26 @@ def test_bind_mismatch_names_the_tree():
 
 
 def test_unregistered_leaf_uses_legacy_kind_rule():
-    """Verified to have teeth: replacing ``hasattr(policy, 'solve_pairs')`` with ``True``
-    in ``_unregistered_node`` failed the plain-solver row."""
+    """Verified to have teeth: replacing ``hasattr(instance, "solve_pairs")`` with ``True``
+    in ``compat.unregistered.legacy_spatial_rule`` failed the plain-solver row."""
+
+    def _hint(bound, policy, flag):
+        return bind_tree(bound, policy, {"use_spatial_matching": flag}).leaf.declaration.candidate_hint or "sampled"
+
     with decompositions():
         node = resolve_dispatch_for_profile(_GREEDY_PARTITIONED)
         for instance, flag, kind in ((_FirstFreeWithPairs(), True, "spatial"),
                                      (_FirstFreeWithPairs(), False, "sampled"),
                                      (_FirstFree(), True, "sampled")):
-            policy, bound = bind_instance(node, instance, use_spatial_matching=flag)
-            assert innermost_policy(policy) is instance and isinstance(policy, CompositePolicy)
-            assert (bound.inner.source, bound.inner.params, bound.inner.candidate_kind) == (
-                "unregistered", None, kind), bound.inner
+            policy, bound = bind_instance(node, instance)
+            assert _innermost(policy) is instance and isinstance(policy, CompositePolicy)
+            assert (bound.inner.source, bound.inner.params) == ("unregistered", None), bound.inner
+            assert _hint(bound, policy, flag) == kind
             assert bound.label == f"Partitioned/{type(instance).__name__}" and bound.leaf == type(instance).__name__
             assert node.inner.name == "GreedyNearest", "the profile's node must not be mutated"
             # Re-binding the built tree accepts its unregistered innermost leaf.
-            again, rebound = bind_instance(node, policy, use_spatial_matching=flag)
-            assert again is policy and rebound.inner.candidate_kind == kind
+            again, rebound = bind_instance(node, policy)
+            assert again is policy and _hint(rebound, again, flag) == kind
 
         class _TweakedGreedy(GreedyNearestSolver):
             pass
@@ -584,3 +614,30 @@ def test_run_start_check_refuses_a_policies_block_without_the_format_marker():
     with pytest.raises(PolicyError, match=r"assignment agent 'a0': profile.policies has policies_format=None"):
         assert_assignment_profiles_resolvable({"a0": {"profile": unmarked}})
     assert_assignment_profiles_resolvable({"a0": {"profile": {**unmarked, "policies_format": 2}}})
+
+
+def test_build_policy_tree_refuses_a_class_that_rejects_the_construction_keywords():
+    """A node with an ``inner`` ref is built as ``cls(params=, inner=, inner_node=)``; a class
+    that cannot take them is a ``PolicyError`` naming the protocol, never a bare ``TypeError``.
+
+    Verified to have teeth: removing the ``try/except TypeError`` in ``build_policy_tree``
+    let the raw ``TypeError`` through and failed this test.
+    """
+    with isolated_registry():
+
+        @policy(slot="planner", name="TestNoInnerKwargs", version="1", description="test only",
+                information_model="per_group")
+        class _NoInnerKwargs:
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True, help="x")
+
+            def __init__(self, params=None):
+                self.params = params
+
+            def solve_tick(self, tick, params):  # pragma: no cover - never reached
+                raise AssertionError
+
+        node = resolve_dispatch_for_profile(_policies("TestNoInnerKwargs"))
+        with pytest.raises(PolicyError, match=r"does not accept the construction keywords"):
+            build_policy_tree(node)

@@ -171,7 +171,7 @@ def test_run_world_hides_selection_keys_and_records_reads():
 def test_message_23_refuses_a_top_declaration_outside_the_ceiling():
     """Teeth: returning early from ``_check_top`` made the first ``raises`` pass silently."""
     prof = _profile(edges=(("h_a", "h_b"),))
-    with pytest.raises(PolicyError, match=r"\('h_c', 'h_a'\) \(owner, carrier\) that no cooperation structure"):
+    with pytest.raises(PolicyError, match=r"\(.h_c., .h_a.\) \(owner, carrier\) that no structure of the scenario"):
         _tree(prof, top_decl=Declaration(cross_company={("h_c", "h_a")}))
     with pytest.raises(PolicyError, match="malformed cross-company pair"):
         _tree(prof, top_decl=Declaration(cross_company={("h_a", "h_a")}))
@@ -322,3 +322,37 @@ def test_declared_partnerships_is_the_union_over_every_structure():
     got = C.declared_partnerships(_profile(extra_structures=(other,)))
     assert got == {("h_a", "h_b"), ("h_b", "h_a"), ("h_a", "h_c")}
     assert C.declared_partnerships({}) == frozenset() and C.declared_partnerships({"cooperation": []}) == frozenset()
+
+
+def test_measure_is_dual_cycle_equals_the_constraint_predicate():
+    """``Measure.is_dual_cycle`` (a copy over the geometry readers) equals ``constraints._is_dual_cycle_pair``.
+
+    Over every truck x order pair of the dense synthetic tick (30% of trucks just
+    dropped off at an order pickup) at three radii, plus a radius-boundary pair whose
+    facility names differ. Teeth: changing ``<=`` to ``<`` in ``Measure.is_dual_cycle``
+    failed the boundary assertion; dropping its facility-name branch failed the far
+    same-facility assertion.
+    """
+    from apps.container_logistics.policies.testing import fixtures as fx
+
+    truck = _truck("tb", "h_a")
+    truck["profile"].update(last_dropoff_loc=_pt(103.85, 1.30), last_dropoff_facility_name="f1")
+    order = _order("ob", "h_a")
+    order["profile"]["pickup_facility_name"] = "f2"
+    edge = C._haversine_km(C._truck_last_dropoff_loc(truck), C.order_pickup_loc(order))
+    assert edge > 0 and C._is_dual_cycle_pair(truck, order, C.order_pickup_loc(order), edge)
+    assert Measure.is_dual_cycle(truck, order, radius_km=edge) is True
+    assert Measure.is_dual_cycle(truck, order, radius_km=edge / 2) is False
+    far = _truck("tf", "h_a")
+    far["profile"].update(last_dropoff_loc=_pt(104.5, 1.0), last_dropoff_facility_name="f2")
+    assert C._is_dual_cycle_pair(far, order, C.order_pickup_loc(order), 0.5)
+    assert Measure.is_dual_cycle(far, order, radius_km=0.5) is True
+    tick = fx.scale(n_trucks=60, n_orders=40, hauliers=2, seed=4)
+    hits = 0
+    for radius in (0.0, 0.5, 3.0):
+        for t in tick.trucks:
+            for o in tick.orders:
+                want = C._is_dual_cycle_pair(t, o, C.order_pickup_loc(o), radius)
+                assert Measure.is_dual_cycle(t, o, radius_km=radius) is want
+                hits += want
+    assert hits > 0

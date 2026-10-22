@@ -7,7 +7,7 @@ What is locked (each test names its finding):
   imports nothing from ``policies.planner`` (C1 review #5).
 - The catalog advertises a REGISTERED default and each composite's ``inner_param``,
   the one descent rule ``--solver`` follows (C1 review #4, #9).
-- The tick scope's sample cap applies per haulier, drawing from ``ctx.rng``
+- The whole tick's sample cap applies per haulier, drawing from ``tick.rng``
   (explainer gap 1); a top-level crash propagates out of ``assign`` (gap 2); a
   contract violation inside a market company is message 19 and drops only that
   company for that round (gap 3).
@@ -33,7 +33,6 @@ from pathlib import Path
 import pytest
 
 from apps.container_logistics.assignment import constraints as assign_constraints
-from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.dispatch.profile import (
@@ -42,11 +41,11 @@ from apps.container_logistics.policies.dispatch.profile import (
     resolve_dispatch_for_profile,
 )
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
-from apps.container_logistics.policies.dispatch.world import DispatchWorld
+from apps.container_logistics.policies.dispatch.tick import DispatchClock
 from apps.container_logistics.policies.framework import PolicyError, PolicyParams, UnknownPolicyError, policy
 from apps.container_logistics.policies.framework.catalog import policy_catalog
 from apps.container_logistics.policies.framework.registry import get_policy_spec, isolated_registry, list_policies
-from apps.container_logistics.policies.dispatch.context import DispatchClock
+from apps.container_logistics.policies.solver_lib import candidates
 from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 from apps.container_logistics.policies.compat.legacy_env import apply_planner_topology_override
 from apps.container_logistics.scenario.scenario_overrides import apply_policy_overrides
@@ -127,30 +126,27 @@ def test_catalog_exposes_inner_param_and_the_solver_override_descends_it():
 
 def test_tick_scope_samples_per_haulier_from_ctx_rng_and_partition_scope_is_unchanged():
     """Verified to have teeth: sampling the whole tick with one ``rng.sample(trucks, cap)``
-    (``_candidates.sampled_trucks`` in the tick branch) failed the per-haulier counts."""
+    (``candidates.sampled_trucks`` in ``tick_sampled_trucks``' depth-0 branch) failed the
+    per-haulier counts."""
     trucks = [_truck(f"t_{h}{i}", h, 103.85 + 0.001 * i, 1.30) for h in ("acme", "borax") for i in range(4)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
     runner = build_runner_for_policy("RandomAssignment")
-    settings = CandidateSettings.from_profile({"max_trucks_per_haulier": 2})
-    world = DispatchWorld.from_profile({}, accounting_params={})
+    profile = {"max_trucks_per_haulier": 2}
+    settings = CandidateSettings.from_profile(profile)
     clock = DispatchClock(sim_clock=_CLOCK, time_step=1)
-    ctx = runner.tick_context(candidates=trucks, orders=orders, world=world, settings=settings,
-                              clock=clock, tick_seed=123)
+    tick = runner.tick(candidates=trucks, orders=orders, profile=profile, clock=clock, seed=123, dials={})
     random.seed(1)
     before = random.getstate()
-    sample = ctx.sampled_trucks()
-    assert random.getstate() == before, "the tick scope must draw from ctx.rng, not the module"
+    sample = candidates.tick_sampled_trucks(tick, settings)
+    assert random.getstate() == before, "the whole tick must draw from tick.rng, not the module"
     assert [assign_constraints.haulier_of(t) for t in sample] == ["acme", "acme", "borax", "borax"]
-    again = runner.tick_context(candidates=trucks, orders=orders, world=world, settings=settings,
-                                clock=clock, tick_seed=123).sampled_trucks()
+    again = candidates.tick_sampled_trucks(
+        runner.tick(candidates=trucks, orders=orders, profile=profile, clock=clock, seed=123, dials={}), settings)
     assert [t["_id"] for t in again] == [t["_id"] for t in sample], "reproducible for a tick seed"
-    group = scopes.partition_context(
-        policy=runner.policy, params=runner.resolved.params, candidate_kind="sampled", trucks=trucks,
-        orders=orders, partition_key=("component", 0), rule=world.rule, settings=settings,
-        accounting_cost=world.accounting_cost, sample_rng=random, clock=clock, parent=ctx)
+    group = tick.restrict(trucks=trucks, orders=orders, scope="partition:component:0", sample_rng=random)
     random.seed(1)
-    assert len(group.sampled_trucks()) == 2, "a group scope still caps its whole slice"
-    assert random.getstate() != before, "a group scope still samples from the module (pre-v2)"
+    assert len(candidates.tick_sampled_trucks(group, settings)) == 2, "a group sub-tick still caps its whole slice"
+    assert random.getstate() != before, "a group sub-tick still samples from the module (pre-v2)"
 
 
 # --- explainer gap 2: a top-level crash propagates --------------------------------------
@@ -178,8 +174,8 @@ def test_a_crash_in_a_top_level_solver_or_a_group_propagates_out_of_assign(crash
     """Explainer gap 2: a non-contract exception aborts the tick, as the partitioned path
     always did (only a MARKET company crash is contained, message 20).
 
-    Verified to have teeth: widening ``DispatchRunner._decide``'s ``except`` to
-    ``Exception`` swallowed the central case.
+    Verified to have teeth: widening ``DispatchRunner._solve``'s ``except`` to
+    ``Exception`` swallowed both cases.
     """
     app = _app([_truck("t1", "acme", 103.85, 1.30)], [_order("o1", "acme", 103.85, 1.30)],
                _base_profile(policies={"planner": dispatch}))
@@ -212,8 +208,8 @@ def borax_double_booker():
 
 
 def test_a_market_company_violation_is_message_19_and_drops_only_that_company(borax_double_booker, caplog):
-    """Explainer gap 3. Verified to have teeth: letting ``ScopeDecider.run`` commit the
-    plan without ``decide_in_scope``'s check committed borax's double booking."""
+    """Explainer gap 3. Verified to have teeth: letting ``Tick.call`` return the company's
+    result without its ``check_result`` committed borax's double booking."""
     trucks = [_truck("t_acme", "acme", 103.85, 1.30), _truck("t_b1", "borax", 103.95, 1.30),
               _truck("t_b2", "borax", 103.951, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30), _order("o_borax", "borax", 103.95, 1.30)]

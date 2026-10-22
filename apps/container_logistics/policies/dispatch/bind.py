@@ -270,10 +270,10 @@ def _check_top(declaration: Declaration, profile: Mapping[str, Any], where: str)
     if outside:
         shown = ", ".join(f"({o!r}, {c!r})" for o, c in outside[:8]) + (" ..." if len(outside) > 8 else "")
         raise PolicyError(
-            f"{where}: bind() declared cross-company pair(s) {shown} (owner, carrier) that no cooperation "
-            "structure of the scenario declares. A solver may let a carrier serve another company's orders "
-            "only where the scenario's cooperation menu pairs them (the union of every structure's adjacency); "
-            "fix the solver's bind() or the scenario's cooperation block."
+            f"{where}: bind() declared cross-company pair(s) {shown} (owner, carrier) that no structure of "
+            "the scenario declares. A solver may let a carrier serve another company's orders only where the "
+            "scenario's structure menu pairs them (the union of every structure's adjacency); fix the "
+            "solver's bind() or the scenario's structures."
         )
 
 

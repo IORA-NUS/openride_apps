@@ -256,7 +256,7 @@ def test_override_patches_profile_policies_and_strategy_mirror():
     assert prof["solver_params"] == {"dual_cycle_bonus_km": 4.0, "dual_cycle_radius_km": 1.0}, (
         "the overridden param must be re-mirrored into the accounting solver_params (F1)")
     assert "use_spatial_matching" not in prof
-    assert resolve_dispatch_for_profile(prof).candidate_kind == "sampled"
+    assert resolve_dispatch_for_profile(prof).inner.params.candidates == "sampled"
     # Validation happens before mutation.
     coll = _collection(legacy)
     with pytest.raises(PolicyParamsError):

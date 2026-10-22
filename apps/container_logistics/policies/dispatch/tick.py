@@ -128,10 +128,24 @@ class Measure:
 
     @staticmethod
     def is_dual_cycle(t: Any, o: Any, *, radius_km: float) -> bool:
-        """The exact dual-cycle predicate ``assignment_cost`` applies, at ``radius_km``."""
-        o = _unwrap(o)
-        pickup = assign_constraints.order_pickup_loc(o)
-        return assign_constraints._is_dual_cycle_pair(_unwrap(t), o, pickup, float(radius_km))
+        """The dual-cycle predicate ``assignment_cost`` applies, at ``radius_km`` (a measurement, e.g. the bench's).
+
+        A verbatim copy of ``constraints._is_dual_cycle_pair`` over the geometry readers
+        (the order's pickup facility is the truck's last drop-off facility, else the last
+        drop-off point lies within ``radius_km`` of the pickup);
+        ``tests/test_solver_contract_types.py`` pins the two equal.
+        """
+        t, o = _unwrap(t), _unwrap(o)
+        last_fac = assign_constraints._truck_last_dropoff_facility(t)
+        order_pickup_fac = (o.get("profile") or {}).get("pickup_facility_name")
+        if last_fac is not None and order_pickup_fac is not None and last_fac == str(order_pickup_fac):
+            return True
+        last_loc = assign_constraints._truck_last_dropoff_loc(t)
+        if last_loc is not None:
+            d = assign_constraints._haversine_km(last_loc, assign_constraints.order_pickup_loc(o))
+            if d is not None and d <= float(radius_km):
+                return True
+        return False
 
 
 def _ownership(cross_company: frozenset[tuple[str, str]]) -> Callable[[Doc, Doc], bool]:

@@ -107,10 +107,14 @@ def test_the_walk_found_the_dispatch_modules():
     mods = set(_policy_modules())
     assert "apps.container_logistics.policies.dispatch.runner" in mods
     assert "apps.container_logistics.policies.solver_lib.candidates" in mods
-    # Round 2 C3: the whole-tick runtime's new modules are walked too.
-    assert {"apps.container_logistics.policies.dispatch.compose",
+    # Round 2 C3 / WS1: the whole-tick runtime's modules are walked too.
+    assert {"apps.container_logistics.policies.dispatch.tick",
+            "apps.container_logistics.policies.dispatch.bind",
+            "apps.container_logistics.policies.dispatch.result",
             "apps.container_logistics.policies.dispatch.library.partitioned",
-            "apps.container_logistics.policies.dispatch.library.pooled_market"} <= mods
+            "apps.container_logistics.policies.dispatch.library.pooled_market",
+            "apps.container_logistics.policies.solver_lib.cooperation",
+            "apps.container_logistics.policies.compat.legacy_context"} <= mods
 
 
 def test_app_imports_the_dispatch_package_only_locally():

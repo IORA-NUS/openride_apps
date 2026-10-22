@@ -44,7 +44,7 @@ class UnregisteredPairLeaf:
         return pair_leaf_declaration(world, top=top, spatial=self.spatial)
 
     def solve_tick(self, tick: Any, params: Any) -> Any:
-        from apps.container_logistics.policies.compat.legacy_context import LegacyDecideContext, result_from_legacy
+        from apps.container_logistics.policies.compat.legacy_context import LegacyDecideContext
         from apps.container_logistics.policies.dispatch.base import DispatchPolicy
         from apps.container_logistics.policies.solver_lib.pair_solver import PairSolver, solve_pair_tick
 
@@ -56,5 +56,5 @@ class UnregisteredPairLeaf:
         decide = getattr(cls, "decide", None)
         if decide is not None and decide not in (PairSolver.decide, DispatchPolicy.decide):
             kind = "spatial" if self.spatial else "sampled"
-            return result_from_legacy(instance.decide(LegacyDecideContext(tick, default_candidate_kind=kind)))
+            return LegacyDecideContext(tick, default_candidate_kind=kind).run(instance.decide)
         return solve_pair_tick(instance, tick, spatial=self.spatial)

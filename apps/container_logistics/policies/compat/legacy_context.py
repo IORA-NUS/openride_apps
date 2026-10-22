@@ -185,6 +185,10 @@ class LegacyDecideContext:
     def allowed(self, truck: Any, order: Any) -> bool:
         return self._tick.permitted(truck, order)
 
+    def run(self, decide: Any) -> Any:
+        """``decide(self)`` converted by :func:`result_from_legacy` (``DispatchPolicy.solve_tick``'s shim)."""
+        return result_from_legacy(decide(self))
+
     def sampled_trucks(self) -> list:
         """The tick's trucks, randomly capped (drawn once per tick: ``candidates.tick_sampled_trucks``)."""
         from apps.container_logistics.policies.solver_lib import candidates

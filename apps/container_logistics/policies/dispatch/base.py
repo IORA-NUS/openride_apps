@@ -164,15 +164,12 @@ class DispatchPolicy(ABC):
         returned ``Plan`` is converted to a ``Result`` (a chain longer than one is a
         ``DispatchContractViolation``); a ``Result`` is passed through.
         """
-        from apps.container_logistics.policies.compat.legacy_context import (  # local: compat reaches solver_lib
-            LegacyDecideContext,
-            result_from_legacy,
-        )
+        from apps.container_logistics.policies.compat.legacy_context import LegacyDecideContext  # local: compat reaches solver_lib
 
         if params is not tick.params:
             raise DispatchContractViolation(
                 f"{type(self).__name__}.solve_tick: params must be the tick's own (tick.params)")
-        return result_from_legacy(self.decide(LegacyDecideContext(tick)))
+        return LegacyDecideContext(tick).run(self.decide)
 
     @contextmanager
     def decision_rng(self, ctx: Any) -> Iterator[None]:

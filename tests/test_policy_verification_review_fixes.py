@@ -5,16 +5,17 @@ What is locked:
 
 - MINOR-A: the tick documents are READ-ONLY for a policy (``DispatchPolicy`` docstring).
   The shipped selections honour it; and the boundary is pinned: a composite that moves
-  a truck for a sub-solve and restores it gets the sub-scope's physical verdict at the
-  tick (``DispatchWorld.tick_allowed`` re-checks only who may serve whom). That is the
-  documented contract, not an accident: a per-head fingerprint cost more than the
-  shortcut saves. If the shortcut ever gains a fingerprint, invert that test.
-- MINOR-B: the composite recipe is ``sample_rng=ctx.rng``, ``inner.set_rng(ctx.rng)``
-  AND ``inner.set_tiebreak(ctx.tick_seed)``; without the tiebreak a GreedyNearest inner
-  makes the composite fail ``determinism.order_independent``.
+  a truck for a sub-solve and restores it gets the sub-tick's physical verdict at the
+  top (``Tick._top_check`` re-checks only ownership-or-declared for pairs a sub-tick
+  proved). That is the documented contract, not an accident: a per-pair fingerprint
+  cost more than the shortcut saves. If the shortcut ever gains a fingerprint, invert
+  that test.
+- MINOR-B: the composite recipe is ``restrict(sample_rng=tick.rng)``,
+  ``inner.set_rng(tick.rng)`` AND ``inner.set_tiebreak(tick.seed)``; without the
+  tiebreak a GreedyNearest inner makes the composite fail ``determinism.order_independent``.
 - MINOR-C: ``determinism.no_module_rng`` attributes a draw to the node whose method is
   on the stack by the method's FIRST PARAMETER, whatever its name (``decide(me, ctx)``);
-  a scope a node builds for itself is that node's own draw, not its parent's scope
+  a sub-tick a node builds for itself is that node's own draw, not its parent's scope
   sample; a thread a node starts during the decision is that node's, and a draw from a
   thread no node started is "provenance cannot be separated" (SKIP), never a FAIL.
 - NITs: the ``policies_format`` marker is the int 2 only (``2.0``, ``"2"``, ``True``,
@@ -34,14 +35,18 @@ from dataclasses import dataclass
 import pytest
 
 from apps.container_logistics.assignment import constraints as assign_constraints
-from apps.container_logistics.policies.dispatch import compose, scopes
 from apps.container_logistics.policies.dispatch import runner as runner_module
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
+from apps.container_logistics.policies.dispatch.bind import Declaration
 from apps.container_logistics.policies.dispatch.composite import CompositePolicy
 from apps.container_logistics.policies.dispatch.legacy import check_policies_format
+from apps.container_logistics.policies.dispatch.library.partitioned import cooperation_groups
 from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyError, PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework.registry import get_policy_spec, isolated_registry
+from apps.container_logistics.policies.solver_lib import cooperation
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings, tick_sampled_trucks
 from apps.container_logistics.policies.testing import battery
 from apps.container_logistics.policies.testing.battery import CheckResult
 from openride_control import policies as control_policies
@@ -67,6 +72,17 @@ def _greedy(ctx):
     return Plan(chains=chains)
 
 
+def _declare_arm(params, world, *, top):
+    """A composite's ``bind``: at the top, the active arm's cross-company pairs."""
+    arm = cooperation.resolve_arm(world)
+    return Declaration(cross_company=cooperation.directed_pairs(arm) if top else frozenset())
+
+
+def _groups(tick):
+    arm = cooperation.resolve_arm(tick.world)
+    return cooperation_groups(tick, arm.component_of if arm is not None else {})
+
+
 # --- MINOR-A: the documents are read-only -----------------------------------------------
 
 
@@ -80,10 +96,10 @@ def test_the_shipped_selections_leave_the_tick_documents_unchanged(selection, mo
     real_run = runner_module.DispatchRunner.run
     seen = []
 
-    def run(self, ctx):
-        before = copy.deepcopy((list(ctx.raw_trucks), list(ctx.raw_orders)))
-        out = real_run(self, ctx)
-        seen.append(before == (list(ctx.raw_trucks), list(ctx.raw_orders)))
+    def run(self, tick):
+        before = copy.deepcopy((list(tick.raw_trucks), list(tick.raw_orders)))
+        out = real_run(self, tick)
+        seen.append(before == (list(tick.raw_trucks), list(tick.raw_orders)))
         return out
 
     monkeypatch.setattr(runner_module.DispatchRunner, "run", run)
@@ -96,8 +112,10 @@ def test_the_shipped_selections_leave_the_tick_documents_unchanged(selection, mo
 @pytest.fixture
 def moving_composite():
     """``MoveForSubSolve``: per cooperation group, a scripted inner pairs each truck with
-    the first structure-allowed order; with ``move`` on, the composite puts every chosen
-    truck at its order's pickup for the sub-solve and restores it afterwards."""
+    the first order its company may serve (``tick.serves``: own, or a pair the top
+    declared); with ``move`` on, the composite puts every chosen truck at its order's
+    pickup for the sub-solve and restores it afterwards. Rewritten for the generic
+    contract (WS1): ``tick.restrict`` / ``tick.call``, and ``bind`` declares the arm."""
     script: dict[str, str] = {}
     with isolated_registry():
         @policy(slot="planner", name="Scripted", version="1", information_model="central",
@@ -119,14 +137,17 @@ def moving_composite():
             class Params(PolicyParams):
                 inner: PolicyRef = param(ref("Scripted"), kind="planner", leaf_only=True, help="inner")
 
-            def decide(self, ctx):
-                chains = {}
-                for group in compose.cooperation_groups(ctx):
+            bind = staticmethod(_declare_arm)
+
+            def solve_tick(self, tick, params):
+                pairs = []
+                for group in _groups(tick):
                     script.clear()
                     saved, used = [], set()
                     for t in sorted(group.trucks, key=lambda d: str(d["_id"])):
                         for o in sorted(group.orders, key=lambda d: str(d["_id"])):
-                            if str(o["_id"]) in used or not ctx.world.structure_allows(t, o):
+                            th, oh = assign_constraints.haulier_of(t), assign_constraints.haulier_of(o)
+                            if str(o["_id"]) in used or th is None or oh is None or not tick.serves(th, oh):
                                 continue
                             if not (assign_constraints.size_compatible(t, o)
                                     and not assign_constraints.restricted_area_blocks(t, o)):
@@ -138,21 +159,18 @@ def moving_composite():
                                 saved.append((prof, prof.get("current_loc")))
                                 prof["current_loc"] = copy.deepcopy(assign_constraints.order_pickup_loc(o))
                             break
-                    sub = scopes.partition_context(
-                        policy=self.inner, params=self.inner_node.params,
-                        candidate_kind=self.inner_node.candidate_kind, trucks=list(group.trucks),
-                        orders=list(group.orders), partition_key=group.key, rule=ctx.world.rule,
-                        settings=ctx.candidate_settings, accounting_cost=ctx.accounting_cost,
-                        clock=ctx.clock, sample_rng=ctx.rng, parent=ctx)
-                    plan = ctx.execute(compose.decide_in_scope, self.inner, self.inner_node, sub)
+                    kind, value = group.key
+                    sub = tick.restrict(trucks=group.trucks, orders=group.orders,
+                                        scope=f"partition:{kind}:{value}", sample_rng=tick.rng)
+                    result = tick.call(params.inner, sub)
                     for prof, old in saved:
                         if old is None:
                             prof.pop("current_loc", None)
                         else:
                             prof["current_loc"] = old
-                    if plan is not None:
-                        chains.update(plan.chains)
-                return Plan(chains=chains)
+                    if result is not None:
+                        pairs.extend(result.pairs)
+                return Result(pairs=tuple(pairs))
 
         yield MoveForSubSolve
 
@@ -162,15 +180,16 @@ def test_mutating_documents_during_a_sub_solve_is_outside_the_contract(moving_co
     """The documented boundary of the tick check's shortcut (MINOR-A).
 
     Golden tick A with a 300 s pickup limit. Read-only, the scripted pairs that break
-    the limit are refused in the sub-scope and nothing infeasible is committed. Moving
-    the trucks to the pickups for the sub-solve and restoring them gets those heads
-    proved in the sub-scope, and the tick check (structure only, for proved heads)
-    commits them. This is why ``DispatchPolicy`` says the documents are read-only.
-    If ``tick_allowed`` ever keys on a fingerprint of the documents, both cases commit
+    the limit are refused in the sub-tick and nothing infeasible is committed. Moving
+    the trucks to the pickups for the sub-solve and restoring them gets those pairs
+    proved in the sub-tick, and the top check (ownership-or-declared only, for proved
+    pairs) commits them. This is why ``DispatchPolicy`` says the documents are read-only.
+    If ``Tick._top_check`` ever keys on a fingerprint of the documents, both cases commit
     nothing infeasible: change the second expectation and drop the contract text.
 
-    Verified to have teeth: making ``tick_allowed`` ignore ``verified`` (full check on
-    every head) committed 0 infeasible pairs in the moving case.
+    Verified to have teeth (pre-WS1, on ``tick_allowed``; the WS1 equivalent is making
+    ``Tick._top_check`` ignore ``verified``): the full check on every pair committed 0
+    infeasible pairs in the moving case.
     """
     moving_composite.move = move
     prof = _selection_profile({"type": "MoveForSubSolve"})
@@ -196,30 +215,32 @@ def _recipe_composite(name: str, *, tiebreak: bool):
         class Params(PolicyParams):
             inner: PolicyRef = param(ref("GreedyNearest"), kind="planner", leaf_only=True, help="inner")
 
-        def decide(self, ctx):
-            self.inner.set_rng(ctx.rng)
+        bind = staticmethod(_declare_arm)
+
+        def solve_tick(self, tick, params):
+            self.inner.set_rng(tick.rng)
             if tiebreak:
-                self.inner.set_tiebreak(ctx.tick_seed)
-            chains = {}
-            for group in compose.cooperation_groups(ctx):
-                sub = scopes.partition_context(
-                    policy=self.inner, params=self.inner_node.params,
-                    candidate_kind=self.inner_node.candidate_kind, trucks=list(group.trucks),
-                    orders=list(group.orders), partition_key=group.key, rule=ctx.world.rule,
-                    settings=ctx.candidate_settings, accounting_cost=ctx.accounting_cost,
-                    clock=ctx.clock, sample_rng=ctx.rng, parent=ctx)
-                plan = ctx.execute(compose.decide_in_scope, self.inner, self.inner_node, sub)
-                if plan is not None:
-                    chains.update(plan.chains)
-            return Plan(chains=chains)
+                self.inner.set_tiebreak(tick.seed)
+            pairs = []
+            for group in _groups(tick):
+                kind, value = group.key
+                sub = tick.restrict(trucks=group.trucks, orders=group.orders,
+                                    scope=f"partition:{kind}:{value}", sample_rng=tick.rng)
+                result = tick.call(params.inner, sub)
+                if result is not None:
+                    pairs.extend(result.pairs)
+            return Result(pairs=tuple(pairs))
 
     return Recipe
 
 
 def test_the_composite_recipe_needs_the_tiebreak_for_order_independence():
-    """``set_rng`` + ``sample_rng=ctx.rng`` alone fails ``order_independent`` with a
+    """``set_rng`` + ``sample_rng=tick.rng`` alone fails ``order_independent`` with a
     GreedyNearest inner (its ``self.rng.shuffle`` tiebreak sees the input order); adding
-    ``set_tiebreak(ctx.tick_seed)`` passes it, and ``no_module_rng`` passes undeclared."""
+    ``set_tiebreak(tick.seed)`` passes it, and ``no_module_rng`` passes undeclared.
+
+    Rewritten for the generic contract (WS1); test-side teeth (verified): dropping the
+    ``set_tiebreak`` call from the FullRecipe arm made its ``order_independent`` fail."""
     with isolated_registry():
         _recipe_composite("FullRecipe", tiebreak=True)
         _recipe_composite("NoTiebreak", tiebreak=False)
@@ -287,22 +308,27 @@ def test_a_renamed_self_is_still_attributed_to_its_node():
 
 
 def test_a_scope_a_node_builds_for_itself_is_its_own_draw():
-    """A leaf that builds its own ``partition_context(sample_rng=random)`` and samples FAILS
-    under Partitioned (it is not Partitioned's scope sample).
+    """A leaf that builds its own ``tick.restrict(sample_rng=random)`` sub-tick and samples it
+    FAILS under Partitioned (it is not Partitioned's scope sample).
 
-    Verified to have teeth: dropping the ``_handed_to`` test in ``_attribute_frame`` (any
-    non-tick context on the stack is a scope sample) credited it to Partitioned (SKIP).
+    Verified to have teeth (pre-WS1): dropping the ``_handed_to`` test in
+    ``_attribute_frame`` (any sub-scope on the stack is a scope sample) credited it to
+    Partitioned (SKIP). Test-side (WS1, verified): sampling the HANDED tick instead of the
+    self-built sub-tick (``tick_sampled_trucks(tick, ...)``) turned it into a SKIP.
     """
-    def own_scope(self, ctx):
-        sub = scopes.partition_context(
-            policy=self, params=self.params, candidate_kind="sampled", trucks=list(ctx.raw_trucks),
-            orders=list(ctx.raw_orders), partition_key=("haulier", "x"), rule=ctx.world.rule,
-            settings=ctx.candidate_settings, accounting_cost=ctx.accounting_cost, clock=ctx.clock,
-            sample_rng=random, parent=ctx)
-        sub.sampled_trucks()
-
     with isolated_registry():
-        _probe_leaf("OwnScope", own_scope)
+        @policy(slot="planner", name="OwnScope", version="1", description="probe", information_model="central")
+        class OwnScope(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                pass
+
+            def solve_tick(self, tick, params):
+                sub = tick.restrict(trucks=tick.raw_trucks, orders=tick.raw_orders,
+                                    scope="partition:haulier:x", sample_rng=random)
+                tick_sampled_trucks(sub, CandidateSettings.from_world(tick.world))
+                return Result()
+
         ok, detail = _under_partitioned("OwnScope")
     assert not ok and "OwnScope on" in detail, detail
 

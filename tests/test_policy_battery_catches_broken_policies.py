@@ -36,8 +36,8 @@ and ``touched = False`` in ``_decide_via_runner`` failed
 ``test_module_rng_policy_fails_only_no_module_rng``. Round 2 C5 (each mutation in
 ``battery.py`` restored after, verified by hash): returning ``[]`` from
 ``_scope_problems`` failed ``test_leaky_market_fails_only_scopes_respect_model``;
-making the tick context's feasibility always true (``allowed_raw=lambda t, o: True``
-in ``scopes.tick_context``, a scratch copy) failed
+making the top tick's feasibility always true (``tick._top_permitted`` returning
+``True``; WS1, restored by copy) failed
 ``test_cross_company_central_fails_only_only_allowed_pairs``;
 ``arm_budget`` returning a budget of 10x the default for unmeasured arms failed
 ``test_slow_undeclared_arm_fails_only_its_performance_scale``.
@@ -52,10 +52,9 @@ from dataclasses import dataclass
 import pytest
 
 from apps.container_logistics.assignment import constraints as assign_constraints
-from apps.container_logistics.policies.dispatch import scopes
-from apps.container_logistics.policies.dispatch.allowed import CompanyRule
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 from apps.container_logistics.policies.framework.errors import PolicyRegistrationError
 from apps.container_logistics.policies.framework.registry import isolated_registry
@@ -63,9 +62,13 @@ from apps.container_logistics.policies.testing.battery import DISPATCH_CHECKS, b
 
 
 def _first_feasible(ctx, trucks=None, allowed=None):
-    """Each order (by id) takes the first free allowed truck (by id, unless given)."""
+    """Each order (by id) takes the first free allowed truck (by id, unless given).
+
+    ``ctx`` is a legacy context (``allowed_raw``) or a ``Tick`` (``permitted``).
+    """
     trucks = sorted(ctx.raw_trucks, key=lambda t: str(t["_id"])) if trucks is None else trucks
-    allowed = ctx.allowed_raw if allowed is None else allowed
+    if allowed is None:
+        allowed = ctx.allowed_raw if hasattr(ctx, "allowed_raw") else ctx.permitted
     used, chains = set(), {}
     for o in sorted(ctx.raw_orders, key=lambda o: str(o["_id"])):
         for t in trucks:
@@ -84,18 +87,17 @@ def _failing(name):
 
 def test_twice_assigner_fails_only_no_order_twice():
     with isolated_registry():
-        @policy(slot="planner", information_model="central", name="TwiceAssigner", version="1", description="puts one order in two chains")
+        @policy(slot="planner", information_model="central", name="TwiceAssigner", version="1", description="gives one order to two trucks")
         class TwiceAssigner(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
                 pass
 
             def decide(self, ctx):
-                chains = _first_feasible(ctx)
-                if len(chains) >= 2:
-                    (t1, c1), (t2, c2) = list(chains.items())[:2]
-                    chains[t2] = c2 + c1  # o1 again, in t2's tail
-                return Plan(chains=chains)
+                pairs = [(t, c[0]) for t, c in _first_feasible(ctx).items()]
+                if len(pairs) >= 2:
+                    pairs[1] = (pairs[1][0], pairs[0][1])  # o1 again, for the second truck
+                return Result(pairs=tuple(pairs))
 
         assert _failing("TwiceAssigner") == {"structure.no_order_twice"}
 
@@ -250,10 +252,13 @@ def test_registering_bad_param_defaults_raises():
 
 
 def test_leaky_market_fails_only_scopes_respect_model():
-    """A ``per_company`` policy whose company scopes hold EVERY company's trucks.
+    """A ``per_company`` policy whose company sub-ticks hold EVERY company's trucks.
 
-    Its plan is a correct one (decided on the tick), so only the information audit
-    of the scopes it built can see the leak.
+    Its result is a correct one (decided on the whole tick), so only the information
+    audit of the sub-ticks it built (``tick.restrict``) can see the leak. Rewritten for
+    the generic contract (WS1): ``tick.restrict`` replaces ``scopes.company_context``.
+    Verified to have teeth (restored by copy): ``_scope_problems`` returning ``[]`` made
+    this pass; restricting to ``hid``'s own trucks (no leak) emptied the failing set.
     """
     with isolated_registry():
         @policy(slot="planner", information_model="per_company", name="LeakyMarket", version="1",
@@ -263,19 +268,15 @@ def test_leaky_market_fails_only_scopes_respect_model():
             class Params(PolicyParams):
                 pass
 
-            def decide(self, ctx):
-                hids = sorted({assign_constraints.haulier_of(o) for o in ctx.raw_orders} - {None})
+            def solve_tick(self, tick, params):
+                hids = sorted({assign_constraints.haulier_of(o) for o in tick.raw_orders} - {None})
                 for hid in hids:
-                    scopes.company_context(  # the leak: all trucks, not just hid's
-                        policy=self, params=ctx.params, candidate_kind=ctx.default_candidate_kind,
-                        trucks=list(ctx.raw_trucks),
-                        orders=[o for o in ctx.raw_orders if assign_constraints.haulier_of(o) == hid],
-                        haulier_id=hid, round=1,
-                        rule=CompanyRule(haulier_id=hid, max_travel_time_pickup=ctx.world.max_travel_time_pickup),
-                        rng=ctx.rng, settings=ctx.candidate_settings, accounting_cost=ctx.accounting_cost,
-                        clock=ctx.clock, parent=ctx,
+                    tick.restrict(  # the leak: all trucks, not just hid's
+                        trucks=list(tick.raw_trucks),
+                        orders=[o for o in tick.raw_orders if assign_constraints.haulier_of(o) == hid],
+                        scope=f"company:{hid}", sample_rng=tick.rng,
                     )
-                return Plan(chains=_first_feasible(ctx))
+                return Result(pairs=tuple((t, c[0]) for t, c in _first_feasible(tick).items()))
 
         assert _failing("LeakyMarket") == {"information.scopes_respect_model"}
 
@@ -283,8 +284,11 @@ def test_leaky_market_fails_only_scopes_respect_model():
 def test_cross_company_central_fails_only_only_allowed_pairs():
     """A central policy that lets any company serve any other's orders, ignoring the structure.
 
-    Only ``three_company_chain`` exposes it (``h_d`` is solo, ``h_a``/``h_c`` are not
-    partners); the framework's world rule on the tick scope is what refuses it.
+    Only ``three_company_chain`` exposes it (its orders sit nearer a neighbour's trucks);
+    what refuses it is the framework's top check: ownership or a pair the top DECLARED
+    in ``bind``. Since WS1 a central policy that declares nothing may commit no
+    cross-company pair at all (the old world rule allowed the structure's edges to any
+    top solver); the refusal set is unchanged here.
     """
     with isolated_registry():
         @policy(slot="planner", information_model="central", name="CrossCompanyCentral", version="1",

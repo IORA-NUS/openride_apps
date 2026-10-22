@@ -33,16 +33,18 @@ from dataclasses import dataclass
 
 import pytest
 
-from apps.container_logistics.policies.dispatch import scopes
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
+from apps.container_logistics.policies.dispatch.bind import Declaration
 from apps.container_logistics.policies.dispatch.composite import CompositePolicy
-from apps.container_logistics.policies.dispatch import compose
+from apps.container_logistics.policies.dispatch.library.partitioned import cooperation_groups
 from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework import components
 from apps.container_logistics.policies.framework import params as params_mod
 from apps.container_logistics.policies.framework.errors import PolicyRegistrationError
 from apps.container_logistics.policies.framework.registry import get_policy_spec, isolated_registry
+from apps.container_logistics.policies.solver_lib import cooperation
 from apps.container_logistics.policies.testing import battery
 from apps.container_logistics.policies.testing.battery import CheckResult, arm_budget, run_battery
 from openride import cli, control
@@ -192,10 +194,12 @@ def test_partitioned_reports_skip_and_its_inner_arms_are_really_checked():
 
 
 def _groups_composite(name: str, *, declare: bool, own_draw: bool):
-    """A per-group composite that injects ``ctx.rng`` into its inner and samples from it.
+    """A per-group composite that injects ``tick.rng`` into its inner and samples from it.
 
     ``own_draw``: its own code draws from the random module once per tick (declared
-    when ``declare``).
+    when ``declare``). Written against the generic contract (WS1): ``bind`` declares the
+    active arm's pairs at the top, each group is ``tick.restrict(sample_rng=tick.rng)``
+    decided through ``tick.call``.
     """
     extra = {"module_rng": "draws one module number per tick on purpose"} if declare else {}
 
@@ -206,23 +210,25 @@ def _groups_composite(name: str, *, declare: bool, own_draw: bool):
         class Params(PolicyParams):
             inner: PolicyRef = param(ref("GreedyNearest"), kind="planner", leaf_only=True, help="Inner.")
 
-        def decide(self, ctx):
+        def bind(self, params, world, *, top):
+            arm = cooperation.resolve_arm(world)
+            return Declaration(cross_company=cooperation.directed_pairs(arm) if top else frozenset())
+
+        def solve_tick(self, tick, params):
             if own_draw:
                 random.random()
-            self.inner.set_rng(ctx.rng)
-            self.inner.set_tiebreak(ctx.tick_seed)  # the full recipe (verification review MINOR-B)
-            chains = {}
-            for group in compose.cooperation_groups(ctx):
-                sub = scopes.partition_context(
-                    policy=self.inner, params=self.inner_node.params,
-                    candidate_kind=self.inner_node.candidate_kind, trucks=list(group.trucks),
-                    orders=list(group.orders), partition_key=group.key, rule=ctx.world.rule,
-                    settings=ctx.candidate_settings, accounting_cost=ctx.accounting_cost,
-                    clock=ctx.clock, sample_rng=ctx.rng, parent=ctx)
-                plan = ctx.execute(compose.decide_in_scope, self.inner, self.inner_node, sub)
-                if plan is not None:
-                    chains.update(plan.chains)
-            return Plan(chains=chains)
+            self.inner.set_rng(tick.rng)
+            self.inner.set_tiebreak(tick.seed)  # the full recipe (verification review MINOR-B)
+            arm = cooperation.resolve_arm(tick.world)
+            pairs = []
+            for group in cooperation_groups(tick, arm.component_of if arm is not None else {}):
+                kind, value = group.key
+                sub = tick.restrict(trucks=group.trucks, orders=group.orders,
+                                    scope=f"partition:{kind}:{value}", sample_rng=tick.rng)
+                result = tick.call(params.inner, sub)
+                if result is not None:
+                    pairs.extend(result.pairs)
+            return Result(pairs=tuple(pairs))
 
     return Groups
 

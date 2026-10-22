@@ -22,12 +22,9 @@ import pytest
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.assignment import spatial
 from apps.container_logistics.assignment.solver import RandomAssignmentSolver
-from apps.container_logistics.policies.dispatch import scopes
-from apps.container_logistics.policies.dispatch.allowed import PartitionRule
-from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
-from apps.container_logistics.policies.dispatch.profile import resolve_dispatch_for_profile
-from apps.container_logistics.policies.dispatch.runner import DispatchRunner
+from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
+from apps.container_logistics.policies.dispatch.tick import DispatchClock
+from apps.container_logistics.policies.solver_lib import candidates as C
 from tests.test_assignment_cooperation import _app, _order, _truck
 
 _CLOCK = DispatchClock(sim_clock="Wed, 01 Jan 2020 08:00:00 GMT", time_step=42)
@@ -48,22 +45,28 @@ def _line_world(n_trucks=10, n_orders=10, haulier="acme"):
     return trucks, orders
 
 
-def _spatial_runner(policy=None):
-    policy = policy or RandomAssignmentSolver()
-    resolved = resolve_dispatch_for_profile(_SPATIAL_PROFILE)
-    assert resolved.candidate_kind == "spatial"
-    return DispatchRunner(policy=policy, resolved=resolved)
+def _spatial_runner(seed):
+    """``Partitioned{inner: RandomAssignment(candidates=spatial)}`` with ``Random(seed)`` injected into the leaf.
+
+    The one-haulier group sub-tick carries the leaf's OWN injected RNG (the old
+    partition scope), so the injected seed is the randomness input.
+    """
+    runner = build_runner_for_policy("Partitioned", {"inner": {"type": "RandomAssignment",
+                                                                "params": {"candidates": "spatial"}}})
+    leaf = runner.tree.leaf
+    assert leaf.declaration.candidate_hint == "spatial"
+    assert isinstance(leaf.instance, RandomAssignmentSolver)
+    leaf.instance.set_rng(random.Random(seed))
+    return runner
 
 
-def _ctx(runner, trucks, orders):
-    # Round 2 C3: contexts come from dispatch/scopes.py only (no runner.partition_context).
-    return scopes.partition_context(
-        policy=runner.policy, params=runner.resolved.params, candidate_kind=runner.candidate_kind,
-        trucks=trucks, orders=orders, partition_key=("haulier", "acme"),
-        rule=PartitionRule(max_travel_time_pickup=None, adjacency={}),
-        settings=CandidateSettings.from_profile(_SPATIAL_PROFILE),
-        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
-    )
+def _tick(runner, trucks, orders):
+    return runner.tick(candidates=trucks, orders=orders, profile=_SPATIAL_PROFILE, clock=_CLOCK, seed=1)
+
+
+def _spatial_candidates(tick):
+    """The tick's spatial pairs (one haulier: the same set as its one group's)."""
+    return C.spatial_pairs(tick, C.CandidateSettings.from_world(tick.world))
 
 
 def _ids(pairs):
@@ -71,18 +74,16 @@ def _ids(pairs):
 
 
 def test_random_spatial_uses_only_candidate_pairs():
-    """Verified to have teeth: making ``RandomAssignmentSolver.decide`` call ``solve``
+    """Verified to have teeth: making ``RandomAssignmentSolver.solve_tick`` call ``solve``
     over the sampled trucks on the spatial branch failed this test."""
     trucks, orders = _line_world()
     full = {(t["_id"], o["_id"]) for t in trucks for o in orders}
     for seed in range(20):
-        policy = RandomAssignmentSolver()
-        policy.set_rng(random.Random(seed))
-        runner = _spatial_runner(policy)
-        ctx = _ctx(runner, trucks, orders)
-        candidates = set(_ids(ctx.candidate_pairs("spatial")))
+        runner = _spatial_runner(seed)
+        tick = _tick(runner, trucks, orders)
+        candidates = set(_ids(_spatial_candidates(tick)))
         assert candidates and candidates < full, "the world must make spatial a strict subset"
-        result = _ids(runner.run(ctx).pairs)
+        result = _ids(runner.run(tick).pairs)
         assert result, f"seed {seed}: nothing matched"
         outside = [p for p in result if p not in candidates]
         assert not outside, f"seed {seed}: pairs outside the spatial candidates: {outside}"
@@ -114,10 +115,8 @@ def test_random_spatial_reproducible_under_seeded_rng():
     trucks, orders = _line_world(n_trucks=8, n_orders=12)
 
     def _run(seed):
-        policy = RandomAssignmentSolver()
-        policy.set_rng(random.Random(seed))
-        runner = _spatial_runner(policy)
-        return _ids(runner.run(_ctx(runner, trucks, orders)).pairs)
+        runner = _spatial_runner(seed)
+        return _ids(runner.run(_tick(runner, trucks, orders)).pairs)
 
     random.seed(1234)
     module_state = random.getstate()
@@ -131,7 +130,7 @@ def test_random_spatial_reproducible_under_seeded_rng():
 
 def test_assignment_app_random_spatial_commits_only_emitted_pairs(monkeypatch):
     """Verified to have teeth: making the spatial branch of
-    ``RandomAssignmentSolver.decide`` read ``ctx.candidate_pairs("full")`` failed this test."""
+    ``RandomAssignmentSolver.solve_tick`` use ``candidates.tick_full_pairs(tick)`` failed this test."""
     emitted = []
     real = spatial.iter_candidate_pairs
 
@@ -151,7 +150,7 @@ def test_assignment_app_random_spatial_commits_only_emitted_pairs(monkeypatch):
     random.seed(5)
     result = _ids(app.assign("Wed, 01 Jan 2020 08:00:00 GMT", 42))
     runner = app._dispatch_runner(app.behavior["profile"])
-    assert runner.candidate_kind == "spatial" and runner.resolved.source == "policies"
+    assert runner.tree.declaration.candidate_hint == "spatial" and runner.resolved.source == "policies"
     assert emitted, "the spatial generator was never called: the profile did not select spatial"
     assert result, "nothing was assigned"
     outside = [p for p in result if p not in set(emitted)]

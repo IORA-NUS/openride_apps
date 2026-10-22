@@ -5,8 +5,10 @@ What is locked:
   stored partitioned share tag of the dispatch golden fixture, and ``audited``
   rendering reproduces every stored pooled tag (only ``pool_id``/``market_round``,
   solver provenance, are fed from the stored tags). The candidates are rebuilt from
-  the stored tick state with ``filter_assignable_trucks``, and cost/feasibility come
-  from ``DispatchWorld.from_profile`` -- exactly the inputs work item C3 wires;
+  the stored tick state with ``filter_assignable_trucks``, and cost/feasibility are the
+  inputs ``AssignmentApp._dispatch_tick`` wires: ``tick.measure.cost`` (dials
+  ``solver_params``) and ``constraints.pair_allowed`` with the profile's
+  ``max_travel_time_pickup`` (:func:`_world`);
 - the non-finite rules: ``v1`` keeps the pre-v2 ``-inf`` benefit (byte identity),
   ``audited`` never lets a non-finite number through;
 - the owner reserve is the minimum over the owner's FREE (uncommitted by any pair of
@@ -31,7 +33,9 @@ import pytest
 
 from apps.container_logistics.assignment import accounting
 from apps.container_logistics.assignment import constraints as assign_constraints
-from apps.container_logistics.policies.dispatch.world import DispatchWorld
+from types import SimpleNamespace
+
+from apps.container_logistics.policies.dispatch.tick import Measure
 from tests.golden.capture_dispatch_golden import FIXTURE_PATH
 from tests.test_assignment_cooperation import _order, _truck
 
@@ -60,7 +64,7 @@ def _tick_inputs(case):
     for o in state["orders"]:
         orders.setdefault(str(o["_id"]), o)
     pairs = [(trucks[tid], orders[oid]) for tid, oid in case["expected"]["pairs"]]
-    world = DispatchWorld.from_profile(prof, accounting_params=prof.get("solver_params") or {})
+    world = _world(prof.get("max_travel_time_pickup"), dials=prof.get("solver_params") or {})
     return candidates, pairs, world
 
 
@@ -99,8 +103,14 @@ def test_audited_render_reproduces_stored_pooled_tags_except_market_notes():
     assert with_shares == 13, "the fixture's pooled share-tag coverage changed"
 
 
-def _world(mtt=None):
-    return DispatchWorld.from_profile({"max_travel_time_pickup": mtt}, accounting_params={})
+def _world(mtt=None, dials=None):
+    """The accounting inputs ``AssignmentApp._dispatch_tick`` passes: the tick's measurement
+    cost and the owner reserve's strict own-haulier rule under ``mtt``."""
+
+    def own_allowed(t, o):
+        return assign_constraints.pair_allowed(t, o, max_travel_time_pickup=mtt)
+
+    return SimpleNamespace(accounting_cost=Measure(dials or {}).cost, own_allowed=own_allowed)
 
 
 def _account(pairs, candidates, world=None):
