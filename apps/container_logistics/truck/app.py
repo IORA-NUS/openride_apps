@@ -391,6 +391,10 @@ class TruckApp(ORSimApp, OrderInteractionMixin, FacilityInteractionMixin):
                     "owner_reserve_km": parsed.owner_reserve_km,
                     "market_round": parsed.market_round,
                 }
+                # A solver's opaque per-pair notes (policies.compat.wire): forwarded
+                # only when present, so trip docs without notes are unchanged.
+                if parsed.solver_notes is not None:
+                    collaboration["solver_notes"] = parsed.solver_notes
             self.handle_assignment(
                 self.latest_sim_clock, self.latest_loc, parsed.order,
                 collaboration=collaboration,

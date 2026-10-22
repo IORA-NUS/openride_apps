@@ -21,6 +21,7 @@ from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from apps.container_logistics.rebate import RebateBook
 from apps.container_logistics.statemachine import ContainerLogisticsActions
+from apps.container_logistics.policies.compat.wire import wire_fields
 from apps.container_logistics.policies.framework import UnknownPolicyError
 from orsim.lifecycle import ORSimApp
 
@@ -546,7 +547,7 @@ class AssignmentApp(ORSimApp):
             accounting.account_shares(outcome.pairs, candidates=candidates,
                                       cost=world.accounting_cost, own_allowed=world.own_allowed),
             fmt=runner.share_tag_format,
-            pair_notes=outcome.notes.get("pair_notes"),
+            solver_notes=outcome.notes.get("pair_notes"),
         )
         market_notes = outcome.notes.get("market")
         if market_notes is not None:
@@ -581,24 +582,16 @@ class AssignmentApp(ORSimApp):
             if not tid:
                 continue
             tag = share_tags.get((str(tid), str(order.get("_id")))) or {}
+            # The share fields (and a solver's ``solver_notes``) come from the tag via
+            # the compat wire table; an unshared pair gets the dataclass defaults.
             payload = AssignedHaulTripPayload(
                 action=ContainerLogisticsActions.ASSIGNED_HAUL_TRIP,
                 order=self._order_publish_payload(order),
                 truck_id=tid,
-                shared=bool(tag.get("shared", False)),
-                owner_haulier_id=tag.get("owner_haulier_id"),
-                carrier_haulier_id=tag.get("carrier_haulier_id"),
-                benefit_km=tag.get("benefit_km"),
-                # Shared-pool audit trail (plan §D6): these make benefit_km a
-                # CHECKABLE identity (benefit == reserve - awarded) instead of a
-                # bare difference. All optional — absent on the legacy path.
-                pool_id=tag.get("pool_id"),
-                awarded_cost_km=tag.get("awarded_cost_km"),
-                owner_reserve_km=tag.get("owner_reserve_km"),
-                market_round=tag.get("market_round"),
+                **wire_fields(tag),
             )
             topic = f"{self.run_id}/{tid}"
             try:
-                self.messenger.client.publish(topic, json.dumps(payload.__dict__, default=str))
+                self.messenger.client.publish(topic, json.dumps(payload.to_wire_dict(), default=str))
             except Exception:
                 logging.exception("Failed to publish assignment to %s", topic)

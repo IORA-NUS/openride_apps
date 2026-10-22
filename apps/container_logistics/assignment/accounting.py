@@ -1,4 +1,4 @@
-"""Cross-company share accounting: one computation, two historical wire formats.
+"""Cross-company share accounting: one computation, rendered by the compat wire formats.
 
 Single responsibility: given the pairs a tick commits, compute every cross-company
 share's values (who owned the order, who carried it, the owner's best own
@@ -8,16 +8,17 @@ SOLVER-INDEPENDENT: no solver input reaches :func:`account_shares`, so every dis
 policy is accounted by the same function.
 
 - :func:`account_shares` -> one :class:`ShareAccount` per cross-company pair.
-- :func:`render_share_tags` -> ``{(truck_id, order_id): tag}`` in one of two formats:
-  ``v1`` (4 keys, the pre-v2 partitioned format, kept for byte identity and reserved
-  to ``Partitioned`` at registration) and ``audited`` (the 8-key pooled format whose
-  ``benefit_km == owner_reserve_km - awarded_cost_km`` is checkable).
+- :func:`render_share_tags` -> ``{(truck_id, order_id): tag}``. A dispatcher: the two
+  historical tag formats, and the routing of a solver's opaque ``solver_notes`` into
+  them, live in ``policies.compat.wire`` (the only place that names old solver
+  provenance). Nothing here knows a format name or a note key.
 
 :func:`owner_reserve_km` and :func:`finite_or_none` were moved here from
-``pooled_planner`` (round 2): the market engine no longer accounts.
+``pooled_planner`` (round 2): the solver no longer accounts.
 
 Framework side of the boundary. Import contract (round-2 §4): imports only
-``assignment.constraints``, so ``assignment.app`` may import it at module top.
+``assignment.constraints`` and the leaf ``policies.compat.wire`` (which imports no
+``assignment`` module at top), so ``assignment.app`` may import it at module top.
 """
 
 from __future__ import annotations
@@ -25,14 +26,15 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Literal, Mapping, Optional, Sequence, Set
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Set
+
+from apps.container_logistics.policies.compat.wire import share_tag_renderer
 
 from . import constraints as assign_constraints
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "PAIR_NOTE_KEYS",
     "ShareAccount",
     "account_shares",
     "finite_or_none",
@@ -43,11 +45,6 @@ __all__ = [
 Truck = dict[str, Any]
 Order = dict[str, Any]
 Pair = tuple[Truck, Order]
-
-#: The only ``pair_notes`` keys a solver may contribute to an ``audited`` tag (market
-#: provenance). Everything else in a tag is computed here.
-PAIR_NOTE_KEYS = ("pool_id", "market_round")
-
 
 @dataclass(frozen=True)
 class ShareAccount:
@@ -192,62 +189,25 @@ def account_shares(
     return accounts
 
 
-def _v1_tag(acc: ShareAccount) -> dict[str, Any]:
-    """The pre-v2 partitioned tag: 4 keys; a non-finite benefit stays +-inf (FIX-5 defect, kept)."""
-    reserve = acc.owner_reserve_km
-    return {
-        "shared": True,
-        "owner_haulier_id": acc.owner_haulier_id,
-        "carrier_haulier_id": acc.carrier_haulier_id,
-        "benefit_km": round(reserve - acc.awarded_cost_km, 3) if reserve is not None else None,
-    }
-
-
-def _audited_tag(acc: ShareAccount, note: Mapping[str, Any]) -> dict[str, Any]:
-    """The pooled tag: 8 keys, no non-finite number, ``benefit = reserve - awarded``."""
-    reserve = acc.owner_reserve_km
-    awarded = finite_or_none(acc.awarded_cost_km)
-    benefit = None
-    if reserve is not None and awarded is not None:
-        benefit = finite_or_none(reserve - awarded)
-    return {
-        "shared": True,
-        "owner_haulier_id": acc.owner_haulier_id,
-        "carrier_haulier_id": acc.carrier_haulier_id,
-        # SIGNED on purpose (F3): a cost-blind or cap-limited solver can genuinely pick
-        # a worse-than-own partner truck. None = no free feasible own truck.
-        "benefit_km": round(benefit, 3) if benefit is not None else None,
-        "pool_id": note.get("pool_id"),
-        "awarded_cost_km": round(awarded, 3) if awarded is not None else None,
-        "owner_reserve_km": round(reserve, 3) if reserve is not None else None,
-        "market_round": note.get("market_round"),
-    }
-
-
 def render_share_tags(
     accounts: Iterable[ShareAccount],
     *,
-    fmt: Literal["v1", "audited"],
-    pair_notes: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
+    fmt: str,
+    solver_notes: Mapping[tuple[str, str], Mapping[str, Any]] | None = None,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """``{(truck_id, order_id): tag}`` for ``accounts``, in their order.
 
-    ``fmt="v1"``: ``{shared, owner_haulier_id, carrier_haulier_id, benefit_km}``.
-    ``fmt="audited"``: those plus ``pool_id``, ``awarded_cost_km``,
-    ``owner_reserve_km`` and ``market_round``; ``pool_id``/``market_round`` come only
-    from the :data:`PAIR_NOTE_KEYS` of ``pair_notes[(truck_id, order_id)]`` (``None``
-    when absent). ``pair_notes`` is ignored for ``v1``. Raises ``ValueError`` for
-    another ``fmt``.
+    ``fmt`` names a share-tag format; ``solver_notes[(truck_id, order_id)]`` is the
+    solver's opaque note for that pair. Both are handed to
+    ``compat.wire.share_tag_renderer``, which owns the formats, routes the legacy note
+    keys to their old tag keys and every other key to a ``solver_notes`` tag key (omitted
+    when empty). A note can never overwrite a computed value. Raises ``ValueError`` for
+    an unknown ``fmt``.
     """
-    if fmt not in ("v1", "audited"):
-        raise ValueError(f"share tag format must be 'v1' or 'audited' (got {fmt!r}).")
-    notes = pair_notes or {}
+    render = share_tag_renderer(fmt)
+    notes = solver_notes or {}
     tags: dict[tuple[str, str], dict[str, Any]] = {}
     for acc in accounts:
         key = (acc.truck_id, acc.order_id)
-        if fmt == "v1":
-            tags[key] = _v1_tag(acc)
-        else:
-            raw = notes.get(key) or {}
-            tags[key] = _audited_tag(acc, {k: raw[k] for k in PAIR_NOTE_KEYS if k in raw})
+        tags[key] = render(acc, notes.get(key))
     return tags
