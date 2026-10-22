@@ -5,7 +5,7 @@ byte-identity holds by construction (plan ``docs/plans/policy_slots_p0_p3.md``
 §1.2 item 6, §4 P1.3). The framework's accounting (``benefit_km``, owner reserve,
 claim bids, arbitration) uses the same ``assignment_cost``.
 
-Policy helper. Not a leaf module: imports ``assignment.constraints`` at top (plan
+Solver helper (``policies/solver_lib``). Not a leaf module: imports ``assignment.constraints`` at top (plan
 §2.7; safe while ``assignment/app.py`` imports ``policies`` lazily).
 """
 

@@ -18,27 +18,19 @@ from typing import Literal
 
 from apps.container_logistics.policies.framework.params import PolicyParams
 
-__all__ = ["KIND_WITHOUT_CANDIDATES_PARAM", "ResolvedDispatch", "ResolvedSource", "candidate_kind_for"]
+__all__ = ["ResolvedDispatch", "ResolvedSource"]
 
 ResolvedSource = Literal["policies", "legacy-profile", "unregistered"]
-
-#: The candidate kind of a policy that declares no ``candidates`` param: it gets no
-#: prebuilt spatial pairs. The ONE copy of this rule (review F14).
-KIND_WITHOUT_CANDIDATES_PARAM = "sampled"
-
-
-def candidate_kind_for(params: PolicyParams) -> str:
-    """``params.candidates`` when the policy declares it, else ``KIND_WITHOUT_CANDIDATES_PARAM``."""
-    return getattr(params, "candidates", KIND_WITHOUT_CANDIDATES_PARAM)
 
 
 @dataclass(frozen=True)
 class ResolvedDispatch:
-    """Which dispatch policy runs, with what params, timing and candidate kind.
+    """Which dispatch policy runs, with what params and timing.
 
     ``params`` is ``None`` only for ``source="unregistered"`` (a hand-injected
-    solver class with no ``@policy`` declaration). ``candidate_kind`` is one of
-    ``helpers.candidates.CANDIDATE_KINDS``.
+    solver class with no ``@policy`` declaration). The candidate kind is not here: a
+    solver reads its own params, and a caller reads a child's
+    ``Declaration.candidate_hint`` (``dispatch/bind.py``).
 
     Tree fields (round 2): ``information_model`` and ``share_tag_format`` are the
     policy's registration (``None``/``"audited"`` for an unregistered class);
@@ -51,7 +43,6 @@ class ResolvedDispatch:
     version: str
     timing: str
     params: PolicyParams | None
-    candidate_kind: str
     source: ResolvedSource
     information_model: str | None = None
     share_tag_format: str = "audited"

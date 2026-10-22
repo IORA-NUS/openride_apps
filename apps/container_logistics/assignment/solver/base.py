@@ -16,7 +16,7 @@ from apps.container_logistics.policies.dispatch.base import (
     PairAllowed,
     Truck,
 )
-from apps.container_logistics.policies.dispatch.pair_solver import PairSolver
+from apps.container_logistics.policies.solver_lib.pair_solver import PairSolver
 
 BaseAssignmentSolver = PairSolver
 

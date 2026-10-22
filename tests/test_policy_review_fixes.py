@@ -114,18 +114,31 @@ def test_legacy_drop_rule_is_implemented_once(caplog):
 # --- F13 / F14 ----------------------------------------------------------------------
 
 def test_executable_timings_and_kind_rule_have_one_source():
+    """The timings come from the slot table; the candidate kind is the SOLVER's own, never the framework's.
+
+    WS1: the framework's ``candidate_kind`` (``resolved.candidate_kind_for``) is gone; a
+    leaf declares a ``candidate_hint`` from its own ``candidates`` param at bind, and the
+    helper base gives a param-less policy none. Verified to have teeth: making
+    ``PairLeafMixin.bind`` hint ``"spatial"`` unconditionally failed the RandomAssignment
+    assertion.
+    """
     from apps.container_logistics.policies.dispatch import resolved as RS
     from apps.container_logistics.policies.dispatch import runner
+    from apps.container_logistics.policies.dispatch.base import DispatchPolicy
+    from apps.container_logistics.policies.dispatch.bind import RunWorld
 
     assert runner.EXECUTABLE_TIMINGS is SLOTS["planner"].executable_timings
     assert not hasattr(P, "_KIND_WITHOUT_CANDIDATES_PARAM")
-    random_runner = runner.build_runner_for_policy("RandomAssignment")
-    assert random_runner.candidate_kind == RS.candidate_kind_for(random_runner.resolved.params)
+    assert not hasattr(RS, "candidate_kind_for") and not hasattr(RS, "KIND_WITHOUT_CANDIDATES_PARAM")
+    assert runner.build_runner_for_policy("RandomAssignment").tree.declaration.candidate_hint is None
+    assert runner.build_runner_for_policy("GreedyNearest").tree.declaration.candidate_hint == "spatial"
+    assert runner.build_runner_for_policy(
+        "RandomAssignment", {"candidates": "spatial"}).tree.declaration.candidate_hint == "spatial"
 
     class _NoCandidates:
         pass
 
-    assert RS.candidate_kind_for(_NoCandidates()) == RS.KIND_WITHOUT_CANDIDATES_PARAM == "sampled"
+    assert DispatchPolicy().bind(_NoCandidates(), RunWorld({}), top=True).candidate_hint is None
 
 
 # --- F11 ----------------------------------------------------------------------------

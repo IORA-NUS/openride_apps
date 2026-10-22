@@ -48,7 +48,10 @@ _LEAVES = [
     "apps.container_logistics.policies.framework.catalog",
     "apps.container_logistics.policies.dispatch.base",
     "apps.container_logistics.policies.dispatch.plan",
-    "apps.container_logistics.policies.dispatch.pair_solver",
+    "apps.container_logistics.policies.dispatch.result",
+    "apps.container_logistics.policies.dispatch.bind",
+    "apps.container_logistics.policies.solver_lib",
+    "apps.container_logistics.policies.solver_lib.pair_solver",
     "apps.container_logistics.policies.dispatch.resolved",
     "apps.container_logistics.policies.dispatch.legacy",
     "apps.container_logistics.policies.dispatch.composite",
@@ -102,11 +105,15 @@ def test_leaf_modules_pull_in_no_assignment_module(module):
 def test_the_walk_found_the_dispatch_modules():
     mods = set(_policy_modules())
     assert "apps.container_logistics.policies.dispatch.runner" in mods
-    assert "apps.container_logistics.policies.dispatch.helpers.candidates" in mods
-    # Round 2 C3: the whole-tick runtime's new modules are walked too.
-    assert {"apps.container_logistics.policies.dispatch.compose",
+    assert "apps.container_logistics.policies.solver_lib.candidates" in mods
+    # Round 2 C3 / WS1: the whole-tick runtime's modules are walked too.
+    assert {"apps.container_logistics.policies.dispatch.tick",
+            "apps.container_logistics.policies.dispatch.bind",
+            "apps.container_logistics.policies.dispatch.result",
             "apps.container_logistics.policies.dispatch.library.partitioned",
-            "apps.container_logistics.policies.dispatch.library.pooled_market"} <= mods
+            "apps.container_logistics.policies.dispatch.library.pooled_market",
+            "apps.container_logistics.policies.solver_lib.cooperation",
+            "apps.container_logistics.policies.compat.legacy_context"} <= mods
 
 
 def test_app_imports_the_dispatch_package_only_locally():

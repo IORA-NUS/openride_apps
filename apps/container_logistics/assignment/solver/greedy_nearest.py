@@ -4,9 +4,10 @@ import math
 from dataclasses import dataclass
 from typing import Iterable, List, Tuple
 
-from apps.container_logistics.policies.dispatch.helpers import objective
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
+from apps.container_logistics.policies.solver_lib import candidates, objective
+from apps.container_logistics.policies.solver_lib.pair_leaf import PairLeafMixin
 
 from ..tiebreak import pair_tiebreak
 from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
@@ -34,7 +35,7 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     # agent a per-step straggler (its ~1.9 s solve alone is close to the settle window).
     arm_budgets_ms={"candidates=sampled": 5790},
 )
-class GreedyNearestSolver(BaseAssignmentSolver):
+class GreedyNearestSolver(PairLeafMixin, BaseAssignmentSolver):
     """Globally greedy nearest-pair matching within a haulier bucket.
 
     Builds every feasible ``(truck, order)`` pair, sorts by injected ``cost``
@@ -79,27 +80,31 @@ class GreedyNearestSolver(BaseAssignmentSolver):
             ),
         )
 
-    def decide(self, ctx) -> Plan:
+    def solve_tick(self, tick, params) -> Result:
         """Rank by the dual-cycle cost built from this policy's own params.
 
         With the default/legacy params this equals the framework's accounting cost,
         because both are ``constraints.assignment_cost`` with the same two floats.
-        Runs under ``decision_rng``: the shuffle / tiebreak are the scope's.
+        Runs under ``decision_rng``: the shuffle / tiebreak are the tick's. On the
+        spatial path the caller's ``tick.candidates`` are used when supplied (a market's
+        round prebuild), else the tick's own spatial pairs; the sampled path ignores them.
         """
-        p = ctx.params
-        # ``ctx.dual_cycle_cost`` with the knobs bound once (same function, same floats):
-        # this is called once per candidate pair, and the per-call view unwrapping and
-        # knob-dict build of the ctx method cost ~3-7 ms per golden tick (gate 6). The
-        # pairs scored here are raw documents (candidate_pairs / sampled_trucks / raw_orders).
+        p = params
+        # ``objective.dual_cycle_cost`` with the knobs bound once (same function, same
+        # floats): this is called once per candidate pair, and a per-call knob-dict build
+        # cost ~3-7 ms per golden tick (gate 6). The pairs scored here are raw documents.
         cost = objective.dual_cycle_cost_fn(
             bonus_km=p.dual_cycle_bonus_km, radius_km=p.dual_cycle_radius_km
         )
+        settings = candidates.CandidateSettings.from_world(tick.world)
 
-        with self.decision_rng(ctx):
+        with self.decision_rng(tick):
             if p.candidates == "spatial":
-                return Plan.from_pairs(self.solve_pairs(ctx.candidate_pairs("spatial"), cost=cost))
-            return Plan.from_pairs(
-                self.solve(ctx.sampled_trucks(), list(ctx.raw_orders), pair_allowed=ctx.allowed_raw, cost=cost)
+                pairs = tick.candidates if tick.candidates is not None else candidates.spatial_pairs(tick, settings)
+                return Result.from_pairs(self.solve_pairs(pairs, cost=cost))
+            return Result.from_pairs(
+                self.solve(candidates.tick_sampled_trucks(tick, settings), list(tick.raw_orders),
+                           pair_allowed=tick.permitted, cost=cost)
             )
 
     def solve(

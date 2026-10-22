@@ -3,15 +3,16 @@
 Recorded in ``docs/plans/policy_slots_round2_whole_tick.md``, "Final review fixes
 (runtime)". What is locked:
 
-- MAJOR-4: ``scopes.partition_context`` takes the cap-sample RNG as a REQUIRED keyword
-  (``sample_rng``). ``Partitioned`` passes the ``random`` module (byte identity, golden);
-  a third-party composite built on the shipped ``compose``/``scopes`` helpers that passes
-  its decision RNG (``ctx.rng``) and injects it into its inner passes the battery's
-  ``determinism.no_module_rng`` WITHOUT declaring ``module_rng``, and fails it when it
-  passes the module instead.
-- MAJOR-5 (FIX-12): every ``PooledMarket`` company solve goes through ``ctx.execute``, so
-  ``solve_in_thread`` offloads each one exactly once (never nested), and the pairs, the
-  share tags and the module-RNG state are identical with the flag on and off.
+- MAJOR-4: ``Tick.restrict`` (the generic successor of ``scopes.partition_context``,
+  WS1) takes the cap-sample RNG as a REQUIRED keyword (``sample_rng``). ``Partitioned``
+  passes the ``random`` module (byte identity, golden); a third-party composite built on
+  ``tick.restrict`` / ``tick.call`` that passes its decision RNG (``tick.rng``) and
+  injects it into its inner passes the battery's ``determinism.no_module_rng`` WITHOUT
+  declaring ``module_rng``, and fails it when it passes the module instead.
+- MAJOR-5 (FIX-12): every ``PooledMarket`` company solve goes through ``tick.execute``
+  (``Tick.call`` offloads a child that offloads ``self``), so ``solve_in_thread``
+  offloads each one exactly once (never nested), and the pairs, the share tags and the
+  module-RNG state are identical with the flag on and off.
 """
 
 from __future__ import annotations
@@ -23,11 +24,15 @@ from dataclasses import dataclass
 import pytest
 
 import apps.container_logistics.assignment.app as app_module
-from apps.container_logistics.policies.dispatch import compose, scopes
+from apps.container_logistics.assignment.solver import GreedyNearestSolver, RandomAssignmentSolver
+from apps.container_logistics.policies.dispatch.bind import Declaration
 from apps.container_logistics.policies.dispatch.composite import CompositePolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.dispatch.library.partitioned import cooperation_groups
+from apps.container_logistics.policies.dispatch.result import Result
+from apps.container_logistics.policies.dispatch.tick import Tick
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework.registry import get_policy_spec, isolated_registry
+from apps.container_logistics.policies.solver_lib import cooperation
 from apps.container_logistics.policies.testing import battery
 from tests.test_policy_round2_c3_review_fixes import _CLOCK, _ids, _selection_profile, _tick_a_app
 
@@ -35,24 +40,25 @@ from tests.test_policy_round2_c3_review_fixes import _CLOCK, _ids, _selection_pr
 # --- MAJOR-4: the partition scope's sample RNG is the caller's ------------------------
 
 
-def test_partition_context_has_no_silent_sample_rng_default():
+def test_restrict_has_no_silent_sample_rng_default():
     """``sample_rng`` is keyword-only and required: every call site names its choice.
 
-    Verified to have teeth: giving the parameter a default (``sample_rng: Any = random``)
-    failed this test.
+    Verified to have teeth: giving ``Tick.restrict``'s parameter a default
+    (``sample_rng: Any = None``) failed this test.
     """
-    p = inspect.signature(scopes.partition_context).parameters["sample_rng"]
+    p = inspect.signature(Tick.restrict).parameters["sample_rng"]
     assert p.kind is inspect.Parameter.KEYWORD_ONLY
     assert p.default is inspect.Parameter.empty
 
 
 @pytest.fixture
 def group_composite():
-    """``GroupsVia``: a third-party per-group composite built only on ``compose`` /
-    ``scopes`` helpers, whose inner is the shipped ``RandomAssignment`` (``candidates=
-    sampled``: it shuffles through ``self.rng`` and caps through ``ctx.sampled_trucks()``).
+    """``GroupsVia``: a third-party per-group composite built only on ``tick.restrict`` /
+    ``tick.call`` (and ``Partitioned``'s ``cooperation_groups``), whose inner is the
+    shipped ``RandomAssignment`` (``candidates=sampled``: it shuffles through
+    ``self.rng`` and caps through ``solver_lib.candidates.tick_sampled_trucks``).
     ``GroupsVia.sample_with`` picks what it passes as ``sample_rng``: ``"decision"`` (the
-    tick ``ctx.rng``, also injected into the inner) or ``"module"`` (the ``random``
+    tick ``tick.rng``, also injected into the inner) or ``"module"`` (the ``random``
     module, as ``Partitioned`` must for byte identity)."""
     with isolated_registry():
         @policy(slot="planner", name="GroupsVia", version="1", information_model="per_group",
@@ -65,23 +71,24 @@ def group_composite():
                 inner: PolicyRef = param(ref("RandomAssignment"), kind="planner", leaf_only=True,
                                          help="the per-group solver")
 
-            def decide(self, ctx):
-                self.inner.set_rng(ctx.rng)
-                self.inner.set_tiebreak(ctx.tick_seed)  # the full recipe (verification review MINOR-B)
-                sample_rng = ctx.rng if GroupsVia.sample_with == "decision" else random
-                chains = {}
-                for group in compose.cooperation_groups(ctx):
-                    sub = scopes.partition_context(
-                        policy=self.inner, params=self.inner_node.params,
-                        candidate_kind=self.inner_node.candidate_kind,
-                        trucks=list(group.trucks), orders=list(group.orders), partition_key=group.key,
-                        rule=ctx.world.rule, settings=ctx.candidate_settings,
-                        accounting_cost=ctx.accounting_cost, clock=ctx.clock,
-                        sample_rng=sample_rng, parent=ctx)
-                    plan = ctx.execute(compose.decide_in_scope, self.inner, self.inner_node, sub)
-                    if plan is not None:
-                        chains.update(plan.chains)
-                return Plan(chains=chains)
+            def bind(self, params, world, *, top):
+                arm = cooperation.resolve_arm(world)
+                return Declaration(cross_company=cooperation.directed_pairs(arm) if top else frozenset())
+
+            def solve_tick(self, tick, params):
+                self.inner.set_rng(tick.rng)
+                self.inner.set_tiebreak(tick.seed)  # the full recipe (verification review MINOR-B)
+                sample_rng = tick.rng if GroupsVia.sample_with == "decision" else random
+                arm = cooperation.resolve_arm(tick.world)
+                pairs = []
+                for group in cooperation_groups(tick, arm.component_of if arm is not None else {}):
+                    kind, value = group.key
+                    sub = tick.restrict(trucks=group.trucks, orders=group.orders,
+                                        scope=f"partition:{kind}:{value}", sample_rng=sample_rng)
+                    result = tick.call(params.inner, sub)
+                    if result is not None:
+                        pairs.extend(result.pairs)
+                return Result(pairs=tuple(pairs))
 
         yield GroupsVia
 
@@ -97,9 +104,9 @@ def test_a_composite_passing_its_decision_rng_passes_no_module_rng_undeclared(gr
     (``scale`` has 1000 trucks in one group, over the 500-truck sample cap): PASS with
     ``sample_rng=ctx.rng`` and no ``module_rng`` declaration; FAIL with the module.
 
-    Verified to have teeth: making ``scopes.partition_context`` ignore its argument and
-    sample from the ``random`` module (the pre-fix hardcoding) failed the decision case
-    (``decide drew from the random MODULE on scale``).
+    Verified to have teeth: making ``Tick.sample_rng`` ignore the caller's argument and
+    return the ``random`` module on a sub-tick (the pre-fix hardcoding) failed the
+    decision case (``decide drew from the random MODULE on scale``).
     """
     assert get_policy_spec("planner", "GroupsVia").module_rng is None
     group_composite.sample_with = "decision"
@@ -111,7 +118,7 @@ def test_a_composite_passing_its_decision_rng_passes_no_module_rng_undeclared(gr
     assert not ok and "scale" in detail, detail
 
 
-# --- MAJOR-5: PooledMarket company solves go through ctx.execute ----------------------
+# --- MAJOR-5: PooledMarket company solves go through tick.execute ---------------------
 
 
 class _CountingTpool:
@@ -139,24 +146,25 @@ _POOLED_INNERS = {
 @pytest.mark.parametrize("inner", sorted(_POOLED_INNERS))
 def test_pooled_market_offloads_every_company_solve_exactly_once(inner, monkeypatch):
     """Golden tick A, pooled, ``solve_in_thread`` on: one ``tpool.execute`` per company
-    solve (``compose.decide_in_scope`` on a company scope), each solve inside exactly one
-    offload, and nothing else offloaded. With the flag off nothing is offloaded. The
-    pairs, the share tags and the ``random`` module state after the tick are identical.
+    solve (the inner's ``solve_tick`` on a ``company:`` sub-tick), each solve inside
+    exactly one offload, and nothing else offloaded. With the flag off nothing is
+    offloaded. The pairs, the share tags and the ``random`` module state after the tick
+    are identical.
 
-    Verified to have teeth: restoring the direct call in ``compose.ScopeDecider.run``
-    (``plan = decide_in_scope(self.policy, self.node, company_ctx)``) failed both cases
-    (0 offloads against 11 / 10 company solves); routing composites through
-    ``ctx.execute`` in ``DispatchRunner._decide`` too (a nested offload) failed both
-    (12 / 11 offloads, every solve at depth 2).
+    Verified to have teeth: calling the child's ``solve_tick`` directly in ``Tick.call``
+    (ignoring ``offload == "self"``) failed both cases (0 offloads against the company
+    solves); offloading ``children`` nodes in ``DispatchRunner._solve`` too (a nested
+    offload) failed both (one offload more, every solve at depth 2).
     """
-    real = compose.decide_in_scope
+    cls = {"GreedyNearest": GreedyNearestSolver, "RandomAssignment": RandomAssignmentSolver}[inner]
+    real = cls.solve_tick
     solves = []
 
-    def counting_decide_in_scope(policy, node, sub_ctx):
-        solves.append((sub_ctx.scope.kind, _CountingTpool.depth))
-        return real(policy, node, sub_ctx)
+    def counting_solve_tick(self, tick, params):
+        solves.append((tick.scope.partition(":")[0], _CountingTpool.depth))
+        return real(self, tick, params)
 
-    monkeypatch.setattr(compose, "decide_in_scope", counting_decide_in_scope)
+    monkeypatch.setattr(cls, "solve_tick", counting_solve_tick)
     monkeypatch.setattr(app_module, "_eventlet_tpool", _CountingTpool)
 
     def run(threaded):

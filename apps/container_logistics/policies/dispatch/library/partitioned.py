@@ -1,24 +1,27 @@
 """``Partitioned``: decide each cooperation group of the tick with an inner per-scope solver.
 
 Single responsibility: the pre-v2 ``partitioned`` topology as an ordinary built-in
-dispatch solver (plan ``docs/plans/policy_slots_round2_whole_tick.md`` §2.3). The
-tick is split by ``compose.cooperation_groups`` (a multi-company component of the
-active structure, else one haulier); each group gets its own context
-(``scopes.partition_context``) and is decided by ``inner`` through
-``compose.decide_in_scope`` via ``ctx.execute`` (``solve_in_thread`` runs each group in
-a worker thread, as before). The group plans are merged in group order, which is the
-pre-v2 commit order.
+planner solver (plan ``docs/plans/policy_slots_round2_whole_tick.md`` §2.3; contract
+``plan_contract_final.md`` §2). At run start ``bind`` resolves the scenario's active
+cooperation arm (``solver_lib.cooperation``), validates it (message 14) and, at the
+top, declares the arm's cross-company pairs. Each tick is split by
+:func:`cooperation_groups` (a multi-company component of the active arm, else one
+haulier; a verbatim move of the old ``compose.cooperation_groups``); each group is a
+sub-tick (``tick.restrict``) decided by ``inner`` through ``tick.call`` (the framework
+offloads each call when ``solve_in_thread`` is on, as before). The group results are
+merged in group order, which is the pre-v2 commit order, with each inner result's
+``solver_notes``.
 
-Byte identity with pre-v2 partitioned runs (the dispatch golden): every group context
+Byte identity with pre-v2 partitioned runs (the dispatch golden): every group sub-tick
 carries the INNER's own ``rng`` / ``tiebreak_seed`` / ``rebate_book`` (the ``random``
 module, ``None``, ``None`` unless something injected them) and samples from the
-``random`` module; this solver never reads ``ctx.rng``, so the tick ``Random`` is never
-built. Hence the ``module_rng`` and ``order_sensitive`` declarations, and the ``v1``
-share-tag format (reserved to this policy). An inner's non-contract exception
+``random`` module; this solver never reads ``tick.rng``, so the tick ``Random`` is
+never built. Hence the ``module_rng`` and ``order_sensitive`` declarations, and the
+``v1`` share-tag format (reserved to this policy). An inner's non-contract exception
 propagates, as before; a contract violation drops only that group (message 19).
 
-Policy side of the boundary: the framework still checks the merged plan against the
-world rule, commits it and does the accounting.
+Policy side of the boundary: the framework still checks the merged result against the
+top's declaration, commits it and does the accounting.
 """
 
 from __future__ import annotations
@@ -26,17 +29,21 @@ from __future__ import annotations
 import logging
 import random
 from dataclasses import dataclass
+from typing import Any, Mapping
 
+from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
+from apps.container_logistics.policies.solver_lib import cooperation
 
-from .. import compose, scopes
+from ..bind import Declaration
 from ..composite import CompositePolicy
-from ..context import DispatchContext
-from ..plan import Plan
+from ..result import Result
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Partitioned"]
+__all__ = ["GroupScope", "Partitioned", "cooperation_groups"]
+
+Doc = dict[str, Any]
 
 _INNER_HELP = (
     "The per-scope solver each cooperation group is decided by (a leaf: GreedyNearest, "
@@ -66,7 +73,7 @@ _INNER_HELP = (
     arm_budgets_ms={"inner=GreedyNearest": 500},
 )
 class Partitioned(CompositePolicy):
-    """Decide each cooperation group of the tick with ``inner``; merge the plans in group order."""
+    """Decide each cooperation group of the tick with ``inner``; merge the results in group order."""
 
     @dataclass(frozen=True)
     class Params(PolicyParams):
@@ -80,32 +87,78 @@ class Partitioned(CompositePolicy):
         """Recorded here only, NOT forwarded: pre-v2 partitioned ties are a shuffle, never a tiebreak."""
         self._tiebreak_seed = tick_seed
 
-    def decide(self, ctx: DispatchContext) -> Plan:
-        """One ``decide_in_scope`` per cooperation group, through ``ctx.execute``; a dropped group adds nothing."""
-        chains: dict[str, tuple[str, ...]] = {}
-        for group in compose.cooperation_groups(ctx):
-            plan = ctx.execute(compose.decide_in_scope, self.inner, self.inner_node, self._group_context(ctx, group))
-            if plan is not None:
-                chains.update(plan.chains)
-        return Plan(chains=chains)
+    def bind(self, params: Any, world: Mapping[str, Any], *, top: bool) -> Declaration:
+        """At the top: validate the active arm (message 14) and declare its cross-company pairs."""
+        cooperation.validate_arm(world)
+        arm = cooperation.resolve_arm(world)
+        return Declaration(cross_company=cooperation.directed_pairs(arm) if top else frozenset())
 
-    def _group_context(self, ctx: DispatchContext, group: compose.GroupScope) -> DispatchContext:
-        """The group's context: the inner's RNG/tiebreak/rebates, the world rule, module sampling."""
-        return scopes.partition_context(
-            policy=self.inner,
-            params=self.inner_node.params,
-            candidate_kind=self.inner_node.candidate_kind,
-            trucks=list(group.trucks),
-            orders=list(group.orders),
-            partition_key=group.key,
-            rule=ctx.world.rule,
-            settings=ctx.candidate_settings,
-            accounting_cost=ctx.accounting_cost,
-            clock=ctx.clock,
-            # The random MODULE on purpose, not ctx.rng: the pre-v2 inline fallback called
-            # random.sample, and the dispatch golden locks module-RNG consumption (plan
-            # docs/plans/policy_slots_p0_p3.md §4 P1.5, §7 risk 1). This is the draw the
-            # module_rng declaration above covers; another composite passes ctx.rng here.
-            sample_rng=random,
-            parent=ctx,
-        )
+    def solve_tick(self, tick: Any, params: Any) -> Result:
+        """One ``tick.call(params.inner, ...)`` per cooperation group; a dropped group adds nothing."""
+        arm = cooperation.resolve_arm(tick.world)
+        pairs: list[tuple[str, str]] = []
+        notes: dict[tuple[str, str], Any] = {}
+        for group in cooperation_groups(tick, arm.component_of if arm is not None else {}):
+            kind, value = group.key
+            sub = tick.restrict(
+                trucks=group.trucks,
+                orders=group.orders,
+                scope=f"partition:{kind}:{value}",
+                # The random MODULE on purpose, not tick.rng: the pre-v2 inline fallback called
+                # random.sample, and the dispatch golden locks module-RNG consumption (plan
+                # docs/plans/policy_slots_p0_p3.md §4 P1.5, §7 risk 1). This is the draw the
+                # module_rng declaration above covers; another composite passes tick.rng here.
+                sample_rng=random,
+            )
+            result = tick.call(params.inner, sub)
+            if result is not None:
+                pairs.extend(result.pairs)
+                notes.update(result.solver_notes)
+        return Result(pairs=tuple(pairs), solver_notes=notes)
+
+
+@dataclass(frozen=True)
+class GroupScope:
+    """One cooperation group of a tick: its partition key and its trucks and orders, in input order."""
+
+    key: tuple[str, Any]
+    trucks: tuple[Doc, ...]
+    orders: tuple[Doc, ...]
+
+
+def cooperation_groups(tick: Any, component_of: Mapping[str, int]) -> list[GroupScope]:
+    """The groups of ``tick`` that have both orders and trucks, in first-seen order of their orders.
+
+    A haulier in a multi-company component of the active arm (``component_of``) is
+    keyed ``("component", idx)``; any other haulier ``("haulier", id)``; a document
+    without a haulier never matches (fail-closed) and is left out. Pure (no RNG).
+    Verbatim move of the old ``compose.cooperation_groups``.
+    """
+
+    # Partition both sides by the structure's connected component: one logical planner
+    # per component. A haulier with no partners (or no structure at all) is its own
+    # singleton partition, the pre-cooperation haulier bucket.
+    def _partition_key(haulier_id: Any) -> tuple[str, Any] | None:
+        if haulier_id is None:
+            return None
+        hid = str(haulier_id)
+        if hid in component_of:
+            return ("component", component_of[hid])
+        return ("haulier", hid)
+
+    truck_buckets: dict[Any, list[Doc]] = {}
+    for t in tick.raw_trucks:
+        truck_buckets.setdefault(_partition_key(assign_constraints.haulier_of(t)), []).append(t)
+    order_buckets: dict[Any, list[Doc]] = {}
+    for o in tick.raw_orders:
+        order_buckets.setdefault(_partition_key(assign_constraints.haulier_of(o)), []).append(o)
+
+    groups: list[GroupScope] = []
+    for key, bucket_orders in order_buckets.items():
+        if key is None:  # a None haulier never matches (fail-closed in haulier_matches)
+            continue
+        bucket_trucks = truck_buckets.get(key)
+        if not bucket_trucks:
+            continue
+        groups.append(GroupScope(key=key, trucks=tuple(bucket_trucks), orders=tuple(bucket_orders)))
+    return groups

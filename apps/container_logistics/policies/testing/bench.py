@@ -23,7 +23,7 @@ Columns: ``policy`` (the alias), ``label`` (the selection, e.g.
 and ``benefit_km_total`` (sum of ``owner_reserve_km - awarded_cost_km`` over the
 shares whose both values are finite), solve times and ``violations``.
 
-Deadhead is the HAVERSINE km from truck anchor to pickup (``objective.deadhead_km``),
+Deadhead is the HAVERSINE km from truck anchor to pickup (``tick.measure.deadhead_km``),
 a decision-time proxy: it is not the road-distance KPI (CLAUDE.md §6.3), and one tick
 screens policies; only runs (n>=3, interleaved) certify them.
 
@@ -44,9 +44,8 @@ from typing import Any, Iterator, Mapping, Sequence
 from apps.container_logistics.assignment import accounting
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.dispatch import capture
-from apps.container_logistics.policies.dispatch.context import DispatchContext
-from apps.container_logistics.policies.dispatch.helpers import objective
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
+from apps.container_logistics.policies.dispatch.tick import Tick
 from apps.container_logistics.policies.framework.errors import PolicyError
 from apps.container_logistics.policies.framework.registry import get_policy_spec
 from apps.container_logistics.policies.framework.resolve import merge_params
@@ -76,7 +75,7 @@ _DUAL_CYCLE_RADIUS_KM = assign_constraints._DEFAULT_DUAL_CYCLE_RADIUS_KM
 
 @dataclass(frozen=True)
 class CapturedFixture:
-    """A tick captured from a live run (``openride.dispatch_context/2``)."""
+    """A tick captured from a live run (``openride.dispatch_context/3``, or a converted ``/2``)."""
 
     id: str
     fx: Mapping[str, Any]
@@ -92,7 +91,7 @@ class CapturedFixture:
             yield
 
     def context(self, runner: Any, *, trucks: Any = None, orders: Any = None,
-                scope_log: Any = None) -> DispatchContext:
+                scope_log: Any = None) -> Tick:
         """``capture.context_from_fixture`` for ``runner``'s selection (order overrides unsupported)."""
         if trucks is not None or orders is not None:
             raise ValueError("a captured fixture replays its recorded truck/order order only")
@@ -188,24 +187,30 @@ def _validated_params(entry: BenchEntry, override: Mapping[str, Any] | None) -> 
 def _bench_one(entry: BenchEntry, params: Mapping[str, Any], fixture: Any) -> dict[str, Any]:
     runner = build_runner_for_policy(entry.name, params)
     with fixture.module_random():
-        ctx = fixture.context(runner)
-        pairs = runner.run(ctx).pairs
-    world = ctx.world
-    shares = accounting.account_shares(pairs, candidates=list(ctx.raw_trucks),
-                                       cost=world.accounting_cost, own_allowed=world.own_allowed)
+        tick = fixture.context(runner)
+        pairs = runner.run(tick).pairs
+    mtt = tick.world.unread().get("max_travel_time_pickup")
+
+    def own_allowed(t: Any, o: Any) -> bool:
+        # The owner reserve's rule (as AssignmentApp): strict own-haulier feasibility.
+        return assign_constraints.pair_allowed(t, o, max_travel_time_pickup=mtt)
+
+    measure = tick.measure
+    shares = accounting.account_shares(pairs, candidates=list(tick.raw_trucks),
+                                       cost=measure.cost, own_allowed=own_allowed)
     benefit = 0.0
     for acc in shares:
         reserve, awarded = acc.owner_reserve_km, acc.awarded_cost_km
         if reserve is not None and math.isfinite(reserve) and math.isfinite(awarded):
             benefit += reserve - awarded
-    km = [objective.deadhead_km(t, o) for t, o in pairs]
+    km = [measure.deadhead_km(t, o) for t, o in pairs]
     return {
         "label": runner.resolved.label,
         "info_model": runner.resolved.information_model,
         "assigned": len(pairs),
-        "orders": len(ctx.raw_orders),
+        "orders": len(tick.raw_orders),
         "deadhead": [k for k in km if math.isfinite(k)],
-        "dual": sum(1 for t, o in pairs if objective.is_dual_cycle(t, o, radius_km=_DUAL_CYCLE_RADIUS_KM)),
+        "dual": sum(1 for t, o in pairs if measure.is_dual_cycle(t, o, radius_km=_DUAL_CYCLE_RADIUS_KM)),
         "cross": len(shares),
         "benefit": benefit,
         "ms": runner.stats["total_ms"],
@@ -275,7 +280,7 @@ def render_table(report: BenchReport) -> str:
 def load_fixtures(directory: str) -> list[CapturedFixture]:
     """Every ``step_*.json.gz`` capture in ``directory``, sorted by time step.
 
-    Each is read with ``capture.read_fixture`` (format ``/2``) and replayed through
+    Each is read with ``capture.read_fixture`` (format ``/3``, a ``/2`` converted) and replayed through
     ``capture.context_from_fixture``. Raises ``FileNotFoundError`` for a missing
     directory and ``PolicyError`` for a file in another format (message 22 for ``/1``).
     """

@@ -275,25 +275,22 @@ def test_missing_requirements_are_reported():
     assert spec.missing_requirements() == ["definitely_not_a_module_xyz", "definitely_not_a_pkg_xyz.sub"]
 
 
-def test_slot_base_class_table_is_enforced():
-    """The P1 hook: a slot listed in ``_SLOT_BASES`` rejects classes outside that base.
+def test_slot_entry_point_table_is_enforced():
+    """The registration hook: a slot listed in ``_SLOT_ENTRY_POINTS`` rejects a class without that callable.
 
-    Verified to have teeth: making ``_check_slot_base`` return early let it register.
+    (Was ``_SLOT_BASES``: a required base class. WS1 relaxed it to a required entry
+    point, G5.) Verified to have teeth: making ``_check_slot_base`` return early let it
+    register.
     """
-    class Base:
-        pass
-
     with isolated_registry():
-        saved = dict(registry._SLOT_BASES)
-        registry._SLOT_BASES["planner"] = f"{__name__}:_BaseForSlotTest"
-        globals()["_BaseForSlotTest"] = Base
+        saved = dict(registry._SLOT_ENTRY_POINTS)
+        registry._SLOT_ENTRY_POINTS["planner"] = "_slot_test_entry_point"
         try:
-            with pytest.raises(PolicyRegistrationError, match="must subclass"):
-                _dummy("TestNotABase")
+            with pytest.raises(PolicyRegistrationError, match="must define a callable _slot_test_entry_point"):
+                _dummy("TestNoEntryPoint")
         finally:
-            registry._SLOT_BASES.clear()
-            registry._SLOT_BASES.update(saved)
-            globals().pop("_BaseForSlotTest")
+            registry._SLOT_ENTRY_POINTS.clear()
+            registry._SLOT_ENTRY_POINTS.update(saved)
 
 
 def test_isolated_registry_restores_global_state():
@@ -417,19 +414,28 @@ def test_discovery_finds_both_builtins_with_version_1():
     assert (greedy.share_tag_format, rand.share_tag_format) == ("audited", "audited")
 
 
-def test_dispatch_slot_rejects_a_class_that_is_not_a_dispatch_policy():
-    """The shipped table requires every dispatch policy to subclass ``DispatchPolicy``.
+def test_dispatch_slot_requires_solve_tick_not_a_base_class():
+    """The shipped table requires a callable ``solve_tick``; ``DispatchPolicy`` is an optional helper (G5).
 
-    Verified to have teeth: emptying ``_SLOT_BASES`` let the plain class register.
+    A plain class with ``solve_tick`` registers; one without is refused, and so is one
+    that only has the PAIR API ``solve`` (B1: ``solve`` is never the entry point).
+    Verified to have teeth: emptying ``_SLOT_ENTRY_POINTS`` let the plain class register.
     """
     @dataclass(frozen=True)
     class Params(PolicyParams):
         pass
 
     with isolated_registry():
-        with pytest.raises(PolicyRegistrationError, match="must subclass .*DispatchPolicy"):
+        with pytest.raises(PolicyRegistrationError, match="must define a callable solve_tick"):
             policy(slot="planner", information_model="central", name="TestPlainClass", version="1", description="x")(
                 type("TestPlainClass", (), {"Params": Params}))
+        with pytest.raises(PolicyRegistrationError, match="must define a callable solve_tick"):
+            policy(slot="planner", information_model="central", name="TestPairOnly", version="1", description="x")(
+                type("TestPairOnly", (), {"Params": Params, "solve": lambda self, *a, **k: []}))
+        plain = type("TestPlainSolver", (), {"Params": Params, "solve_tick": lambda self, tick, params: None})
+        policy(slot="planner", information_model="central", name="TestPlainSolver", version="1",
+               description="x")(plain)
+        assert registry.get_policy_spec("planner", "TestPlainSolver").cls is plain
 
 
 # --- round 2 (docs/plans/policy_slots_round2_whole_tick.md §5 C1) ---------------------

@@ -1,8 +1,5 @@
-id:candidate_kind	2
-id:candidate_kind_for	2
 id:information_model	2
 id:share_tag_format	2
 id:wrap_legacy_leaf	2
-sub:cooperation	2
 sub:market	1
 sub:topology	1

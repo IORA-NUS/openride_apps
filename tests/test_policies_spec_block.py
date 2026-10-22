@@ -417,7 +417,7 @@ def test_legacy_use_spatial_false_in_a_profile_is_folded_and_removed(tmp_path, m
     SC._patch_assignment_profiles({"a0": {"profile": prof}}, resolved, "legacy")
     assert "use_spatial_matching" not in prof
     assert prof["policies"]["planner"]["params"]["candidates"] == "sampled"
-    assert resolve_dispatch_for_profile(prof).candidate_kind == "sampled"
+    assert resolve_dispatch_for_profile(prof).params.candidates == "sampled"
     authored = {"strategy": "GreedyNearest", "use_spatial_matching": False}
     with pytest.raises(SpecValidationError, match="candidates='sampled' instead"):
         SC._patch_assignment_profiles({"a0": {"profile": authored}}, resolved, "authored")

@@ -7,7 +7,7 @@ Policy knobs are driven primarily by ``scenario_config.assignment_settings["prof
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from apps.container_logistics.scenario.scenario_config import facility_settings
 
@@ -349,6 +349,30 @@ def share_adjacency(structure: Optional[Dict[str, Any]]) -> Dict[str, set]:
     if not isinstance(adj, dict):
         return {}
     return {str(k): {str(p) for p in v} for k, v in adj.items() if isinstance(v, (list, tuple, set))}
+
+
+def declared_partnerships(profile: Dict[str, Any]) -> FrozenSet[Tuple[str, str]]:
+    """Every ``(owner, carrier)`` pair ANY cooperation structure of ``profile`` declares.
+
+    The union over ``profile["cooperation"]["structures"][*]`` of
+    ``{(owner, carrier): owner in share_adjacency(s)[carrier], owner != carrier}``:
+    the ceiling a planner's declared cross-company pairs must stay inside
+    (``policies.dispatch.bind``, message 23), over every arm of the menu so an arm
+    switch never widens it. Directional exactly like :func:`share_eligible` (a carrier's
+    trucks may serve an owner's orders iff the owner is in the carrier's adjacency).
+    Defensive like :func:`share_adjacency`: never raises; empty without a valid block.
+    """
+    coop = (profile or {}).get("cooperation")
+    if not isinstance(coop, dict):
+        return frozenset()
+    structures = coop.get("structures")
+    if not isinstance(structures, list):
+        return frozenset()
+    out = set()
+    for structure in structures:
+        for carrier, owners in share_adjacency(structure).items():
+            out.update((owner, carrier) for owner in owners if owner != carrier)
+    return frozenset(out)
 
 
 def share_eligible(truck: Dict[str, Any], order: Dict[str, Any], adjacency: Dict[str, set]) -> bool:

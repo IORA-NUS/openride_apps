@@ -1,13 +1,14 @@
-"""The whole-tick dispatch runtime (round 2 C3): one context per tick, decompositions as solvers.
+"""The whole-tick dispatch runtime (round 2 C3; generic contract WS1): one tick, decompositions as solvers.
 
 What is locked (plan ``docs/plans/policy_slots_round2_whole_tick.md`` §2, §5 C3):
 
 - ``Partitioned`` splits the tick into exactly the groups the pre-v2 inline bucketing
   of ``AssignmentApp.assign`` built (a frozen copy of it is the oracle), and never
   constructs the tick ``Random``; ``PooledMarket`` constructs it exactly once.
-- The FRAMEWORK re-checks every committed head against the world rule: a central
-  policy that pairs companies the structure does not connect commits nothing that
-  tick (message 18), and a sub-scope violation drops only that scope (message 19).
+- The FRAMEWORK re-checks every committed pair against ownership-or-declared AND
+  physical feasibility: a central policy that pairs companies outside its declared
+  cross-company set commits nothing that tick (message 18), and a sub-tick violation
+  drops only that sub-tick (message 19).
 - Selecting ``PooledMarket`` through ``policies`` equals the legacy
   ``planner.topology: pooled`` path byte for byte (pairs, tags, published strings,
   round stats).
@@ -34,13 +35,14 @@ import pytest
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.assignment.app import AssignmentApp
 from apps.container_logistics.assignment.solver import get_solver
-from apps.container_logistics.policies.dispatch import compose
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.composite import innermost_policy
+from apps.container_logistics.policies.dispatch.bind import Declaration
+from apps.container_logistics.policies.dispatch.library import partitioned as partitioned_module
 from apps.container_logistics.policies.dispatch.plan import Plan
 from apps.container_logistics.policies.dispatch.profile import build_policy_tree, resolve_dispatch_for_profile
 from apps.container_logistics.policies.framework import PolicyParams, policy
 from apps.container_logistics.policies.framework.registry import isolated_registry
+from apps.container_logistics.policies.solver_lib import cooperation
 from tests import test_dispatch_golden_identity as _golden
 from tests.golden.harness import build_app, run_case
 from tests.test_assignment_cooperation import _StubManager, _StubMessenger, _coop, _order, _truck
@@ -117,18 +119,18 @@ def _frozen_inline_bucketing(prof, candidates, orders):
                                      "A-greedy-partitioned-no-coop-spatial-cap500"])
 def test_partitioned_groups_match_the_frozen_inline_bucketing(case_id, monkeypatch):
     """Verified to have teeth: keying a multi-company component by haulier in
-    ``compose.cooperation_groups`` (dropping the ``component_of`` branch) failed the
+    ``partitioned.cooperation_groups`` (dropping the ``component_of`` branch) failed the
     chain case. (The skips are locked by the synthetic test below.)"""
     case = _CASES[case_id]
     seen = []
-    real = compose.cooperation_groups
+    real = partitioned_module.cooperation_groups
 
-    def _spy(ctx):
-        groups = real(ctx)
-        seen.append((ctx, groups))
+    def _spy(tick, component_of):
+        groups = real(tick, component_of)
+        seen.append((tick, groups))
         return groups
 
-    monkeypatch.setattr(compose, "cooperation_groups", _spy)
+    monkeypatch.setattr(partitioned_module, "cooperation_groups", _spy)
     app = build_app(case["profile"], case["strategy"], _TICKS[case["tick_state"]])
     app.assign(_TICKS[case["tick_state"]]["sim_clock"], 42)
     (ctx, groups), = seen
@@ -145,7 +147,7 @@ def test_partitioned_groups_skip_truckless_and_haulierless_orders_like_the_inlin
     haulier next to a component (the golden ticks have neither skip).
 
     Verified to have teeth: dropping the empty-truck-bucket skip in
-    ``compose.cooperation_groups`` failed this test; so did dropping the ``None``-key skip.
+    ``partitioned.cooperation_groups`` failed this test; so did dropping the ``None``-key skip.
     """
     stray = _truck("t_none", "acme", 103.851, 1.30)
     stray["haulier_id"] = None
@@ -159,12 +161,13 @@ def test_partitioned_groups_skip_truckless_and_haulierless_orders_like_the_inlin
               _order("o_acme", "acme", 103.85, 1.30), _order("o_echo", "echo", 103.88, 1.30)]
     profile = _base_profile(strategy="GreedyNearest", cooperation=_coop([("acme", "borax")], active="s1"))
     seen = []
-    real = compose.cooperation_groups
-    monkeypatch.setattr(compose, "cooperation_groups", lambda ctx: seen.append(ctx) or real(ctx))
+    real = partitioned_module.cooperation_groups
+    monkeypatch.setattr(partitioned_module, "cooperation_groups",
+                        lambda tick, component_of: seen.append((tick, component_of)) or real(tick, component_of))
     app = _app(trucks, orders, profile)
     app.assign(_CLOCK, 2)
-    (ctx,) = seen
-    got = [(g.key, [t["_id"] for t in g.trucks], [o["_id"] for o in g.orders]) for g in real(ctx)]
+    ((ctx, component_of),) = seen
+    got = [(g.key, [t["_id"] for t in g.trucks], [o["_id"] for o in g.orders]) for g in real(ctx, component_of)]
     assert got == _frozen_inline_bucketing(profile, ctx.raw_trucks, ctx.raw_orders)
     assert [key for key, _t, _o in got] == [("haulier", "delta"), ("component", 0)], got
 
@@ -178,10 +181,10 @@ def test_partitioned_groups_skip_truckless_and_haulierless_orders_like_the_inlin
     ("A-greedy-pooled-chain-spatial-cap500", 1),
 ])
 def test_partitioned_never_constructs_the_tick_rng(case_id, constructions, monkeypatch):
-    """``ctx.rng`` is lazy: Partitioned never reads it, PooledMarket builds it once.
+    """``tick.rng`` is lazy: Partitioned never reads it, PooledMarket builds it once.
 
-    Verified to have teeth: building ``random.Random(tick_seed)`` eagerly in
-    ``scopes.tick_context`` failed both partitioned cases.
+    Verified to have teeth: building ``random.Random(seed)`` eagerly in ``Tick.top``
+    failed both partitioned cases.
     """
     built = []
 
@@ -206,7 +209,11 @@ def _chain_abc():
 
 @pytest.fixture
 def cross_pairer():
-    """A central policy that hands the cargo truck the acme order (cargo-acme is not an edge)."""
+    """A central policy that hands the cargo truck the acme order (cargo-acme is not an edge).
+
+    It declares the active arm's pairs at bind, exactly like a built-in central leaf, so
+    the refusal below is the framework's check of a pair OUTSIDE the declaration.
+    """
     with isolated_registry():
         @policy(slot="planner", name="CrossPairer", version="1", information_model="central",
                 description="pairs cargo with acme")
@@ -215,6 +222,9 @@ def cross_pairer():
             class Params(PolicyParams):
                 pass
 
+            def bind(self, params, world, *, top):
+                return Declaration(cross_company=cooperation.directed_pairs(cooperation.resolve_arm(world)))
+
             def decide(self, ctx):
                 return Plan(chains={"t_cargo": ("o_acme",)})
 
@@ -222,8 +232,8 @@ def cross_pairer():
 
 
 def test_disallowed_cross_company_head_is_discarded_by_the_framework(cross_pairer, caplog):
-    """Verified to have teeth: building the tick context with ``allowed_raw = lambda t, o:
-    True`` (instead of ``world.allowed``) in ``scopes.tick_context`` committed the pair."""
+    """Verified to have teeth: building the top tick with ``permitted = lambda t, o: True``
+    (instead of ``_top_permitted``) in ``Tick.top`` committed the pair."""
     trucks = [_truck("t_cargo", "cargo", 103.85, 1.30), _truck("t_acme", "acme", 103.95, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
     profile = _base_profile(policies={"planner": {"type": "CrossPairer"}}, cooperation=_chain_abc())
@@ -234,9 +244,11 @@ def test_disallowed_cross_company_head_is_discarded_by_the_framework(cross_paire
     assert app._dispatch_runner(profile).stats["violations"] == 1
     msg = next(r.getMessage() for r in caplog.records if "CONTRACT VIOLATION" in r.getMessage())
     assert msg.startswith(
-        "PLANNER POLICY CONTRACT VIOLATION: CrossPairer v1 at step 7 returned an invalid tick plan: "
-        "head pair ('t_cargo', 'o_acme') is not allowed. The plan was DISCARDED (nothing committed "
+        "PLANNER POLICY CONTRACT VIOLATION: CrossPairer v1 at step 7 returned an invalid tick result: "
+        "pair ('t_cargo', 'o_acme') is not allowed. The result was DISCARDED (nothing committed "
         "this tick). This is a policy bug: run `openride policy validate planner CrossPairer`."), msg
+    assert app._dispatch_runner(profile).tree.declaration.cross_company == {
+        ("acme", "borax"), ("borax", "acme"), ("borax", "cargo"), ("cargo", "borax")}
 
 
 @pytest.fixture
@@ -261,7 +273,7 @@ def acme_breaker():
 
 
 def test_scope_violation_discards_only_that_group(acme_breaker, caplog):
-    """Verified to have teeth: returning ``Plan(chains={})`` from ``Partitioned.decide``
+    """Verified to have teeth: returning ``Result()`` from ``Partitioned.solve_tick``
     when any group is dropped (instead of skipping just that group) failed the borax
     assertion."""
     trucks = [_truck("t_a1", "acme", 103.85, 1.30), _truck("t_a2", "acme", 103.86, 1.30),
@@ -275,8 +287,8 @@ def test_scope_violation_discards_only_that_group(acme_breaker, caplog):
     assert app._dispatch_runner(profile).stats["violations"] == 1
     msg = next(r.getMessage() for r in caplog.records if "CONTRACT VIOLATION" in r.getMessage())
     assert msg.startswith("PLANNER POLICY CONTRACT VIOLATION: inner AcmeBreaker v1 in scope "
-                          "partition:haulier:acme at step 3 returned an invalid plan: order 'o_a1' "
-                          "appears twice in the plan. The scope's plan was DISCARDED"), msg
+                          "partition:haulier:acme at step 3 returned an invalid result: order 'o_a1' "
+                          "appears twice in the result. The scope's result was DISCARDED"), msg
 
 
 # --- 5. PooledMarket via policies == the legacy topology path ----------------------------
@@ -287,7 +299,7 @@ def test_scope_violation_discards_only_that_group(acme_breaker, caplog):
                                      "A-greedy-pooled-chain-sampled-cap40"])
 def test_pooled_market_selection_equals_legacy_topology_path(case_id):
     """Verified to have teeth: calling ``self.inner.set_tiebreak(None)`` instead of the
-    tick seed in ``PooledMarket.decide`` failed the greedy cases (on the legacy path
+    tick seed in ``PooledMarket.solve_tick`` failed the greedy cases (on the legacy path
     too, so the comparison here was against the golden-locked legacy run)."""
     case = copy.deepcopy(_CASES[case_id])
     legacy = run_case(case, _TICKS)
@@ -322,18 +334,24 @@ def _central_world():
 
 def test_central_greedy_serves_only_world_allowed_cross_pairs_and_renders_audited_tags():
     """Cargo's truck is nearer to acme's order than borax's, but only borax is acme's
-    partner: the central leaf's candidates and the framework's check both follow the
-    world rule. Verified to have teeth: rendering the central leaf's tags with
-    ``fmt="v1"`` failed the key assertion."""
+    partner: the central leaf's declaration (the active arm's pairs), its candidates and
+    the framework's check all follow the structure. Verified to have teeth: rendering
+    the central leaf's tags with ``fmt="v1"`` failed the key assertion."""
     trucks, orders = _central_world()
     profile = _base_profile(policies={"planner": {"type": "GreedyNearest"}},
                             cooperation=_coop([("acme", "borax")], active="s1"))
     app = _app(trucks, orders, profile)
     pairs = _ids(app.assign(_CLOCK, 1))
-    world = app._dispatch_world(profile)
+    assert app._dispatch_runner(profile).tree.declaration.cross_company == {("acme", "borax"), ("borax", "acme")}
     by_id = {t["_id"]: t for t in trucks} | {o["_id"]: o for o in orders}
+
+    def oracle(t, o):  # own, or an edge of the structure; and physically feasible
+        th, oh = assign_constraints.haulier_of(t), assign_constraints.haulier_of(o)
+        return (th == oh or {th, oh} == {"acme", "borax"}) and \
+            assign_constraints.pair_allowed_ignoring_haulier(t, o, max_travel_time_pickup=None)
+
     assert ("t_borax", "o_acme") in pairs and ("t_cargo", "o_acme") not in pairs, pairs
-    assert all(world.allowed(by_id[t], by_id[o]) for t, o in pairs)
+    assert all(oracle(by_id[t], by_id[o]) for t, o in pairs)
     tag = app._share_tags[("t_borax", "o_acme")]
     assert list(tag) == ["shared", "owner_haulier_id", "carrier_haulier_id", "benefit_km", "pool_id",
                          "awarded_cost_km", "owner_reserve_km", "market_round"]
@@ -346,10 +364,10 @@ def test_central_greedy_serves_only_world_allowed_cross_pairs_and_renders_audite
                                          ("RandomAssignment", {})],
                          ids=["GreedyNearest-spatial", "GreedyNearest-sampled", "RandomAssignment"])
 def test_central_leaves_draw_no_module_rng(name, params):
-    """With the sample cap binding (1 per haulier), the tick scope samples from ``ctx.rng``.
+    """With the sample cap binding (1 per haulier), the whole tick samples from ``tick.rng``.
 
-    Verified to have teeth: drawing the tick-scope sample from the ``random`` module
-    (``rng=random`` in ``DispatchContext.sampled_trucks``' tick branch) failed the
+    Verified to have teeth: drawing the whole-tick sample from the ``random`` module
+    (``rng=random`` in ``candidates.tick_sampled_trucks``' depth-0 branch) failed the
     GreedyNearest-sampled and RandomAssignment cases.
     """
     trucks = [_truck(f"t_{h}{i}", h, 103.85 + 0.01 * i, 1.30) for h in ("acme", "borax") for i in range(3)]
@@ -442,7 +460,8 @@ class _RebateManager(_StubManager):
 @pytest.mark.parametrize("top", ["Partitioned", "PooledMarket"])
 def test_rebate_book_reaches_the_leaf_through_a_composite(rebate_reader, top):
     """Verified to have teeth: not forwarding ``set_rebate_book`` in
-    ``CompositePolicy`` left the leaf's book ``None`` (both tops)."""
+    ``CompositePolicy`` left the leaf's book ``None`` (both tops); binding a sub-tick's
+    ``rebates`` to ``None`` in ``Tick.call`` failed the ``seen`` assertion."""
     trucks = [_truck("t_acme", "acme", 103.85, 1.30)]
     orders = [_order("o_acme", "acme", 103.85, 1.30)]
     profile = _base_profile(planner={"rebate_aware": True},
@@ -450,7 +469,7 @@ def test_rebate_book_reaches_the_leaf_through_a_composite(rebate_reader, top):
     app = _app(trucks, orders, profile)
     app.manager = _RebateManager(trucks, orders)
     app.assign(_CLOCK, 1)
-    leaf = innermost_policy(app._solver)
+    leaf = app._dispatch_runner(profile).tree.leaf.instance
     assert leaf.rebate_book is not None, "the book must reach the leaf"
     assert rebate_reader.seen and all(book is leaf.rebate_book for book in rebate_reader.seen), (
         "every scope the leaf decides must carry the leaf's book")
@@ -460,4 +479,4 @@ def test_get_solver_harness_still_builds_the_default_tree_around_its_leaf():
     """The pre-v2 ``__new__`` harness injects a LEAF; the runner wraps it (``bind_instance``)."""
     app = _app([], [], _base_profile(strategy="GreedyNearest"), solver=get_solver("GreedyNearest", None))
     runner = app._dispatch_runner(app.behavior["profile"])
-    assert runner.resolved.label == "Partitioned/GreedyNearest" and innermost_policy(runner.policy) is app._solver
+    assert runner.resolved.label == "Partitioned/GreedyNearest" and runner.tree.leaf.instance is app._solver

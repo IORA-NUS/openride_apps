@@ -16,7 +16,7 @@ the awarded pairs plus their market provenance (``pair_notes``).
   rule is required to be order-independent.
 - Every COMPANY decision is delegated: what to contribute (``ctx.offer``), what to
   bid on (``ctx.claim``), and which truck serves which job (``ctx.dispatch``, the
-  ``compose.ScopeDecider`` adapter; this module never imports ``policies`` itself).
+  ``PooledMarket`` solver's company decider; this module never imports ``policies`` itself).
 
 ``PoolMarket`` is the only object allowed to mutate allocation state; this module
 asks it to ``commit`` and never bookkeeps allocation on the side.
@@ -163,7 +163,7 @@ class PooledMarketResult:
 class PooledPlannerContext:
     """Everything the engine needs for one tick, injected by the ``PooledMarket`` solver.
 
-    ``dispatch`` is the ``compose.ScopeDecider`` (``candidate_kind``,
+    ``dispatch`` is the ``PooledMarket`` solver's company decider (``candidate_kind``,
     ``company_rule``, ``company_context``, ``run``, ``report_crash``); it is typed
     ``Any`` so this module keeps no import of the policies package.
     ``candidate_settings`` is its ``CandidateSettings``; ``clock`` its

@@ -1,3 +1,0 @@
-id:CompanyRule	2
-id:PartitionRule	2
-id:share_eligible	1

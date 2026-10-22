@@ -1,7 +1,2 @@
-id:CANDIDATE_KINDS	3
-id:_ACCOUNTING_KEYS	3
-id:accounting_params_for	3
-id:candidate_kind	6
-id:dual_cycle_bonus_km	1
-id:dual_cycle_radius_km	1
+id:accounting_params_for	2
 id:share_tag_format	2

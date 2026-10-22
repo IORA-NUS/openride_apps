@@ -1,14 +1,17 @@
-"""Dispatch context helpers: verbatim moves, held to frozen copies of the old inline code.
+"""Planner tick helpers: verbatim moves, held to frozen copies of the old inline code.
 
-What is locked: the P1 leaf helpers (``helpers/candidates.py``, ``helpers/objective.py``,
-``allowed.py``, ``views.py``, ``context.py``/``scopes.py``) compute exactly what the
-inline code in ``assignment/app.py`` and ``assignment/pooled_planner.py`` computed at
-``ec085f5``, including how many draws they take from which RNG.
+What is locked: the moved helpers (``solver_lib/candidates.py``,
+``solver_lib/objective.py``, the framework's ``Tick.permitted`` / ``Tick.serves``,
+``pooled_market.CompanyRule``, ``views.py``, ``compat.legacy_context``) compute
+exactly what the inline code in ``assignment/app.py`` and
+``assignment/pooled_planner.py`` computed at ``ec085f5``, including how many draws
+they take from which RNG.
 
-Why: the dispatch refactor (docs/plans/policy_slots_p0_p3.md §4 P1) must be
-byte-identical. The golden test locks the end-to-end result; these tests pin each
-moved piece separately against an ORACLE, a frozen copy of the old inline code kept
-inside this file, so a drift is located to one helper rather than to "the tick".
+Why: the dispatch refactor (docs/plans/policy_slots_p0_p3.md §4 P1; the generic
+contract, plan_contract_final.md WS1) must be byte-identical. The golden test locks
+the end-to-end result; these tests pin each moved piece separately against an ORACLE,
+a frozen copy of the old inline code kept inside this file, so a drift is located to
+one helper rather than to "the tick".
 """
 
 from __future__ import annotations
@@ -16,30 +19,58 @@ from __future__ import annotations
 import itertools
 import math
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pytest
 
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.assignment import spatial
-from apps.container_logistics.policies.dispatch.allowed import CompanyRule, PartitionRule
-from apps.container_logistics.policies.dispatch.context import DispatchClock
-from apps.container_logistics.policies.dispatch.helpers import candidates as C
-from apps.container_logistics.policies.dispatch.helpers import objective as OBJ
-from apps.container_logistics.policies.dispatch.scopes import company_context, partition_context
+from apps.container_logistics.policies.compat.legacy_context import LegacyDecideContext
+from apps.container_logistics.policies.dispatch.bind import bind_tree
+from apps.container_logistics.policies.dispatch.library.pooled_market import CompanyRule
+from apps.container_logistics.policies.dispatch.resolved import ResolvedDispatch
+from apps.container_logistics.policies.dispatch.runner import DispatchRunner
+from apps.container_logistics.policies.dispatch.tick import DispatchClock
 from apps.container_logistics.policies.dispatch.views import OrderView, TruckView
+from apps.container_logistics.policies.solver_lib import candidates as C
+from apps.container_logistics.policies.solver_lib import objective as OBJ
+from apps.container_logistics.policies.solver_lib.pair_solver import PairSolver
 from apps.container_logistics.rebate import RebateBook  # noqa: F401  (leaf import check)
 from tests.test_assignment_cooperation import _order, _pt, _truck
 
 _CLOCK = DispatchClock(sim_clock="Wed, 01 Jan 2020 08:00:00 GMT", time_step=7)
 
 
-class _Policy:
-    """The three attributes the scopes read from a policy (DispatchPolicy defaults)."""
+class _Leaf(PairSolver):
+    """An unregistered pair leaf: its top ``bind`` declares the profile's active arm (``compat.unregistered``)."""
 
-    rng = random
-    tiebreak_seed = None
-    rebate_book = None
+    def solve(self, trucks, orders, *, pair_allowed, cost):  # pragma: no cover - ticks are not solved here
+        return []
+
+
+def _profile(adjacency=None, max_pickup=None, **knobs):
+    """An assignment-profile slice: ``max_travel_time_pickup``, an arm with ``adjacency``, knobs."""
+    prof: Dict[str, Any] = {"max_travel_time_pickup": max_pickup, **knobs}
+    if adjacency:
+        prof["cooperation"] = {"active": "s", "structures": [
+            {"id": "s", "adjacency": {k: sorted(v) for k, v in adjacency.items()}}]}
+    return prof
+
+
+def _tick(trucks, orders, *, adjacency=None, max_pickup=None, **knobs):
+    """The WHOLE tick of an unregistered leaf over ``trucks``/``orders`` under that world."""
+    prof = _profile(adjacency, max_pickup, **knobs)
+    node = ResolvedDispatch(name="_Leaf", version="unregistered", timing="online", params=None,
+                            source="unregistered")
+    runner = DispatchRunner(bind_tree(node, _Leaf(), prof), profile=prof)
+    return runner.tick(candidates=list(trucks), orders=list(orders), profile=prof, clock=_CLOCK, seed=99)
+
+
+def _sub(trucks, orders, *, scope="partition:haulier:acme", sample_rng=random, candidates=None, **world):
+    """A sub-tick over ALL of the tick's documents (the old partition / company scope)."""
+    tick = _tick(trucks, orders, **world)
+    return tick.restrict(trucks=tick.raw_trucks, orders=tick.raw_orders, scope=scope,
+                         sample_rng=sample_rng, candidates=candidates)
 
 
 # --- oracles: frozen copies of the old inline code (ec085f5) ------------------
@@ -238,20 +269,27 @@ def _ids(pairs):
 def test_spatial_partition_pairs_match_the_old_inline_grouping(adjacency, per_order):
     """Same pairs, same order, same objects as the old inline loop.
 
-    Verified to have teeth: swapping the arguments to ``rule.serves`` in
+    Both the list-level ``spatial_pairs_for_partition`` (fed the oracle's own
+    ``serves``/``allowed``) and the tick-level ``spatial_pairs`` (fed the tick's
+    ``serves``/``permitted``, i.e. the top's declared pairs) are pinned.
+
+    Verified to have teeth: swapping the arguments to ``serves`` in
     ``spatial_pairs_for_partition`` failed the asymmetric-adjacency cases (it
     survived while every adjacency here was symmetric, hence the fourth one).
     """
     trucks, orders = _grid_trucks(), _grid_orders()
     settings = C.CandidateSettings(cell_deg=0.02, per_order=per_order, max_rings=8, max_trucks_per_scope=500)
     for max_pickup in _MAX_PICKUP:
-        rule = PartitionRule(max_travel_time_pickup=max_pickup, adjacency=adjacency)
-        got = C.spatial_pairs_for_partition(trucks, orders, rule=rule, settings=settings)
         want = _oracle_spatial_pairs(
             trucks, orders, adjacency=adjacency, max_pickup_travel=max_pickup,
             cell_deg=0.02, per_order=per_order, max_rings=8,
         )
+        got = C.spatial_pairs_for_partition(
+            trucks, orders, serves=_oracle_serves_factory(adjacency),
+            allowed=_oracle_pair_allowed_factory(adjacency, max_pickup), settings=settings)
         assert _ids(got) == _ids(want), f"spatial pairs drifted (adjacency={adjacency}, max_pickup={max_pickup})"
+        tick = _tick(trucks, orders, adjacency=adjacency, max_pickup=max_pickup)
+        assert _ids(C.spatial_pairs(tick, settings)) == _ids(want), (adjacency, max_pickup)
     assert got, "the grid must produce candidate pairs or this test is vacuous"
 
 
@@ -265,19 +303,17 @@ def test_spatial_pairs_call_iter_candidate_pairs_through_the_module(monkeypatch)
         return real(*a, **kw)
 
     monkeypatch.setattr(spatial, "iter_candidate_pairs", _wrapped)
-    rule = PartitionRule(max_travel_time_pickup=None, adjacency={})
-    settings = C.CandidateSettings.from_profile({})
-    C.spatial_pairs_for_partition(_grid_trucks(), _grid_orders(), rule=rule, settings=settings)
+    tick = _tick(_grid_trucks(), _grid_orders())
+    C.spatial_pairs(tick, C.CandidateSettings.from_world(tick.world))
     assert len(calls) == 3, "one iter_candidate_pairs call per order haulier, through the module"
 
 
 def test_sampled_trucks_cap_and_rng_source():
-    """Module RNG on the partition scope, tick Random on the company scope; at most one draw.
+    """Module RNG on a partition sub-tick, the tick Random on a company sub-tick; at most one draw.
 
-    Verified to have teeth: ``sample_rng=random.Random(0)`` instead of the module
-    in ``partition_context`` failed this test; so did replacing the
-    ``self._sampled is None`` cache test in ``DispatchContext.sampled_trucks`` with
-    ``True`` (a second draw).
+    Verified to have teeth: drawing from ``tick.rng`` instead of ``tick.sample_rng``
+    on a sub-tick in ``candidates.tick_sampled_trucks`` failed this test; so did
+    replacing its ``sampled is None`` memo test with ``True`` (a second draw).
     """
     trucks = [_truck(f"t{i}", "acme", 103.8 + i * 0.001, 1.3) for i in range(10)]
     orders = [_order("o1", "acme", 103.85, 1.3)]
@@ -294,40 +330,33 @@ def test_sampled_trucks_cap_and_rng_source():
     assert a.getstate() == b.getstate()
 
     settings = C.CandidateSettings(cell_deg=0.02, per_order=40, max_rings=8, max_trucks_per_scope=4)
-    rule = PartitionRule(max_travel_time_pickup=None, adjacency={})
 
-    # Partition scope: draws from the random MODULE, once, only when asked.
+    # Partition sub-tick: draws from the random MODULE, once, only when asked.
     random.seed(99)
     seeded = random.getstate()
     expected = random.sample(list(trucks), 4)
     after_one_draw = random.getstate()
 
     random.seed(99)
-    ctx = partition_context(
-        policy=_Policy, params=None, candidate_kind="sampled", trucks=trucks, orders=orders,
-        partition_key=("haulier", "acme"), rule=rule, settings=settings,
-        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
-    )
-    assert random.getstate() == seeded, "building a context must not draw"
-    first = ctx.sampled_trucks()
+    sub = _sub(trucks, orders, sample_rng=random, max_trucks_per_haulier=4)
+    assert random.getstate() == seeded, "building a sub-tick must not draw"
+    ctx = LegacyDecideContext(sub)
+    first = C.tick_sampled_trucks(sub, settings)
+    C.tick_sampled_trucks(sub, settings)
     ctx.sampled_trucks()
     ctx.candidate_pairs("sampled")
     assert [t["_id"] for t in first] == [t["_id"] for t in expected]
-    assert random.getstate() == after_one_draw, "sampled_trucks must draw exactly once per context"
+    assert random.getstate() == after_one_draw, "sampled trucks must be drawn exactly once per tick"
 
-    # Company scope: draws from the tick Random; the module is untouched.
+    # Company sub-tick: draws from the tick Random it was handed; the module is untouched.
     random.seed(99)
     module_before = random.getstate()
-    tick, oracle = random.Random(1234), random.Random(1234)
-    cctx = company_context(
-        policy=_Policy, params=None, candidate_kind="sampled", trucks=trucks, orders=orders,
-        haulier_id="acme", round=1, rule=CompanyRule("acme", None), rng=tick, settings=settings,
-        accounting_cost=assign_constraints.assignment_cost, clock=_CLOCK,
-    )
-    got = cctx.sampled_trucks()
+    tick_rng, oracle = random.Random(1234), random.Random(1234)
+    csub = _sub(trucks, orders, scope="company:acme", sample_rng=tick_rng)
+    got = C.tick_sampled_trucks(csub, settings)
     assert [t["_id"] for t in got] == [t["_id"] for t in oracle.sample(list(trucks), 4)]
-    assert tick.getstate() == oracle.getstate()
-    assert random.getstate() == module_before, "the company scope must not touch the module RNG"
+    assert tick_rng.getstate() == oracle.getstate()
+    assert random.getstate() == module_before, "the company sub-tick must not touch the module RNG"
 
 
 def test_dual_cycle_cost_equals_assignment_cost_on_a_grid():
@@ -376,6 +405,8 @@ def test_dual_cycle_cost_equals_assignment_cost_on_a_grid():
 def test_candidate_settings_from_profile_matches_app_parsing(prof):
     """Including the clamps: per_order 0 -> 1, max_rings -3 -> 0, max_trucks 0 -> 1.
 
+    ``from_world`` parses a run world identically.
+
     Verified to have teeth: dropping ``max(1, ...)`` around ``per_order`` in
     ``CandidateSettings.from_profile`` failed the second case.
     """
@@ -386,6 +417,7 @@ def test_candidate_settings_from_profile_matches_app_parsing(prof):
     )
     assert type(s.cell_deg) is float and type(s.per_order) is int
     assert s.spatial_params() == {"cell_deg": cell_deg, "per_order": per_order, "max_rings": max_rings}
+    assert C.CandidateSettings.from_world(_tick([], [], **prof).world) == s
 
 
 def test_candidate_settings_from_profile_raises_like_app_on_garbage():
@@ -402,16 +434,10 @@ def test_views_expose_typed_fields_and_raw():
     bare_t = {"_id": 7, "profile": {}}
     bare_o = {"_id": 8, "order_size": "40ft"}
 
-    rule = PartitionRule(max_travel_time_pickup=None, adjacency={})
-    ctx = partition_context(
-        policy=_Policy, params=None, candidate_kind="spatial", trucks=[t, bare_t], orders=[o, bare_o],
-        partition_key=("haulier", "acme"), rule=rule,
-        settings=C.CandidateSettings.from_profile({}),
-        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
-    )
-    tv, btv = ctx.trucks
-    ov, bov = ctx.orders
-    assert ctx.trucks is ctx.trucks, "views are cached per context"
+    tick = _sub([t, bare_t], [o, bare_o])
+    tv, btv = tick.trucks
+    ov, bov = tick.orders
+    assert tick.trucks is tick.trucks, "views are cached per tick"
     assert isinstance(tv, TruckView) and isinstance(ov, OrderView)
     assert (tv.id, tv.haulier_id, tv.size, tv.position) == ("t1", "acme", "40ft", (103.9, 1.31))
     assert tv.last_dropoff_position == (103.8, 1.29) and tv.last_dropoff_facility == "fac_x"
@@ -421,37 +447,43 @@ def test_views_expose_typed_fields_and_raw():
     assert (ov.pickup_facility_name, ov.dropoff_facility_name) == ("fac_a", None)
     assert ov.raw is o
     assert (bov.size, bov.pickup, bov.haulier_id) == ("40ft", None, None)
-    # Views and raw documents are interchangeable at the context's helpers.
-    assert ctx.allowed(tv, ov) == ctx.allowed(t, o) == rule.allowed(t, o)
-    assert ctx.deadhead_km(tv, ov) == OBJ.deadhead_km(t, o)
+    # Views and raw documents are interchangeable at the tick's and the legacy context's helpers.
+    oracle = _oracle_pair_allowed_factory({}, None)
+    ctx = LegacyDecideContext(tick)
+    assert tick.permitted(tv, ov) == tick.permitted(t, o) == ctx.allowed(tv, ov) == oracle(t, o)
+    assert tick.measure.deadhead_km(tv, ov) == ctx.deadhead_km(tv, ov) == OBJ.deadhead_km(t, o)
     assert ctx.dual_cycle_cost(tv, ov, bonus_km=5.0, radius_km=0.5) == assign_constraints.assignment_cost(t, o, {})
+    assert tick.measure.cost(t, o) == assign_constraints.assignment_cost(t, o, {})
     with pytest.raises(Exception):
         tv.id = "x"  # frozen
 
 
 @pytest.mark.parametrize("adjacency", _ADJACENCIES)
-def test_partition_rule_matches_legacy_closure_on_a_pair_grid(adjacency):
-    """``PartitionRule.allowed``/``.serves`` == app.py's ``_pair_allowed``/``_serves``.
+def test_tick_permitted_and_serves_match_the_legacy_closure_on_a_pair_grid(adjacency):
+    """The top's ``Tick.permitted``/``.serves`` == app.py's ``_pair_allowed``/``_serves``.
+
+    The top's declared pairs come from the arm (the unregistered leaf's bind,
+    ``compat.unregistered`` -> ``solver_lib.pair_leaf``); a sub-tick inherits them.
 
     Verified to have teeth: replacing ``pair_allowed_ignoring_haulier`` with
-    ``pair_allowed`` in the cross-pair branch of ``PartitionRule.allowed`` failed
-    the non-empty-adjacency cases.
+    ``pair_allowed`` in ``dispatch.tick._top_permitted`` failed the
+    non-empty-adjacency cases.
     """
     trucks, orders = _grid_trucks(), _grid_orders()
     allowed_seen = 0
     for max_pickup in _MAX_PICKUP:
-        rule = PartitionRule(max_travel_time_pickup=max_pickup, adjacency=adjacency)
+        tick = _tick(trucks, orders, adjacency=adjacency, max_pickup=max_pickup)
+        sub = tick.restrict(trucks=tick.raw_trucks, orders=tick.raw_orders, scope="s", sample_rng=random)
         oracle = _oracle_pair_allowed_factory(adjacency, max_pickup)
         for t, o in itertools.product(trucks, orders):
-            got = rule.allowed(t, o)
-            assert got == oracle(t, o), (t["_id"], o["_id"], max_pickup)
+            got = tick.permitted(t, o)
+            assert got == oracle(t, o) == sub.permitted(t, o), (t["_id"], o["_id"], max_pickup)
             allowed_seen += got
     serves = _oracle_serves_factory(adjacency)
-    rule = PartitionRule(max_travel_time_pickup=None, adjacency=adjacency)
+    tick = _tick(trucks, orders, adjacency=adjacency)
     for a, b in itertools.product(["acme", "borax", "cargo", "zeta"], repeat=2):
-        assert rule.serves(a, b) == serves(a, b), (a, b)
+        assert tick.serves(a, b) == serves(a, b), (a, b)
     assert allowed_seen > 0
-    assert rule.to_dict()["adjacency"] == {k: sorted(v) for k, v in sorted(adjacency.items())}
 
 
 def test_company_rule_matches_legacy_closure_on_a_pair_grid():
@@ -470,33 +502,35 @@ def test_company_rule_matches_legacy_closure_on_a_pair_grid():
     assert CompanyRule("acme", 60).to_dict() == {"kind": "company", "haulier_id": "acme", "max_travel_time_pickup": 60}
 
 
-def test_candidate_pairs_are_cached_per_kind_and_full_is_the_allowed_cross_product():
-    trucks, orders = _grid_trucks(n_per=2), _grid_orders(n_per=2)
-    rule = PartitionRule(max_travel_time_pickup=None, adjacency={})
-    calls = []
+def test_candidate_pairs_are_cached_per_kind_and_full_is_the_allowed_cross_product(monkeypatch):
+    """The legacy context's ``candidate_pairs``: cached per kind; ``full`` = every permitted pair;
+    a caller's ``candidates`` are served as a copy.
 
-    ctx = partition_context(
-        policy=_Policy, params=None, candidate_kind="spatial", trucks=trucks, orders=orders,
-        partition_key=("component", 3), rule=rule, settings=C.CandidateSettings.from_profile({}),
-        accounting_cost=assign_constraints.assignment_cost, sample_rng=random, clock=_CLOCK,
-    )
-    real = ctx._spatial_source
-    ctx._spatial_source = lambda: calls.append(1) or real()
-    assert ctx.scope.key == "partition:component:3" and ctx.scope.round is None
-    assert _ids(ctx.candidate_pairs()) == _ids(ctx.candidate_pairs("spatial"))
+    Verified to have teeth: dropping the ``_pairs_cache`` store in
+    ``LegacyDecideContext.candidate_pairs`` failed the one-call assertion.
+    """
+    trucks, orders = _grid_trucks(n_per=2), _grid_orders(n_per=2)
+    calls = []
+    real = C.spatial_pairs
+    monkeypatch.setattr(C, "spatial_pairs", lambda *a: calls.append(1) or real(*a))
+
+    sub = _sub(trucks, orders, scope="partition:component:3")
+    ctx = LegacyDecideContext(sub)
+    assert ctx.default_candidate_kind == "sampled", "no candidates param: the legacy default kind"
+    assert ctx.scope.kind == "partition" and ctx.scope.key == "partition:component:3" and ctx.scope.round is None
+    assert _ids(ctx.candidate_pairs("spatial")) == _ids(ctx.candidate_pairs("spatial"))
     assert len(calls) == 1
+    oracle = _oracle_pair_allowed_factory({}, None)
     full = ctx.candidate_pairs("full")
-    assert _ids(full) == _ids([(t, o) for t in trucks for o in orders if rule.allowed(t, o)])
+    assert _ids(full) == _ids([(t, o) for t in trucks for o in orders if oracle(t, o)])
     with pytest.raises(ValueError):
         ctx.candidate_pairs("nearest")
 
-    pairs = [(trucks[0], orders[0])]
-    cctx = company_context(
-        policy=_Policy, params=None, candidate_kind="spatial", trucks=trucks, orders=orders,
-        haulier_id="acme", round=2, rule=CompanyRule("acme", None), rng=random.Random(0),
-        settings=C.CandidateSettings.from_profile({}), accounting_cost=assign_constraints.assignment_cost,
-        clock=_CLOCK, prebuilt_pairs=pairs,
-    )
-    assert cctx.scope.key == "company:acme" and cctx.scope.round == 2
+    pairs = [(sub.raw_trucks[0], sub.raw_orders[0])]
+    cctx = LegacyDecideContext(_sub(trucks, orders, scope="company:acme", sample_rng=random.Random(0),
+                                    candidates=pairs), default_candidate_kind="spatial")
+    # The pooled round is no longer part of the scope (plan_contract_final.md §7.7: round=None).
+    assert cctx.scope.key == "company:acme" and cctx.scope.kind == "company" and cctx.scope.round is None
     got = cctx.candidate_pairs()
     assert _ids(got) == _ids(pairs) and got is not pairs
+    assert len(calls) == 1, "a caller's candidates are served; nothing is rebuilt"

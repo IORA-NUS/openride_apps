@@ -115,9 +115,9 @@ class AssignmentApp(ORSimApp):
     # --- the dispatch slot (round 2: docs/plans/policy_slots_round2_whole_tick.md §2) ---
     #
     # Import-cycle rule (round-2 §4): ``policies.dispatch`` modules are imported ONLY
-    # locally: in the three accessors below (``_build_dispatch_policy``,
-    # ``_dispatch_runner``, ``_dispatch_world``), in ``_tick_seed`` (the one seed
-    # formula, ``dispatch.world.tick_seed``) and in ``_dispatch_tick`` (the clock value).
+    # locally: in the two accessors below (``_build_dispatch_policy``,
+    # ``_dispatch_runner``), in ``_tick_seed`` (the one seed formula,
+    # ``dispatch.tick.tick_seed``) and in ``_dispatch_tick`` (the clock value).
     # ``policies.dispatch`` reaches back into this package (constraints, spatial,
     # pooled_planner), so a module-top import here would cycle through
     # ``assignment/__init__`` (tests/test_policy_import_cycles.py pins it). The leaf
@@ -136,20 +136,21 @@ class AssignmentApp(ORSimApp):
     def _dispatch_runner(self, prof: Dict[str, Any]):
         """The ``DispatchRunner`` for ``self._solver`` under ``prof``, cached on its inputs.
 
-        Rebuilt when ``_solver`` is swapped or a profile key the selection reads
-        (``policies``, ``strategy``, ``solver_params``, ``use_spatial_matching``,
+        Rebuilt (and re-bound) when ``_solver`` is swapped, a profile key the selection
+        reads (``policies``, ``strategy``, ``solver_params``, ``use_spatial_matching``,
         ``planner``) is patched after construction (the tests that build the app via
-        ``__new__`` rely on it). ``_solver`` is fitted into the selection
-        (``bind_instance``: reused as the top, or wrapped as the innermost leaf).
-        When a reused top's composites were stale (a patched profile) and
-        ``bind_instance`` rebuilt them around the same leaf, the rebuilt top becomes
+        ``__new__`` rely on it), or a WORLD key the bound tree's ``bind`` read
+        (``BoundTree.world_reads``, e.g. ``cooperation``) changed. ``_solver`` is fitted
+        into the selection (``bind_instance``: reused as the top, or wrapped as the
+        innermost leaf). When a reused top's composites were stale (a patched profile)
+        and ``bind_instance`` rebuilt them around the same leaf, the rebuilt top becomes
         ``_solver``, so later injections (``_inject_rebate_book``) reach the tree that
-        runs (review C3 #4). Raises ``PolicyError`` on a mismatch.
+        runs (review C3 #4). Raises ``PolicyError`` on a mismatch or a refused
+        declaration.
         """
-        from apps.container_logistics.policies.dispatch.composite import innermost_policy  # local: cycle rule
         from apps.container_logistics.policies.dispatch.runner import build_runner_for_app  # local: cycle rule
 
-        def _key():
+        def _key(runner):
             return (
                 id(self._solver),
                 json.dumps(prof.get("policies"), sort_keys=True, default=str),
@@ -157,24 +158,17 @@ class AssignmentApp(ORSimApp):
                 json.dumps(prof.get("solver_params"), sort_keys=True, default=str),
                 prof.get("use_spatial_matching", True),
                 json.dumps(prof.get("planner"), sort_keys=True, default=str),
+                runner.tree.digest(prof),
             )
 
-        key = _key()
         cached_key, cached = getattr(self, "_dispatch_runner_cache", (None, None))
-        if cached is not None and cached_key == key:
+        if cached is not None and cached_key == _key(cached):
             return cached
         runner = build_runner_for_app(self._solver, prof)
-        if runner.policy is not self._solver and innermost_policy(runner.policy) is not self._solver:
+        if runner.policy is not self._solver and runner.tree.leaf.instance is not self._solver:
             self._solver = runner.policy  # the stale top was rebuilt (bind_instance)
-            key = _key()
-        self._dispatch_runner_cache = (key, runner)
+        self._dispatch_runner_cache = (_key(runner), runner)
         return runner
-
-    def _dispatch_world(self, prof: Dict[str, Any]):
-        """This tick's ``DispatchWorld``: the active structure, the rule, the accounting cost."""
-        from apps.container_logistics.policies.dispatch.world import DispatchWorld  # local: cycle rule
-
-        return DispatchWorld.from_profile(prof, accounting_params=self._solver_params)
 
     def _order_publish_payload(self, order: Dict[str, Any]) -> Dict[str, Any]:
         """Shape expected by ``TruckApp.handle_assignment`` / smoke tests."""
@@ -263,12 +257,12 @@ class AssignmentApp(ORSimApp):
 
     @staticmethod
     def _tick_seed(run_id: str, time_step: int) -> int:
-        """Stable 64-bit per-tick seed (``dispatch.world.tick_seed``). Identical inputs => identical awards (I-P5).
+        """Stable 64-bit per-tick seed (``dispatch.tick.tick_seed``). Identical inputs => identical awards (I-P5).
 
         Scope honesty: this makes the PLANNER deterministic for a given tick input.
         It does NOT make a whole run reproducible — agent scheduling is async.
         """
-        from apps.container_logistics.policies.dispatch.world import tick_seed  # local: cycle rule
+        from apps.container_logistics.policies.dispatch.tick import tick_seed  # local: cycle rule
 
         return tick_seed(run_id, time_step)
 
@@ -515,65 +509,56 @@ class AssignmentApp(ORSimApp):
     ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
         """Decide the whole tick with the selected policy; account the shares; record provenance.
 
-        The FRAMEWORK half of a tick (round-2 §2): the world, the tick context, the
-        runner (decide -> check against the world rule -> commit heads), then the
-        solver-independent share accounting and, when the solver reports a market,
-        its round provenance. Returns the committed pairs.
+        The FRAMEWORK half of a tick (plan ``plan_contract_final.md`` §2.7): the tick,
+        the runner (solve -> check against ownership-or-declared and physical
+        feasibility -> commit the pairs), then the solver-independent share accounting
+        (priced with the tick's measurement, dials ``self._solver_params``) and, when
+        the solver reports a market, its round provenance. Returns the committed pairs.
         """
-        from apps.container_logistics.policies.dispatch.context import DispatchClock  # local: cycle rule
+        from apps.container_logistics.policies.dispatch.tick import DispatchClock  # local: cycle rule
 
-        world = self._dispatch_world(prof)
         runner = self._dispatch_runner(prof)
         use_tpool = solve_in_thread and _eventlet_tpool is not None
-        ctx = runner.tick_context(
+        tick = runner.tick(
             candidates=candidates,
             orders=orders,
-            world=world,
-            settings=runner.candidate_settings(prof),
+            profile=prof,
             clock=DispatchClock(
                 sim_clock=sim_clock,
                 time_step=int(time_step or 0),
                 horizon_steps=getattr(self, "_sim_horizon_steps", None),
             ),
-            tick_seed=self._tick_seed(str(getattr(self, "run_id", "")), int(time_step or 0)),
+            seed=self._tick_seed(str(getattr(self, "run_id", "")), int(time_step or 0)),
             execute=_eventlet_tpool.execute if use_tpool else _direct_call,
+            dials=self._solver_params,
         )
         events_before = runner.stats.get("violations", 0) + runner.stats.get("crashes", 0)
         self._tick_contract_events = 0
-        outcome = runner.run(ctx)
+        outcome = runner.run(tick)
         self._tick_contract_events = (
             runner.stats.get("violations", 0) + runner.stats.get("crashes", 0) - events_before)
+        mtt = prof.get("max_travel_time_pickup")
+
+        def own_allowed(t, o):
+            # The owner reserve's rule: the strict own-haulier feasibility.
+            return assign_constraints.pair_allowed(t, o, max_travel_time_pickup=mtt)
+
         self._share_tags = accounting.render_share_tags(
             accounting.account_shares(outcome.pairs, candidates=candidates,
-                                      cost=world.accounting_cost, own_allowed=world.own_allowed),
+                                      cost=tick.measure.cost, own_allowed=own_allowed),
             fmt=runner.share_tag_format,
-            solver_notes=outcome.notes.get("pair_notes"),
+            solver_notes=outcome.solver_notes,
         )
-        market_notes = outcome.notes.get("market")
+        market_notes = outcome.tick_notes.get("market")
         if market_notes is not None:
             # Solver provenance: only a solver that ran a market reports it, so the
             # agent-side meta.market writer stays on the pooled path only.
             self._record_round_stats(market_notes, time_step=time_step)
             self._patch_round_stats_to_run_config()
-        self._log_cooperation(world, market_notes)
+        if self._share_tags:
+            logging.info("Planner %s: %d cross-company assignment(s) this tick.",
+                         runner.resolved.label, len(self._share_tags))
         return outcome.pairs
-
-    def _log_cooperation(self, world, market_notes) -> None:
-        """One INFO line per tick with cross-haulier shares (celery journal)."""
-        if not self._share_tags:
-            return
-        structure_id = (world.structure or {}).get("id")
-        if market_notes is not None:
-            logging.info(
-                "Pooled cooperation: %d cross-haulier award(s) this tick "
-                "(structure %s, round cap %d).",
-                len(self._share_tags), structure_id, market_notes["max_rounds"],
-            )
-        else:
-            logging.info(
-                "Cooperation: %d cross-haulier assignment(s) this tick (structure %s).",
-                len(self._share_tags), structure_id,
-            )
 
     def publish(self, assignment: List[Tuple[Dict[str, Any], Dict[str, Any]]]) -> None:
         share_tags = getattr(self, "_share_tags", {}) or {}

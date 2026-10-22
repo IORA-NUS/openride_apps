@@ -1,6 +1,6 @@
 """Typed, read-only views of the raw truck and order documents a policy sees.
 
-Built lazily by ``DispatchContext.trucks`` / ``.orders`` with the SAME accessors the
+Built lazily by ``Tick.trucks`` / ``.orders`` with the SAME accessors the
 constraints use (``truck_anchor_loc``, ``order_pickup_loc``, ``haulier_of``, ...), so
 a view can never disagree with feasibility or cost. Positions are ``(lon, lat)``
 tuples. Each view keeps its source document as ``.raw``; the built-in policies use
