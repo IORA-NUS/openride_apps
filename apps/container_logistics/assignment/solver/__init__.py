@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional, Type
 
-from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
+from apps.container_logistics.policies.compat.legacy import LEGACY_LEAF_DEFAULT
 from apps.container_logistics.policies.framework import get_policy_spec
 
 from .base import BaseAssignmentSolver

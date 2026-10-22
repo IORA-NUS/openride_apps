@@ -29,7 +29,7 @@ OVERRIDE_CASES = [
     ("--policy-param planner.dual_cycle_bonus_km=0",
      {"overrides": {"planner": {"params": {"dual_cycle_bonus_km": 0}}}}),
     ("--policy planner=PooledMarket", {"overrides": {"planner": {"type": "PooledMarket"}}}),
-    ("ORSIM_PLANNER_TOPOLOGY=pooled", {"topology": "pooled"}),
+    ("ORSIM_PLANNER_TOPOLOGY=pooled", {"legacy_env": {"topology": "pooled"}}),
 ]
 
 

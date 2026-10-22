@@ -17,8 +17,9 @@ from apps.container_logistics.datagen.overrides import (
     override_sha256,
 )
 from apps.container_logistics.datagen.preprocess import Preprocessor, SpecValidationError
-from apps.container_logistics.policies.dispatch import legacy as _legacy
-from apps.container_logistics.policies.dispatch.profile import as_dispatch_node, mirror_dispatch_selection
+from apps.container_logistics.policies.compat import legacy as _legacy
+from apps.container_logistics.policies.compat.mirrors import mirror_dispatch_selection
+from apps.container_logistics.policies.dispatch.profile import as_dispatch_node
 from apps.container_logistics.policies.framework import (
     PolicyError,
     ResolvedPolicy,

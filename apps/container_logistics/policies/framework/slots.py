@@ -8,7 +8,8 @@ simulation's own state machines and world model, not slots). The pooled market's
 offer/claim/arbitration are not slots but components of the ``PooledMarket`` dispatch
 policy (``framework/components.py``).
 
-Leaf module: stdlib only (plan §2.7). ``SLOTS`` is immutable and in table order;
+Leaf module: stdlib only (plan §2.7), plus the stdlib-only ``compat.defaults``
+(the default selection). ``SLOTS`` is immutable and in table order;
 that order is the catalog's order.
 """
 
@@ -18,6 +19,8 @@ import logging
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Literal, Mapping
+
+from apps.container_logistics.policies.compat.defaults import DEFAULT_PLANNER
 
 from .errors import UnknownSlotError
 
@@ -60,12 +63,11 @@ _TABLE = (
     SlotSpec(
         name="planner",
         kind="operator",
-        # The whole-tick default: per-cooperation-group decomposition whose inner
-        # defaults to RandomAssignment (the pre-v2 no-strategy behaviour). The flat
-        # legacy leaf default is policies/dispatch/legacy.LEGACY_LEAF_DEFAULT.
-        default="Partitioned",
+        # The default selection is a compat value (what old inputs meant), named in
+        # policies/compat/defaults.py.
+        default=DEFAULT_PLANNER,
         description="Which free truck serves which unassigned order, decided for the whole tick "
-                    "(the decomposition, e.g. Partitioned or PooledMarket, is part of the selection).",
+                    "by the selected solver.",
         timings=("online", "plan"),
         executable_timings=("online",),
     ),

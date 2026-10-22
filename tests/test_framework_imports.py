@@ -62,7 +62,11 @@ COMPAT_PACKAGE = f"{_P}.compat"
 # The END STATE of what the framework takes from compat (plan §7.3). Keys are module
 # names relative to ``policies.compat``.
 COMPAT_ALLOWED: dict[str, frozenset[str]] = {
-    "legacy": frozenset({"check_policies_format", "LEGACY_LEAF_DEFAULT"}),
+    # wrap_legacy_leaf (WS2, reviewed): dispatch/profile.py's legacy_dispatch_from_profile
+    # translates a profile with no ``policies`` block (an old bundle) through it -- the
+    # framework has always called this translation; WS2 only moved it into compat. It
+    # leaves the list when the legacy-profile translation itself moves into compat.
+    "legacy": frozenset({"check_policies_format", "LEGACY_LEAF_DEFAULT", "wrap_legacy_leaf"}),
     "mirrors": frozenset({"check_mirrors"}),
     "measurement": frozenset({"accounting_params_for", "framework_accounting_cost"}),
     "selection_keys": frozenset({"LEGACY_SELECTION_KEYS"}),

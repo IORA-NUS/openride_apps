@@ -201,7 +201,7 @@ def test_padded_component_names_are_refused():
 def test_undeclared_component_params_dropped_with_warning(caplog):
     """Verified to have teeth: passing component params through unfiltered failed the
     equality, and removing the ``logger.warning`` failed the log assertion."""
-    with caplog.at_level(logging.WARNING, logger="apps.container_logistics.policies.dispatch.legacy"):
+    with caplog.at_level(logging.WARNING, logger="apps.container_logistics.policies.compat.legacy"):
         got = legacy.legacy_market_params({"market": {
             "offer": {"type": "OfferSpare", "params": {"keep_below_km": 2, "bogus_knob": 1}},
             "claim": {"type": "ClaimAllPlanned", "params": {"min_gain_km": 1.0}},

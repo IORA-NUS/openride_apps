@@ -67,22 +67,22 @@ def test_topology_env_pooled_keeps_inner_and_market_block():
     (``_carried_inner`` returning ``{}``) failed the label and the bonus; ignoring
     ``planner.market`` in ``_dispatch_entry`` failed the market assertions."""
     coll = _coll(GREEDY_BONUS_2)
-    merged, labels = run_dispatch_overrides(coll, topology="pooled")
+    merged, labels = run_dispatch_overrides(coll, legacy_env={"topology": "pooled"})
     node = _dispatch(coll)
     assert node.label == "PooledMarket/GreedyNearest"
     assert node.params["inner"]["params"]["dual_cycle_bonus_km"] == 2.0, "the per-scope solver is kept"
     assert node.params["offer"] == {"type": "OfferSpare", "params": {"keep_below_km": 4.0, "only_when_short": True}}
     assert node.params["max_rounds"] == 6
-    assert labels == {"planner": None, "topology": "pooled"}, "the env adds only its own segment"
+    assert labels == {"planner": None, "legacy": ["pooled"]}, "the env adds only its own segment"
     prof = coll["assignment_0"]["profile"]
     assert prof["planner"]["topology"] == "pooled" and prof["planner"]["market"]["max_rounds"] == 6
     # And back: partitioned keeps the solver too; two-stage is pooled.
-    run_dispatch_overrides(coll, topology="partitioned")
+    run_dispatch_overrides(coll, legacy_env={"topology": "partitioned"})
     assert _dispatch(coll).label == "Partitioned/GreedyNearest"
     assert _dispatch(coll).params["inner"]["params"]["dual_cycle_bonus_km"] == 2.0
-    assert run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="two-stage")[1]["topology"] == "pooled"
+    assert run_dispatch_overrides(_coll(GREEDY_BONUS_2), legacy_env={"topology": "two-stage"})[1]["legacy"] == ["pooled"]
     with pytest.raises(PolicyError, match=r"^ORSIM_PLANNER_TOPOLOGY='nonsense' is not a legacy topology"):
-        run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="nonsense")
+        run_dispatch_overrides(_coll(GREEDY_BONUS_2), legacy_env={"topology": "nonsense"})
 
 
 @pytest.fixture(scope="module")
@@ -117,7 +117,7 @@ def test_topology_env_equals_compiled_pooled_scenario_outputs(tmp_path_factory, 
     pooled_spec["planner"]["topology"] = "pooled"
     compiled = next(iter(_compile(pooled_spec, root)["agents"]["assignment"].values()))["profile"]
     coll = _coll(base)
-    run_dispatch_overrides(coll, topology="pooled")
+    run_dispatch_overrides(coll, legacy_env={"topology": "pooled"})
     via_env = coll["assignment_0"]["profile"]
     assert via_env["policies"] == compiled["policies"]
     assert via_env["planner"]["topology"] == compiled["planner"]["topology"] == "pooled"
@@ -137,21 +137,21 @@ def test_market_env_without_pooled_market_is_loud():
     then refused it with an unknown-key error instead."""
     coll = _coll(GREEDY_BONUS_2)
     with pytest.raises(PolicyError) as exc:
-        run_dispatch_overrides(coll, offer="OfferSpare")
+        run_dispatch_overrides(coll, legacy_env={"offer": "OfferSpare"})
     assert str(exc.value) == (
         "ORSIM_OFFER_POLICY='OfferSpare' configures the PooledMarket dispatch, but this run's dispatch "
         "is Partitioned/GreedyNearest. Add ORSIM_PLANNER_TOPOLOGY=pooled, or select --policy "
         "planner=PooledMarket --policy-param planner.offer=OfferSpare.")
     with pytest.raises(PolicyError, match=r"^ORSIM_MARKET_MAX_ROUNDS=5 configures"):
-        run_dispatch_overrides(coll, max_rounds=5)
+        run_dispatch_overrides(coll, legacy_env={"max_rounds": 5})
     assert coll == _coll(GREEDY_BONUS_2), "nothing mutated"
     # With the topology in the same request (the env order: topology, then the market) it applies.
-    run_dispatch_overrides(coll, topology="pooled", claim="ClaimNone", arbitration="OwnerFirst")
+    run_dispatch_overrides(coll, legacy_env={"topology": "pooled", "claim": "ClaimNone", "arbitration": "OwnerFirst"})
     node = _dispatch(coll)
     assert (node.params["claim"]["type"], node.params["arbitration"]["type"]) == ("ClaimNone", "OwnerFirst")
     assert node.params["offer"]["params"]["keep_below_km"] == 4.0, "an untouched role keeps planner.market's"
     with pytest.raises(UnknownPolicyError, match="'ClaimNope'"):
-        run_dispatch_overrides(coll, claim="ClaimNope")
+        run_dispatch_overrides(coll, legacy_env={"claim": "ClaimNope"})
 
 
 def test_env_conflicts_are_loud():
@@ -161,13 +161,11 @@ def test_env_conflicts_are_loud():
     topology silently replace the override's type; removing ``_refuse_market_conflict``
     let ORSIM_OFFER_POLICY silently replace the override's offer."""
     with pytest.raises(PolicyError) as exc:
-        run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="pooled",
-                               overrides={"planner": {"type": "Partitioned"}})
+        run_dispatch_overrides(_coll(GREEDY_BONUS_2), overrides={"planner": {"type": "Partitioned"}}, legacy_env={"topology": "pooled"})
     assert str(exc.value) == (
         "ORSIM_PLANNER_TOPOLOGY='pooled' selects PooledMarket but ORSIM_POLICY_OVERRIDES sets "
         "planner.type='Partitioned'; pass one of them.")
-    run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="pooled",
-                           overrides={"planner": {"type": "PooledMarket"}})  # agreeing is fine
+    run_dispatch_overrides(_coll(GREEDY_BONUS_2), overrides={"planner": {"type": "PooledMarket"}}, legacy_env={"topology": "pooled"})  # agreeing is fine
     with pytest.raises(PolicyError) as exc:
         run_dispatch_overrides(_coll(GREEDY_BONUS_2), solver="RandomAssignment",
                                overrides={"planner": {"params": {"inner": {"type": "GreedyNearest"}}}})
@@ -175,8 +173,7 @@ def test_env_conflicts_are_loud():
         "--solver 'RandomAssignment' conflicts with planner.inner.type='GreedyNearest' from "
         "--policy/--policy-param/--policy-overrides; --solver is shorthand for the innermost solver, pass one of them.")
     with pytest.raises(PolicyError, match=r"ORSIM_OFFER_POLICY='OfferSpare' conflicts with planner.offer.type='OfferAll'"):
-        run_dispatch_overrides(_coll(GREEDY_BONUS_2), topology="pooled", offer="OfferSpare",
-                               overrides={"planner": {"params": {"offer": {"type": "OfferAll"}}}})
+        run_dispatch_overrides(_coll(GREEDY_BONUS_2), overrides={"planner": {"params": {"offer": {"type": "OfferAll"}}}}, legacy_env={"topology": "pooled", "offer": "OfferSpare"})
 
 
 def test_market_max_rounds_env_range_1_to_100():
@@ -185,11 +182,11 @@ def test_market_max_rounds_env_range_1_to_100():
     pooled = {**GREEDY_BONUS_2, "planner": {"topology": "pooled"}}
     for good, want in ((1, 1), (11, 11), (100, 100), ("42", 42), (" 7 ", 7)):
         coll = _coll(pooled)
-        run_dispatch_overrides(coll, max_rounds=good)
+        run_dispatch_overrides(coll, legacy_env={"max_rounds": good})
         assert _dispatch(coll).params["max_rounds"] == want, good
     for bad in (0, 101, -1, "x", "1.5", 2.0, True):
         with pytest.raises(PolicyError, match="must be an integer in 1..100"):
-            run_dispatch_overrides(_coll(pooled), max_rounds=bad)
+            run_dispatch_overrides(_coll(pooled), legacy_env={"max_rounds": bad})
 
 
 # --- run names: byte-equal to ec085f5 ------------------------------------------------

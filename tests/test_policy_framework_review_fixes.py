@@ -256,7 +256,8 @@ if first:
 from apps.container_logistics.policies.framework import components
 offer = "apps.container_logistics.assignment.policy.offer"
 before = offer in sys.modules
-legacy = "apps.container_logistics.policies.dispatch.legacy" in sys.modules
+legacy = any(m in sys.modules for m in ("apps.container_logistics.policies.dispatch.legacy",
+                                         "apps.container_logistics.policies.compat.legacy"))
 kinds = list(components.COMPONENT_KINDS)
 print(json.dumps({"before": before, "kinds": kinds, "after": offer in sys.modules, "legacy": legacy}))
 """
@@ -278,7 +279,7 @@ def test_builtin_kinds_are_found_lazily_in_a_fixed_order_whatever_was_imported_f
     assert probe["after"], probe
     if not first:
         assert not probe["before"], "importing framework.components must not import the market"
-        assert not probe["legacy"], "the framework must not pull in policies.dispatch.legacy"
+        assert not probe["legacy"], "the framework must not pull in the legacy translation (compat.legacy)"
 
 
 def test_the_v1_reservation_is_the_one_allowlist():
@@ -309,10 +310,12 @@ def test_the_v1_reservation_is_the_one_allowlist():
 
 def test_no_framework_module_mentions_the_dispatch_legacy_module():
     """C3 removed ``framework/resolve.py``'s ``dispatch.legacy`` import (C1 review #5);
-    no framework module may import or name it again (AST imports and strings).
+    no framework module may import or name it again (AST imports and strings), at its
+    old path or at its compat home (``policies/compat/legacy.py``).
 
     Verified to have teeth: adding ``from apps.container_logistics.policies.dispatch
-    import legacy`` inside a function of ``catalog.py`` failed it.
+    import legacy`` inside a function of ``catalog.py`` failed it; so did ``from
+    apps.container_logistics.policies.compat import legacy`` there (WS2).
     """
     offenders = []
     for path in sorted(FRAMEWORK.glob("*.py")):
@@ -324,7 +327,7 @@ def test_no_framework_module_mentions_the_dispatch_legacy_module():
                 names = [a.name for a in node.names]
             elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                 names = [node.value]
-            if any("policies.dispatch.legacy" in n for n in names):
+            if any("policies.dispatch.legacy" in n or "policies.compat.legacy" in n for n in names):
                 offenders.append(f"{path.name}:{node.lineno}")
     assert not offenders, offenders
 

@@ -144,7 +144,7 @@ def test_orsim_solver_still_works(monkeypatch):
     monkeypatch.setenv("ORSIM_SOLVER", "GreedyNearest")
     coll = _collection({"strategy": "RandomAssignment"})
     merged, labels = launcher._apply_dispatch_overrides_or_exit(coll)
-    assert labels == {"planner": "GreedyNearest", "topology": None} and merged
+    assert labels == {"planner": "GreedyNearest", "legacy": []} and merged
     assert coll["assignment_0"]["profile"]["strategy"] == "GreedyNearest"
     assert apply_solver_override(_collection({}), "RandomAssignment") == "RandomAssignment"
     # A params-only override labels the policy with exactly the overridden params
@@ -157,7 +157,7 @@ def test_orsim_solver_still_works(monkeypatch):
         "GreedyNearest(dual_cycle_bonus_km=0.0)"
     monkeypatch.delenv("ORSIM_POLICY_OVERRIDES")
     untouched = _collection({})
-    assert launcher._apply_dispatch_overrides_or_exit(untouched) == ({}, {"planner": None, "topology": None})
+    assert launcher._apply_dispatch_overrides_or_exit(untouched) == ({}, {"planner": None, "legacy": []})
     assert untouched == _collection({}), "nothing requested mutates nothing"
 
 

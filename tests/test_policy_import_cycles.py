@@ -33,7 +33,9 @@ _EXTRA = [
 # dispatch/profile.py both import), and the round-2 leaves framework/components.py
 # (registries imported locally) and dispatch/legacy.py (round-2 §4), plus
 # dispatch/composite.py (it imports only base and resolved), plus the compat quarantine
-# package (plan_contract_final.md §7.3; its __init__ imports nothing).
+# package (plan_contract_final.md §7.3; its __init__ imports nothing) and its modules
+# (they import only stdlib, ``policies.framework`` and leaf ``dispatch`` modules at
+# top; ``dispatch.legacy`` is now their re-export shim).
 _LEAVES = [
     "apps.container_logistics.policies",
     "apps.container_logistics.policies.compat",
@@ -52,6 +54,10 @@ _LEAVES = [
     "apps.container_logistics.policies.dispatch.composite",
     # WS3: assignment.accounting and assignment.app import compat.wire at module top.
     "apps.container_logistics.policies.compat.wire",
+    "apps.container_logistics.policies.compat.legacy",
+    "apps.container_logistics.policies.compat.defaults",
+    "apps.container_logistics.policies.compat.mirrors",
+    "apps.container_logistics.policies.compat.legacy_env",
 ]
 
 

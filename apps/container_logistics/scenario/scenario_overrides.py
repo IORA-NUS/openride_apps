@@ -1,21 +1,31 @@
 """Per-run overrides of a LOADED scenario: the dispatch selection, cooperation, smoke config.
 
 The dispatch selection has ONE application point, :func:`run_dispatch_overrides`
-(``ORSIM_POLICY_OVERRIDES``, ``ORSIM_PLANNER_TOPOLOGY``, the ``ORSIM_*`` market
-variables and ``ORSIM_SOLVER``), shared by the sim main and the control-plane dry run
-(``docs/plans/policy_slots_round2_whole_tick.md`` §3.6, §5 C4); the older entry
-points (:func:`apply_policy_overrides`, :func:`apply_solver_override`,
-:func:`apply_planner_topology_override`, :func:`apply_market_override`,
-:func:`known_planner_topologies`) are compatibility shims with no run-path caller. Everything here patches the
-loaded behaviors in memory; the on-disk bundle is never written.
+(``ORSIM_POLICY_OVERRIDES``, ``ORSIM_SOLVER``, and the legacy dispatch variables,
+handed through opaquely as ``legacy_env`` and translated by
+``policies/compat/legacy_env.py``), shared by the sim main and the control-plane dry
+run (``docs/plans/policy_slots_round2_whole_tick.md`` §3.6, §5 C4); the older entry
+points (:func:`apply_policy_overrides`, :func:`apply_solver_override`, and the
+compat re-exports below) are compatibility shims with no run-path caller. Everything
+here patches the loaded behaviors in memory; the on-disk bundle is never written.
 """
 
 import copy
 import json
 import logging
-import re
 from contextlib import contextmanager
 from copy import deepcopy
+
+from apps.container_logistics.policies.compat import legacy_env as _legacy_env
+# Re-exported from the compat quarantine until the shims are removed (moved verbatim,
+# see that module's docstring).
+from apps.container_logistics.policies.compat.legacy_env import (  # noqa: F401
+    MARKET_ENV,
+    apply_market_override,
+    apply_planner_topology_override,
+    known_planner_topologies,
+    legacy_topology_name,
+)
 
 from .validation_config import smoke_scenario_config_bundle
 
@@ -54,7 +64,7 @@ def apply_policy_overrides(assignment_collection, overrides):
     (resolved, ``to_profile`` form) and -- exactly as compile does -- the selection's
     legacy mirrors (``strategy`` = the innermost solver, the keys ``solver_params`` and
     ``planner.deployment.params`` already carry, ``planner.topology``,
-    ``planner.market``; ``dispatch/profile.py::mirror_dispatch_selection``). So a
+    ``planner.market``; ``compat/mirrors.py::mirror_dispatch_selection``). So a
     per-run arm equals the same edit compiled into ``spec.json``: the framework's
     accounting (``benefit_km``, owner reserve, claims, arbitration) ranks with what
     the policy ranks with (review F1).
@@ -92,7 +102,7 @@ def _profiles_with_current(assignment_collection):
     ``policies.planner {type: X}`` meant the per-scope solver X and would otherwise
     run as a CENTRAL X (final review MAJOR-1). Raises ``PolicyError``.
     """
-    from apps.container_logistics.policies.dispatch import legacy
+    from apps.container_logistics.policies.compat import legacy
     from apps.container_logistics.policies.framework import PolicyError
 
     out = []
@@ -122,8 +132,8 @@ def _commit(planned):
     a round-2 block may be committed (final review MAJOR-1; the primary check is
     :func:`_profiles_with_current`, this is the backstop at the write).
     """
-    from apps.container_logistics.policies.dispatch import legacy
-    from apps.container_logistics.policies.dispatch.profile import mirror_dispatch_selection
+    from apps.container_logistics.policies.compat import legacy
+    from apps.container_logistics.policies.compat.mirrors import mirror_dispatch_selection
 
     for profile, _merged_sel in planned:
         legacy.check_policies_format(profile)
@@ -149,25 +159,12 @@ def precheck_override_names(overrides, solver=None):
     _checked_solver(solver)
 
 
-#: The ``PooledMarket`` params each legacy market variable sets, in the message order.
-MARKET_ENV = (
-    ("offer", "ORSIM_OFFER_POLICY"),
-    ("claim", "ORSIM_CLAIM_POLICY"),
-    ("arbitration", "ORSIM_ARBITRATION_RULE"),
-    ("max_rounds", "ORSIM_MARKET_MAX_ROUNDS"),
-)
-
-
 def run_dispatch_overrides(
     assignment_collection,
     *,
     overrides=None,
     solver=None,
-    topology=None,
-    offer=None,
-    claim=None,
-    arbitration=None,
-    max_rounds=None,
+    legacy_env=None,
 ):
     """Apply every per-run dispatch selection input to the loaded assignment behaviors.
 
@@ -178,15 +175,10 @@ def run_dispatch_overrides(
 
     1. ``overrides`` (``ORSIM_POLICY_OVERRIDES``; ``--policy``/``--policy-param``),
        literally: ``planner.type`` is the TOP of the selection;
-    2. ``topology`` (``ORSIM_PLANNER_TOPOLOGY``: ``partitioned``, ``pooled`` or
-       ``two-stage``): the top becomes ``Partitioned`` / ``PooledMarket`` keeping the
-       current per-scope solver; a new ``PooledMarket`` takes its market from the
-       profile's ``planner.market`` (strictly). Message 10 when ``overrides`` names
-       another top;
-    3. the market variables (``offer``/``claim``/``arbitration`` component names,
-       ``max_rounds`` an int or an integer string in 1..100): ``PooledMarket`` params;
-       a changed component type resets its params. Message 9 when the top is not
-       ``PooledMarket`` after step 2;
+    2-3. ``legacy_env``: the legacy dispatch variables
+       (``compat.legacy_env.read_legacy_dispatch_env``), opaque here; checked by
+       ``compat.legacy_env.legacy_env_request`` and folded into the entry by
+       ``compat.legacy_env.apply_legacy_env`` (messages 9 and 10 are raised there);
     4. ``solver`` (``--solver``/``ORSIM_SOLVER``): the INNERMOST per-scope solver (the
        ``inner`` chain; a leaf top is replaced); a changed type resets its params.
        Message 11 for a decomposition name, message 12 when ``overrides`` names a
@@ -195,9 +187,11 @@ def run_dispatch_overrides(
     Every behavior is validated before any is mutated; nothing requested mutates
     nothing. Returns ``(merged_overrides, labels)``: the override object actually
     merged into the first behavior (``{}`` when nothing was requested), and
-    ``{"planner": <run-name segment or None>, "topology": <canonical topology or
-    None>}`` (:func:`dispatch_override_label`; the market variables add no segment,
-    as before). Raises ``PolicyError`` (unknown names are ``UnknownPolicyError``).
+    ``{"planner": <run-name segment or None>, "legacy": [<run-name segment>, ...]}``
+    (:func:`dispatch_override_label`; ``legacy`` is
+    ``compat.legacy_env.LegacyEnvRequest.segments``, appended by the caller where the
+    legacy segment always went). Raises ``PolicyError`` (unknown names are
+    ``UnknownPolicyError``).
     """
     from apps.container_logistics.policies.framework import PolicyError
 
@@ -205,11 +199,10 @@ def run_dispatch_overrides(
     if not isinstance(overrides.get("planner", {}), dict):
         raise PolicyError(f"policy overrides.planner must be an object (got {overrides['planner']!r}).")
     explicit = overrides.get("planner") or {}
-    want_top = _topology_top(topology)
-    market = _market_request(offer=offer, claim=claim, arbitration=arbitration, max_rounds=max_rounds)
+    request = _legacy_env.legacy_env_request(legacy_env)
     leaf = _checked_solver(solver)
-    if want_top is None and not market and leaf is None and not overrides:
-        return {}, {"planner": None, "topology": None}
+    if not request and leaf is None and not overrides:
+        return {}, {"planner": None, "legacy": []}
 
     pairs = _profiles_with_current(assignment_collection)
     if not pairs:
@@ -219,7 +212,7 @@ def run_dispatch_overrides(
     planned, first = [], None
     for profile, current in pairs:
         entry = _dispatch_entry(current, (profile or {}).get("planner"), explicit,
-                                topology=topology, want_top=want_top, market=market, leaf=leaf)
+                                request=request, leaf=leaf)
         merged_overrides = dict(overrides)
         if entry:
             merged_overrides["planner"] = entry
@@ -234,67 +227,9 @@ def run_dispatch_overrides(
     merged_overrides, merged = first
     labels = {
         "planner": dispatch_override_label(overrides, merged, solver=leaf),
-        "topology": legacy_topology_name(topology),
+        "legacy": request.segments(),
     }
     return merged_overrides, labels
-
-
-def legacy_topology_name(topology):
-    """The canonical spelling (``partitioned``/``pooled``) of a topology request, ``None`` if unset.
-
-    Raises ``PolicyError`` for an unknown value (the env converter is loud, round-2 §3.6).
-    """
-    from apps.container_logistics.policies.dispatch import legacy
-    from apps.container_logistics.policies.framework import PolicyError
-
-    if topology is None or (isinstance(topology, str) and not topology.strip()):
-        return None
-    name = topology.strip() if isinstance(topology, str) else topology
-    canonical = legacy.LEGACY_TOPOLOGIES.get(name) if isinstance(name, str) else None
-    if canonical is None:
-        raise PolicyError(
-            f"ORSIM_PLANNER_TOPOLOGY={topology!r} is not a legacy topology "
-            f"({', '.join(legacy.LEGACY_TOPOLOGIES)}). The decomposition is now the dispatch "
-            f"policy: --policy planner={legacy.PARTITIONED} or --policy planner={legacy.POOLED_MARKET}."
-        )
-    return canonical
-
-
-def _topology_top(topology):
-    from apps.container_logistics.policies.dispatch import legacy
-
-    canonical = legacy_topology_name(topology)
-    if canonical is None:
-        return None
-    return legacy.POOLED_MARKET if canonical == "pooled" else legacy.PARTITIONED
-
-
-def _market_request(**values):
-    """``{param: value}`` of the market variables that were given; ``max_rounds`` checked as an int in 1..100."""
-    from apps.container_logistics.policies.dispatch import legacy
-    from apps.container_logistics.policies.framework import PolicyError
-
-    out = {}
-    for key, env in MARKET_ENV:
-        value = values.get(key)
-        if value is None or (isinstance(value, str) and not value.strip()):
-            continue
-        if key != "max_rounds":
-            if not isinstance(value, str):
-                raise PolicyError(f"{env}={value!r} must name a {key} component.")
-            out[key] = value.strip()
-            continue
-        rounds = value
-        if isinstance(value, str) and re.fullmatch(r"\s*[+-]?\d+\s*", value):
-            rounds = int(value)
-        low, high = legacy.LEGACY_MAX_ROUNDS_RANGE
-        if isinstance(rounds, bool) or not isinstance(rounds, int) or not low <= rounds <= high:
-            raise PolicyError(
-                f"{env}={value!r} must be an integer in {low}..{high}. It is the pooled "
-                "auction's safety backstop; the auction ends on convergence."
-            )
-        out[key] = rounds
-    return out
 
 
 def _checked_solver(solver):
@@ -323,79 +258,18 @@ def _checked_solver(solver):
     return spec.name
 
 
-def _dispatch_entry(current, planner, explicit, *, topology, want_top, market, leaf):
-    """The ONE dispatch override entry for a profile whose resolved selection is ``current``."""
-    from apps.container_logistics.policies.dispatch import legacy
-    from apps.container_logistics.policies.framework import PolicyError
+def _dispatch_entry(current, planner, explicit, *, request, leaf):
+    """The ONE dispatch override entry for a profile whose resolved selection is ``current``.
 
+    The legacy env ``request`` is folded in first (``compat.legacy_env.apply_legacy_env``,
+    which reads ``planner``, the profile's legacy block), then ``leaf`` (``--solver``).
+    """
     entry = copy.deepcopy(explicit)
-    named_top = entry.get("type").strip() if isinstance(entry.get("type"), str) else None
-    top = named_top or current["planner"].name
-    if want_top is not None:
-        if named_top is not None and named_top != want_top:
-            raise PolicyError(
-                f"ORSIM_PLANNER_TOPOLOGY={topology!r} selects {want_top} but ORSIM_POLICY_OVERRIDES "
-                f"sets planner.type={entry['type']!r}; pass one of them."
-            )
-        if top != want_top:
-            entry["type"] = top = want_top
-            if want_top == legacy.POOLED_MARKET:
-                params = entry.setdefault("params", {})
-                for key, value in legacy.legacy_market_params(planner).items():
-                    params[key] = _over(value, params.get(key))
-    if market:
-        if top != legacy.POOLED_MARKET:
-            key, env = next((k, e) for k, e in MARKET_ENV if k in market)
-            label = _merged(current, {"planner": entry})["planner"].label if entry else current["planner"].label
-            raise PolicyError(
-                f"{env}={market[key]!r} configures the PooledMarket dispatch, but this run's dispatch "
-                f"is {label}. Add ORSIM_PLANNER_TOPOLOGY=pooled, or select --policy "
-                f"planner=PooledMarket --policy-param planner.{key}={market[key]}."
-            )
-        params = entry.setdefault("params", {})
-        stated = explicit.get("params") if isinstance(explicit.get("params"), dict) else {}
-        for key, value in market.items():
-            _refuse_market_conflict(key, value, stated.get(key))
-            if key == "max_rounds":
-                params[key] = value
-            else:
-                params[key] = _with_type(params.get(key), value)
+    if request:
+        _legacy_env.apply_legacy_env(entry, explicit, current, planner, request)
     if leaf is not None:
         _set_innermost(entry, explicit, current, leaf)
     return entry
-
-
-def _over(base, stated):
-    """A legacy market value under what ``overrides`` stated for the same key (the statement wins)."""
-    if stated is None:
-        return base
-    if isinstance(base, dict) and isinstance(stated, dict) and "type" not in stated:
-        return {"type": base["type"], "params": {**base.get("params", {}), **(stated.get("params") or {})}}
-    return stated
-
-
-def _with_type(value, name):
-    """A component ref set to ``name``: the same type keeps its params, another type starts from none."""
-    if isinstance(value, str):
-        value = {"type": value}
-    if isinstance(value, dict) and value.get("type") in (None, name):
-        return {**value, "type": name}
-    return {"type": name}
-
-
-def _refuse_market_conflict(key, value, stated):
-    from apps.container_logistics.policies.framework import PolicyError
-
-    env = dict(MARKET_ENV)[key]
-    have = stated.get("type") if isinstance(stated, dict) else stated
-    if have is None or (key != "max_rounds" and isinstance(have, str) and have.strip() == value) \
-            or (key == "max_rounds" and not isinstance(have, bool) and have == value):
-        return
-    path = f"planner.{key}" if key == "max_rounds" else f"planner.{key}.type"
-    raise PolicyError(
-        f"{env}={value!r} conflicts with {path}={have!r} from ORSIM_POLICY_OVERRIDES "
-        "(--policy-param/--policy-overrides); pass one of them."
-    )
 
 
 def _set_innermost(entry, explicit, current, leaf):
@@ -458,8 +332,8 @@ def dispatch_override_label(overrides, resolved, *, solver=None):
 
     ``overrides`` is the raw ``{slot: entry}`` request (``ORSIM_POLICY_OVERRIDES`` /
     ``--policy``/``--policy-param``), ``solver`` the ``--solver``/``ORSIM_SOLVER``
-    name, ``resolved`` the merged ``{slot: ResolvedPolicy}``. The topology and market
-    variables never contribute (they keep their own segment / none, as before).
+    name, ``resolved`` the merged ``{slot: ResolvedPolicy}``. The legacy env variables
+    never contribute (``labels["legacy"]`` carries their own segment, as before).
     A node of the selection's ``inner`` chain is TOUCHED when the request names its
     type (``--solver`` names the innermost one) or sets one of its own params.
     Formats (the frontend's ``lib/runNameMeta.ts`` reads bare names, ``Name(k=v,...)``
@@ -609,65 +483,6 @@ def apply_cooperation_override(assignment_collection, structure=None, sharing=No
                 (planner.get("sharing") or {}).get("params") or {}
             )}
     return applied
-
-
-def known_planner_topologies():
-    """Planner topologies accepted by ``apply_planner_topology_override`` — sourced
-    from the same constant ``Preprocessor._normalize_planner`` validates against, so
-    CLI/override validation and the compiler can never drift (plan §6.11/§7).
-
-    Compatibility shim (verification review MINOR-11): no run path calls it (the
-    topology request is validated by :func:`legacy_topology_name`). Kept for tests
-    and external callers.
-    """
-    from apps.container_logistics.datagen.preprocess import PLANNER_TOPOLOGIES
-
-    return tuple(PLANNER_TOPOLOGIES)
-
-
-def apply_planner_topology_override(assignment_collection, topology):
-    """Per-run planner-topology override: ``ORSIM_PLANNER_TOPOLOGY``.
-
-    A LOUD wrapper of :func:`run_dispatch_overrides` (``topology=topology``): the
-    dispatch top becomes ``PooledMarket`` (``pooled``; ``two-stage`` is its deprecated
-    alias) or ``Partitioned``, keeping the current per-scope solver; the legacy
-    ``planner.topology`` / ``planner.market`` keys are rewritten as mirrors. Mutates the
-    loaded behaviors only; the on-disk bundle is never touched. Returns the canonical
-    topology, or ``None`` for a falsy value (nothing changed). Raises ``PolicyError``
-    for an unknown topology (it used to be ignored with a warning).
-
-    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
-    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
-    Kept for tests and external callers.
-    """
-    _merged_overrides, labels = run_dispatch_overrides(assignment_collection, topology=topology)
-    return labels["topology"]
-
-
-def apply_market_override(
-    assignment_collection, *, offer=None, claim=None, arbitration=None, max_rounds=None
-):
-    """Per-run pooled-market overrides: ``ORSIM_OFFER_POLICY`` / ``_CLAIM_`` / ``_ARBITRATION_`` / ``MAX_ROUNDS``.
-
-    A LOUD wrapper of :func:`run_dispatch_overrides`: each given component name
-    becomes that ``PooledMarket`` param (a changed type resets its params) and
-    ``max_rounds`` (an int, or an integer string, in 1..100) the round backstop; the
-    ``planner.market`` mirror is rewritten in the legacy shape. Returns the applied
-    patch ``{role: name, max_rounds: int}``, or ``None`` when nothing was requested.
-    Raises ``UnknownPolicyError`` for an unknown component, ``PolicyError`` for a
-    ``max_rounds`` outside 1..100 or when the dispatch is not ``PooledMarket``
-    (message 9). All used to be ignored or deferred to the runtime's fail-soft
-    registries.
-
-    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
-    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
-    Kept for tests and external callers.
-    """
-    patch = _market_request(offer=offer, claim=claim, arbitration=arbitration, max_rounds=max_rounds)
-    if not patch:
-        return None
-    run_dispatch_overrides(assignment_collection, **patch)
-    return patch
 
 
 @contextmanager

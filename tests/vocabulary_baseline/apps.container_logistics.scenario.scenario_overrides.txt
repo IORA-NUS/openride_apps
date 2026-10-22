@@ -1,4 +1,2 @@
-sub:market	28
-sub:partitioned	2
-sub:pooled	9
-sub:topology	33
+sub:market	2	# removed-by: WS8
+sub:topology	2	# removed-by: WS8
