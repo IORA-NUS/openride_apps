@@ -467,7 +467,7 @@ def apply_cooperation_override(assignment_collection, structure=None):
             raise PolicyError(
                 f"cooperation structure override {structure!r} is not declared by assignment agent "
                 f"{agent_id!r} (declared structures: {', '.join(declared) or 'none'}). Pick a declared id "
-                "or fix the typo; the run was not started on the scenario's own arm instead."
+                "or fix the typo (it is never replaced by the scenario's own arm)."
             )
         blocks.append(coop)
     for coop in blocks:
