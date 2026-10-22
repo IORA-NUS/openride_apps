@@ -322,7 +322,7 @@ DEFAULT_ARBITRATION_RULE = "LowestCost"
 # This module owns the component kind 'market.arbitration': the framework resolves refs of that kind
 # against the live registry above (framework/components.py, round-2 review #5).
 register_component_kind("market.arbitration", lambda: ARBITRATION_REGISTRY, DEFAULT_ARBITRATION_RULE,
-                        "Who wins when two companies bid for the same pooled order.")
+                        "Who wins when two companies bid for the same pooled order.", order=30)
 
 
 def get_arbitration_rule(

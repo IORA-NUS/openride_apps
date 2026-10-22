@@ -253,7 +253,7 @@ DEFAULT_OFFER_POLICY = "OfferAll"
 # This module owns the component kind 'market.offer': the framework resolves refs of that kind
 # against the live registry above (framework/components.py, round-2 review #5).
 register_component_kind("market.offer", lambda: OFFER_REGISTRY, DEFAULT_OFFER_POLICY,
-                        "Which of its own orders a company offers to the shared pool.")
+                        "Which of its own orders a company offers to the shared pool.", order=10)
 
 
 def get_offer_policy(

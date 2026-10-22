@@ -15,23 +15,27 @@ for every ref kind, and register those answers into the params hook
   of its LIVE ``{name: class}`` registry, so a name a test injects there resolves too
   (round-2 S11). A component class's nested ``Params`` is its typed params; a class
   without one declares no params.
-- Built-in kinds are found even when nothing imported their modules yet:
-  :data:`BUILTIN_COMPONENT_MODULES` is THE one list of modules that declare built-in
-  kinds; it is imported lazily (on the first kind lookup, never at this module's
-  import), the component analogue of ``registry.BUILTIN_POLICY_PACKAGES``. A new
-  solver with its own component kind adds its module there (or imports it before
-  use) and edits nothing else in the framework.
+- Built-in kinds are found even when nothing imported their modules yet: the first
+  kind lookup (never this module's import) runs
+  ``registry.discover_builtin_policies()``, and the policies that use a kind import
+  the module that declares it (``assignment/pooled_planner.py`` imports offer, claim
+  and arbitration before ``PooledMarket`` registers). The framework names no
+  component module. A new solver with its own component kind declares it in a module
+  its policy imports, and edits nothing in the framework.
+- Listing order is declared by the owner: ``register_component_kind(..., order=N)``
+  sorts by ``(order, declaration sequence)``, so it never depends on which module
+  happened to be imported first. Built-ins declare 10/20/30; the default is 1000.
 
 :func:`instantiate_component` builds a component from a resolved ref; a ``None``
 value (an unset nullable number) is dropped first, so the class keeps its own default.
 
-Leaf module (plan §2.7): never imports ``apps.container_logistics.assignment.*`` at
-module top; the built-in component modules are imported in :func:`_load_builtin_kinds`.
+Leaf module (plan §2.7): never imports ``apps.container_logistics.assignment.*``;
+the built-in component modules are imported by policy discovery in
+:func:`_load_builtin_kinds`.
 """
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import itertools
 import logging
@@ -40,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator, Mapping
 
 from . import params as _params
+from . import registry as _registry
 from .errors import PolicyParamsError, PolicyRegistrationError, UnknownPolicyError
 from .params import PolicyParams, PolicyRef, version_echo, warn_version_drift
 from .registry import check_policy_name, get_policy_spec, list_policies
@@ -47,8 +52,8 @@ from .registry import check_policy_name, get_policy_spec, list_policies
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "BUILTIN_COMPONENT_MODULES",
     "ComponentKind",
+    "DEFAULT_KIND_ORDER",
     "COMPONENT_KINDS",
     "NoParams",
     "RefTarget",
@@ -59,22 +64,16 @@ __all__ = [
     "instantiate_component",
 ]
 
-#: THE one place the framework names where built-in component kinds are declared: each
-#: module calls :func:`register_component_kind` at import. Imported lazily, in this
-#: order (which is also the listing order of their kinds), the first time a kind is
-#: looked up. Not hardcoded kinds: the kinds, defaults and descriptions live there.
-BUILTIN_COMPONENT_MODULES = (
-    "apps.container_logistics.assignment.policy.offer",
-    "apps.container_logistics.assignment.policy.claim",
-    "apps.container_logistics.assignment.arbitration",
-)
+#: The listing order of a kind that declares none: after every built-in kind.
+DEFAULT_KIND_ORDER = 1000
 
 
 @dataclass(frozen=True)
 class ComponentKind:
     """One component kind: its live registry getter, its default name, its meaning.
 
-    ``module`` is the module that declared it (ordering and re-declaration checks).
+    ``module`` is the module that declared it (re-declaration check); ``order`` is the
+    listing position its owner declared (ties broken by declaration sequence).
     """
 
     kind: str
@@ -82,26 +81,29 @@ class ComponentKind:
     description: str
     registry_getter: Callable[[], Mapping[str, type]] = field(compare=False, repr=False)
     module: str = ""
+    order: int = DEFAULT_KIND_ORDER
 
 
 _KINDS: dict[str, ComponentKind] = {}
 _KIND_SEQ: dict[str, int] = {}
 _SEQ = itertools.count()
-_LOAD = {"done": False, "running": False}
 _LOCK = threading.RLock()
 
 
 def register_component_kind(kind: str, registry_getter: Callable[[], Mapping[str, type]],
-                            default: str, description: str) -> ComponentKind:
+                            default: str, description: str, *,
+                            order: int = DEFAULT_KIND_ORDER) -> ComponentKind:
     """Declare component ``kind``: refs of that kind resolve against ``registry_getter()``.
 
     Called by the module that owns the kind, at import, after its registry dict exists.
     ``registry_getter`` returns the LIVE ``{name: class}`` dict (read on every lookup);
-    ``default`` must be one of its names. Re-declaring a kind from the same module with
-    the same default and description (a reload) replaces the getter; anything else
-    raises ``PolicyRegistrationError``. Returns the declared :class:`ComponentKind`.
-    The declaring module is read from ``registry_getter.__module__`` (a lambda or
-    function defined there), which orders the kinds and guards re-declaration.
+    ``default`` must be one of its names; ``order`` (an int) is the kind's listing
+    position, ties broken by declaration sequence. Re-declaring a kind from the same
+    module with the same default, description and order (a reload) replaces the getter;
+    anything else raises ``PolicyRegistrationError``. Returns the declared
+    :class:`ComponentKind`. The declaring module is read from
+    ``registry_getter.__module__`` (a lambda or function defined there), which guards
+    re-declaration.
     """
     module = getattr(registry_getter, "__module__", None) or ""
     where = f"register_component_kind({kind!r}) from {module or '?'}"
@@ -114,6 +116,8 @@ def register_component_kind(kind: str, registry_getter: Callable[[], Mapping[str
     for label, value in (("default", default), ("description", description)):
         if not isinstance(value, str) or not value.strip():
             raise PolicyRegistrationError(f"{where}: {label} must be a non-empty string (got {value!r}).")
+    if not isinstance(order, int) or isinstance(order, bool):
+        raise PolicyRegistrationError(f"{where}: order must be an int (got {order!r}).")
     registry = registry_getter()
     if not isinstance(registry, Mapping) or default not in registry:
         raise PolicyRegistrationError(
@@ -125,11 +129,12 @@ def register_component_kind(kind: str, registry_getter: Callable[[], Mapping[str
         # segment exactly like a policy name ('PooledMarket(offer=OfferNone)').
         check_policy_name(name, f"{where}: component")
     spec = ComponentKind(kind=kind, default=default, description=description,
-                         registry_getter=registry_getter, module=module)
+                         registry_getter=registry_getter, module=module, order=order)
     with _LOCK:
         existing = _KINDS.get(kind)
-        if existing is not None and (existing.module, existing.default, existing.description) != \
-                (spec.module, spec.default, spec.description):
+        if existing is not None and (existing.module, existing.default, existing.description,
+                                     existing.order) != \
+                (spec.module, spec.default, spec.description, spec.order):
             raise PolicyRegistrationError(
                 f"{where}: component kind {kind!r} is already declared by {existing.module} "
                 f"(default {existing.default!r}); one module owns a kind."
@@ -141,34 +146,25 @@ def register_component_kind(kind: str, registry_getter: Callable[[], Mapping[str
 
 
 def _load_builtin_kinds() -> None:
-    """Import :data:`BUILTIN_COMPONENT_MODULES` once (re-entrant calls return at once).
+    """Load the built-in kinds: run policy discovery, which imports their declaring modules.
 
-    Import errors propagate: a broken component module must not vanish.
+    Delegates to ``registry.discover_builtin_policies()`` (idempotent; a call during a
+    running discovery returns at once, so kinds looked up by a policy module being
+    discovered must already be imported by it, as ``pooled_planner`` does). Import
+    errors propagate: a broken component module must not vanish.
     """
-    with _LOCK:
-        if _LOAD["done"] or _LOAD["running"]:
-            return
-        _LOAD["running"] = True
-        try:
-            for name in BUILTIN_COMPONENT_MODULES:
-                importlib.import_module(name)
-            _LOAD["done"] = True
-        finally:
-            _LOAD["running"] = False
+    _registry.discover_builtin_policies()
 
 
 def _order(kind: str) -> tuple[int, int]:
-    module = _KINDS[kind].module
-    builtin = BUILTIN_COMPONENT_MODULES.index(module) if module in BUILTIN_COMPONENT_MODULES \
-        else len(BUILTIN_COMPONENT_MODULES)
-    return builtin, _KIND_SEQ[kind]
+    return _KINDS[kind].order, _KIND_SEQ[kind]
 
 
 class _LiveKinds(Mapping[str, ComponentKind]):
     """Read-only live view of the declared kinds; loads the built-in ones on first use.
 
-    Ordered by :data:`BUILTIN_COMPONENT_MODULES` position, then declaration order, so
-    the listing never depends on which module happened to be imported first.
+    Ordered by each kind's declared ``order``, then declaration sequence, so the
+    listing never depends on which module happened to be imported first.
     """
 
     def __getitem__(self, kind: str) -> ComponentKind:
@@ -318,6 +314,6 @@ def _resolver(kind: str):
 
 # The params hook (round-2 §3.2): registered here, so params.py never imports the
 # registry (no params <-> registry cycle). Component kinds add theirs in
-# register_component_kind; a kind not yet declared loads the built-in modules once.
+# register_component_kind; a kind not yet declared runs policy discovery (once).
 _params._REF_RESOLVERS["planner"] = _resolver("planner")
 _params._REF_KIND_LOADER = _load_builtin_kinds
