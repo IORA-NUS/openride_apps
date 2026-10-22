@@ -1,6 +1,0 @@
-id:PAIR_NOTE_KEYS	3
-id:_v1_tag	2
-id:market_round	3
-id:pool_id	3
-str:v1	3
-sub:market	3
