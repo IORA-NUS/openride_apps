@@ -1,0 +1,4 @@
+id:information_model	3
+id:share_tag_format	2
+sub:market	5
+sub:pooled	2
