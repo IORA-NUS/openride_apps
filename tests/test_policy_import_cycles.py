@@ -32,9 +32,11 @@ _EXTRA = [
 # Plan §2.7 leaf list, plus dispatch/resolved.py (a value module the runner and
 # dispatch/profile.py both import), and the round-2 leaves framework/components.py
 # (registries imported locally) and dispatch/legacy.py (round-2 §4), plus
-# dispatch/composite.py (it imports only base and resolved).
+# dispatch/composite.py (it imports only base and resolved), plus the compat quarantine
+# package (plan_contract_final.md §7.3; its __init__ imports nothing).
 _LEAVES = [
     "apps.container_logistics.policies",
+    "apps.container_logistics.policies.compat",
     "apps.container_logistics.policies.framework",
     "apps.container_logistics.policies.framework.errors",
     "apps.container_logistics.policies.framework.slots",
