@@ -14,19 +14,16 @@ __all__ = [
     "AssignmentManager",
 ]
 
-_LAZY = {
-    "AssignmentAgent": ".agent",
-    "AssignmentApp": ".app",
-    "AssignmentManager": ".manager",
-}
-
-
 def __getattr__(name):
-    module = _LAZY.get(name)
-    if module is None:
+    # Plain function-local imports (not importlib): the framework guards follow static
+    # imports, including local ones, so the package stays inside tier A's scanned closure.
+    if name == "AssignmentAgent":
+        from .agent import AssignmentAgent as value
+    elif name == "AssignmentApp":
+        from .app import AssignmentApp as value
+    elif name == "AssignmentManager":
+        from .manager import AssignmentManager as value
+    else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from importlib import import_module
-
-    value = getattr(import_module(module, __name__), name)
     globals()[name] = value
     return value
