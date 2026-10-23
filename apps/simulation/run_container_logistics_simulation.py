@@ -52,6 +52,11 @@ from apps.container_logistics.policies.dispatch.profile import (
 )
 from apps.container_logistics.policies.compat.legacy_env import read_legacy_dispatch_env
 from apps.container_logistics.policies.framework import PolicyError
+from apps.container_logistics.scenario.run_declaration import (
+    FRAMEWORK_RUN_SETTINGS as _FRAMEWORK_RUN_SETTINGS,
+    append_run_name_segments,
+    check_run_declaration,
+)
 
 
 def _resolve_scenario_name() -> str:
@@ -69,24 +74,20 @@ def _refuse_invalid_policy_config(error: PolicyError) -> None:
 
 
 #: EVERY run setting ``main()`` itself writes into ``scenario_manager.orsim_settings``
-#: (which ships to the agents and becomes ``run_config.meta``). The ONE list: every
-#: write goes through :func:`_set_run_setting`, which refuses a key missing from it, and
-#: ``tests/test_run_entry_ownership.py`` fails on a subscript write that bypasses
-#: the helper. :func:`_apply_run_declaration` refuses a solver ``stamp_settings`` key in
-#: this set (or already in the settings), whether or not this run writes it: a key the
-#: framework writes later (``STREAM_GEO`` in headless mode, ``PERSIST_ROUTE_GEO``,
-#: ``ORDER_LIFECYCLE``) would otherwise silently overwrite the solver's value, or the
-#: solver's would stand on a run where the framework does not write it.
-#: ``COOPERATION`` is framework-owned too (final review M3): derived from the run's
-#: active arm in WORLD data, never from what a solver chose to stamp.
-FRAMEWORK_RUN_SETTINGS = frozenset({
-    "POLICIES",
-    "COOPERATION",
-    "STREAM_GEO",
-    "MIN_STEP_WALL_TIME_MS",
-    "PERSIST_ROUTE_GEO",
-    "ORDER_LIFECYCLE",
-})
+#: (which ships to the agents and becomes ``run_config.meta``). The ONE list, defined in
+#: ``scenario.run_declaration`` (the pure run-declaration check the control-plane dry run
+#: and scenario compile share) and re-exported here: every write goes through
+#: :func:`_set_run_setting`, which refuses a key missing from it, and
+#: ``tests/test_run_entry_ownership.py`` fails on a subscript write that bypasses the
+#: helper. A solver ``stamp_settings`` key in this set -- or in the wider
+#: ``run_declaration.reserved_run_settings()`` (every setting framework code READS,
+#: round-2 review M-B), or already in the settings -- is refused whether or not this run
+#: writes it: a key the framework writes later (``STREAM_GEO`` in headless mode,
+#: ``PERSIST_ROUTE_GEO``, ``ORDER_LIFECYCLE``) would otherwise silently overwrite the
+#: solver's value, or the solver's would stand on a run where the framework does not
+#: write it. ``COOPERATION`` is framework-owned too (final review M3): derived from the
+#: run's active arm in WORLD data, never from what a solver chose to stamp.
+FRAMEWORK_RUN_SETTINGS = _FRAMEWORK_RUN_SETTINGS
 
 
 def _set_run_setting(scenario_manager, key: str, value) -> None:
@@ -253,55 +254,41 @@ def _first_assignment_profile(scenario_manager):
 def _apply_run_declaration(scenario_manager, tree, run_name: str | None, profile=None) -> str | None:
     """Write the framework's ``COOPERATION``, merge the top's ``stamp_settings`` and run-name segments.
 
-    ``COOPERATION`` (the record the analytics agent builds its planner-scope rows and
-    gains attribution from, ``analytics.manager.cooperation_record``) is FRAMEWORK-owned
-    (final review M3): derived from the active arm of ``profile``'s cooperation block
-    (world data, after any ``--structure`` override; default: the first assignment
-    profile) and written whenever the run has an arm, whatever the solver declared --
-    so a contract-only solver gets planner rows too. A solver that ALSO declares a
-    ``COOPERATION`` stamp setting (the built-ins do) must declare exactly that record;
-    any other value is refused (exit 2). Written at the place the solver's value used
-    to be merged, so the built-ins' settings are byte-identical.
+    The CHECK is ``scenario.run_declaration.check_run_declaration`` (pure; the
+    control-plane dry run and scenario compile call the same function, round-2 review
+    M-A): ``COOPERATION`` is framework-owned (the active arm of ``profile``'s
+    cooperation block, after any ``--structure`` override; default: the first
+    assignment profile) and a solver that also declares it must declare exactly that
+    record; no other stamp setting may be one the settings already hold or a reserved
+    framework setting; and no run-name segment may be one the framework writes or a
+    reader parses as another arm, a lifecycle or a selection. A refusal is exit 2
+    (:func:`_refuse_invalid_policy_config`).
 
-    The other ``stamp_settings`` are merged into ``orsim_settings``, which ships them to
-    the agents at spawn (the STREAM_GEO pattern). A key the settings already hold, or
-    any key in :data:`FRAMEWORK_RUN_SETTINGS` (``POLICIES``, ``STREAM_GEO``,
-    ``PERSIST_ROUTE_GEO``, ``ORDER_LIFECYCLE``, ``MIN_STEP_WALL_TIME_MS``, ...; written
-    later in ``main()`` or not on this run), is REFUSED (exit 2): a solver may add run
-    settings, never replace or pre-empt the framework's. ``run_name_segments`` are
-    appended after the legacy segments, idempotent by SEGMENT (not substring, so
-    ``chain`` never matches ``chain2``): the ``--structure`` path already appended its
-    ``· <structure>`` and must not get ``… · chain · chain``.
+    Then, here: ``COOPERATION`` is written whenever the run has an arm, whatever the
+    solver declared (so a contract-only solver gets planner rows too), at the place the
+    solver's value used to be merged, so the built-ins' settings are byte-identical; the
+    other ``stamp_settings`` are merged into ``orsim_settings``, which ships them to the
+    agents at spawn (the STREAM_GEO pattern); and ``run_name_segments`` are appended
+    after the legacy segments, idempotent by SEGMENT
+    (``run_declaration.append_run_name_segments``).
     """
-    from apps.container_logistics.analytics.manager import COOPERATION_SETTING, cooperation_record
+    from apps.container_logistics.analytics.manager import COOPERATION_SETTING
 
     if tree is None:
         return run_name
+    try:
+        plan = check_run_declaration(
+            tree,
+            settings_keys=scenario_manager.orsim_settings,
+            profile=_first_assignment_profile(scenario_manager) if profile is None else profile,
+        )
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
+    if plan.cooperation is not None:
+        _set_run_setting(scenario_manager, COOPERATION_SETTING, plan.cooperation)
+    scenario_manager.orsim_settings.update(plan.settings)
+    run_name = append_run_name_segments(run_name, plan.run_name_segments)
     declaration = tree.declaration
-    record = cooperation_record(_first_assignment_profile(scenario_manager) if profile is None else profile)
-    declared = dict(declaration.stamp_settings)
-    if COOPERATION_SETTING in declared and declared[COOPERATION_SETTING] != record:
-        _refuse_invalid_policy_config(PolicyError(
-            f"planner policy {tree.top.name} declared run setting {COOPERATION_SETTING}="
-            f"{declared[COOPERATION_SETTING]!r}, but the run's active cooperation arm is "
-            f"{record!r}. {COOPERATION_SETTING} is framework-owned (derived from the world's "
-            "cooperation block); drop it from stamp_settings or declare exactly that record."
-        ))
-    declared.pop(COOPERATION_SETTING, None)
-    clash = sorted(k for k in declared
-                   if k in scenario_manager.orsim_settings or k in FRAMEWORK_RUN_SETTINGS)
-    if clash:
-        _refuse_invalid_policy_config(PolicyError(
-            f"planner policy {tree.top.name} declared run setting(s) {', '.join(clash)} that the run "
-            "already sets or the framework owns; a solver's stamp_settings may add settings, never replace one."
-        ))
-    if record is not None:
-        _set_run_setting(scenario_manager, COOPERATION_SETTING, record)
-    scenario_manager.orsim_settings.update(declared)
-    for segment in declaration.run_name_segments:
-        segments = [seg.strip() for seg in (run_name or "").split("·")]
-        if segment not in segments:
-            run_name = f"{run_name} · {segment}" if run_name else str(segment)
     print(
         f"Run declaration: cross_company={len(declaration.cross_company)} pairs, "
         f"world_reads={','.join(sorted(tree.world_reads)) or '-'}"

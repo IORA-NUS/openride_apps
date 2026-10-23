@@ -72,7 +72,62 @@ from orsim.lifecycle import ORSimAgent
 from apps.agent_transport import select_agent_transport
 
 
-class OpenRideAgent(ORSimAgent):
+class InitFailureReporting:
+    """Mixin: an agent whose app raised at init answers the boot handshake with ``init_error``.
+
+    Stock ``ORSimAgent`` catches the exception of ``_create_app`` in ``__init__``,
+    sets ``agent_failed`` and carries on: ``start_listening`` subscribes to nothing,
+    then ``take_first_step`` publishes ``ready`` exactly like a healthy agent (the
+    ``init_error`` payload it builds is never sent). The scheduler cannot tell the
+    two apart, so the run went on without the agent and reported ``ok`` (round-2
+    review L-D). Here ``take_first_step`` publishes ``{'action': 'init_error',
+    'details': <the init traceback>}`` instead when the agent failed, and
+    ``OpenRideScheduler`` fails the run on it (``init_failure_handler='hard'``). A
+    healthy agent's handshake is untouched, byte for byte.
+
+    The traceback is captured by wrapping this INSTANCE's ``_create_app`` before
+    ``ORSimAgent.__init__`` calls it (the subclass's method, unchanged otherwise).
+    Declare the mixin before ``ORSimAgent`` in the bases.
+    """
+
+    #: The init traceback, ``None`` when the app was created (or never attempted).
+    _init_failure_details = None
+
+    def __init__(self, *args, **kwargs):
+        create_app = self._create_app
+
+        def _recording_create_app():
+            try:
+                return create_app()
+            except Exception:
+                self._init_failure_details = traceback.format_exc()
+                raise
+
+        self._create_app = _recording_create_app
+        super().__init__(*args, **kwargs)
+
+    def take_first_step(self, dummy_payload):
+        if not getattr(self, "agent_failed", False):
+            return super().take_first_step(dummy_payload)
+        payload = {
+            'agent_id': self.unique_id,
+            'time_step': getattr(self, 'current_time_step', -1),
+            'action': 'init_error',
+            'did_step': False,
+            'run_time': time.time() - getattr(self, 'start_time', time.time()),
+            'details': self._init_failure_details or "the agent's app failed to initialise",
+        }
+        try:
+            self.messenger.client.publish(
+                f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(payload))
+        except Exception:
+            logging.exception(
+                f"Agent {getattr(self, 'unique_id', '?')}: could not publish init_error; the "
+                "scheduler's never-answered-a-step guard will report it instead")
+        self.message_processing_active = False
+
+
+class OpenRideAgent(InitFailureReporting, ORSimAgent):
 
     def __init__(self, *args, **kwargs):
         # ── Transport selection (RabbitMQ -> Kafka migration, phase 2) ───────
@@ -338,6 +393,13 @@ class OpenRideAgent(ORSimAgent):
             super().start_listening()
         except Exception:
             self.agent_failed = True
+            self._init_failure_details = traceback.format_exc()
+            # Best-effort init_error so the scheduler fails the run (round-2 review
+            # L-D) instead of waiting on a pending_boot agent that never replies.
+            try:
+                self.take_first_step({'action': 'init', 'time_step': getattr(self, 'current_time_step', 0)})
+            except Exception:
+                pass
             logging.exception(
                 f"Agent {getattr(self, 'unique_id', '?')}: start_listening FAILED; "
                 "treating the agent as failed so its messenger/transport is released "

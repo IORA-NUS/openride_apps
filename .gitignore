@@ -22,6 +22,7 @@ scenarios/_index.json
 scenarios/_registry.json
 scenarios/*/scenario.json
 scenarios/*/index.json
+scenarios/*/scenario.run_inputs.json
 scenarios/**/*.tmp
 
 
