@@ -37,7 +37,7 @@ from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.bind import Declaration
 from apps.container_logistics.policies.dispatch.composite import CompositePolicy
 from apps.container_logistics.policies.dispatch.library.partitioned import cooperation_groups
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework import components

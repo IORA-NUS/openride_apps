@@ -34,10 +34,10 @@ import pytest
 
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
+from apps.container_logistics.policies.compat.mirrors import check_mirrors
 from apps.container_logistics.policies.dispatch.profile import (
     assert_assignment_profiles_resolvable,
-    check_mirrors,
     resolve_dispatch_for_profile,
 )
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy

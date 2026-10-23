@@ -6,17 +6,17 @@ dispatch slot (plan ``docs/plans/policy_slots_p0_p3.md`` §4 P0.7 and P1.6; roun
 
 - :func:`resolve_profile_policies` is THE profile resolver (agent, run-start check,
   run stamp and per-run overrides all use it): the compiled ``policies`` block when
-  present, else the legacy keys (``strategy``, ``solver_params``,
-  ``use_spatial_matching``, ``planner.topology``/``planner.market``) translated by
-  :func:`legacy_dispatch_from_profile` and ``compat.legacy.wrap_legacy_leaf``.
+  present, else the legacy keys, translated by
+  ``compat.legacy_profile.resolve_legacy_profile`` (the translation names solvers, so
+  it lives in the compat quarantine).
 - :func:`resolve_dispatch_for_profile` is its dispatch entry as a typed
   :class:`ResolvedDispatch` tree (:func:`dispatch_node`).
 - :func:`build_policy_tree` instantiates a tree; :func:`bind_instance` fits an
   already-built policy object (``AssignmentApp._solver``) into a tree, or refuses;
   :func:`bind_profile_instance` does that for a profile. ``dispatch.bind.bind_profile``
   then binds the instances (``bind`` per node, messages 23/24).
-- :func:`mirror_dispatch_selection` / :func:`check_mirrors` (the legacy mirrors,
-  message 13) live in ``policies/compat/mirrors.py`` and are re-exported here.
+- The legacy mirrors (``mirror_dispatch_selection`` / ``check_mirrors``, message 13)
+  live in ``policies/compat/mirrors.py``; the run-start check calls ``check_mirrors``.
 - :func:`assert_assignment_profiles_resolvable` is the run-start check
   ``run_container_logistics_simulation.main`` runs before any agent spawns.
 
@@ -44,20 +44,11 @@ from apps.container_logistics.policies.framework import (
     spec_for_class,
 )
 from apps.container_logistics.policies.framework.params import version_echo, warn_version_drift
-from apps.container_logistics.policies.framework.resolve import (
-    ENTRY_KEYS,
-    INNER_PARAM,
-    drop_undeclared_legacy_params,
-)
+from apps.container_logistics.policies.framework.resolve import ENTRY_KEYS, INNER_PARAM
 
-from apps.container_logistics.policies.compat.legacy import (
-    LEGACY_LEAF_DEFAULT,
-    check_policies_format,
-    wrap_legacy_leaf,
-)
-# Re-exported from the compat quarantine until the shims are removed (moved verbatim
-# from this module's "legacy mirrors" section, 35b5b92 lines 494-638).
-from apps.container_logistics.policies.compat.mirrors import check_mirrors, mirror_dispatch_selection
+from apps.container_logistics.policies.compat.legacy import check_policies_format
+from apps.container_logistics.policies.compat.legacy_profile import resolve_legacy_profile
+from apps.container_logistics.policies.compat.mirrors import check_mirrors
 
 from .base import DispatchPolicy
 from .resolved import ResolvedDispatch, ResolvedSource
@@ -71,24 +62,13 @@ __all__ = [
     "bind_instance",
     "bind_profile_instance",
     "build_policy_tree",
-    "check_mirrors",
     "dispatch_node",
-    "legacy_dispatch_from_profile",
-    "mirror_dispatch_selection",
     "resolve_dispatch_for_profile",
     "resolve_profile_policies",
-    "use_spatial_matching",
 ]
 
 #: The keys of a compiled ``profile.policies.<slot>`` entry (``ResolvedPolicy.to_profile``).
 COMPILED_ENTRY_KEYS = ("type", "version", "kind", "timing", "params")
-
-_LEGACY_SOURCE_NOTE = (
-    "(This profile has no 'policies' block: its selection is translated from the legacy keys "
-    "strategy, solver_params, use_spatial_matching and planner.topology/planner.market; "
-    "the fix goes there, or recompile the scenario.)"
-)
-
 
 # --- the run-start check ----------------------------------------------------------
 
@@ -139,48 +119,6 @@ def assert_assignment_profiles_resolvable(
 # --- profile -> resolved policies -------------------------------------------------
 
 
-def _declares(spec: Any, key: str) -> bool:
-    return key in spec.params_cls.__dataclass_fields__
-
-
-def use_spatial_matching(prof: Mapping[str, Any]) -> bool:
-    """The legacy ``use_spatial_matching`` flag, strictly boolean (absent means true).
-
-    The pre-v2 code read it with ``bool(...)``; a non-boolean here is a malformed
-    profile, so it raises instead of silently picking an arm (plan §2.6).
-    """
-    value = prof.get("use_spatial_matching", True)
-    if not isinstance(value, bool):
-        raise PolicyError(
-            f"assignment profile use_spatial_matching must be true or false (got {value!r}, "
-            f"a {type(value).__name__})."
-        )
-    return value
-
-
-def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
-    """Translate the legacy LEAF keys into a ``{"type", "timing", "params"}`` entry.
-
-    ``type`` is ``strategy`` or the legacy leaf default (``legacy.LEGACY_LEAF_DEFAULT``).
-    ``params`` keeps only the ``solver_params`` keys the policy's ``Params`` declares,
-    via the framework's one drop rule (``framework.resolve.drop_undeclared_legacy_params``,
-    logged at WARNING): legacy keys were never validated, and ``solver_params`` also
-    feeds the framework's accounting, so a cost-blind policy legitimately ignores the
-    dual-cycle keys. ``use_spatial_matching: false`` becomes ``candidates="sampled"``
-    where declared. This is the per-scope solver only; :func:`resolve_profile_policies`
-    wraps it in the profile's decomposition. Raises ``UnknownPolicyError`` for an
-    unregistered ``strategy``.
-    """
-    name = prof.get("strategy") or LEGACY_LEAF_DEFAULT
-    spec = get_policy_spec("planner", name)
-    params = drop_undeclared_legacy_params(
-        spec, prof.get("solver_params") or {}, "profile.strategy/solver_params"
-    )
-    if not use_spatial_matching(prof) and _declares(spec, "candidates"):
-        params["candidates"] = "sampled"
-    return {"type": name, "timing": "online", "params": params}
-
-
 def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, ResolvedPolicy], str]:
     """THE resolver of an assignment profile's policies: ``({slot: ResolvedPolicy}, source)``.
 
@@ -198,22 +136,13 @@ def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, Resolve
     literally, as a central ``GreedyNearest`` (round-2 §3.6; the run-start mirror
     check then refuses such a bundle). Next to a block, ``use_spatial_matching``
     other than ``true`` is refused. Without a block the legacy keys are translated:
-    the leaf (:func:`legacy_dispatch_from_profile`) wrapped in ``Partitioned`` or
-    ``PooledMarket`` per ``planner.topology``/``planner.market``
-    (``legacy.wrap_legacy_leaf``; loud on an unknown topology, component or
-    ``max_rounds``). ``source`` is ``"bundle"`` or ``"legacy-profile"``. Raises
-    ``PolicyError`` subclasses.
+    ``compat.legacy_profile.resolve_legacy_profile`` (the leaf wrapped in the profile's
+    legacy decomposition; loud on an unknown value). ``source`` is ``"bundle"`` or
+    ``"legacy-profile"``. Raises ``PolicyError`` subclasses.
     """
     block = prof.get("policies")
     if block is None:
-        try:
-            entry = wrap_legacy_leaf(legacy_dispatch_from_profile(prof), prof.get("planner"))
-            resolved = resolve_policies_block({"planner": entry}, where="profile.policies",
-                                              legacy_slots=("planner",))
-        except PolicyError as exc:
-            # The paths above are the translation's; name the keys the author wrote.
-            raise type(exc)(f"{exc} {_LEGACY_SOURCE_NOTE}") from exc
-        return resolved, "legacy-profile"
+        return resolve_legacy_profile(prof), "legacy-profile"
     if not isinstance(block, Mapping) or not isinstance(block.get("planner"), Mapping):
         raise PolicyError(
             f"assignment profile 'policies' must be an object with a 'planner' entry "

@@ -275,13 +275,13 @@ def register(sub) -> None:
     pol = sub.add_parser("policy", help="Pluggable policies: list / show / validate / bench")
     psub = pol.add_subparsers(dest="policy_cmd", required=True)
 
-    ls = psub.add_parser("list", help="List policy slots, their policies and the market components")
+    ls = psub.add_parser("list", help="List policy slots, their policies and the component kinds")
     ls.add_argument("slot", nargs="?", default=None, metavar="SLOT|KIND",
-                    help="Only this slot (e.g. planner) or component kind (e.g. market.offer)")
+                    help="Only this slot (e.g. planner) or one component kind (as `policy list` shows them)")
     ls.add_argument("--json", action="store_true", help="Emit the raw catalog JSON")
     ls.set_defaults(func=_cmd_list)
 
-    show = psub.add_parser("show", help="Describe one policy (or market component) and its params")
+    show = psub.add_parser("show", help="Describe one policy (or component) and its params")
     show.add_argument("slot", metavar="SLOT|KIND")
     show.add_argument("name")
     show.add_argument("--json", action="store_true", help="Emit the raw catalog entry")
@@ -296,7 +296,7 @@ def register(sub) -> None:
     bench.add_argument("slot")
     bench.add_argument("--policies", required=True, metavar="A,ALIAS=B",
                        help="Comma-separated NAME or ALIAS=NAME entries (one policy benched in several "
-                            "configurations: pm=PooledMarket,pr=PooledMarket)")
+                            "configurations: a=NAME,b=NAME, then --policy-param b.PATH=VALUE)")
     src = bench.add_mutually_exclusive_group(required=True)
     src.add_argument("--fixtures", default=None, metavar="DIR",
                      help="Captured fixtures (openride run --capture-dispatch)")

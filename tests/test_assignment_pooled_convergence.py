@@ -26,7 +26,7 @@ from apps.container_logistics.datagen.preprocess import (
 from apps.container_logistics.assignment.arbitration import ARBITRATION_REGISTRY
 from apps.container_logistics.assignment.policy.claim import CLAIM_REGISTRY
 from apps.container_logistics.assignment.policy.offer import OFFER_REGISTRY
-from apps.container_logistics.policies.dispatch.legacy import market_echo
+from apps.container_logistics.policies.compat.legacy import market_echo
 from apps.container_logistics.policies.dispatch.profile import resolve_dispatch_for_profile
 from tests.test_assignment_cooperation import _coop, _order, _truck
 from tests.test_assignment_pooled import _app, _ids

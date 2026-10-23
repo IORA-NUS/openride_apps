@@ -1,49 +1,40 @@
-"""Shared machinery of the framework-vocabulary and framework-import guards.
+"""Shared machinery of the framework-vocabulary and framework-import guards (END STATE).
 
-Plan ``plan_contract_final.md`` §7.3 (WS0). Two tests use it:
+Plan ``plan_contract_final.md`` §7.3 (WS0) and §7.12 (WS8). Two tests use it:
 
-- ``tests/test_framework_vocabulary.py`` -- the guarded modules may not grow solver
-  vocabulary (``pooled``, ``market``, ``PartitionRule``, ...).
-- ``tests/test_framework_imports.py`` -- tier A may not import solver packages, may take
-  only allow-listed symbols from ``policies.compat``, and may call only allow-listed
+- ``tests/test_framework_vocabulary.py`` -- the guarded modules contain NO solver
+  vocabulary (``pooled``, ``market``, ``PartitionRule``, ...);
+- ``tests/test_framework_imports.py`` -- tier A imports no solver package, takes only
+  allow-listed symbols from ``policies.compat``, and calls only allow-listed
   ``assignment.constraints`` functions.
 
-Both compare a per-module scan with a per-module BASELINE file of sorted
-``token<TAB>count`` lines (optionally ``<TAB># removed-by: WS<n>``). A baseline can only
-SHRINK: the test fails on any hit above its baseline count (or absent from it), and on
-any baseline count above the actual count, so a fix must also lower the baseline. The
-end state (WS8) is every baseline empty.
+History: WS0 started both guards with per-module, shrink-only BASELINE files
+(``tests/vocabulary_baseline/``), and a workstream could add a transitional line only
+with a ``# removed-by: WS<n>`` tag naming a later workstream (plan H4). WS8 is the last
+workstream: it removed the last hits, deleted the baseline directory and set
+:data:`REQUIRE_EMPTY_BASELINES`. Every guarded module must now scan to ZERO hits, and
+the only exemption is ``policies/compat/**`` (never scanned, :func:`_expand`).
 
-Transitional additions (plan H4): a workstream may ADD a baseline line only with a
-``# removed-by: WS<n>`` tag naming a LATER workstream. When WS<n> merges it adds its id
-to :data:`MERGED_WORKSTREAMS`, and a line still tagged with a merged id fails the guard.
-WS8 sets :data:`REQUIRE_EMPTY_BASELINES`.
-
-Maintenance CLI (run from the repo root)::
-
-    python -m tests.test_framework_vocabulary --shrink   # lower counts / drop lines only
-    python -m tests.test_framework_imports --shrink
-    python -m tests.test_framework_vocabulary --write    # WS0 ONLY: rewrite from the scan
-
-``--shrink`` never adds a line or raises a count, so it can not launder a new hit.
+Re-creating a baseline file can not launder a hit: :func:`compare` reports every line
+of one (``REQUIRE_EMPTY_BASELINES``), and every ``# removed-by:`` tag names a merged
+workstream (:data:`MERGED_WORKSTREAMS`), so it is reported as stale too.
 """
 
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Mapping
+from typing import Iterable, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_DIR = REPO_ROOT / "tests" / "vocabulary_baseline"
 
-# Workstreams that have merged into feat/policy-slots. A baseline line tagged
-# ``# removed-by: WS<n>`` for a merged WS<n> fails the guard. Each WS adds its own id here.
-MERGED_WORKSTREAMS: frozenset[str] = frozenset({"WS0", "WS1", "WS2", "WS3", "WS4a", "WS4b", "WS5", "WS7"})
-# WS8 flips this: every baseline must then be empty (the framework names no solver).
-REQUIRE_EMPTY_BASELINES = False
+# Every workstream of the build (WS6 is the frontend repo). A ``# removed-by: WS<n>`` tag
+# naming one of these is stale; with WS8 in, every tag is.
+MERGED_WORKSTREAMS: frozenset[str] = frozenset({"WS0", "WS1", "WS2", "WS3", "WS4a", "WS4b", "WS5", "WS7", "WS8"})
+# WS8 flipped this: there are no baselines; every guarded module scans to zero hits.
+REQUIRE_EMPTY_BASELINES = True
 
 _POLICIES = "apps/container_logistics/policies"
 
@@ -122,19 +113,15 @@ def read_baseline(path: Path) -> dict[str, BaselineLine]:
     return lines
 
 
-def write_baseline(path: Path, counts: Mapping[str, int], tags: Mapping[str, str] | None = None) -> None:
-    tags = tags or {}
-    path.parent.mkdir(parents=True, exist_ok=True)
-    body = "".join(
-        f"{tok}\t{counts[tok]}" + (f"\t# removed-by: {tags[tok]}" if tok in tags else "") + "\n"
-        for tok in sorted(counts) if counts[tok] > 0
-    )
-    path.write_text(body)
+def compare(module: str, actual: Mapping[str, int],
+            baseline: Mapping[str, BaselineLine] | None = None) -> list[str]:
+    """Every problem of ``module``'s scan (empty means clean).
 
-
-def compare(module: str, actual: Mapping[str, int], baseline: Mapping[str, BaselineLine],
-            shrink_cmd: str) -> list[str]:
-    """Every problem of ``module``'s scan against its baseline (empty means clean)."""
+    ``baseline`` is a re-created baseline file's lines, if any (``read_baseline``); with
+    :data:`REQUIRE_EMPTY_BASELINES` each of its lines is itself a problem, so it can not
+    allow a hit.
+    """
+    baseline = baseline or {}
     problems: list[str] = []
     for tok in sorted(actual):
         allowed = baseline[tok].count if tok in baseline else 0
@@ -144,50 +131,11 @@ def compare(module: str, actual: Mapping[str, int], baseline: Mapping[str, Basel
     for tok, line in sorted(baseline.items()):
         have = actual.get(tok, 0)
         if line.count > have:
-            problems.append(f"{module}: baseline says {tok} {line.count}x, scan finds {have}; the baseline only "
-                            f"shrinks -- run `{shrink_cmd}`")
+            problems.append(f"{module}: baseline says {tok} {line.count}x, scan finds {have}")
         if line.removed_by and line.removed_by in MERGED_WORKSTREAMS:
             problems.append(f"{module}: {tok} is tagged '# removed-by: {line.removed_by}', and {line.removed_by} "
                             "has merged; remove the hit and the line")
         if REQUIRE_EMPTY_BASELINES:
-            problems.append(f"{module}: baseline line {tok} remains; WS8 requires every baseline empty")
+            problems.append(f"{module}: baseline line {tok} exists; the guard has no baselines since WS8 "
+                            "(remove the hit, do not baseline it)")
     return problems
-
-
-def orphan_baselines(directory: Path, modules: Iterable[str]) -> list[str]:
-    """Baseline files naming a module that is no longer guarded (deleted or renamed)."""
-    known = set(modules)
-    return [f"{p}: no guarded module {p.stem!r}; delete the file" for p in sorted(directory.glob("*.txt"))
-            if p.stem not in known]
-
-
-def shrink(directory: Path, scans: Mapping[str, Mapping[str, int]]) -> int:
-    """Lower each baseline count to the scan (never raise one, never add a line). Returns edits."""
-    edits = 0
-    for module, actual in scans.items():
-        path = directory / f"{module}.txt"
-        base = read_baseline(path)
-        counts = {tok: min(line.count, actual.get(tok, 0)) for tok, line in base.items()}
-        tags = {tok: line.removed_by for tok, line in base.items() if line.removed_by}
-        if any(counts[t] != base[t].count for t in base):
-            edits += 1
-            write_baseline(path, counts, tags)
-    return edits
-
-
-def main(directory: Path, scan_all: Callable[[], Mapping[str, Mapping[str, int]]], argv: list[str]) -> int:
-    """``--shrink`` (safe) or ``--write`` (WS0 only: rewrite every baseline from the scan)."""
-    scans = scan_all()
-    if argv == ["--shrink"]:
-        print(f"shrunk {shrink(directory, scans)} baseline file(s) in {directory}")
-        return 0
-    if argv == ["--write"]:
-        directory.mkdir(parents=True, exist_ok=True)
-        for module, actual in scans.items():
-            path = directory / f"{module}.txt"
-            tags = {t: line.removed_by for t, line in read_baseline(path).items() if line.removed_by}
-            write_baseline(path, actual, {t: w for t, w in tags.items() if t in actual})
-        print(f"wrote {len(scans)} baseline file(s) in {directory}; REVIEW every line")
-        return 0
-    print("usage: --shrink | --write", file=sys.stderr)
-    return 2

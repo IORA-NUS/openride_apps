@@ -17,7 +17,7 @@ from apps.container_logistics.assignment.solver import (
     RandomAssignmentSolver,
     get_solver,
 )
-from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
+from apps.container_logistics.policies.compat.legacy import LEGACY_LEAF_DEFAULT
 from apps.container_logistics.policies.framework import SLOTS, UnknownPolicyError
 
 

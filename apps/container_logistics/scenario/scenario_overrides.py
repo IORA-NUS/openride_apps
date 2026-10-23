@@ -5,8 +5,9 @@ The dispatch selection has ONE application point, :func:`run_dispatch_overrides`
 handed through opaquely as ``legacy_env`` and translated by
 ``policies/compat/legacy_env.py``), shared by the sim main and the control-plane dry
 run (``docs/plans/policy_slots_round2_whole_tick.md`` §3.6, §5 C4); the older entry
-points (:func:`apply_policy_overrides`, :func:`apply_solver_override`, and the
-compat re-exports below) are compatibility shims with no run-path caller. Everything
+points (:func:`apply_policy_overrides`, :func:`apply_solver_override`) are
+compatibility shims with no run-path caller; the legacy env helpers themselves are
+imported from ``policies/compat/legacy_env.py`` (no re-export here). Everything
 here patches the loaded behaviors in memory; the on-disk bundle is never written.
 """
 
@@ -17,15 +18,6 @@ from contextlib import contextmanager
 from copy import deepcopy
 
 from apps.container_logistics.policies.compat import legacy_env as _legacy_env
-# Re-exported from the compat quarantine until the shims are removed (moved verbatim,
-# see that module's docstring).
-from apps.container_logistics.policies.compat.legacy_env import (  # noqa: F401
-    MARKET_ENV,
-    apply_market_override,
-    apply_planner_topology_override,
-    known_planner_topologies,
-    legacy_topology_name,
-)
 
 from .validation_config import smoke_scenario_config_bundle
 

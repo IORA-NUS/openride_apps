@@ -16,8 +16,8 @@ market branches of ``_dispatch_entry`` (326-366, now :func:`apply_legacy_env`) w
 their helpers ``_over`` / ``_with_type`` (369-383), and the compatibility shims
 :func:`known_planner_topologies` (614-626), :func:`apply_planner_topology_override`
 (628-645) and :func:`apply_market_override` (647-672). Every message text is
-unchanged. ``scenario_overrides`` re-exports the public names until the shims are
-removed.
+unchanged. ``scenario_overrides`` no longer re-exports the public names (WS8 deleted
+the re-exports); callers import them from here.
 
 Import contract: stdlib plus ``compat.legacy`` and ``policies.framework`` (imported
 inside the functions, as in the original); ``scenario_overrides`` (whose

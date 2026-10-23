@@ -32,7 +32,7 @@ import pytest
 from apps.container_logistics.policies.dispatch import invariants
 from apps.container_logistics.policies.dispatch import runner as runner_module
 from apps.container_logistics.policies.dispatch.invariants import check_result
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation

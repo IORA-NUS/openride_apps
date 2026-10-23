@@ -1,1 +1,0 @@
-compat:legacy:*	1	# removed-by: WS8

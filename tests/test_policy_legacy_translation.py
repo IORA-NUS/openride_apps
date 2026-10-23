@@ -36,7 +36,7 @@ from apps.container_logistics.assignment.policy.offer import DEFAULT_OFFER_POLIC
 
 from apps.container_logistics.datagen.preprocess import Preprocessor
 from apps.container_logistics.assignment import pooled_planner
-from apps.container_logistics.policies.dispatch import legacy
+from apps.container_logistics.policies.compat import legacy
 from apps.container_logistics.policies.dispatch.profile import (
     resolve_dispatch_for_profile,
     resolve_profile_policies,

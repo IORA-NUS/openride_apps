@@ -50,13 +50,12 @@ from apps.container_logistics.policies.framework import PolicyParams, PolicyRef,
 from apps.container_logistics.policies.framework.registry import isolated_registry
 from apps.container_logistics.policies.solver_lib import candidates as C
 from apps.container_logistics.policies.solver_lib.pair_solver import PairSolver
+from apps.container_logistics.policies.compat.legacy_profile import legacy_dispatch_from_profile
+from apps.container_logistics.policies.compat.mirrors import check_mirrors, mirror_dispatch_selection
 from apps.container_logistics.policies.dispatch.profile import (
     assert_assignment_profiles_resolvable,
     bind_instance,
     build_policy_tree,
-    check_mirrors,
-    mirror_dispatch_selection,
-    legacy_dispatch_from_profile,
     resolve_dispatch_for_profile,
     bind_profile_instance,
 )

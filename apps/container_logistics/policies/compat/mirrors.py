@@ -10,8 +10,8 @@ its compiled selection (message 13). Round 2
 
 Moved verbatim from ``policies/dispatch/profile.py`` (35b5b92: ``_MARKET_KEYS`` line
 94 and the "legacy mirrors" section, lines 494-638) into the compat quarantine;
-``dispatch/profile.py`` re-exports :func:`check_mirrors` and
-:func:`mirror_dispatch_selection` until the shims are removed.
+``dispatch/profile.py`` imports :func:`check_mirrors` for the run-start check; its
+re-exports of both helpers were deleted in WS8 (callers import them from here).
 
 Import contract: ``compat.legacy`` and ``policies.framework`` at module top; the
 selection-tree helpers of ``dispatch/profile.py`` (which imports this module) are

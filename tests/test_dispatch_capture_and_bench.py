@@ -46,7 +46,7 @@ from apps.container_logistics.assignment import accounting
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.dispatch import capture
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_app, build_runner_for_policy
 from apps.container_logistics.policies.dispatch.tick import tick_seed
 from apps.container_logistics.policies.framework import PolicyParams, policy

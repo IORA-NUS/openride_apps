@@ -82,7 +82,7 @@ def _resolve_compiled_policies(compiled) -> dict[str, ResolvedPolicy]:
     contradicts its innermost solver (:func:`_refuse_deployment_contradicting_policies`),
     then writes the selection's legacy mirrors into the profile (``strategy`` = the
     leaf, ``solver_params``/``planner.deployment``, ``planner.topology``,
-    ``planner.market``) via ``dispatch/profile.py::mirror_dispatch_selection`` -- the
+    ``planner.market``) via ``compat/mirrors.py::mirror_dispatch_selection`` -- the
     same helper the per-run override path uses -- so the framework's accounting (F6)
     reads exactly what the policy runs with and the run-start mirror check passes. A
     legacy translation was built FROM those keys, so its mirrors already agree.

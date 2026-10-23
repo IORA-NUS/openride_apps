@@ -12,8 +12,10 @@ constant (f-string parts included). Each is cut into words on non-word character
 word is checked whole against the banned identifiers, then split on ``_`` and camel case
 (``PooledMarket`` -> ``pooled``, ``market``), lower-cased, and checked against the banned
 subwords. Hits are counted per token as ``sub:<w>``, ``pair:component_of``, ``id:<name>``
-or ``str:v1``, and compared with ``tests/vocabulary_baseline/<dotted.module>.txt`` (see
-``tests/_framework_guard.py`` for the shrink-only rule and ``# removed-by:`` tags).
+or ``str:v1``. END STATE (WS8): every guarded module has ZERO hits -- the per-module
+baselines WS0 started with (``tests/vocabulary_baseline/``, shrink-only, with
+``# removed-by:`` tags for transitional lines) are deleted, and the only exemption is
+``policies/compat/**`` (see ``tests/_framework_guard.py``).
 
 Tier A (core runtime) and tier B (world plumbing) are listed in ``_framework_guard``.
 ``pool`` and ``partition`` are deliberately NOT banned subwords: they would hit
@@ -29,6 +31,14 @@ Verified to have teeth (WS0, mutate / see it fail / restore):
   baseline only shrinks", and ``--shrink`` restored it);
 - a ``# removed-by: WS0`` tag on a baseline line failed (WS0 is merged);
 - a baseline file for a module that is not guarded failed (orphan).
+
+Verified to have teeth (WS8, end state; mutate / see it fail / restore):
+
+- ``x = "market"`` added to ``dispatch/runner.py`` failed
+  ``test_module_has_no_solver_vocabulary`` (``sub:market`` occurs 1x, allows 0);
+- re-creating ``tests/vocabulary_baseline/apps.container_logistics.policies.dispatch.runner.txt``
+  with the line ``sub:market<TAB>1`` (the WS0 way of allowing that hit) still failed it
+  (the line itself is reported), and failed ``test_no_baseline_directory_exists``.
 """
 
 from __future__ import annotations
@@ -68,7 +78,6 @@ BANNED_IDENTIFIERS_TIER_A = frozenset({"active_cooperation_structure", "share_ad
 BANNED_STRINGS_TIER_A = frozenset({"v1"})
 
 BASELINE_DIR = guard.BASELINE_DIR
-SHRINK_CMD = "python -m tests.test_framework_vocabulary --shrink"
 
 _WORD = re.compile(r"\w+")
 _CAMEL = re.compile(r"[A-Z]+(?=[A-Z][a-z]|\d|$)|[A-Z]?[a-z]+|[A-Z]+|\d+")
@@ -176,16 +185,29 @@ def test_the_tiers_name_real_modules():
 
 
 @pytest.mark.parametrize("module", sorted(_SCANS))
-def test_module_has_no_vocabulary_beyond_its_baseline(module):
-    baseline = guard.read_baseline(BASELINE_DIR / f"{module}.txt")
-    problems = guard.compare(module, _SCANS[module], baseline, SHRINK_CMD)
+def test_module_has_no_solver_vocabulary(module):
+    problems = guard.compare(module, _SCANS[module], guard.read_baseline(BASELINE_DIR / f"{module}.txt"))
     assert not problems, "\n".join(problems)
 
 
-def test_every_guarded_module_has_a_baseline_file_and_none_is_orphaned():
-    missing = [m for m in _SCANS if not (BASELINE_DIR / f"{m}.txt").exists()]
-    assert not missing, f"no baseline file for {missing} (an empty file means 'no hits')"
-    assert not guard.orphan_baselines(BASELINE_DIR, _SCANS)
+def test_no_baseline_directory_exists():
+    """The end state has no baselines (WS8): a hit is fixed, never baselined."""
+    assert guard.REQUIRE_EMPTY_BASELINES is True
+    assert "WS8" in guard.MERGED_WORKSTREAMS
+    assert not BASELINE_DIR.exists(), f"{BASELINE_DIR} was re-created; the guard allows no baseline"
+
+
+def test_a_recreated_baseline_line_can_not_allow_a_hit(tmp_path):
+    """Writing a WS0-style baseline line (tagged or not) never makes a hit pass."""
+    path = tmp_path / "m.txt"
+    path.write_text("sub:market\t1\nsub:pooled\t1\t# removed-by: WS8\n")
+    problems = guard.compare("m", {"sub:market": 1, "sub:pooled": 1}, guard.read_baseline(path))
+    assert any("sub:market" in p and "no baselines since WS8" in p for p in problems), problems
+    assert any("removed-by: WS8" in p for p in problems), problems
+    assert guard.compare("m", {"sub:market": 1}) == [
+        "m: sub:market occurs 1x, baseline allows 0 (new framework vocabulary: move it to the "
+        "solver side or policies/compat/)"]
+    assert guard.compare("m", {}) == []
 
 
 @pytest.mark.parametrize(("source", "tier_a", "want"), [
@@ -205,7 +227,3 @@ def test_every_guarded_module_has_a_baseline_file_and_none_is_orphaned():
 ])
 def test_the_scanner_tokenises_as_specified(source, tier_a, want):
     assert dict(scan_source(source, tier_a=tier_a)) == want
-
-
-if __name__ == "__main__":
-    raise SystemExit(guard.main(BASELINE_DIR, scan_all, sys.argv[1:]))

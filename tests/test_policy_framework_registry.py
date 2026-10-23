@@ -32,7 +32,7 @@ from apps.container_logistics.policies.framework import (
 from apps.container_logistics.policies.framework import registry
 from apps.container_logistics.policies.framework.registry import isolated_registry
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 
 
 class _TestPolicyBase(DispatchPolicy):

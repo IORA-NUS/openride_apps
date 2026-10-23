@@ -31,11 +31,13 @@ _EXTRA = [
 ]
 # Plan §2.7 leaf list, plus dispatch/resolved.py (a value module the runner and
 # dispatch/profile.py both import), and the round-2 leaves framework/components.py
-# (registries imported locally) and dispatch/legacy.py (round-2 §4), plus
-# dispatch/composite.py (it imports only base and resolved), plus the compat quarantine
-# package (plan_contract_final.md §7.3; its __init__ imports nothing) and its modules
-# (they import only stdlib, ``policies.framework`` and leaf ``dispatch`` modules at
-# top; ``dispatch.legacy`` is now their re-export shim).
+# (registries imported locally), plus dispatch/composite.py (it imports only base and
+# resolved), plus the compat quarantine package (plan_contract_final.md §7.3; its
+# __init__ imports nothing) and its modules (they import only stdlib,
+# ``policies.framework`` and leaf ``dispatch`` modules at top). WS8 deleted the
+# re-export shims ``dispatch/legacy.py`` and ``dispatch/plan.py``; their leaf homes are
+# ``compat.legacy`` and ``compat.legacy_context``, and the legacy-profile translation
+# moved out of ``dispatch/profile.py`` into the leaf ``compat.legacy_profile``.
 _LEAVES = [
     "apps.container_logistics.policies",
     "apps.container_logistics.policies.compat",
@@ -47,17 +49,17 @@ _LEAVES = [
     "apps.container_logistics.policies.framework.components",
     "apps.container_logistics.policies.framework.catalog",
     "apps.container_logistics.policies.dispatch.base",
-    "apps.container_logistics.policies.dispatch.plan",
     "apps.container_logistics.policies.dispatch.result",
     "apps.container_logistics.policies.dispatch.bind",
     "apps.container_logistics.policies.solver_lib",
     "apps.container_logistics.policies.solver_lib.pair_solver",
     "apps.container_logistics.policies.dispatch.resolved",
-    "apps.container_logistics.policies.dispatch.legacy",
     "apps.container_logistics.policies.dispatch.composite",
     # WS3: assignment.accounting and assignment.app import compat.wire at module top.
     "apps.container_logistics.policies.compat.wire",
     "apps.container_logistics.policies.compat.legacy",
+    "apps.container_logistics.policies.compat.legacy_profile",
+    "apps.container_logistics.policies.compat.legacy_context",
     "apps.container_logistics.policies.compat.defaults",
     "apps.container_logistics.policies.compat.mirrors",
     "apps.container_logistics.policies.compat.legacy_env",
@@ -96,6 +98,8 @@ def test_each_module_imports_cleanly_as_the_first_import(module):
 def test_leaf_modules_pull_in_no_assignment_module(module):
     """Verified to have teeth: a top-level ``from apps.container_logistics.assignment
     import constraints`` added to ``dispatch/plan.py`` failed the plan and pair_solver cases.
+    Re-verified in WS8 (``dispatch/plan.py`` deleted): the same line added to
+    ``dispatch/result.py`` failed the result, pair_solver and compat.legacy_context cases.
     """
     proc = _run(
         f"import json, sys, {module}; "

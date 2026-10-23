@@ -1,2 +1,0 @@
-sub:market	5
-sub:pooled	2

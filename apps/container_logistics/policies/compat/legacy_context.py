@@ -6,8 +6,8 @@ Single responsibility: let a policy written against the round-2 contract
 tick in :class:`LegacyDecideContext`, calls ``decide`` and converts the returned
 ``Plan`` with :func:`result_from_legacy`.
 
-- :class:`Plan` -- moved VERBATIM from ``dispatch/plan.py`` (which re-exports it until
-  the compat shims are removed). A chain longer than one is refused at conversion
+- :class:`Plan` -- moved VERBATIM from ``dispatch/plan.py`` (WS1; that re-export shim
+  was deleted in WS8, so this is its only home). A chain longer than one is refused at conversion
   (tails are not a framework concept, decision 2), and so is an empty chain.
 - :class:`LegacyDecideContext` -- the LEAF-style members a ``decide`` uses, mapped onto
   the tick: ``raw_trucks``, ``raw_orders``, ``trucks``, ``orders``, ``params``, ``rng``,

@@ -14,7 +14,7 @@ from ``dispatch/profile.py:_unregistered_node`` and ``pair_solver.PairSolver.dec
   ``solve`` otherwise) under the instance's ``decision_rng``. The instance itself
   stays the object injections reach (the parent's ``inner``).
 
-Compat (old inputs). Imports ``solver_lib`` and ``dispatch.profile`` locally.
+Compat (old inputs). Imports ``solver_lib``, ``dispatch.base`` and ``compat.legacy_profile`` locally.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ __all__ = ["UnregisteredPairLeaf", "legacy_spatial_rule"]
 
 def legacy_spatial_rule(instance: Any, profile: Mapping[str, Any]) -> bool:
     """``use_spatial_matching(profile) and hasattr(instance, "solve_pairs")`` (the pre-v2 rule)."""
-    from apps.container_logistics.policies.dispatch.profile import use_spatial_matching
+    from apps.container_logistics.policies.compat.legacy_profile import use_spatial_matching
 
     return use_spatial_matching(profile) and hasattr(instance, "solve_pairs")
 

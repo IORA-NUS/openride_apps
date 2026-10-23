@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Mapping
 
-__all__ = ["accounting_dials", "accounting_params_for", "framework_accounting_cost"]
+__all__ = ["accounting_dials", "accounting_params_for", "framework_accounting_cost", "offline_measurement_dials"]
 
 _ACCOUNTING_KEYS = ("dual_cycle_bonus_km", "dual_cycle_radius_km")
 
@@ -49,6 +49,19 @@ def accounting_params_for(selection: Any) -> dict[str, Any]:
         return out
     values = selection.to_dict() if hasattr(selection, "to_dict") else dict(selection or {})
     return {k: values[k] for k in _ACCOUNTING_KEYS if k in values}
+
+
+def offline_measurement_dials(selection: Any) -> dict[str, Any]:
+    """The measurement dials of an OFFLINE tick (battery, fixtures, bench, capture replay).
+
+    The framework's entry point (``dispatch/runner.py``) into :func:`accounting_params_for`,
+    under a name that states the framework's need rather than this module's rule: the
+    framework only asks "which dials does ``Measure`` get when the live app supplies
+    none"; that the answer is "the first node that declares the dual-cycle keys" is the
+    compat rule, and it stays here (plan ``plan_contract_final.md`` §2.5 ``measure``,
+    M5). Same value as :func:`accounting_params_for`, which it calls.
+    """
+    return accounting_params_for(selection)
 
 
 def framework_accounting_cost(selection: Any) -> Callable[[dict[str, Any], dict[str, Any]], float]:
