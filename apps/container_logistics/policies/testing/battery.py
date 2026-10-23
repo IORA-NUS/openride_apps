@@ -28,9 +28,20 @@ decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in
   ``audit_scopes(scope_log, tick) -> list[str]`` over the sub-ticks it built
   (``tick.restrict``, recorded only while auditing), and every committed pair must lie
   inside one of those sub-ticks (a node that audits its scopes decides each pair inside
-  one); SKIP, with the reason, when the top has no ``audit_scopes`` (a central leaf).
-  This certifies the declared decomposition shape; it cannot prove a policy never
-  peeks beyond its sub-ticks.
+  one); SKIP, with the reason, when the top has no ``audit_scopes`` AND makes no
+  containment claim (a central leaf). It FAILS (final review M5: containment must not be
+  silently self-certified) when the top has no ``audit_scopes`` but its badge claims a
+  decomposition (any badge other than :data:`CENTRAL_BADGES`, read from the registration
+  and the stamped provenance) or its solve built sub-ticks. This certifies the declared
+  decomposition shape; it cannot prove a policy never peeks beyond its sub-ticks.
+  ``information_scope``: FRAMEWORK-MEASURED, not the solver's word. The battery wraps
+  ``Tick.restrict`` / ``Tick.call`` (from this side; ``dispatch/tick.py`` is not
+  touched) and records, for every sub-tick, the carrier hauliers of its trucks and the
+  owner hauliers of its orders, and which inner decided it. The detail reports the
+  widest view an inner call had against the tick's hauliers. SKIP when no sub-tick was
+  built (one central view; nothing to contain); FAIL when the top's badge claims a
+  decomposition but no fixture with two or more hauliers made it build a sub-tick
+  (the badge is unbacked by any measured split); PASS otherwise, with the measurement.
   ``bind_pure``: binding the selection twice against the fixture's profile gives equal
   declarations and reads, and leaves the ``random`` module state and the profile
   unchanged.
@@ -104,6 +115,7 @@ from .fixtures import seeded_module_random
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "CENTRAL_BADGES",
     "CheckResult",
     "Skip",
     "DISPATCH_CHECKS",
@@ -119,6 +131,13 @@ __all__ = [
     "seeded_module_random",
 ]
 
+#: The badges that make NO information-containment claim: none, and the pair leaves'
+#: ``central`` (one planner sees the whole tick; ``solver_lib.pair_leaf.CENTRAL_BADGE``,
+#: pinned equal by ``tests/test_policy_battery_information_scope.py``). Any other badge
+#: (``per group``, ``per company``, a third party's) claims a decomposition, so the
+#: top must let the battery audit it (``audit_scopes``).
+CENTRAL_BADGES: frozenset[str | None] = frozenset({None, "central"})
+
 STRUCTURE_CHECKS: tuple[str, ...] = (
     "returns_plan", "no_truck_twice", "no_order_twice", "only_in_scope", "only_allowed_pairs",
 )
@@ -130,6 +149,7 @@ ARM_CHECKS: tuple[str, ...] = (
     "determinism.order_independent",
     "determinism.no_module_rng",
     "contract.scope_audit",
+    "contract.information_scope",
     "contract.bind_pure",
     "contract.world_reads_at_bind",
     "contract.declaration_within_ceiling",
@@ -394,6 +414,7 @@ def _arm_results(spec: PolicySpec, arm: dict[str, Any]) -> list[CheckResult]:
     checks["determinism.order_independent"] = _bind(_order_independent, spec, arm)
     checks["determinism.no_module_rng"] = _bind(_no_module_rng, outcomes)
     checks["contract.scope_audit"] = _bind(_scope_audit, outcomes)
+    checks["contract.information_scope"] = _bind(_information_scope, outcomes)
     checks["contract.bind_pure"] = _bind(_bind_pure, spec, arm)
     checks["contract.world_reads_at_bind"] = _bind(_world_reads_at_bind, outcomes)
     checks["contract.declaration_within_ceiling"] = _bind(_declaration_within_ceiling, spec, arm)
@@ -491,6 +512,9 @@ class _Decision:
     solve_reads: frozenset[str] = frozenset()   # world keys read while solving it
     bind_reads: frozenset[str] = frozenset()    # world keys the bound tree's binds read
     audit: Any = None                           # the top's audit_scopes, or None
+    badge: str | None = None                    # the top's claimed badge (registration or provenance)
+    sub_ticks: tuple[Mapping[str, Any], ...] = ()   # framework-measured: every restrict() and its call
+    tick_hauliers: frozenset[str] = frozenset() # hauliers of the whole tick's trucks and orders
 
     @property
     def fixture_id(self) -> str:
@@ -524,11 +548,13 @@ def _decide_via_runner(
     error: str | None = None
     scope_log: list[dict[str, Any]] = []
     pairs: list[tuple[str, str]] = []
+    sub_ticks: list[dict[str, Any]] = []
     with fixture.module_random():
         before = random.getstate()
         ctx = fixture.context(runner, trucks=trucks, orders=orders, scope_log=scope_log)
         try:
-            pairs = [(str(t.get("_id")), str(o.get("_id"))) for t, o in runner.run(ctx).pairs]
+            with _measured_sub_ticks(sub_ticks):
+                pairs = [(str(t.get("_id")), str(o.get("_id"))) for t, o in runner.run(ctx).pairs]
         except Exception as exc:  # noqa: BLE001 - reported by robustness
             error = f"{type(exc).__name__}: {exc}"
         touched = random.getstate() != before
@@ -558,7 +584,64 @@ def _decide_via_runner(
         solve_reads=solve_reads,
         bind_reads=tree.world_reads,
         audit=getattr(tree.top.solver, "audit_scopes", None),
+        badge=_claimed_badge(spec, tree),
+        sub_ticks=tuple(sub_ticks),
+        tick_hauliers=_hauliers_of(ctx.raw_trucks, ctx.raw_orders),
     )
+
+
+def _claimed_badge(spec: PolicySpec, tree: Any) -> str | None:
+    """The top's badge: its registration's, else the one its bound declaration stamps."""
+    if spec.badge is not None:
+        return spec.badge
+    badge = (tree.top.declaration.provenance or {}).get("badge")
+    return badge if isinstance(badge, str) else None
+
+
+def _hauliers_of(trucks: Any, orders: Any) -> frozenset[str]:
+    return frozenset(h for h in (*(assign_constraints.haulier_of(t) for t in trucks),
+                                 *(assign_constraints.haulier_of(o) for o in orders)) if h is not None)
+
+
+@contextmanager
+def _measured_sub_ticks(record: list[dict[str, Any]]) -> Iterator[None]:
+    """Record every ``Tick.restrict`` (what the sub-tick shows) and ``Tick.call`` (who decided it).
+
+    Wraps the two class attributes for the block and restores them; the wrappers call
+    the originals unchanged, so the decision is the one the sim makes. Each record:
+    ``scope``, ``depth``, ``carriers`` (the trucks' hauliers), ``owners`` (the orders'),
+    ``n_trucks``, ``n_orders``, ``callee`` (the inner that solved it, ``None`` if
+    never called).
+    """
+    original_restrict, original_call = Tick.restrict, Tick.call
+    by_sub: dict[int, dict[str, Any]] = {}
+
+    def restrict(self: Tick, **kwargs: Any) -> Tick:
+        sub = original_restrict(self, **kwargs)
+        entry = {
+            "scope": sub.scope, "depth": sub.depth,
+            "carriers": frozenset(h for h in map(assign_constraints.haulier_of, sub.raw_trucks) if h is not None),
+            "owners": frozenset(h for h in map(assign_constraints.haulier_of, sub.raw_orders) if h is not None),
+            "n_trucks": len(sub.raw_trucks), "n_orders": len(sub.raw_orders), "callee": None,
+        }
+        by_sub[id(sub)] = entry
+        record.append(entry)
+        return sub
+
+    def call(self: Tick, ref: Any, sub: Tick) -> Any:
+        entry = by_sub.get(id(sub))
+        if entry is not None and entry["callee"] is None:
+            try:
+                entry["callee"] = self.callee(ref).name
+            except Exception:  # noqa: BLE001 - the original call reports a bad ref itself
+                entry["callee"] = "?"
+        return original_call(self, ref, sub)
+
+    Tick.restrict, Tick.call = restrict, call
+    try:
+        yield
+    finally:
+        Tick.restrict, Tick.call = original_restrict, original_call
 
 
 class _Outcomes:
@@ -950,6 +1033,16 @@ def _scope_audit(outcomes: _Outcomes) -> tuple[bool, str]:
     decisions = [d for d in outcomes.all() if d.error is None]
     audit = next((d.audit for d in decisions if d.audit is not None), None)
     if audit is None:
+        badge = next((d.badge for d in decisions if d.badge is not None), outcomes.spec.badge)
+        built = sum(len(d.sub_ticks) for d in decisions)
+        if badge not in CENTRAL_BADGES:
+            return False, (f"{outcomes.spec.name} claims the badge {badge!r} (a decomposition, i.e. information "
+                           "containment) but defines no audit_scopes(scope_log, tick): the claim would be "
+                           "unverified text. Define audit_scopes, or badge it 'central'")
+        if built:
+            return False, (f"{outcomes.spec.name} built {built} sub-tick(s) (tick.restrict) but defines no "
+                           "audit_scopes(scope_log, tick): a decomposition must let the battery audit its "
+                           "scopes (see contract.information_scope for what each one showed)")
         return _skip(f"{outcomes.spec.name} defines no audit_scopes(scope_log, tick): it decides the tick "
                      "without sub-ticks the battery could audit")
     problems: list[str] = []
@@ -966,6 +1059,34 @@ def _scope_audit(outcomes: _Outcomes) -> tuple[bool, str]:
         shown = "; ".join(problems[:6]) + (f"; ... {len(problems) - 6} more" if len(problems) > 6 else "")
         return False, shown
     return True, f"{scopes} sub-tick(s) audited by {outcomes.spec.name}.audit_scopes, every committed pair inside one"
+
+
+def _information_scope(outcomes: _Outcomes) -> tuple[bool, str]:
+    """FRAMEWORK-MEASURED: what each sub-tick the policy built showed, against the whole tick."""
+    decisions = [d for d in outcomes.all() if d.error is None]
+    badge = next((d.badge for d in decisions if d.badge is not None), outcomes.spec.badge)
+    subs = [(d, e) for d in decisions for e in d.sub_ticks]
+    multi = [d for d in decisions if len(d.tick_hauliers) >= 2]
+    if not subs:
+        if badge not in CENTRAL_BADGES and multi:
+            return False, (f"{outcomes.spec.name} claims the badge {badge!r} but built no sub-tick on "
+                           f"{len(multi)} multi-company tick(s) ({', '.join(d.fixture_id for d in multi)}): "
+                           "every decision saw the whole tick, so the claim is unbacked")
+        return _skip(f"no sub-tick built on {len(decisions)} whole tick(s): one central view of every "
+                     "haulier, nothing to contain")
+    called = [(d, e) for d, e in subs if e["callee"] is not None]
+    widest = max(subs, key=lambda de: (len(de[1]["carriers"] | de[1]["owners"]), de[1]["n_trucks"]))
+    d, e = widest
+    seen = e["carriers"] | e["owners"]
+    multi_carrier = sum(1 for _d, x in subs if len(x["carriers"]) > 1)
+    whole = sum(1 for dd, x in subs if len(dd.tick_hauliers) >= 2 and (x["carriers"] | x["owners"]) >= dd.tick_hauliers)
+    callees = sorted({x["callee"] for _d, x in called})
+    return True, (f"measured {len(subs)} sub-tick(s) on {len({id(dd) for dd, _ in subs})} whole tick(s), "
+                  f"{len(called)} solved by an inner ({', '.join(callees) or '-'}); widest: {d.fixture_id} "
+                  f"{e['scope']} saw {len(seen)} of the tick's {len(d.tick_hauliers)} haulier(s) "
+                  f"({len(e['carriers'])} carrier(s), {len(e['owners'])} owner(s)); {multi_carrier} sub-tick(s) "
+                  f"held trucks of more than one carrier; {whole} saw every haulier of a multi-company tick"
+                  f" (badge {badge!r})")
 
 
 def _bound_twice(spec: PolicySpec, arm: Mapping[str, Any], profile: Mapping[str, Any]) -> tuple[Any, Any]:

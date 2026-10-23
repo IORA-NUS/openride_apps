@@ -1,8 +1,11 @@
 """The accounting dials of the framework's measurement cost (compat: "first node wins").
 
-Verbatim move of ``dispatch/runner.py`` ``_ACCOUNTING_KEYS``, ``accounting_params_for``
-and ``framework_accounting_cost`` (plan ``plan_contract_final.md`` §5.1 row 18), plus
-:func:`accounting_dials`, the live app's read (``AssignmentApp._solver_params``).
+Verbatim move of ``dispatch/runner.py`` ``_ACCOUNTING_KEYS`` and ``accounting_params_for``
+(plan ``plan_contract_final.md`` §5.1 row 18), plus :func:`offline_measurement_dials`,
+the framework's one entry point into it (``dispatch/runner.py``). The two zero-caller
+helpers that also lived here (``accounting_dials``, ``framework_accounting_cost``) were
+deleted in the final-review fix loop (M8): dead code in the quarantine is a hole, not
+a convenience.
 
 Why compat: the dials are named after one solver family's params
 (``dual_cycle_bonus_km`` / ``dual_cycle_radius_km``) and are found by walking the
@@ -10,22 +13,17 @@ selection for the first node that declares them (the F1 one-dial mirror rule). M
 them to a world measurement setting changes bundle bytes and override semantics, a
 documented later phase (plan §11). Until then this rule is kept, quarantined.
 
-Not a leaf module: ``framework_accounting_cost`` imports ``assignment.constraints``
-locally.
+Leaf module: imports ``policies.dispatch.resolved`` locally (inside
+:func:`accounting_params_for`) and nothing else.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Mapping
+from typing import Any
 
-__all__ = ["accounting_dials", "accounting_params_for", "framework_accounting_cost", "offline_measurement_dials"]
+__all__ = ["accounting_params_for", "offline_measurement_dials"]
 
 _ACCOUNTING_KEYS = ("dual_cycle_bonus_km", "dual_cycle_radius_km")
-
-
-def accounting_dials(profile: Mapping[str, Any]) -> Mapping[str, Any]:
-    """The live dials: ``profile["solver_params"] or {}`` (``AssignmentApp.__init__``'s read)."""
-    return (profile or {}).get("solver_params") or {}
 
 
 def accounting_params_for(selection: Any) -> dict[str, Any]:
@@ -62,20 +60,3 @@ def offline_measurement_dials(selection: Any) -> dict[str, Any]:
     M5). Same value as :func:`accounting_params_for`, which it calls.
     """
     return accounting_params_for(selection)
-
-
-def framework_accounting_cost(selection: Any) -> Callable[[dict[str, Any], dict[str, Any]], float]:
-    """The accounting cost an offline tick uses: ``constraints.assignment_cost``.
-
-    The live sim passes ``AssignmentApp._solver_params``, which the one-dial mirror
-    keeps equal to the selection's dual-cycle params; offline they come from
-    :func:`accounting_params_for` and the constraint defaults for the rest.
-    """
-    from apps.container_logistics.assignment import constraints as assign_constraints
-
-    accounting = accounting_params_for(selection)
-
-    def cost(t: dict[str, Any], o: dict[str, Any]) -> float:
-        return assign_constraints.assignment_cost(t, o, accounting)
-
-    return cost

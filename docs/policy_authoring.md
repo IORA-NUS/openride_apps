@@ -179,7 +179,7 @@ plane's dry run and the assignment agent all call `dispatch.bind.bind_profile` /
 `bind_tree`), pre-order, with `top=True` for the selection's root. It must be **pure in
 `(params, world)`**: no RNG, no mutation, no I/O (the battery's `contract.bind_pure` binds
 twice and compares, and checks `random.getstate()` and a deep copy of the profile).
-`DispatchPolicy.bind` returns `Declaration()` plus a `candidate_hint` (below).
+`DispatchPolicy.bind` returns `Declaration()`: no pairs and no `candidate_hint` (a hint is the solver's own declaration; `PairSolver` and the built-in pair leaves declare `"spatial"` from their own `candidates` param, and a legacy `decide` class keeps its round-2 hint through `compat.legacy_context.legacy_candidate_hint`).
 
 `Declaration` (`dispatch/bind.py`), every field defaulting to "nothing":
 
@@ -316,10 +316,15 @@ class PerCompany(CompositePolicy):
   identity, declared `module_rng`).
 - `PerCompany` reads no `cooperation`: its bound `world_reads` are the four candidate knobs
   its GreedyNearest inner read, and `--structure` on it is refused with message 25 (verified).
-- A decomposition may define `audit_scopes(scope_log, tick) -> list[str]`; the battery's
-  `contract.scope_audit` runs it over the sub-ticks it built and SKIPs without one.
-  `Partitioned` and `PooledMarket` define one. It certifies the declared shape; it cannot prove
-  a third-party solver does not peek (e.g. by keeping a reference to the tick).
+- A decomposition must define `audit_scopes(scope_log, tick) -> list[str]`; the battery's
+  `contract.scope_audit` runs it over the sub-ticks it built. Without one it SKIPs only for a
+  central decision (badge `None` or `"central"`, no sub-tick built) and FAILS for any other
+  badge or once the solve built a sub-tick. `Partitioned` and `PooledMarket` define one. It
+  certifies the declared shape; it cannot prove a third-party solver does not peek (e.g. by
+  keeping a reference to the tick). `contract.information_scope` is measured by the battery
+  itself (it wraps `Tick.restrict` / `Tick.call`): it reports the carrier and owner hauliers
+  each sub-tick showed and which inner decided it, SKIPs when no sub-tick was built, and FAILS
+  a containment badge that no multi-company tick backed with a split.
 
 ### 3.4 `offload`
 
@@ -510,11 +515,12 @@ Control-plane equivalents: `python -m openride_control.command policy-validate -
 only_allowed_pairs), `robustness.<fixture>` (empty_trucks, empty_orders, single_truck,
 no_geometry, one_haulier, all_infeasible, tied_costs, three_company_chain, missing_haulier,
 scale), `determinism.{reproducible,order_independent,no_module_rng}`,
-`contract.{scope_audit,bind_pure,world_reads_at_bind,declaration_within_ceiling}`,
+`contract.{scope_audit,information_scope,bind_pure,world_reads_at_bind,declaration_within_ceiling}`,
 `performance.scale`, `params.*`. Each row is PASS, FAIL or **SKIP** (a declared exemption: `ok`
 stays true, exit 0, "N passed, k skipped"). Read the skip count, not only the verdict. Built-in
-counts on the branch: GreedyNearest 50 + 2 SKIP, RandomAssignment 48 + 4, Partitioned 49 + 3,
-PooledMarket 205 + 8 (the leaves' SKIPs include `contract.scope_audit`).
+counts on the branch: GreedyNearest 50 + 4 SKIP, RandomAssignment 48 + 6, Partitioned 51 + 3,
+PooledMarket 214 + 8 (the leaves' SKIPs include `contract.scope_audit` and
+`contract.information_scope` on each arm).
 
 **Arms.** Each non-default `choices` value of every `str` param, and for each ref param every
 other registered target of its kind satisfying `leaf_only`, at its defaults (from

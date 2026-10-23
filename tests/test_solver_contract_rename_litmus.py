@@ -45,11 +45,32 @@ top renders ``audited`` (8 keys). So on a Partitioned-topped case WITH shares (1
   are ``None`` (a partition has no pool or round); and ``benefit_km``
   agrees with ``owner_reserve_km - awarded_cost_km`` to the 3-dp rounding whenever both
   are known;
+- the two audited-only values ``awarded_cost_km`` / ``owner_reserve_km`` (``None`` in v1)
+  equal values DERIVED FROM THE GOLDEN, never copied from the renamed run (final review
+  M10): the award is ``constraints.assignment_cost`` of the pair's STORED documents
+  under the case's stored ``solver_params``, the reserve is the owner's cheapest own
+  truck left free by the GOLDEN pairs (``pair_allowed`` with the stored
+  ``max_travel_time_pickup``), both rounded to 3 dp, and ``reserve - award`` agrees with
+  the golden v1 ``benefit_km`` to the 3-dp rounding (``None`` iff it is ``None``);
 - every ``published`` payload equals the golden string after the golden payload's two
-  audited-only fields ``awarded_cost_km`` / ``owner_reserve_km`` (``None`` in v1) are set
-  to the values the renamed tag carries for that pair (``tests/golden/compare.py``'s
+  audited-only fields are set to those golden-derived values (``tests/golden/compare.py``'s
   rules, applied to that re-dumped golden string; every stored payload re-dumps
   byte-identically). No other key of any payload may differ.
+
+RUN STAMP AND RUN NAME (final review M10): for every case the renamed selection's run
+stamp (``framework.policies_stamp`` over ``resolve_profile_policies`` + ``bind_profile``,
+the sim main's pair of calls), its stamp settings and its run-name segments equal the
+original selection's once each renamed name is mapped back -- except, on a
+Partitioned-topped case, ``share_tag_format`` (``v1`` -> ``audited``, the same compat
+rule). A name-keyed branch in the stamp, provenance or run declaration fails here.
+
+BLIND SPOT, by construction: a renamed policy is a SUBCLASS of the built-in, so a branch
+keyed on the class (``isinstance(x, GreedyNearestSolver)``) or on a param's SHAPE (a
+built-in-only param name or value) is taken by both runs and this litmus cannot see it.
+Those are covered by the stored expectations instead: the dispatch golden for
+decomposition tops, ``tests/golden/central_top_v1.json.gz``
+(``tests/test_solver_contract_central_top.py``) for leaf tops, and the registry-built
+vocabulary guard for a param name spelled in framework code.
 
 Every other case (Partitioned-topped without shares, and all pooled cases) must be equal
 byte for byte, and the exception must actually fire (not vacuous). Any other difference
@@ -93,7 +114,9 @@ from apps.container_logistics.policies.dispatch.profile import (
     resolve_dispatch_for_profile,
     resolve_profile_policies,
 )
-from apps.container_logistics.policies.framework import get_policy_spec, policy
+from apps.container_logistics.assignment import constraints as assign_constraints
+from apps.container_logistics.policies.dispatch.bind import bind_profile
+from apps.container_logistics.policies.framework import get_policy_spec, policies_stamp, policy
 from apps.container_logistics.policies.framework.registry import isolated_registry
 from tests.golden.capture_dispatch_golden import FIXTURE_PATH
 from tests.golden.compare import published_mismatch
@@ -219,21 +242,101 @@ def _is_v1_exception(case: dict[str, Any]) -> bool:
     return case["profile"]["planner"]["topology"] == "partitioned" and bool(case["expected"]["share_tags"])
 
 
-def _expected_published_with_audited_fields(expected_published, actual_tags) -> list[list[str]]:
-    """Golden payloads with ``awarded_cost_km``/``owner_reserve_km`` set from the renamed tags."""
-    by_pair = {tuple(key): tag for key, tag in actual_tags}
+def _golden_audited_values(case: dict[str, Any], tick: dict[str, Any]) -> dict[tuple[str, str], tuple[Any, Any]]:
+    """``{(truck_id, order_id): (awarded_cost_km, owner_reserve_km)}`` of each GOLDEN share, from the golden alone.
+
+    Derived from the stored tick documents, the stored golden pairs and the case's stored
+    profile, never from the run under test: the award is ``assignment_cost`` of the
+    pair under ``solver_params``; the reserve is the owner's cheapest own assignable
+    truck that no golden pair commits, that ``pair_allowed`` admits under the stored
+    ``max_travel_time_pickup`` (the accounting's own-haulier rule). 3 dp, ``None`` for a
+    non-finite award / no free own truck.
+    """
+    import math
+
+    prof = case["profile"]
+    dials = prof.get("solver_params") or {}
+    trucks = {str(t["_id"]): t for t in tick["trucks"]}
+    orders = {str(o["_id"]): o for o in tick["orders"]}
+    busy = {str(x) for x in tick["busy_ids"]} if prof.get("reject_if_active_haul_trip", True) else set()
+    assignable = assign_constraints.filter_assignable_trucks(
+        list(tick["trucks"]), busy,
+        respect_truck_online_state=bool(prof.get("respect_truck_online_state", True)),
+        reject_if_active_haul_trip=bool(prof.get("reject_if_active_haul_trip", True)),
+        online_state_name="online")
+    committed = {tid for tid, _oid in case["expected"]["pairs"]}
+    mtt = prof.get("max_travel_time_pickup")
+    out: dict[tuple[str, str], tuple[Any, Any]] = {}
+    for (tid, oid), _tag in case["expected"]["share_tags"]:
+        truck, order = trucks[tid], orders[oid]
+        award = float(assign_constraints.assignment_cost(truck, order, dials))
+        owner = assign_constraints.haulier_of(order)
+        best = None
+        for t in assignable:
+            if str(t.get("_id")) in committed or assign_constraints.haulier_of(t) != owner:
+                continue
+            if not assign_constraints.pair_allowed(t, order, max_travel_time_pickup=mtt):
+                continue
+            c = float(assign_constraints.assignment_cost(t, order, dials))
+            if math.isfinite(c) and (best is None or c < best):
+                best = c
+        out[(tid, oid)] = (round(award, 3) if math.isfinite(award) else None,
+                           round(best, 3) if best is not None else None)
+    return out
+
+
+def _expected_published_with_audited_fields(expected_published, golden_values) -> list[list[str]]:
+    """Golden payloads with ``awarded_cost_km``/``owner_reserve_km`` set from the GOLDEN-derived values."""
     out = []
     for topic, payload in expected_published:
         assert json.dumps(json.loads(payload)) == payload, "a golden payload does not re-dump verbatim"
         doc = json.loads(payload)
-        tag = by_pair.get((doc.get("truck_id"), (doc.get("order") or {}).get("_id")))
-        if doc.get("shared") and tag is not None:
-            for field in AUDITED_ONLY_PAYLOAD_FIELDS:
+        key = (doc.get("truck_id"), (doc.get("order") or {}).get("_id"))
+        if doc.get("shared"):
+            for field, value in zip(AUDITED_ONLY_PAYLOAD_FIELDS, golden_values[key]):
                 assert doc[field] is None, f"v1 payload already carried {field}"
-                doc[field] = tag[field]
+                doc[field] = value
             payload = json.dumps(doc)
         out.append([topic, payload])
     return out
+
+
+def _run_declaration(profile: dict[str, Any]) -> dict[str, Any]:
+    """The sim main's stamp pair (``resolve_profile_policies`` + ``bind_profile``) and the run declaration."""
+    resolved, source = resolve_profile_policies(profile)
+    tree = bind_profile(profile)
+    stamp = policies_stamp(resolved, tree=tree, accounting_params=profile.get("solver_params") or {},
+                           source=source)
+    decl = tree.declaration
+    return json.loads(json.dumps({
+        "stamp": stamp,
+        "stamp_settings": dict(decl.stamp_settings),
+        "run_name_segments": list(decl.run_name_segments),
+        "cross_company": sorted(map(list, decl.cross_company)),
+        "world_reads": sorted(tree.world_reads),
+    }, default=str))
+
+
+def _compiled_original(case: dict[str, Any]) -> dict[str, Any]:
+    """The case's profile as a compiled block of the ORIGINAL names (the renamed run's twin)."""
+    profile = copy.deepcopy(case["profile"])
+    resolved, _source = resolve_profile_policies(profile)
+    block = {slot: r.to_profile() for slot, r in resolved.items()}
+    legacy_planner = profile.pop("planner")
+    profile.pop("use_spatial_matching", None)
+    profile["policies"] = block
+    profile["policies_format"] = 2
+    profile["strategy"] = _leaf_name(block["planner"])
+    profile["planner"] = {k: v for k, v in legacy_planner.items() if k not in ("topology", "market", "deployment")}
+    return profile
+
+
+def _unname(value: Any) -> Any:
+    """``value`` with each renamed policy name mapped back to its original (inside any string)."""
+    text = json.dumps(value, sort_keys=True)
+    for old, new in NEW_NAME.items():
+        text = text.replace(new, old)
+    return json.loads(text)
 
 
 @pytest.mark.parametrize("case_id", sorted(_CASES))
@@ -270,7 +373,17 @@ def test_renamed_builtins_reproduce_the_golden_case(renamed_registry, case_id):
         if got["owner_reserve_km"] is not None and got["awarded_cost_km"] is not None:
             # Both sides are rounded to 3 dp separately, so they agree to one unit there.
             assert abs(got["benefit_km"] - (got["owner_reserve_km"] - got["awarded_cost_km"])) <= 0.0011, got
-    want_published = _expected_published_with_audited_fields(expected["published"], actual["share_tags"])
+    golden = _golden_audited_values(case, tick)
+    for (key, got), (_key, want) in zip(actual["share_tags"], expected["share_tags"]):
+        award, reserve = golden[tuple(key)]
+        assert (got["awarded_cost_km"], got["owner_reserve_km"]) == (award, reserve), (
+            f"{case_id} {key}: audited values {got['awarded_cost_km']}/{got['owner_reserve_km']} differ from the "
+            f"golden-derived {award}/{reserve}")
+        if want["benefit_km"] is None:
+            assert reserve is None, f"{case_id} {key}: golden benefit None but a reserve was derived"
+        elif award is not None:
+            assert abs(want["benefit_km"] - (reserve - award)) <= 0.0011, (case_id, key, want, award, reserve)
+    want_published = _expected_published_with_audited_fields(expected["published"], golden)
     problem = published_mismatch(actual["published"], want_published,
                                  sim_clock=tick["sim_clock"], time_step=TIME_STEP)
     assert problem is None, f"{case_id}: published differs beyond the audited fields: {problem}"
@@ -285,3 +398,19 @@ def test_the_compat_exception_is_exercised_and_bounded():
     assert pooled and not set(pooled) & set(exceptions)
     # A shared payload on an exception case really carries audited-only fields to compare.
     assert any(t["shared"] for cid in exceptions for _k, t in _CASES[cid]["expected"]["share_tags"])
+
+
+@pytest.mark.parametrize("case_id", sorted(_CASES))
+def test_renamed_builtins_give_the_same_stamp_and_run_name(renamed_registry, case_id):
+    """M10: the run stamp, stamp settings and run-name segments are rename-invariant (modulo the names)."""
+    case = _CASES[case_id]
+    want = _run_declaration(_compiled_original(case))
+    got = _run_declaration(_retargeted(case)["profile"])
+    top = want["stamp"]["planner"]["name"]
+    assert got["stamp"]["planner"]["name"] == NEW_NAME[top], got["stamp"]["planner"]["name"]
+    if top == "Partitioned":
+        # The documented compat v1 rule, and nothing else.
+        assert (want["stamp"]["planner"]["share_tag_format"], got["stamp"]["planner"]["share_tag_format"]) == \
+            ("v1", "audited"), case_id
+        got["stamp"]["planner"]["share_tag_format"] = "v1"
+    assert _unname(got) == _unname(want), f"{case_id}: the stamp / run declaration differs beyond the name fields"

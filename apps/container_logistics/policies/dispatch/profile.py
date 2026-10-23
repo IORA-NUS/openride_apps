@@ -47,7 +47,7 @@ from apps.container_logistics.policies.framework.params import version_echo, war
 from apps.container_logistics.policies.framework.resolve import ENTRY_KEYS, INNER_PARAM
 
 from apps.container_logistics.policies.compat.legacy import check_policies_format
-from apps.container_logistics.policies.compat.legacy_profile import resolve_legacy_profile
+from apps.container_logistics.policies.compat.legacy_profile import refuse_legacy_flag_next_to_block, resolve_legacy_profile
 from apps.container_logistics.policies.compat.mirrors import check_mirrors
 
 from .base import DispatchPolicy
@@ -135,7 +135,7 @@ def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, Resolve
     as ``POLICY VERSION DRIFT`` (WARNING). A round-1 FLAT block (``{type: GreedyNearest}``) resolves
     literally, as a central ``GreedyNearest`` (round-2 §3.6; the run-start mirror
     check then refuses such a bundle). Next to a block, ``use_spatial_matching``
-    other than ``true`` is refused. Without a block the legacy keys are translated:
+    other than ``true`` is refused (``compat.legacy_profile.refuse_legacy_flag_next_to_block``). Without a block the legacy keys are translated:
     ``compat.legacy_profile.resolve_legacy_profile`` (the leaf wrapped in the profile's
     legacy decomposition; loud on an unknown value). ``source`` is ``"bundle"`` or
     ``"legacy-profile"``. Raises ``PolicyError`` subclasses.
@@ -148,12 +148,7 @@ def resolve_profile_policies(prof: Mapping[str, Any]) -> tuple[dict[str, Resolve
             f"assignment profile 'policies' must be an object with a 'planner' entry "
             f"(got {block!r}). Recompile the scenario."
         )
-    if "use_spatial_matching" in prof and prof["use_spatial_matching"] is not True:
-        raise PolicyError(
-            "assignment profile sets use_spatial_matching="
-            f"{prof['use_spatial_matching']!r} next to a 'policies' block; it is superseded "
-            "by policies.planner.params.candidates. Remove use_spatial_matching."
-        )
+    refuse_legacy_flag_next_to_block(prof)
     authored = {slot: _authored_from_compiled(slot, entry) for slot, entry in block.items()}
     resolved = resolve_policies_block(authored, where="profile.policies")
     for slot, entry in block.items():  # the top-level echo; nested refs are checked by params
