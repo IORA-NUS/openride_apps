@@ -167,13 +167,23 @@ def test_a_soft_run_only_logs_an_init_error():
     assert sched.time == 3
 
 
-def test_an_agent_that_never_answers_a_step_fails_a_hard_run():
-    """A stock agent refused at init: ``ready``, then silence (the assignment agent of the finding)."""
+def test_an_agent_that_never_answers_a_step_is_logged_not_fatal(monkeypatch):
+    """A stock agent refused at init: ``ready``, then silence (the assignment agent of the finding).
+
+    The silence signal is a heuristic, so even a ``'hard'`` run only logs it, once: a healthy
+    agent pruned during a slow boot must never fail a good run (orchestrator decision, round 3).
+    Verified to have teeth: making the overdue branch raise fails this test; dropping the log
+    fails the log assertion.
+    """
     sched = _scheduler()
     _boot(sched, ["truck_1", "assignment_main"])
-    with pytest.raises(AgentInitFailure, match="assignment_main: never answered a step"):
-        _drive(sched, OpenRideScheduler.BOOT_DEADLINE_STEPS + 2, ["truck_1"])
-    assert sched.time == OpenRideScheduler.BOOT_DEADLINE_STEPS
+    import apps.simulation.openride_scheduler as sched_mod
+    seen = []
+    monkeypatch.setattr(sched_mod.logging, "error", lambda msg, *a, **k: seen.append(msg % a if a else msg))
+    _drive(sched, OpenRideScheduler.BOOT_DEADLINE_STEPS + 5, ["truck_1"])
+    assert sched.time == OpenRideScheduler.BOOT_DEADLINE_STEPS + 5
+    hits = [m for m in seen if "AGENT NEVER STEPPED" in m and "assignment_main" in m]
+    assert len(hits) == 1
 
 
 def test_a_late_reply_clears_the_suspicion():

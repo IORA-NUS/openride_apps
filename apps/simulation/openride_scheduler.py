@@ -44,8 +44,13 @@ library — optimize *around* it). Three concerns are carried here:
      and never hears a step) -- e.g. the assignment agent refusing its policy, which
      used to leave a run that finished with no assignments and ``ok: true``.
 
-   Either raises :class:`AgentInitFailure` from ``step()``, which aborts the run
-   as FAILED (``SimulationRuntime.run_simulation``). ``'soft'`` only logs.
+   Only the explicit ``init_error`` raises :class:`AgentInitFailure` from ``step()``
+   (``'hard'``), which aborts the run as FAILED (``SimulationRuntime.run_simulation``).
+   The silence signal is a HEURISTIC and is only ever logged (``AGENT NEVER STEPPED``
+   at ERROR, once per agent): a healthy agent can be pruned during a slow boot on a
+   large live run, and failing a good run is worse than the defect it would catch.
+   Promote it to fatal only after a live 500/1000-truck run shows it never fires on a
+   healthy run. ``'soft'`` only logs either signal.
 
 Because stock orsim exposes no finer hooks, ``on_receive_message``, ``step``,
 ``confirm_responses``, ``_update_agent_stat`` and ``step_timeout_handler`` are
@@ -78,7 +83,7 @@ def _parse_reply(raw: bytes):
 
 
 class AgentInitFailure(RuntimeError):
-    """An agent failed to initialise, or never answered a step, under ``init_failure_handler='hard'``."""
+    """An agent reported ``init_error`` at boot under ``init_failure_handler='hard'``."""
 
 
 class OpenRideScheduler(ORSimScheduler):
@@ -234,13 +239,19 @@ class OpenRideScheduler(ORSimScheduler):
     def _check_init_failures(self) -> None:
         """Raise :class:`AgentInitFailure` (``'hard'``) or log (``'soft'``) for concern 4's two signals."""
         self._init_failure_state()
-        problems = [f"{aid}: init_error ({details.strip().splitlines()[-1] if details.strip() else details})"
-                    for aid, details in sorted(self._init_errors.items())]
         overdue = sorted(aid for aid, pruned_at in self._never_stepped_pruned.items()
                          if self.time - pruned_at >= self.BOOT_DEADLINE_STEPS
                          and aid not in self._stepped_agents)
-        problems += [f"{aid}: never answered a step (pruned at step {self._never_stepped_pruned[aid]}, "
-                     f"silent for {self.BOOT_DEADLINE_STEPS}+ steps)" for aid in overdue]
+        for aid in overdue:
+            # Heuristic signal: logged, never fatal (see concern 4).
+            logging.error(
+                "AGENT NEVER STEPPED: %s: %s was pruned at step %s and has been silent for %s+ "
+                "steps without ever answering one; if its app was refused at init the run will "
+                "finish short. Check `journalctl --user -u openride-celery` for 'Failed to launch app'.",
+                self.scheduler_id, aid, self._never_stepped_pruned[aid], self.BOOT_DEADLINE_STEPS)
+            self._never_stepped_pruned.pop(aid, None)
+        problems = [f"{aid}: init_error ({details.strip().splitlines()[-1] if details.strip() else details})"
+                    for aid, details in sorted(self._init_errors.items())]
         if not problems:
             return
         message = (f"{self.scheduler_id}: {len(problems)} agent(s) failed to initialise and will never act; "
@@ -252,8 +263,6 @@ class OpenRideScheduler(ORSimScheduler):
             raise AgentInitFailure(message)
         logging.error(message + " (init_failure_handler='soft': continuing)")
         self._init_errors.clear()
-        for aid in overdue:
-            self._never_stepped_pruned.pop(aid, None)
 
     @property
     def sleeping_agent_count(self) -> int:
