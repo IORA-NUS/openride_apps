@@ -26,8 +26,8 @@ Verified to have teeth (FB, mutate / see it fail / restore):
   ``test_the_reviewers_leaky_probe_is_refused`` and
   ``test_a_containment_badge_without_an_audit_fails`` fail;
 - making ``_measured_sub_ticks`` record nothing made
-  ``test_information_scope_measures_what_each_sub_tick_showed`` fail and turned
-  Partitioned's ``contract.information_scope`` into SKIP;
+  ``test_information_scope_measures_what_each_sub_tick_showed`` (Partitioned's
+  ``contract.information_scope`` turned SKIP) and the leaky-probe test fail;
 - ``CENTRAL_BADGES`` without ``"central"`` failed ``test_central_badge_is_the_leaves_badge``
   and the leaves' ``contract.scope_audit`` (they would need an audit they cannot have).
 """

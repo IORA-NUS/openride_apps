@@ -69,12 +69,11 @@ Verified to have teeth (FB; mutate / see it fail / restore):
   not) failed it (``compat:wire:wire_fields``) -- under the old global allow-list it
   passed;
 - ``import importlib`` added to ``dispatch/tick.py`` failed it (``dynamic:importlib``);
-- ``from apps.container_logistics.policies.compat.legacy_context import Plan`` added to
-  ``dispatch/runner.py`` failed it, and in ``compat/legacy_context.py`` a new local
-  import of ``solver_lib.pair_leaf`` at module top would change no tier-A scan but
-  failed the transitive-gateway test only if a NEW crossing module appeared: a
-  ``from apps.container_logistics.policies.solver_lib import candidates`` added to
-  ``framework/catalog.py`` failed both.
+- ``from apps.container_logistics.policies.solver_lib import candidates`` added to
+  ``framework/catalog.py`` failed it AND the transitive-gateway test (a new crossing);
+- ``from apps.container_logistics.policies.solver_lib import provenance`` added to
+  ``compat/wire.py`` (compat is never scanned, so no tier-A scan changes) failed the
+  transitive-gateway test alone: ``wire`` became a fifth, undocumented gateway.
 """
 
 from __future__ import annotations

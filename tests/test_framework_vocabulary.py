@@ -25,7 +25,8 @@ every registered policy name and component name (``name:<X>``: case-sensitive, i
 any identifier or non-docstring string, not followed by a lower-case letter or digit, so
 ``RandomAssignmentSolver`` and ``"PooledMarket(offer=OfferNone)"`` hit and ``OfferAllowed``
 does not), every declared param name of every policy and component (``param:<p>``: an
-identifier equal to it, or a whole word of a string), and every component kind name
+identifier equal to it; in a string, a compound name as any whole word, a plain-word
+name only as the whole string or in key/path syntax, :func:`_param_pattern`), and every component kind name
 (``kind:<k>``, inside a string). A solver added tomorrow extends the guard by
 registering. Two framework-owned spellings are exempt, each pinned by a test:
 :data:`FRAMEWORK_OWNED_PARAMS` (``inner``, the framework's own descent param,
@@ -67,9 +68,9 @@ Verified to have teeth (FB, final review H3; mutate / see it fail / restore):
 - ``if p["candidates"] == "spatial":`` re-added to ``dispatch/base.py`` failed it
   (``param:candidates``), and ``max_rounds = 3`` in ``dispatch/runner.py`` failed it
   (``param:max_rounds``);
-- deleting the ``FRAMEWORK_SURFACE_IDENTIFIERS`` entry failed nine modules (every
-  ``tick.candidates`` / ``restrict(candidates=...)`` / assignable-``candidates`` read),
-  i.e. the exemption is load-bearing and exactly scoped.
+- renaming the ``FRAMEWORK_SURFACE_IDENTIFIERS`` entry away failed seven modules (every
+  ``tick.candidates`` / ``restrict(candidates=...)`` / assignable-``candidates`` read)
+  plus the two exemption tests, i.e. the exemption is load-bearing and exactly scoped.
 """
 
 from __future__ import annotations
@@ -234,6 +235,21 @@ def _texts(tree: ast.AST) -> Iterator[tuple[str, str]]:
             yield "str", node.value
 
 
+def _param_pattern(name: str) -> re.Pattern:
+    """Where a param name counts inside a STRING.
+
+    A compound name (``dual_cycle_bonus_km``, ``max_rounds``) is never prose: any whole
+    word hits. A plain word (``claim``, ``offer``, ``candidates``) is also English, so it
+    hits only as the whole string or in key/path syntax: after ``.`` or ``[``, or before
+    ``=``, ``]`` or ``.<word>`` (``"planner.inner.candidates"``, ``"candidates=spatial"``,
+    ``p["claim"]`` is the whole-string case). Prose such as "the claim is unbacked" does not.
+    """
+    word = re.escape(name)
+    if "_" in name:
+        return re.compile(rf"(?<!\w){word}(?!\w)")
+    return re.compile(rf"^{word}$|(?<=[.\[]){word}(?!\w)|(?<!\w){word}(?=\s*[=\]]|\.\w)")
+
+
 def scan_source(source: str, *, tier_a: bool, vocab: Vocabulary | None = None) -> Counter:
     """Banned-vocabulary hits of one module's source, as ``Counter({token: count})``.
 
@@ -245,7 +261,7 @@ def scan_source(source: str, *, tier_a: bool, vocab: Vocabulary | None = None) -
     pairs = BANNED_SUBWORD_PAIRS_TIER_A if tier_a else frozenset()
     idents = BANNED_IDENTIFIERS | (BANNED_IDENTIFIERS_TIER_A if tier_a else frozenset())
     name_re = vocab.name_pattern
-    param_res = {p: re.compile(rf"(?<!\w){re.escape(p)}(?!\w)") for p in vocab.params}
+    param_res = {p: _param_pattern(p) for p in vocab.params}
     hits: Counter = Counter()
     for kind, text in _texts(ast.parse(source)):
         if kind == "str" and tier_a and text in BANNED_STRINGS_TIER_A:
@@ -357,6 +373,9 @@ def test_the_scanner_tokenises_as_specified(source, tier_a, want):
     ('msg = f"use {x}.dual_cycle_bonus_km"', {"param:dual_cycle_bonus_km": 1, "id:dual_cycle_bonus_km": 1}),
     ('arb = "OwnerFirst"', {"name:OwnerFirst": 1}),
     ('k = "market.claim"', {"kind:market.claim": 1, "sub:market": 1, "param:claim": 1}),
+    ('msg = "the claim is unbacked; an offer"', {}),
+    ('key = "planner.inner.claim"', {"param:claim": 1}),
+    ('arg = "candidates=spatial"', {"param:candidates": 1}),
     # Case-sensitive, whole names: a lower-case word or a longer camel word is not a name.
     ('x = "random assignment"', {}),
     ("OfferAllowed = 1", {}),

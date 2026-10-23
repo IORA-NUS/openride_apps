@@ -30,6 +30,10 @@ resolves to the copy and never to this checkout or the main tree):
 Nothing outside the copy is written. ~10 s per validate. The suite registers no
 ``slow`` marker, so the test is unmarked (plan §7.12).
 
+Verified to have teeth (FB, final review M10): ``assignment = list(assignment)[1:]`` at
+the top of ``AssignmentApp.publish`` (in a private, git-initialised copy) failed this
+test on the assign/publish part; the two validates do not publish.
+
 Verified to have teeth (WS8): writing the toy file under a NON-discovered directory
 of the copy (``policies/dispatch/litmus_toy.py``, one level up) failed the first
 validate (unknown policy 'LitmusToy', exit 2) -- the PASS really comes from discovery.

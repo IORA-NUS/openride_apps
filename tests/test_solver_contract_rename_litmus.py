@@ -95,6 +95,17 @@ Verified to have teeth (WS8, mutate / see it fail / restore), in ``DispatchRunne
   two files), so this test is not the only guard for that spelling.
 
 ``runner.py`` was restored byte for byte afterwards (diffed against a copy).
+
+Verified to have teeth (FB, final review M10; mutate a private copy / see it fail):
+
+- in ``compat/wire.py::render_audited_tag``, adding 0.5 km to BOTH ``owner_reserve_km`` and
+  ``awarded_cost_km`` of a tag without ``pool_id`` (``benefit_km`` unchanged): the
+  pre-fix litmus passed (69 passed: it copied both values from the run under test),
+  this one failed 10 of the 13 exception cases (the other three have no finite pair of
+  values to shift);
+- in ``framework/resolve.py::policies_stamp``, appending a world read only when the top's
+  name is a built-in's: ``test_renamed_builtins_give_the_same_stamp_and_run_name``
+  failed on all 68 cases (the pre-fix litmus never looked at the stamp).
 """
 
 from __future__ import annotations
