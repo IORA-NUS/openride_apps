@@ -31,6 +31,27 @@ library — optimize *around* it). Three concerns are carried here:
    *active* population instead of every order ever spawned. The agent side
    lives in OpenRideAgent.handle_orsim_agent_message / sleep_steps_hint.
 
+4. **Init failures fail the run** (``init_failure_handler='hard'``, which the
+   container-logistics wiring passes; stock orsim's handling of it is commented
+   out, so it was a no-op -- round-2 review L-D). Two signals, both app-side:
+
+   - an ``init_error`` reply: an ``OpenRideAgent`` whose app raised at init now
+     answers the boot handshake with it instead of ``ready``
+     (``openride_agent.InitFailureReporting``);
+   - an agent that NEVER answered a single step: pruned as unresponsive and still
+     silent ``BOOT_DEADLINE_STEPS`` steps later. This is how a stock ``ORSimAgent``
+     whose app was refused at init looks (it says ``ready``, subscribes to nothing
+     and never hears a step) -- e.g. the assignment agent refusing its policy, which
+     used to leave a run that finished with no assignments and ``ok: true``.
+
+   Only the explicit ``init_error`` raises :class:`AgentInitFailure` from ``step()``
+   (``'hard'``), which aborts the run as FAILED (``SimulationRuntime.run_simulation``).
+   The silence signal is a HEURISTIC and is only ever logged (``AGENT NEVER STEPPED``
+   at ERROR, once per agent): a healthy agent can be pruned during a slow boot on a
+   large live run, and failing a good run is worse than the defect it would catch.
+   Promote it to fatal only after a live 500/1000-truck run shows it never fires on a
+   healthy run. ``'soft'`` only logs either signal.
+
 Because stock orsim exposes no finer hooks, ``on_receive_message``, ``step``,
 ``confirm_responses``, ``_update_agent_stat`` and ``step_timeout_handler`` are
 overridden wholesale. This duplicates orsim internals — keep the orsim version
@@ -59,6 +80,10 @@ def _parse_reply(raw: bytes):
     if _fastjson is not None:
         return _fastjson.loads(raw)
     return json.loads(raw.decode("utf-8"))
+
+
+class AgentInitFailure(RuntimeError):
+    """An agent reported ``init_error`` at boot under ``init_failure_handler='hard'``."""
 
 
 class OpenRideScheduler(ORSimScheduler):
@@ -179,6 +204,66 @@ class OpenRideScheduler(ORSimScheduler):
     #: exercise -- a counter that exists only in ``__init__`` breaks them.
     _boot_timed_out = 0
 
+    #: Replies that prove an agent took part in a step (anything but the boot
+    #: handshake). See ``_note_participation``.
+    _BOOT_ONLY_ACTIONS = frozenset({'ready', 'init_error'})
+
+    # Init-failure state (concern 4). ``None`` at class level and created on first
+    # use, because the barrier tests build a scheduler with ``__new__``; mutable
+    # class-level defaults would be shared between instances.
+    #: agent ids that sent at least one step reply.
+    _stepped_agents = None
+    #: agent id -> the step it was pruned on, for agents pruned before any step reply.
+    _never_stepped_pruned = None
+    #: agent id -> details of an ``init_error`` reply not yet raised.
+    _init_errors = None
+
+    def _init_failure_state(self):
+        if self._stepped_agents is None:
+            self._stepped_agents = set()
+            self._never_stepped_pruned = {}
+            self._init_errors = {}
+
+    def _note_participation(self, agent_id, action, payload) -> None:
+        """Record a reply's init-failure meaning (paho thread; GIL-atomic set/dict ops)."""
+        self._init_failure_state()
+        if action == 'init_error':
+            self._init_errors[agent_id] = str(payload.get('details') or 'no details')[-2000:]
+            logging.error(
+                "AGENT INIT FAILED: %s answered the boot handshake with init_error: %s",
+                agent_id, self._init_errors[agent_id])
+        elif action not in self._BOOT_ONLY_ACTIONS and agent_id is not None:
+            self._stepped_agents.add(agent_id)
+            self._never_stepped_pruned.pop(agent_id, None)
+
+    def _check_init_failures(self) -> None:
+        """Raise :class:`AgentInitFailure` (``'hard'``) or log (``'soft'``) for concern 4's two signals."""
+        self._init_failure_state()
+        overdue = sorted(aid for aid, pruned_at in self._never_stepped_pruned.items()
+                         if self.time - pruned_at >= self.BOOT_DEADLINE_STEPS
+                         and aid not in self._stepped_agents)
+        for aid in overdue:
+            # Heuristic signal: logged, never fatal (see concern 4).
+            logging.error(
+                "AGENT NEVER STEPPED: %s: %s was pruned at step %s and has been silent for %s+ "
+                "steps without ever answering one; if its app was refused at init the run will "
+                "finish short. Check `journalctl --user -u openride-celery` for 'Failed to launch app'.",
+                self.scheduler_id, aid, self._never_stepped_pruned[aid], self.BOOT_DEADLINE_STEPS)
+            self._never_stepped_pruned.pop(aid, None)
+        problems = [f"{aid}: init_error ({details.strip().splitlines()[-1] if details.strip() else details})"
+                    for aid, details in sorted(self._init_errors.items())]
+        if not problems:
+            return
+        message = (f"{self.scheduler_id}: {len(problems)} agent(s) failed to initialise and will never act; "
+                   "the run would finish short and report 'completed'. " + "; ".join(problems[:10])
+                   + (" ..." if len(problems) > 10 else "")
+                   + ". Check `journalctl --user -u openride-celery` for 'Failed to launch app'.")
+        if getattr(self, 'init_failure_handler', 'soft') == 'hard':
+            logging.error(message)
+            raise AgentInitFailure(message)
+        logging.error(message + " (init_failure_handler='soft': continuing)")
+        self._init_errors.clear()
+
     @property
     def sleeping_agent_count(self) -> int:
         """Registered agents currently in an announced nap (see sleep protocol)."""
@@ -255,6 +340,7 @@ class OpenRideScheduler(ORSimScheduler):
         if response_time_step == -1:
             response_time_step = self.time
         action = payload.get('action')
+        self._note_participation(agent_id, action, payload)
 
         entry = self.agent_collection.get(agent_id)
         if entry is None and action in ('completed', 'ready'):
@@ -570,6 +656,10 @@ class OpenRideScheduler(ORSimScheduler):
                     # Pruned as unresponsive, not shut down — stash for
                     # reinstatement if a late reply proves it alive.
                     self._pruned_stash[agent_id] = self.agent_collection[agent_id]
+                    # Never answered a step at all: watch it (concern 4).
+                    self._init_failure_state()
+                    if agent_id not in self._stepped_agents:
+                        self._never_stepped_pruned.setdefault(agent_id, self.time)
                     while len(self._pruned_stash) > self._PRUNED_STASH_MAX:
                         self._pruned_stash.pop(next(iter(self._pruned_stash)))
                 self.remove_agent(agent_id)
@@ -582,6 +672,9 @@ class OpenRideScheduler(ORSimScheduler):
             for agent_id in leftover_sleepers:
                 if agent_id in self.agent_collection:
                     self.remove_agent(agent_id)
+
+        # Concern 4: an init failure fails the run (hard) instead of shrinking it.
+        self._check_init_failures()
 
         self.time += 1
 

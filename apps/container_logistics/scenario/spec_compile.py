@@ -32,6 +32,8 @@ from apps.container_logistics.policies.framework import (
     resolve_policies_block,
 )
 
+from .run_declaration import check_run_declaration
+from .run_inputs import warm_run_inputs
 from .scenario_bundle import compile_bundle, write_bundle
 
 
@@ -293,11 +295,24 @@ def compile_spec_to_bundle(
     # so a bundle the sim main would refuse is never written. Cheap (~0.5 ms warm on the
     # 1000-truck bundle) and read-only: a deep copy is bound, so a solver's ``bind`` can
     # not leave anything in the written bundle. Raises ``PolicyError``.
-    assert_assignment_profiles_resolvable(copy.deepcopy(result.assignment))
+    bound_assignment = copy.deepcopy(result.assignment)
+    trees = assert_assignment_profiles_resolvable(bound_assignment)
 
     orsim_settings = dict(compiled.orsim_settings)
     orsim_settings["BEHAVIOR_REVISION"] = spec.behavior_revision
     orsim_settings["GENERATION_SPEC"] = compiled.recipe
+
+    # The run-declaration check too (round-2 review M-A): the sim main's own pure
+    # function, so a top whose stamp_settings / run-name segments every run would refuse
+    # (exit 2, out of sight) is refused here and the bundle is never written. Raises
+    # ``PolicyError``.
+    for agent_id, tree in trees.items():
+        behavior = bound_assignment.get(agent_id)
+        check_run_declaration(
+            tree,
+            settings_keys=orsim_settings,
+            profile=(behavior.get("profile") if isinstance(behavior, dict) else None) or {},
+        )
 
     _stagger_early_orders(
         result.order,
@@ -326,4 +341,7 @@ def compile_spec_to_bundle(
         generator_override_sha256=override_sha256(scenario_dir),
     )
     write_bundle(scenario_dir, bundle)
+    # Warm the dry run's content-checked sidecar from the bundle just written, so the
+    # first run start after a compile does not parse it (round-2 review M-C).
+    warm_run_inputs(scenario_dir, bundle)
     return bundle

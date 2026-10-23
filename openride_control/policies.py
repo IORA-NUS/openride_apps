@@ -135,20 +135,41 @@ def load_assignment_collection(scenario: str | None) -> dict[str, Any] | None:
     """The scenario's compiled assignment behaviors, read-only; ``None`` when there is no bundle.
 
     Reads ``scenario.json`` (or a legacy ``assignment_behavior.json``) from the same
-    folder ``ScenarioManager`` loads at run start; never generates anything.
+    folder ``ScenarioManager`` loads at run start; never generates anything. The bundle
+    is read through ``scenario.run_inputs.read_run_inputs`` (a content-checked sidecar,
+    round-2 review M-C), so a run start does not parse a multi-hundred-MB bundle.
+    """
+    loaded = _load_run_inputs(scenario)
+    return None if loaded is None else loaded[0]
+
+
+def _bundle_settings_keys(scenario: str | None) -> tuple[str, ...]:
+    """The keys of the scenario bundle's ``settings`` (``()`` without a bundle).
+
+    A second read through the sidecar right after :func:`load_assignment_collection`'s
+    (a stat hit, ~1 ms; a hash check only on the first read after a bundle change).
+    """
+    loaded = _load_run_inputs(scenario)
+    return () if loaded is None else loaded[1]
+
+
+def _load_run_inputs(scenario: str | None) -> tuple[dict[str, Any], tuple[str, ...]] | None:
+    """``(assignment collection, bundle settings keys)``; ``None`` when there is no bundle.
+
+    A legacy folder (``assignment_behavior.json``, no bundle) has no settings to read:
+    its keys are ``()`` and only the reserved framework settings are refused.
     """
     folder = _scenario_folder(scenario)
-    from apps.container_logistics.scenario.scenario_bundle import read_bundle
+    from apps.container_logistics.scenario.run_inputs import read_run_inputs
 
-    bundle = read_bundle(folder) if os.path.isdir(folder) else None
-    agents = (bundle or {}).get("agents")
-    if isinstance(agents, dict) and isinstance(agents.get("assignment"), dict):
-        return agents["assignment"]
+    inputs = read_run_inputs(folder) if os.path.isdir(folder) else None
+    if inputs is not None and isinstance(inputs.assignment, dict):
+        return inputs.assignment, inputs.settings_keys
     legacy = os.path.join(folder, "assignment_behavior.json")
     if os.path.isfile(legacy):
         with open(legacy, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        return data if isinstance(data, dict) else {}
+        return (data if isinstance(data, dict) else {}), ()
     return None
 
 
@@ -279,7 +300,7 @@ def validate_run_policy_args(
             if not _env_requests_a_patch(env):
                 return {}
             return _missing_bundle_message(_env_scenario(env))
-        _dry_run(collection, env)
+        _dry_run(collection, env, settings_keys=_bundle_settings_keys(_env_scenario(env)))
     except PolicyError as exc:
         return str(exc)
     return overrides
@@ -291,20 +312,25 @@ def _precheck_names(overrides: dict[str, Any], solver: str | None) -> None:
     precheck_override_names(overrides, solver)
 
 
-def _dry_run(collection: dict[str, Any], env: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
+def _dry_run(collection: dict[str, Any], env: dict[str, str], *,
+             settings_keys: Sequence[str] = ()) -> tuple[dict[str, Any], dict[str, Any]]:
     """Apply the run's inputs (read from ``env``, :func:`sim_environ`) to a deep copy of ``collection``.
 
-    The sim main's order and readers (``run_container_logistics_simulation._bind_run_policies``):
+    The sim main's order and readers (``run_container_logistics_simulation.main``):
     ``ORSIM_POLICY_OVERRIDES`` + the legacy dispatch variables + ``ORSIM_SOLVER``
     through ``run_dispatch_overrides``, the ``ORSIM_SHARING_POLICY`` refusal,
-    ``ORSIM_COOP_STRUCTURE`` (message 26), then the run-start check
+    ``ORSIM_COOP_STRUCTURE`` (message 26), the run-start check
     (``assert_assignment_profiles_resolvable``: format, resolve, mirrors, bind, message
-    25). Returns ``(patched_copy, {agent_id: BoundTree})``. Raises ``PolicyError``.
+    25), then the run-declaration check (``scenario.run_declaration.check_run_declaration``,
+    the sim main's own function, round-2 review M-A) of every bound tree against its
+    patched profile and ``settings_keys`` (the bundle's settings keys). Returns
+    ``(patched_copy, {agent_id: BoundTree})``. Raises ``PolicyError``.
     """
     from apps.container_logistics.policies.compat.legacy_env import read_legacy_dispatch_env
     from apps.container_logistics.policies.dispatch.profile import (
         assert_assignment_profiles_resolvable,
     )
+    from apps.container_logistics.scenario.run_declaration import check_run_declaration
     from apps.container_logistics.scenario.scenario_overrides import (
         apply_cooperation_override,
         policy_overrides_from_env,
@@ -320,6 +346,10 @@ def _dry_run(collection: dict[str, Any], env: dict[str, str]) -> tuple[dict[str,
     refuse_removed_sharing_env(env)
     _, patched_world_keys = apply_cooperation_override(collection, structure_from_env(env))
     trees = assert_assignment_profiles_resolvable(collection, patched_world_keys=patched_world_keys)
+    for agent_id, tree in trees.items():
+        behavior = collection.get(agent_id)
+        profile = (behavior.get("profile") if isinstance(behavior, dict) else None) or {}
+        check_run_declaration(tree, settings_keys=settings_keys, profile=profile)
     return collection, trees
 
 
@@ -398,7 +428,7 @@ def run_preflight(
         collection = load_assignment_collection(_env_scenario(env))
         if collection is None:
             return {"ok": False, "action": action, "message": _missing_bundle_message(_env_scenario(env))}
-        patched, trees = _dry_run(collection, env)
+        patched, trees = _dry_run(collection, env, settings_keys=_bundle_settings_keys(_env_scenario(env)))
     except PolicyError as exc:
         return {"ok": False, "action": action, "message": str(exc)}
     reads = sorted(frozenset().union(*(t.world_reads for t in trees.values())))
