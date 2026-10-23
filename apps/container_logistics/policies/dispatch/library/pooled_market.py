@@ -75,11 +75,11 @@ __all__ = ["COMPANY_BADGE", "CompanyRule", "PooledMarket", "MARKET_NOTE_KEYS"]
 COMPANY_BADGE = "per company"
 _SAMPLE_SCOPE = "per_company"
 
-#: The keys of ``Result.tick_notes`` (``_market_stats.RoundStatsAggregator.fold`` reads them).
 #: The per-pair note keys the market publishes as top-level wire fields (declared at bind,
 #: ``Declaration.wire_note_keys``: the framework refuses an undeclared one).
 _WIRE_NOTE_KEYS = frozenset({"pool_id", "market_round"})
 
+#: The keys of ``Result.tick_notes`` (``_market_stats.RoundStatsAggregator.fold`` reads them).
 MARKET_NOTE_KEYS = ("rounds_used", "converged", "candidate_pairs_round1", "candidate_pairs_total", "max_rounds")
 
 _INNER_HELP = (

@@ -16,8 +16,8 @@ pairs (plan ``plan_contract_final.md`` §2.7), identical for every solver:
    (a pair a sub-tick already proved re-checks only ownership-or-declared), the
    framework's own index; then every truck of the tick and every committed order must
    be unmodified since the tick was built (the share accounting reads all the trucks),
-   and the notes must
-   be wire-safe (``invariants.check_wire_notes``: no framework wire field, plain JSON).
+   and the notes must be wire-safe (``invariants.check_wire_notes``: no undeclared
+   framework wire field, plain JSON).
    Any problem: log ERROR (message 18), count, commit NOTHING this tick. Nothing here
    is read back from the tick's solver-visible attributes (review H2, L3).
 4. Map the pairs back to the raw documents (first document per id) in result order.
@@ -195,7 +195,7 @@ class DispatchRunner:
                 shown = ", ".join(repr(i) for i in changed[:8]) + (" ..." if len(changed) > 8 else "")
                 problems = [f"document(s) {shown} were modified during the solve (documents are read-only)"]
         if not problems:
-            declared = shared.tree.declaration.wire_note_keys
+            declared = getattr(shared.tree.declaration, "wire_note_keys", frozenset())
             problems = check_wire_notes(result, self.wire_fields - declared)
         if problems:
             self._report_violation(tick, problems)
