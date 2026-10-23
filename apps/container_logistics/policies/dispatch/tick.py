@@ -286,6 +286,11 @@ class _TickShared:
 
     __delattr__ = __setattr__  # type: ignore[assignment]
 
+    def __getattr__(self, name: str) -> Any:
+        # Only reached for a name it does not have (e.g. the memo set, which lives in a
+        # closure): a contract violation, still an AttributeError for hasattr/getattr.
+        raise _NoInstanceDict(f"the tick's framework state has no attribute {name!r} (it is read-only)")
+
     def intact(self, doc: Doc) -> bool:
         """Whether ``doc`` is one of this tick's documents, unmodified since the tick was built."""
         before = self._fingerprints.get(id(doc))
