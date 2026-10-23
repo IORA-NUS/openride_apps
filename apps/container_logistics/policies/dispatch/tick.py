@@ -30,14 +30,31 @@ result with state it took when :meth:`Tick.top` was built and that no solver can
 rewrite through the tick -- its own predicate (``Tick.permitted`` is a read-only
 property handing out that same function), its own id index (no instance ``__dict__``
 to pre-seed; ``__slots__`` and read-only properties throughout), the declared pairs,
-and a fingerprint of every document. A result naming a document that was modified
-during the solve is refused: in a sub-tick for the paired documents, at the top for the
-committed orders AND every truck of the tick (the share accounting prices the owner
-reserve over all of them after the commit; an unpaired order is read by nothing). So
-the verified-pair memo is sound: a sub-tick's physical verdict was reached by the
-framework's predicate on unmodified documents. Out of scope, as in any Python: a solver
-that deliberately reaches framework-private state through ``object.__setattr__``,
-``gc`` or closure cells. That is a review finding, not a contract a test can pin.
+and a fingerprint of every document. A result is read ONCE, into plain data with exact
+builtin types (``invariants.normalise_result``), before any check, and the commit and
+the verified-pair memo use exactly the documents the check judged (review N1-N3). A
+result naming a document that was modified during the solve is refused: in a sub-tick
+for the paired documents, at the top for the committed orders AND every truck of the
+tick (the share accounting prices the owner reserve over all of them after the commit;
+an unpaired order is read by nothing) -- the runner's scan is the last step before the
+commit. So the verified-pair memo is sound: a sub-tick's physical verdict was reached by
+the framework's predicate on unmodified documents, and the memo can only be written by
+that check (``_TickShared.verify``; the set lives in a closure, review N6).
+
+Threat model (the boundary these guarantees are stated against; also
+``docs/policy_authoring.md``). IN scope: a solver's honest bugs; crafted VALUES flowing
+through the contract -- ``str`` / ``dict`` / ``tuple`` subclasses, non-JSON notes,
+mutation of documents, of world values or of tick state; and anything that would
+silently corrupt the research metric. OUT of scope, documented as a limit:
+interpreter-level tampering -- reflection (closure ``cell_contents``,
+``object.__setattr__`` on framework objects, ``__class__`` swaps, ``gc`` referents) and
+monkeypatching framework classes or modules (``Tick``, ``invariants.check_result``,
+``assignment.constraints``, ...). No Python framework can stop code running in its own
+interpreter from rewriting it. Note that a monkeypatch PERSISTS: agents run in the
+long-lived celery workers (CLAUDE.md §8), so a solver that patches a framework module
+leaves it patched for every later run in that worker until ``openride-celery`` is
+restarted. Obfuscated name spellings that evade the static vocabulary guard are out of
+scope for the same reason.
 
 Message 19 (a sub-tick result discarded) is logged here; message 18 (the whole tick)
 by the runner.
@@ -61,7 +78,7 @@ from apps.container_logistics.assignment import constraints as assign_constraint
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation
 
 from .bind import value_fingerprint
-from .invariants import check_result
+from .invariants import check_result, normalise_result
 from .result import Result
 from .views import OrderView, TruckView, order_view, truck_view
 
@@ -242,8 +259,10 @@ class _TickShared:
       :meth:`intact` / :meth:`changed` tell whether a document was modified since the
       tick was built, so a pair (or the accounting that follows) can never be judged on
       a document the solver rewrote;
-    - the verified-pair memo, held in closures, written only by :meth:`Tick.call` after
-      the FRAMEWORK's check of a sub-tick passed against intact documents.
+    - the verified-pair memo, held in a closure: :meth:`verify` is its only writer, and it
+      records a pair only after the FRAMEWORK's check of a sub-tick (the sub-tick's own
+      predicate, on intact documents) passed, so calling it directly can only record a
+      pair that is truly verified (review N6). :meth:`proved` reads it.
 
     Every attribute is read-only after construction (assignment raises
     ``DispatchContractViolation``); ``stats`` and ``scope_log`` are the caller's
@@ -251,7 +270,7 @@ class _TickShared:
     """
 
     __slots__ = ("tree", "stats", "scope_log", "capture", "cross_company", "owns", "index",
-                 "_fingerprints", "_docs", "remember", "proved", "_sealed")
+                 "_fingerprints", "_docs", "verify", "proved", "_sealed")
 
     def __init__(self, *, tree: Any, stats: dict[str, Any], scope_log: list | None, capture: Any,
                  cross_company: frozenset[tuple[str, str]], trucks: tuple[Doc, ...],
@@ -271,14 +290,32 @@ class _TickShared:
         _set(self, "_fingerprints", MappingProxyType(fingerprints))
         _set(self, "_docs", (trucks, orders))  # keeps every fingerprinted id alive
         verified: set[tuple[int, int]] = set()
+        intact = self.intact
 
-        def remember(t: Doc, o: Doc) -> None:
-            verified.add((id(t), id(o)))
+        def verify(sub: "Tick", result: Any) -> tuple[list[str], Any]:
+            """Normalise and check ``sub``'s ``result`` with the framework's own state; record its pairs if it passes.
+
+            Returns ``(problems, normalised_result)``. The check is ``sub``'s own predicate
+            and index on intact documents, and the memo records exactly the documents
+            that check judged (never a second lookup by id).
+            """
+            if not isinstance(sub, Tick) or sub._shared is not self:
+                raise DispatchContractViolation("verify: the sub-tick does not belong to this tick")
+            plain, problems = normalise_result(result)
+            if problems:
+                return problems, plain
+            judged: list[Pair] = []
+            problems = check_result(plain, sub, permitted=sub._permitted, index=sub._index, intact=intact,
+                                    judged=judged, normalised=True)
+            if not problems:
+                for t, o in judged:
+                    verified.add((id(t), id(o)))
+            return problems, plain
 
         def proved(t: Doc, o: Doc) -> bool:
             return bool(verified) and (id(t), id(o)) in verified
 
-        _set(self, "remember", remember)
+        _set(self, "verify", verify)
         _set(self, "proved", proved)
         _set(self, "_sealed", True)
 
@@ -651,9 +688,11 @@ class Tick:
         The solve goes through ``sub.execute`` when the child offloads itself. A
         ``DispatchContractViolation`` raised inside and any ``check_result`` problem
         (checked with the FRAMEWORK's predicate for ``sub``, on intact documents) are
-        reported (message 19) and counted; any other exception propagates. A passing
-        result's pairs are remembered, so the top check re-checks only their ownership
-        half.
+        reported (message 19) and counted; any other exception propagates. The result is
+        normalised first (``invariants.normalise_result``: read once, exact builtin types)
+        and that plain copy is what the check judges and what is returned. A passing
+        result's judged documents are remembered, so the top check re-checks only their
+        ownership half.
         """
         if not isinstance(sub, Tick) or sub._parent is not self:
             raise DispatchContractViolation(
@@ -692,15 +731,10 @@ class Tick:
         if capture is not None:
             capture(tick=sub, result=result, problems=list(problems))
         if not problems:
-            problems = check_result(result, sub, permitted=sub._permitted, index=sub._index,
-                                    intact=shared.intact)
+            problems, result = shared.verify(sub, result)
         if problems:
             report_scope_violation(child.name, child.version, sub, problems, stats=shared.stats)
             return None
-        trucks, orders = sub._index
-        remember = shared.remember
-        for tid, oid in result.pairs:
-            remember(trucks[tid], orders[oid])
         return result
 
     def docs(self, result: Result) -> list[Pair]:

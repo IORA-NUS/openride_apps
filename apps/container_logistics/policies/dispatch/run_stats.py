@@ -25,6 +25,10 @@ untouched.
 Validation (review M2): :func:`check_meta_key`, called from ``bind`` on the top's
 declaration, refuses a ``meta_key`` that is not a plain identifier or that names a key
 the framework itself writes under ``run_config.meta`` (:data:`RESERVED_META_KEYS`).
+Every write goes to the CLASS key, re-checked on each tick with the same rule, never to
+an instance's ``meta_key`` (review N4: ``self.meta_key = "policies"`` in an aggregator
+would otherwise overwrite the planner stamp); a class whose key no longer passes is
+never constructed, folded or pushed.
 
 :func:`patch_run_config_meta` is the run-record writer, moved verbatim from
 ``AssignmentApp._patch_round_stats_to_run_config`` (``assignment/app.py`` at 1e80917)
@@ -106,6 +110,15 @@ class RunStatsAggregator(Protocol):
         """The snapshot before any tick was folded."""
 
 
+def _meta_key_problem(key: Any) -> str | None:
+    """Why ``key`` is not a free ``run_config.meta`` key (``None``: it is)."""
+    if type(key) is not str or not _META_KEY.fullmatch(key):
+        return "not a plain identifier"
+    if key in RESERVED_META_KEYS:
+        return "reserved"
+    return None
+
+
 def check_meta_key(cls: Any, where: str) -> None:
     """Refuse run-stats aggregator ``cls`` unless its ``meta_key`` is a free ``run_config.meta`` key (M2).
 
@@ -115,13 +128,14 @@ def check_meta_key(cls: Any, where: str) -> None:
     """
     key = getattr(cls, "meta_key", None)
     name = getattr(cls, "__qualname__", repr(cls))
-    if not isinstance(key, str) or not _META_KEY.fullmatch(key):
+    problem = _meta_key_problem(key)
+    if problem == "not a plain identifier":
         raise PolicyError(
             f"{where}: bind() declared run stats {name} whose meta_key {key!r} is not a plain identifier "
             "(letters, digits and '_', not starting with a digit). The snapshot is written to "
             "run_config.meta.<meta_key>; pick a name of your own, e.g. the solver's name in snake_case."
         )
-    if key in RESERVED_META_KEYS:
+    if problem == "reserved":
         raise PolicyError(
             f"{where}: bind() declared run stats {name} whose meta_key {key!r} is a key the framework writes "
             f"under run_config.meta (reserved: {', '.join(sorted(RESERVED_META_KEYS))}). Its snapshot would "
@@ -164,10 +178,11 @@ def _retire(store: MutableMapping[str, Any], key: str, exc: BaseException, push:
     return retired
 
 
-def _push_if_due(agg: Any, push: Push, *, force: bool) -> None:
+def _push_if_due(agg: Any, key: str, push: Push, *, force: bool) -> None:
+    # Under the validated CLASS key, never the instance's ``agg.meta_key`` (review N4).
     if agg.push_due(force=force):
         agg.mark_pushed()
-        push(agg.meta_key, agg.snapshot())
+        push(key, agg.snapshot())
 
 
 def record_tick(store: MutableMapping[str, Any], cls: type, tick_notes: Mapping[str, Any],
@@ -175,10 +190,18 @@ def record_tick(store: MutableMapping[str, Any], cls: type, tick_notes: Mapping[
     """Fold one committed tick into ``store``'s aggregator for ``cls`` and push when due.
 
     ``store`` maps ``meta_key`` -> aggregator instance (the app's, so it survives runner
-    rebuilds); the instance is created from ``cls`` on first use. Returns it. Never
+    rebuilds); the instance is created from ``cls`` on first use. Returns it (``None``
+    when ``cls.meta_key`` no longer passes :func:`check_meta_key`'s rule: logged, nothing
+    written). Every snapshot goes to ``run_config.meta.<cls.meta_key>`` (review N4). Never
     raises because of the aggregator: see the module's containment rule (L7).
     """
-    key = cls.meta_key
+    key = getattr(cls, "meta_key", None)
+    if _meta_key_problem(key) is not None:
+        logger.error(
+            "RUN STATS REFUSED: run-stats aggregator %s now has meta_key %r, which is not a free "
+            "run_config.meta key (it was checked at bind); nothing is written. This is a solver bug.",
+            getattr(cls, "__qualname__", cls), key)
+        return None
     agg = store.get(key)
     if isinstance(agg, _Retired):
         return agg
@@ -190,8 +213,8 @@ def record_tick(store: MutableMapping[str, Any], cls: type, tick_notes: Mapping[
         forced = agg.fold(tick_notes, clock)
         what = "push"
         if forced:
-            _push_if_due(agg, push, force=True)
-        _push_if_due(agg, push, force=False)
+            _push_if_due(agg, key, push, force=True)
+        _push_if_due(agg, key, push, force=False)
     except Exception as exc:  # noqa: BLE001 - contained (L7)
         return _retire(store, key, exc, push, what)
     return agg
@@ -203,7 +226,7 @@ def flush(store: MutableMapping[str, Any], push: Push) -> None:
         if isinstance(agg, _Retired):
             continue
         try:
-            _push_if_due(agg, push, force=True)
+            _push_if_due(agg, key, push, force=True)
         except Exception as exc:  # noqa: BLE001 - contained (L7)
             _retire(store, key, exc, push, "final push")
 

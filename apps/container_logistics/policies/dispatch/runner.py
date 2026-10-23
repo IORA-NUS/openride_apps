@@ -4,24 +4,30 @@ The single path from the bound planner selection to committed ``(truck, order)``
 pairs (plan ``plan_contract_final.md`` §2.7), identical for every solver:
 
 1. :meth:`DispatchRunner.tick` builds the whole tick (``tick.Tick.top``) from the
-   candidates, the unassigned orders and the assignment profile (the run world). The
-   bound tree is re-bound first if a world key its ``bind`` read changed.
+   candidates, the unassigned orders and the assignment profile (the run world, a
+   frozen copy: ``bind.RunWorld``). The bound tree is re-bound first if a world key its
+   ``bind`` read changed; a re-bind may never widen the cross-company ceiling beyond the
+   run-start one (review N5) and is refused (``PolicyError``) if it would.
 2. :meth:`DispatchRunner.run` calls ``result = top.solve_tick(tick, params)``, through
    ``tick.execute`` iff the top's registration offloads ``self`` (a node that offloads
    its ``children`` offloads each ``tick.call`` instead; ``solve_in_thread`` thus
    reaches every solver exactly once per decision). A ``DispatchContractViolation``
    raised inside is a violation; any other exception propagates unchanged (a crashing
    top-level solver aborts the tick, as the partitioned path always did).
-3. ``invariants.check_result`` against the tick, with the verified-pair-aware check
-   (a pair a sub-tick already proved re-checks only ownership-or-declared), the
-   framework's own index; then every truck of the tick and every committed order must
-   be unmodified since the tick was built (the share accounting reads all the trucks),
-   and the notes must be wire-safe (``invariants.check_wire_notes``: no undeclared
-   framework wire field, plain JSON).
+3. In this order (review N1-N3): ``invariants.normalise_result(strict=True)`` copies
+   the result into plain JSON with exact builtin types, immediately, so no
+   solver-supplied object is iterated, hashed or compared after this point;
+   ``invariants.check_result`` against the tick, with the verified-pair-aware check
+   (a pair a sub-tick already proved re-checks only ownership-or-declared) and the
+   framework's own index, collecting the documents it judged; the notes must be
+   wire-safe (``invariants.check_wire_notes``: no undeclared framework wire field,
+   plain JSON; ``tick_notes`` plain JSON); and LAST, every truck of the tick and every
+   committed order must be unmodified since the tick was built (the share accounting
+   reads all the trucks).
    Any problem: log ERROR (message 18), count, commit NOTHING this tick. Nothing here
    is read back from the tick's solver-visible attributes (review H2, L3).
-4. Map the pairs back to the raw documents (first document per id) in result order.
-   Returns :class:`TickOutcome` ``(pairs, result)``.
+4. Commit exactly the documents the check judged, in result order (no second lookup by
+   id). Returns :class:`TickOutcome` ``(pairs, result)``, ``result`` the plain copy.
 
 Stats (``calls``, ``violations``, ``total_ms``, ``max_ms``; ``crashes`` once a solver
 noted an incident) are in memory only and shared with every sub-tick.
@@ -47,11 +53,11 @@ from typing import Any, Callable, Iterable, Mapping
 
 from apps.container_logistics.policies.compat.measurement import offline_measurement_dials
 from apps.container_logistics.policies.compat.wire import share_tag_format_for
-from apps.container_logistics.policies.framework.errors import DispatchContractViolation, PolicyTimingError
+from apps.container_logistics.policies.framework.errors import DispatchContractViolation, PolicyError, PolicyTimingError
 from apps.container_logistics.policies.framework.slots import SLOTS
 
 from .bind import BoundTree, RunWorld, bind_tree
-from .invariants import check_result, check_wire_notes
+from .invariants import check_result, check_wire_notes, normalise_result
 from .result import Result
 from .tick import DispatchClock, Measure, Tick, direct_execute
 
@@ -100,10 +106,17 @@ class DispatchRunner:
     share-tag keyword set): a note key naming one that the top did not declare in
     ``Declaration.wire_note_keys`` is a violation (review L3). Raises
     ``PolicyTimingError`` for a timing it cannot execute.
+
+    ``run_ceiling`` is the run-start cross-company ceiling no re-bind may widen (review
+    N5). Default: the bound tree's own ceiling when the runner is built against a run
+    ``profile`` (the agent, the sim main); ``None`` (no bound) for a runner built without
+    one (battery, bench, capture replay), whose worlds legitimately differ per fixture.
+    The agent passes its first runner's ceiling to every rebuilt runner.
     """
 
     def __init__(self, tree: BoundTree, *, capture: Callable[..., None] | None = None,
-                 profile: Mapping[str, Any] | None = None, wire_fields: Iterable[str] = ()) -> None:
+                 profile: Mapping[str, Any] | None = None, wire_fields: Iterable[str] = (),
+                 run_ceiling: frozenset | None = None) -> None:
         resolved = tree.resolved
         if resolved.timing not in EXECUTABLE_TIMINGS:
             raise PolicyTimingError(
@@ -111,6 +124,11 @@ class DispatchRunner:
                 f"executable timings: {list(EXECUTABLE_TIMINGS)}. Use timing {EXECUTABLE_TIMINGS[0]!r}."
             )
         self.tree = tree
+        if run_ceiling is None and profile is not None:
+            run_ceiling = tree.ceiling
+        if run_ceiling is not None:
+            _refuse_wider_ceiling(tree, frozenset(run_ceiling))
+        self.run_ceiling: frozenset | None = None if run_ceiling is None else frozenset(run_ceiling)
         self.wire_fields = frozenset(wire_fields)
         self._bound_digest = tree.digest(profile)
         self._capture = capture
@@ -133,10 +151,18 @@ class DispatchRunner:
         return share_tag_format_for(resolved.name, registered=resolved.source != "unregistered")
 
     def _tree_for(self, profile: Mapping[str, Any] | None) -> BoundTree:
-        """The bound tree for ``profile``: re-bound (same instances) when a key its binds read changed."""
+        """The bound tree for ``profile``: re-bound (same instances) when a key its binds read changed.
+
+        A re-bind whose ceiling is wider than :attr:`run_ceiling` is refused
+        (``PolicyError``) and the runner keeps its tree; with no ``run_ceiling`` the first
+        re-bind against a real profile does not pin one (see the class docstring).
+        """
         digest = self.tree.digest(profile)
         if digest != self._bound_digest:
-            self.tree = bind_tree(self.tree.resolved, self.tree.top.instance, profile)
+            tree = bind_tree(self.tree.resolved, self.tree.top.instance, profile)
+            if self.run_ceiling is not None:
+                _refuse_wider_ceiling(tree, self.run_ceiling)
+            self.tree = tree
             self._bound_digest = self.tree.digest(profile)
         return self.tree
 
@@ -184,25 +210,31 @@ class DispatchRunner:
         if capture is not None:
             capture(tick=tick, result=result, problems=list(problems))
         shared = tick._shared
+        judged: list[Pair] = []
+        tick_note_problems: list[str] = []
         if not problems:
-            problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index)
+            # Read the result ONCE, into plain data: after this line no solver-supplied
+            # object is iterated, hashed or compared (review N2/N3).
+            result, tick_note_problems = normalise_result(result, strict=True)
+            problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index,
+                                    judged=judged, normalised=True)
         if not problems:
-            # One pass over every truck (the accounting reads them all) and the committed
-            # orders: a pair judged above on a modified document is refused here.
-            orders = shared.index[1]
-            changed = shared.changed(orders[oid] for _tid, oid in result.pairs)
+            declared = getattr(shared.tree.declaration, "wire_note_keys", frozenset())
+            problems = check_wire_notes(result, self.wire_fields - declared) + tick_note_problems
+        if not problems:
+            # LAST before the commit: one pass over every truck (the accounting reads them
+            # all) and the committed orders. A pair judged above on a document modified at
+            # any point since the tick was built is refused here.
+            changed = shared.changed(o for _t, o in judged)
             if changed:
                 shown = ", ".join(repr(i) for i in changed[:8]) + (" ..." if len(changed) > 8 else "")
                 problems = [f"document(s) {shown} were modified during the solve (documents are read-only)"]
-        if not problems:
-            declared = getattr(shared.tree.declaration, "wire_note_keys", frozenset())
-            problems = check_wire_notes(result, self.wire_fields - declared)
         if problems:
             self._report_violation(tick, problems)
             return TickOutcome(pairs=[], result=None)
         if result.tick_notes:
             logger.debug("planner %s tick notes: %r", self.resolved.label, sorted(result.tick_notes))
-        return TickOutcome(pairs=tick.docs(result), result=result)  # the framework's own index
+        return TickOutcome(pairs=judged, result=result)  # exactly the documents the check judged
 
     def _solve(self, tick: Tick) -> tuple[Any, list[str]]:
         top = tick._shared.tree.top
@@ -235,12 +267,16 @@ class DispatchRunner:
         )
 
 
-def build_runner_for_app(policy: Any, prof: Mapping[str, Any], *, wire_fields: Iterable[str] = ()) -> DispatchRunner:
+def build_runner_for_app(policy: Any, prof: Mapping[str, Any], *, wire_fields: Iterable[str] = (),
+                         run_ceiling: frozenset | None = None) -> DispatchRunner:
     """The runner ``AssignmentApp`` uses for its built ``policy`` under assignment profile ``prof``.
 
     ``policy`` is fitted into the profile's selection tree (``bind.bind_profile``:
     reused as the top, or wrapped as the innermost leaf) and bound against ``prof``.
-    Raises ``PolicyError`` when it fits neither, or a declaration is refused.
+    ``run_ceiling`` is the agent's run-start ceiling (its first runner's
+    :attr:`DispatchRunner.run_ceiling`; ``None``: this runner's own, i.e. this is the
+    first). Raises ``PolicyError`` when it fits neither, a declaration is refused, or the
+    profile's ceiling is wider than ``run_ceiling`` (review N5).
     """
     # Local imports: capture and bind_profile resolve through the registry, which
     # discovers assignment.solver; keep that off this module's import path.
@@ -252,7 +288,20 @@ def build_runner_for_app(policy: Any, prof: Mapping[str, Any], *, wire_fields: I
     # Capture records whole ticks of the bound selection (format /3).
     capture = None if settings is None else CaptureRecorder(
         settings, resolved=tree.resolved, rebate_aware=CaptureSettings.rebate_aware_of(prof))
-    return DispatchRunner(tree, capture=capture, profile=prof, wire_fields=wire_fields)
+    return DispatchRunner(tree, capture=capture, profile=prof, wire_fields=wire_fields, run_ceiling=run_ceiling)
+
+
+def _refuse_wider_ceiling(tree: BoundTree, run_ceiling: frozenset) -> None:
+    """Refuse a bound ``tree`` whose cross-company ceiling is wider than the run-start one (review N5)."""
+    wider = sorted(tree.ceiling - run_ceiling)
+    if wider:
+        shown = ", ".join(f"({o!r}, {c!r})" for o, c in wider[:8]) + (" ..." if len(wider) > 8 else "")
+        raise PolicyError(
+            f"planner policy {tree.top.name}: the assignment profile's cooperation menu now declares "
+            f"cross-company pair(s) {shown} (owner, carrier) that it did not declare at run start. The "
+            "cross-company ceiling is fixed when the run starts; a profile that widens it mid-run is refused "
+            "(nothing in a run may add a partnership the scenario did not declare)."
+        )
 
 
 def build_runner_for_policy(

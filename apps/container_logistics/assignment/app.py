@@ -189,7 +189,10 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             return cached
         # A solver's notes may not set a field publish() writes from its own share tag
         # (``wire_fields``' keyword set) unless the top declared it (review L3).
-        runner = build_runner_for_app(self._solver, prof, wire_fields=tuple(wire_fields({})))
+        # The run-start cross-company ceiling carries over to every rebuilt runner: a
+        # profile that widens it mid-run is refused (review N5).
+        runner = build_runner_for_app(self._solver, prof, wire_fields=tuple(wire_fields({})),
+                                      run_ceiling=getattr(cached, "run_ceiling", None))
         if runner.policy is not self._solver and runner.tree.leaf.instance is not self._solver:
             self._solver = runner.policy  # the stale top was rebuilt (bind_instance)
         self._dispatch_runner_cache = (_key(runner), runner)
