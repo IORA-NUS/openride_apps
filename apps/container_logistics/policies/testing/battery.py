@@ -41,7 +41,12 @@ decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in
   widest view an inner call had against the tick's hauliers. SKIP when no sub-tick was
   built (one central view; nothing to contain); FAIL when the top's badge claims a
   decomposition but no fixture with two or more hauliers made it build a sub-tick
-  (the badge is unbacked by any measured split); PASS otherwise, with the measurement.
+  (the badge is unbacked by any measured split); FAIL when the badge claims a
+  decomposition but a sub-tick held EVERY truck of a tick whose carriers the fixture's
+  ceiling separates into two or more groups (:func:`_unsplit_fleets`: the fleet was not
+  split, so that inner saw every company's trucks -- a single whole-tick ``restrict``,
+  or per-company sub-ticks that each carry the whole fleet); PASS otherwise, with the
+  measurement. Measured, never keyed on the badge's text.
   ``bind_pure``: binding the selection twice against the fixture's profile gives equal
   declarations and reads, and leaves the ``random`` module state and the profile
   unchanged.
@@ -1076,6 +1081,15 @@ def _information_scope(outcomes: _Outcomes) -> tuple[bool, str]:
                            "every decision saw the whole tick, so the claim is unbacked")
         return _skip(f"no sub-tick built on {len(decisions)} whole tick(s): one central view of every "
                      "haulier, nothing to contain")
+    if badge not in CENTRAL_BADGES:
+        contradictions = _unsplit_fleets(subs)
+        if contradictions:
+            shown = "; ".join(contradictions[:4]) + (f"; ... {len(contradictions) - 4} more"
+                                                     if len(contradictions) > 4 else "")
+            return False, (f"{outcomes.spec.name} claims the badge {badge!r} (a decomposition) but the measured "
+                           f"sub-ticks contradict it: {shown}. A decomposition splits the fleet wherever the "
+                           "scenario's ceiling separates companies; a sub-tick that holds every truck of such a "
+                           "tick shows its inner the whole fleet")
     called = [(d, e) for d, e in subs if e["callee"] is not None]
     widest = max(subs, key=lambda de: (len(de[1]["carriers"] | de[1]["owners"]), de[1]["n_trucks"]))
     d, e = widest
@@ -1089,6 +1103,47 @@ def _information_scope(outcomes: _Outcomes) -> tuple[bool, str]:
                   f"({len(e['carriers'])} carrier(s), {len(e['owners'])} owner(s)); {multi_carrier} sub-tick(s) "
                   f"held trucks of more than one carrier; {whole} saw every haulier of a multi-company tick"
                   f" (badge {badge!r})")
+
+
+def _ceiling_groups(carriers: frozenset[str], profile: Mapping[str, Any]) -> int:
+    """How many groups ``carriers`` fall into under the fixture's ceiling (undirected, every arm)."""
+    parent = {c: c for c in carriers}
+
+    def root(c: str) -> str:
+        while parent[c] != c:
+            c = parent[c]
+        return c
+
+    for owner, carrier in assign_constraints.declared_partnerships(dict(profile)):
+        if owner in parent and carrier in parent:
+            parent[root(owner)] = root(carrier)
+    return len({root(c) for c in carriers})
+
+
+def _unsplit_fleets(subs: list[tuple[_Decision, Mapping[str, Any]]]) -> list[str]:
+    """The sub-ticks that contradict a decomposition badge (final review round 2, G4).
+
+    MEASURED, badge-text agnostic: on a whole tick whose truck carriers fall into two or
+    more groups under the fixture's ceiling (``constraints.declared_partnerships`` over
+    every arm, undirected), a sub-tick holding EVERY truck of the tick did not split the
+    fleet at all, so the inner it was built for saw every company's trucks. Catches a
+    single whole-tick ``restrict`` (the badge liar) and per-company sub-ticks that each
+    carry all trucks (the leak). A tick the ceiling joins into one group may be one
+    sub-tick (``Partitioned`` on two partners); a split by any other key (a zone) passes,
+    because no zone sub-tick holds the whole fleet.
+    """
+    out: list[str] = []
+    groups: dict[int, int] = {}
+    for d, e in subs:
+        carriers = frozenset(h for h in map(assign_constraints.haulier_of, d.tick.raw_trucks) if h is not None)
+        if len(carriers) < 2 or e["n_trucks"] < len(d.tick.raw_trucks):
+            continue
+        if id(d) not in groups:
+            groups[id(d)] = _ceiling_groups(carriers, d.fixture.profile())
+        if groups[id(d)] >= 2:
+            out.append(f"{d.fixture_id} {e['scope']} held all {e['n_trucks']} trucks of {len(carriers)} carriers "
+                       f"in {groups[id(d)]} ceiling groups")
+    return out
 
 
 def _bound_twice(spec: PolicySpec, arm: Mapping[str, Any], profile: Mapping[str, Any]) -> tuple[Any, Any]:

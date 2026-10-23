@@ -71,6 +71,30 @@ Verified to have teeth (FB, final review H3; mutate / see it fail / restore):
 - renaming the ``FRAMEWORK_SURFACE_IDENTIFIERS`` entry away failed seven modules (every
   ``tick.candidates`` / ``restrict(candidates=...)`` / assignable-``candidates`` read)
   plus the two exemption tests, i.e. the exemption is load-bearing and exactly scoped.
+
+Round 2 (fix coder R3B) closed three holes, each verified to have teeth in a private
+copy of the tree (mutate / see it fail / restore; at ``6647aaf`` every one of these
+mutations left the 125 guard tests green):
+
+- G1, the compat exemption is ONE prefix (``_framework_guard.COMPAT_PREFIX``): a new
+  ``policies/dispatch/compat/branch.py`` with ``top.name == "RandomAssignment"``,
+  imported by ``runner.py``, failed ``test_module_has_no_solver_vocabulary[...dispatch.compat.branch]``;
+  ``policies/framework/compat/__init__.py`` importing ``solver_lib`` failed the vocabulary
+  test, ``test_tier_a_imports_obey_the_rules`` and the transitive-gateway test;
+- G2, tier A includes its static import closure (``_framework_guard.CLOSURE_BOUNDARY``
+  is the only reviewed stop besides compat, the solver packages and tier B): a new
+  ``assignment/publish_helpers.py`` with the same name branch, imported by ``app.py``,
+  failed ``test_module_has_no_solver_vocabulary[...publish_helpers]``; with a local
+  ``compat.legacy.wrap_legacy_leaf`` import instead it failed that and
+  ``test_tier_a_imports_obey_the_rules[...publish_helpers]``;
+- the ``candidates`` gap (:func:`surface_comparisons`): ``params.candidates == "spatial"``
+  appended to ``dispatch/base.py`` failed ``test_module_has_no_solver_vocabulary[...dispatch.base]``
+  (``cmp:candidates``).
+
+The closure reaches ``assignment/agent.py`` (the ORSim agent shell, via the package
+``__init__``), whose ``entering_market`` / ``exiting_market`` are the ENGINE's hook names:
+:data:`ENGINE_HOOK_IDENTIFIERS` exempts exactly those two, in identifier positions only,
+pinned to ``orsim.lifecycle.ORSimAgent``.
 """
 
 from __future__ import annotations
@@ -127,6 +151,14 @@ FRAMEWORK_OWNED_PARAMS: dict[str, str] = {
 FRAMEWORK_SURFACE_IDENTIFIERS: dict[str, str] = {
     "candidates": ("Tick.candidates / Tick.restrict(candidates=...): the caller-built pairs of a "
                    "sub-tick; and the app's assignable-truck list. Not a read of any solver's param"),
+}
+
+#: ORSim's agent lifecycle hooks (``orsim.lifecycle.ORSimAgent``): ENGINE vocabulary that
+#: a closure module (``assignment/agent.py``, the agent shell) must spell to override them.
+#: Exempt in identifier positions only; a string still hits. Pinned to the engine's API.
+ENGINE_HOOK_IDENTIFIERS: dict[str, str] = {
+    "entering_market": "orsim.lifecycle.ORSimAgent.entering_market: the engine's agent-activation hook",
+    "exiting_market": "orsim.lifecycle.ORSimAgent.exiting_market: the engine's agent-exit hook",
 }
 
 
@@ -250,6 +282,44 @@ def _param_pattern(name: str) -> re.Pattern:
     return re.compile(rf"^{word}$|(?<=[.\[]){word}(?!\w)|(?<!\w){word}(?=\s*[=\]]|\.\w)")
 
 
+def _str_literals(node: ast.AST) -> list[str]:
+    """The string literal(s) ``node`` is: a ``str`` constant, or a tuple / list / set of them."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, (ast.Tuple, ast.List, ast.Set)):
+        return [e.value for e in node.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return []
+
+
+def _surface_name(node: ast.AST) -> str | None:
+    """``x.candidates`` / ``candidates`` -> ``candidates`` (a framework-surface identifier), else ``None``."""
+    name = node.attr if isinstance(node, ast.Attribute) else node.id if isinstance(node, ast.Name) else None
+    return name if name in FRAMEWORK_SURFACE_IDENTIFIERS else None
+
+
+def surface_comparisons(tree: ast.AST) -> Counter:
+    """A framework-surface identifier COMPARED with a string literal (round 2, candidates gap).
+
+    The ``candidates`` exemption covers ``Tick.candidates`` / ``restrict(candidates=...)``,
+    which hold pairs, never a mode string; so ``params.candidates == "spatial"``,
+    ``"sampled" != candidates``, ``candidates in ("spatial", ...)`` and ``match
+    params.candidates: case "spatial":`` are a read of a SOLVER param under the exempt
+    spelling. Each is a ``cmp:<identifier>`` hit (``policies/compat/`` is never scanned).
+    """
+    hits: Counter = Counter()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare):
+            operands = [node.left, *node.comparators]
+            names = [n for n in map(_surface_name, operands) if n]
+            if names and any(_str_literals(o) for o in operands):
+                hits.update(f"cmp:{n}" for n in names)
+        elif isinstance(node, ast.Match) and _surface_name(node.subject):
+            if any(isinstance(sub, ast.MatchValue) and _str_literals(sub.value)
+                   for case in node.cases for sub in ast.walk(case.pattern)):
+                hits[f"cmp:{_surface_name(node.subject)}"] += 1
+    return hits
+
+
 def scan_source(source: str, *, tier_a: bool, vocab: Vocabulary | None = None) -> Counter:
     """Banned-vocabulary hits of one module's source, as ``Counter({token: count})``.
 
@@ -262,8 +332,11 @@ def scan_source(source: str, *, tier_a: bool, vocab: Vocabulary | None = None) -
     idents = BANNED_IDENTIFIERS | (BANNED_IDENTIFIERS_TIER_A if tier_a else frozenset())
     name_re = vocab.name_pattern
     param_res = {p: _param_pattern(p) for p in vocab.params}
-    hits: Counter = Counter()
-    for kind, text in _texts(ast.parse(source)):
+    tree = ast.parse(source)
+    hits: Counter = surface_comparisons(tree)
+    for kind, text in _texts(tree):
+        if kind == "ident" and text in ENGINE_HOOK_IDENTIFIERS:
+            continue
         if kind == "str" and tier_a and text in BANNED_STRINGS_TIER_A:
             hits[f"str:{text}"] += 1
         for word in _WORD.findall(text):
@@ -310,7 +383,8 @@ def test_the_tiers_name_real_modules():
     a, b = guard.tier_a_modules(), guard.tier_b_modules()
     assert "apps.container_logistics.assignment.app" in a
     assert "apps.container_logistics.policies.dispatch.runner" in a
-    assert not any(".library." in m or ".compat" in m for m in a), "library/ and compat/ are not tier A"
+    assert not any(guard.under(m, pkg) for m in a for pkg in guard.CLOSURE_STOP_PACKAGES), \
+        "the compat quarantine and the solver packages (library/ included) are not tier A"
     assert len(b) == len(guard.TIER_B_GLOBS), sorted(b)
     assert not set(a) & set(b)
 
@@ -414,3 +488,101 @@ def test_the_framework_owned_exemptions_are_real_and_not_stale():
         raw |= {i.name for i in declared_params(spec.params_cls)}
     assert set(FRAMEWORK_OWNED_PARAMS) <= raw and set(FRAMEWORK_SURFACE_IDENTIFIERS) <= declared, \
         "an exemption for a param no solver declares any more is stale: remove it"
+
+
+# --- round 2: the candidates gap, the compat prefix (G1), the tier-A closure (G2) -----
+
+@pytest.mark.parametrize(("source", "want"), [
+    ('if params.candidates == "spatial": pass', {"cmp:candidates": 1}),
+    ('if "sampled" != tick.candidates: pass', {"cmp:candidates": 1}),
+    ('ok = candidates in ("spatial", "sampled")', {"cmp:candidates": 1}),
+    ('match p.candidates:\n    case "spatial":\n        pass', {"cmp:candidates": 1}),
+    # The framework surface itself: pairs, never a mode string.
+    ("if tick.candidates is None: pass", {}),
+    ("same = sub.candidates == tick.candidates", {}),
+    ("sub = tick.restrict(trucks=t, orders=o, scope='s', sample_rng=None, candidates=None)", {}),
+])
+def test_a_surface_identifier_compared_with_a_string_hits(source, want):
+    """``params.candidates == "spatial"`` passed under the identifier exemption (round 2)."""
+    assert dict(scan_source(source, tier_a=True)) == want
+
+
+def test_the_engine_hooks_are_exempt_as_identifiers_only():
+    from orsim.lifecycle import ORSimAgent
+
+    for name in ENGINE_HOOK_IDENTIFIERS:
+        assert callable(getattr(ORSimAgent, name, None)), f"{name}: not an ORSimAgent hook (stale exemption)"
+    src = "class A(Base):\n    def entering_market(self, t):\n        super().entering_market(t)\n" \
+          "    def exiting_market(self):\n        pass"
+    assert dict(scan_source(src, tier_a=True)) == {}
+    assert dict(scan_source('hook = "entering_market"', tier_a=True)) == {"sub:market": 1}
+    assert dict(scan_source("entering_market_v2 = 1", tier_a=True)) == {"sub:market": 1}
+
+
+def _fake_repo(tmp_path, files):
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
+def test_only_the_quarantine_prefix_is_exempt(tmp_path, monkeypatch):
+    """G1: ``dispatch/compat/``, ``framework/compat/`` are tier A; only ``policies/compat/`` is not."""
+    pol = "apps/container_logistics/policies"
+    _fake_repo(tmp_path, {f"{pol}/compat/legacy.py": "", f"{pol}/dispatch/compat/branch.py": "",
+                          f"{pol}/framework/compat/__init__.py": "", f"{pol}/dispatch/deep/compat/x.py": "",
+                          f"{pol}/compatx/y.py": ""})
+    monkeypatch.setattr(guard, "REPO_ROOT", tmp_path)
+    assert guard.is_compat(tmp_path / pol / "compat" / "legacy.py")
+    assert not guard.is_compat(tmp_path / pol / "dispatch" / "compat" / "branch.py")
+    assert not guard.is_compat(tmp_path / pol / "compatx" / "y.py")
+    listed = {guard.dotted(p) for p in guard._tier_a_root_paths()}
+    p = "apps.container_logistics.policies"
+    assert {f"{p}.dispatch.compat.branch", f"{p}.framework.compat", f"{p}.dispatch.deep.compat.x"} <= listed
+    assert f"{p}.compat.legacy" not in listed
+
+
+def test_the_tier_a_closure_scans_a_new_sibling(tmp_path, monkeypatch):
+    """G2: a module ``app.py`` imports is tier A without anyone listing it; the stops hold."""
+    pol, asg = "apps/container_logistics/policies", "apps/container_logistics/assignment"
+    _fake_repo(tmp_path, {
+        "apps/__init__.py": "", "apps/container_logistics/__init__.py": "",
+        f"{pol}/__init__.py": "", f"{pol}/framework/__init__.py": "",
+        f"{pol}/compat/__init__.py": "", f"{pol}/compat/legacy.py": "import apps.container_logistics.helper2\n",
+        f"{pol}/solver_lib/__init__.py": "", f"{pol}/solver_lib/pair_leaf.py": "",
+        f"{asg}/__init__.py": "",
+        f"{asg}/app.py": ("from . import publish_helpers\nfrom . import constraints\n"
+                          "from apps.container_logistics.policies.compat.legacy import x\n"
+                          "from apps.container_logistics.policies.solver_lib import pair_leaf\n"),
+        f"{asg}/accounting.py": "",
+        f"{asg}/publish_helpers.py": "def f():\n    from .deeper import g\n",
+        f"{asg}/deeper.py": "",
+        f"{asg}/constraints.py": "import apps.container_logistics.helper3\n",
+        "apps/container_logistics/helper2.py": "", "apps/container_logistics/helper3.py": "",
+    })
+    monkeypatch.setattr(guard, "REPO_ROOT", tmp_path)
+    added = dict((m, i) for m, _p, i in guard._tier_a_closure.__wrapped__())
+    a = "apps.container_logistics.assignment"
+    assert added[f"{a}.publish_helpers"] == f"{a}.app"
+    assert added[f"{a}.deeper"] == f"{a}.publish_helpers", "a local import inside a function counts"
+    assert f"{a}" in added, "the parent package Python executes on the way"
+    for stopped in (f"{a}.constraints", "apps.container_logistics.helper3",          # the boundary
+                    "apps.container_logistics.policies.compat.legacy", "apps.container_logistics.helper2",
+                    "apps.container_logistics.policies.solver_lib.pair_leaf"):
+        assert stopped not in added, stopped
+
+
+def test_the_real_closure_is_scanned_and_its_boundary_is_not_stale():
+    closure = guard.closure_modules()
+    a = guard.tier_a_modules()
+    assert set(closure) <= set(a)
+    # What the closure adds today: the agent shell and manager, the package inits, the shared
+    # helpers app.py and the run stats use (each scanned under tier A's rules).
+    assert {"apps.container_logistics.assignment", "apps.container_logistics.assignment.agent",
+            "apps.container_logistics.assignment.manager", "apps.common.user_registry",
+            "apps.container_logistics.rebate"} <= set(closure), sorted(closure)
+    assert not set(guard.CLOSURE_BOUNDARY) & set(a)
+    importers = set(a)
+    reached = set().union(*(guard.static_imports(m, p) for m, p in a.items() if m in importers))
+    assert set(guard.CLOSURE_BOUNDARY) <= reached, (
+        f"stale boundary entries (nothing in tier A imports them): {sorted(set(guard.CLOSURE_BOUNDARY) - reached)}")
