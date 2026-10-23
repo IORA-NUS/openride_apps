@@ -18,7 +18,7 @@ by the spawned sim out of sight (round-2 review M-A).
 The rules, in the order they are checked:
 
 1. ``COOPERATION`` is framework-owned: derived from the active arm of the profile's
-   cooperation block (``analytics.manager.cooperation_record``). A top that also
+   cooperation block (``compat.cooperation_record``). A top that also
    declares it must declare exactly that record.
 2. No other ``stamp_settings`` key may be one the run's settings already hold, or one
    in :func:`reserved_run_settings` -- every setting the framework WRITES
@@ -41,10 +41,13 @@ a new framework reader with a key missing here fails that test instead of drifti
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping
 
+from apps.container_logistics.policies.compat.cooperation_record import (
+    COOPERATION_SETTING,
+    cooperation_record,
+)
 from apps.container_logistics.policies.framework import PolicyError
 
 __all__ = [
@@ -60,8 +63,6 @@ __all__ = [
     "cooperation_record",
 ]
 
-#: The run setting (``orsim_settings`` key -> ``run_config``) the cooperation record rides in.
-COOPERATION_SETTING = "COOPERATION"
 _COOPERATION_SETTING = COOPERATION_SETTING
 
 #: EVERY run setting the sim main itself writes into ``orsim_settings`` (only through
@@ -150,47 +151,6 @@ class RunDeclarationPlan:
     cooperation: Any = None
     settings: Mapping[str, Any] = field(default_factory=dict)
     run_name_segments: tuple[str, ...] = ()
-
-
-def cooperation_record(world: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
-    """The run's ``COOPERATION`` record, derived from WORLD data (final review M3).
-
-    ``world`` is an assignment profile (or a run world over one) AFTER any per-run
-    ``--structure`` override; only its ``cooperation`` key is read. Returns ``None``
-    when it has no active structure (own-haulier only: no planner rows), else
-    ``{structure_id, components, adjacency, pools}`` as plain JSON -- the record
-    ``AnalyticsManager.set_cooperation`` reads for the planner-scope breakdown rows
-    and gains attribution. The structure's own ``components`` / ``adjacency`` as
-    authored (``[]`` / ``{}`` when absent) and the EFFECTIVE pools
-    (``assignment.pools.pools_from_structure``).
-
-    FRAMEWORK-owned: the sim main writes it (``_apply_run_declaration``) for every run
-    with an arm, whatever the solver declared, so the analytics never depends on a
-    solver choosing to stamp it. It equals the built-in solvers' own
-    ``solver_lib.cooperation.stamp(resolve_arm(world))`` byte for byte
-    (``tests/test_run_entry_ownership.py`` pins it on every structure of the compiled
-    smoke bundle and a hand-written block), which keeps the built-ins' run settings identical.
-
-    Moved verbatim from ``analytics/manager.py`` (which re-exports it), so the
-    control-plane dry run can compute it without importing the analytics agent stack.
-    """
-    # Local imports: the assignment package is not on this module's import path.
-    from apps.container_logistics.assignment import constraints as assign_constraints
-    from apps.container_logistics.assignment import pools as assign_pools
-
-    structure = assign_constraints.active_cooperation_structure(
-        {"cooperation": (world or {}).get("cooperation")}
-    )
-    if structure is None:
-        return None
-    structure = structure if isinstance(structure, dict) else {}
-    return json.loads(json.dumps({
-        "structure_id": structure.get("id"),
-        "components": structure.get("components") or [],
-        "adjacency": structure.get("adjacency") or {},
-        "pools": [{"id": p.id, "members": sorted(p.members)}
-                  for p in assign_pools.pools_from_structure(structure)],
-    }))
 
 
 def reserved_run_settings() -> frozenset[str]:

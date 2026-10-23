@@ -26,10 +26,10 @@ def _sim_clock_http_param(value: Any) -> str:
 
 
 #: The run setting the cooperation record rides in, and the record itself (final review
-#: M3). Both MOVED, unchanged, to ``scenario/run_declaration.py`` (round-2 review M-C:
-#: the control-plane dry run computes the record and must not import this module, which
-#: pulls in orsim); re-exported here for every existing caller.
-from apps.container_logistics.scenario.run_declaration import (  # noqa: E402,F401
+#: M3). Both MOVED, unchanged, to ``policies/compat/cooperation_record.py`` (round-2
+#: review M-C: the control-plane dry run computes the record and must not import this
+#: module, which pulls in orsim); re-exported here for every existing caller.
+from apps.container_logistics.policies.compat.cooperation_record import (  # noqa: E402,F401
     COOPERATION_SETTING,
     cooperation_record,
 )

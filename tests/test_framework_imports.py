@@ -178,6 +178,13 @@ TRANSITIVE_SOLVER_GATEWAYS: dict[str, tuple[frozenset[str], str]] = {
         frozenset({f"{_P}.solver_lib", f"{_P}.solver_lib.candidates", f"{_P}.solver_lib.objective"}),
         "compat: a legacy decide(ctx) class's context serves candidate pairs and dual-cycle costs from "
         "the solver helpers it was written against (reached via dispatch/base.py, testing/battery.py)"),
+    f"{_P}.compat.cooperation_record": (
+        frozenset({"apps.container_logistics.assignment.pools"}),
+        "compat: the run's COOPERATION record keeps the pre-contract stamp format, whose `pools` "
+        "are the effective pool decomposition (assignment.pools.pools_from_structure). Reached via "
+        "scenario.run_declaration (the run-declaration check), which scenario compile calls "
+        "(round-2 review M-A); the scenario package is in tier A's closure through "
+        "assignment.constraints"),
     f"{_P}.compat.run_stats": (
         frozenset({f"{_P}.dispatch.library", f"{_P}.dispatch.library._market_stats"}),
         "compat: AssignmentApp.round_stats() for the frozen golden harness reads the market's run "
