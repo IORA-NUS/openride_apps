@@ -15,7 +15,16 @@ Single responsibility: the control plane's policy surface.
   ``--cooperation-structure`` is applied on the same copy
   (``scenario_overrides.apply_cooperation_override``) and refused like the sim main
   refuses it: an undeclared id (message 26) or a structure the bound planner tree never
-  reads (message 25).
+  reads (message 25). The dry run ALWAYS runs when the scenario has a bundle, with or
+  without a flag (final review M11): the bundle format, the binding (messages 23/24)
+  and messages 25/26 are checked on every run, so a stale bundle is refused here and
+  not by the spawned sim out of sight.
+- The dry run reads the run's inputs from the environment the spawned sim will see
+  (:func:`sim_environ`: this process's environment, which ``spawn_simulation_process``
+  passes on, overlaid with the variables the flags inject), through the sim main's
+  own readers (``scenario_overrides.*_from_env``, ``compat.legacy_env``), so an
+  inherited ``ORSIM_SHARING_POLICY`` / ``ORSIM_SOLVER`` / legacy dispatch variable is
+  refused or applied here exactly as at run start (final review L8).
 - ``run-preflight`` (:func:`run_preflight`): bind the scenario's planner tree (after the
   same overrides) and report the world keys it reads and the declared cooperation
   structures, so the dashboard can explain which per-run world patches matter.
@@ -36,6 +45,7 @@ from typing import Any, Sequence
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "sim_environ",
     "build_run_policy_overrides",
     "parse_policy_overrides_json",
     "load_assignment_collection",
@@ -162,6 +172,65 @@ def _missing_bundle_message(scenario: str | None) -> str:
     )
 
 
+#: The run inputs the dry run reads from :func:`sim_environ` (the scenario, the dispatch
+#: selection and the structure; the legacy dispatch variables via ``compat.legacy_env``).
+_SCENARIO_ENV = "ORSIM_SCENARIO"
+
+
+def sim_environ(
+    environ: Any = None,
+    *,
+    scenario: str | None = None,
+    solver: str | None = None,
+    overrides: dict[str, Any] | None = None,
+    cooperation_structure: str | None = None,
+) -> dict[str, str]:
+    """The environment the spawned sim main will read for this run's flags.
+
+    ``environ`` (default ``os.environ``) is what ``spawn_simulation_process`` inherits
+    (``paths.openride_apps_env`` copies it), overlaid exactly as
+    ``ServiceManager.run_simulation_background`` / ``openride.runner`` inject the
+    flags: ``ORSIM_SCENARIO`` when ``scenario`` is set, ``ORSIM_SOLVER`` /
+    ``ORSIM_COOP_STRUCTURE`` when non-blank (stripped), ``ORSIM_POLICY_OVERRIDES`` (JSON,
+    keys sorted) when ``overrides`` is non-empty. A variable no flag sets keeps its
+    inherited value, which is exactly what the sim then reads.
+    """
+    from apps.container_logistics.scenario.scenario_overrides import (
+        POLICY_OVERRIDES_ENV,
+        SOLVER_ENV,
+        STRUCTURE_ENV,
+    )
+
+    env = dict(os.environ if environ is None else environ)
+    if scenario:
+        env[_SCENARIO_ENV] = scenario
+    if solver and solver.strip():
+        env[SOLVER_ENV] = solver.strip()
+    if cooperation_structure and cooperation_structure.strip():
+        env[STRUCTURE_ENV] = cooperation_structure.strip()
+    if overrides:
+        env[POLICY_OVERRIDES_ENV] = json.dumps(overrides, sort_keys=True)
+    return env
+
+
+def _env_scenario(env: dict[str, str]) -> str | None:
+    """The scenario the sim main resolves from ``env`` (``None``: the default scenario)."""
+    return env.get(_SCENARIO_ENV, "").strip() or None
+
+
+def _env_requests_a_patch(env: dict[str, str]) -> bool:
+    """Whether ``env`` asks the sim main to patch the loaded behaviors (any per-run input)."""
+    from apps.container_logistics.policies.compat.legacy_env import read_legacy_dispatch_env
+    from apps.container_logistics.scenario.scenario_overrides import (
+        POLICY_OVERRIDES_ENV,
+        solver_from_env,
+        structure_from_env,
+    )
+
+    return bool(env.get(POLICY_OVERRIDES_ENV, "").strip() or solver_from_env(env)
+                or structure_from_env(env) or any(read_legacy_dispatch_env(env).values()))
+
+
 def validate_run_policy_args(
     scenario: str | None,
     solver: str | None,
@@ -169,6 +238,8 @@ def validate_run_policy_args(
     params: Sequence[str] = (),
     overrides_json: str | None = None,
     cooperation_structure: str | None = None,
+    *,
+    environ: Any = None,
 ) -> dict[str, Any] | str:
     """Dry-run a run's policy flags against the scenario's assignment profile.
 
@@ -176,29 +247,39 @@ def validate_run_policy_args(
     ``solver`` stays separate), then check every NAME it carries and ``solver``
     (``scenario_overrides.precheck_override_names``) BEFORE the bundle is read, so a
     bad name is reported as itself and never as a missing scenario; then load the
-    bundle and apply both with ``scenario_overrides.run_dispatch_overrides`` (the sim
-    main's one application point) on a deep copy, then ``cooperation_structure``
-    (``scenario_overrides.apply_cooperation_override``, message 26), followed by the
-    run-start checks with the patched world keys (message 25) -- the sim main's order.
+    bundle and run :func:`_dry_run` over the environment the spawned sim will read
+    (:func:`sim_environ`; ``environ`` defaults to ``os.environ``): the dispatch inputs
+    through ``scenario_overrides.run_dispatch_overrides`` (the sim main's one
+    application point) on a deep copy, the removed ``ORSIM_SHARING_POLICY`` refusal,
+    the structure (``scenario_overrides.apply_cooperation_override``, message 26), then
+    the run-start checks with the patched world keys (bundle format, mirrors, binding:
+    messages 23/24, message 25) -- the sim main's order.
+
+    The dry run runs WITH OR WITHOUT a flag (final review M11): the run route calls
+    this on every run, and a stale bundle must be refused here. Only a scenario with
+    NO bundle and nothing to patch returns ``{}`` unread: the sim main compiles a
+    missing bundle at start, so there is nothing to check yet.
+
     Returns the overrides object to ship as ``ORSIM_POLICY_OVERRIDES`` (``{}`` when no
-    policy flag was given; with neither overrides, ``solver`` nor
-    ``cooperation_structure`` the scenario is not read),
-    or the error message (``str``) when a name, the merge or the patched profile fails,
-    or when the scenario has no readable bundle (never validated against slot
-    defaults: that would name the wrong policy). A bundle compiled before policy
-    slots goes through the legacy translation, exactly as at run start.
+    policy flag was given), or the error message (``str``) when a name, the merge or
+    the patched profile fails, or when a patch is requested and the scenario has no
+    readable bundle (never validated against slot defaults: that would name the wrong
+    policy). A bundle compiled before policy slots goes through the legacy
+    translation, exactly as at run start.
     """
     from apps.container_logistics.policies.framework import PolicyError
 
     try:
         overrides = build_run_policy_overrides(policies, params, overrides_json)
         _precheck_names(overrides, solver)
-        if not overrides and not (solver or "").strip() and not (cooperation_structure or "").strip():
-            return {}
-        collection = load_assignment_collection(scenario)
+        env = sim_environ(environ, scenario=scenario, solver=solver, overrides=overrides,
+                          cooperation_structure=cooperation_structure)
+        collection = load_assignment_collection(_env_scenario(env))
         if collection is None:
-            return _missing_bundle_message(scenario)
-        _dry_run(collection, overrides, solver, cooperation_structure)
+            if not _env_requests_a_patch(env):
+                return {}
+            return _missing_bundle_message(_env_scenario(env))
+        _dry_run(collection, env)
     except PolicyError as exc:
         return str(exc)
     return overrides
@@ -210,29 +291,34 @@ def _precheck_names(overrides: dict[str, Any], solver: str | None) -> None:
     precheck_override_names(overrides, solver)
 
 
-def _dry_run(
-    collection: dict[str, Any],
-    overrides: dict[str, Any],
-    solver: str | None,
-    cooperation_structure: str | None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Apply the run's overrides to a deep copy of ``collection`` as the sim main does.
+def _dry_run(collection: dict[str, Any], env: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply the run's inputs (read from ``env``, :func:`sim_environ`) to a deep copy of ``collection``.
 
-    Returns ``(patched_copy, {agent_id: BoundTree})``. Raises ``PolicyError``.
+    The sim main's order and readers (``run_container_logistics_simulation._bind_run_policies``):
+    ``ORSIM_POLICY_OVERRIDES`` + the legacy dispatch variables + ``ORSIM_SOLVER``
+    through ``run_dispatch_overrides``, the ``ORSIM_SHARING_POLICY`` refusal,
+    ``ORSIM_COOP_STRUCTURE`` (message 26), then the run-start check
+    (``assert_assignment_profiles_resolvable``: format, resolve, mirrors, bind, message
+    25). Returns ``(patched_copy, {agent_id: BoundTree})``. Raises ``PolicyError``.
     """
+    from apps.container_logistics.policies.compat.legacy_env import read_legacy_dispatch_env
     from apps.container_logistics.policies.dispatch.profile import (
         assert_assignment_profiles_resolvable,
     )
     from apps.container_logistics.scenario.scenario_overrides import (
         apply_cooperation_override,
+        policy_overrides_from_env,
+        refuse_removed_sharing_env,
         run_dispatch_overrides,
+        solver_from_env,
+        structure_from_env,
     )
 
     collection = copy.deepcopy(collection)
-    run_dispatch_overrides(collection, overrides=overrides, solver=solver)
-    _, patched_world_keys = apply_cooperation_override(
-        collection, (cooperation_structure or "").strip() or None
-    )
+    run_dispatch_overrides(collection, overrides=policy_overrides_from_env(env),
+                           solver=solver_from_env(env), legacy_env=read_legacy_dispatch_env(env))
+    refuse_removed_sharing_env(env)
+    _, patched_world_keys = apply_cooperation_override(collection, structure_from_env(env))
     trees = assert_assignment_profiles_resolvable(collection, patched_world_keys=patched_world_keys)
     return collection, trees
 
@@ -244,6 +330,8 @@ def cmd_validate_run_policies(
     params: Sequence[str] = (),
     overrides_json: str | None = None,
     cooperation_structure: str | None = None,
+    *,
+    environ: Any = None,
 ) -> dict[str, Any]:
     """``validate-run-policies`` payload: ``{ok, action, overrides}`` or ``{ok:false, action, message}``.
 
@@ -252,10 +340,12 @@ def cmd_validate_run_policies(
     :func:`validate_run_policy_args` ``run-simulation`` runs. ``overrides`` is the
     ``ORSIM_POLICY_OVERRIDES`` object WITHOUT ``solver`` (which ships as
     ``ORSIM_SOLVER``; round-2 §5 C4) and without the structure (``ORSIM_COOP_STRUCTURE``).
+    With no flag at all the full dry run still runs (final review M11), and the reply
+    keeps this shape (``overrides: {}``).
     """
     action = "validate_run_policies"
     result = validate_run_policy_args(
-        scenario, solver, policies, params, overrides_json, cooperation_structure
+        scenario, solver, policies, params, overrides_json, cooperation_structure, environ=environ
     )
     if isinstance(result, str):
         return {"ok": False, "action": action, "message": result}
@@ -281,6 +371,7 @@ def run_preflight(
     policies: Sequence[str] = (),
     params: Sequence[str] = (),
     overrides_json: str | None = None,
+    environ: Any = None,
 ) -> dict[str, Any]:
     """``run-preflight`` payload: what the run would bind, before it is spawned.
 
@@ -293,7 +384,8 @@ def run_preflight(
     cooperation key. Unlike :func:`validate_run_policy_args` it ALWAYS reads the bundle
     (with no flag at all it reports the scenario's own selection). Any refusal --
     a name, a missing bundle, message 26 / 25 -- is ``{ok: false, action, message}``.
-    Writes nothing.
+    Reads the run's inputs from :func:`sim_environ` (``environ`` defaults to
+    ``os.environ``), like :func:`validate_run_policy_args`. Writes nothing.
     """
     from apps.container_logistics.policies.framework import PolicyError
 
@@ -301,10 +393,12 @@ def run_preflight(
     try:
         overrides = build_run_policy_overrides(policies, params, overrides_json)
         _precheck_names(overrides, solver)
-        collection = load_assignment_collection(scenario)
+        env = sim_environ(environ, scenario=scenario, solver=solver, overrides=overrides,
+                          cooperation_structure=cooperation_structure)
+        collection = load_assignment_collection(_env_scenario(env))
         if collection is None:
-            return {"ok": False, "action": action, "message": _missing_bundle_message(scenario)}
-        patched, trees = _dry_run(collection, overrides, solver, cooperation_structure)
+            return {"ok": False, "action": action, "message": _missing_bundle_message(_env_scenario(env))}
+        patched, trees = _dry_run(collection, env)
     except PolicyError as exc:
         return {"ok": False, "action": action, "message": str(exc)}
     reads = sorted(frozenset().union(*(t.world_reads for t in trees.values())))

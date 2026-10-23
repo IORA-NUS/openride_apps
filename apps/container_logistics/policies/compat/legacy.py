@@ -31,7 +31,9 @@ component registries are reached through ``framework.components``, imported insi
 the function that needs them); never imports ``apps.container_logistics.assignment.*``.
 
 Moved verbatim from ``policies/dispatch/legacy.py`` (35b5b92, lines 1-374) into the
-compat quarantine; the old path's re-export shim was deleted in WS8.
+compat quarantine; the old path's re-export shim was deleted in WS8. One text changed
+since: the round-1 refusal of :func:`check_policies_format` named ``policies.dispatch``
+as if it were the current slot (final review L10); it now says the slot was renamed.
 """
 
 from __future__ import annotations
@@ -365,8 +367,9 @@ def check_policies_format(profile: Mapping[str, Any]) -> None:
     if marker is None:
         raise PolicyError(
             f"profile.policies has {POLICIES_FORMAT_KEY}={marker!r}, not {POLICIES_FORMAT}: it was "
-            "compiled before round 2, when a flat policies.dispatch {type: X} meant the per-scope "
-            "solver X under planner.topology; it now means a CENTRAL X. Recompile the scenario "
+            "compiled before round 2, when a flat {type: X} slot entry (the slot was then named "
+            "'dispatch', now 'planner') meant the per-scope solver X under planner.topology; a flat "
+            "policies.planner {type: X} now means a CENTRAL X. Recompile the scenario "
             "(openride scenario compile <slug>); never hand-patch the bundle." + hint
         )
     raise PolicyError(
