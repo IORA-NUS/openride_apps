@@ -22,8 +22,9 @@ sub-tick; ``PooledMarket``: one carrier per sub-tick): the valtable is unchanged
 
 Verified to have teeth (R3B; mutate / see it fail / restore): making
 ``_unsplit_fleets`` return ``[]`` failed the two liar tests; dropping its
-``n_trucks < len(...)`` guard (every multi-carrier sub-tick a contradiction) failed
-``HonestZone`` and the built-in test (``Partitioned`` on ``three_company_chain``).
+``n_trucks < len(...)`` guard (every sub-tick of a multi-group tick a contradiction)
+failed ``HonestZone`` and both built-in rows. At ``6647aaf`` (before the fix) the two
+liar tests fail: the battery reported ``PASS`` for both.
 """
 
 from __future__ import annotations

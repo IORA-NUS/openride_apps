@@ -71,6 +71,30 @@ Verified to have teeth (FB, final review H3; mutate / see it fail / restore):
 - renaming the ``FRAMEWORK_SURFACE_IDENTIFIERS`` entry away failed seven modules (every
   ``tick.candidates`` / ``restrict(candidates=...)`` / assignable-``candidates`` read)
   plus the two exemption tests, i.e. the exemption is load-bearing and exactly scoped.
+
+Round 2 (fix coder R3B) closed three holes, each verified to have teeth in a private
+copy of the tree (mutate / see it fail / restore; at ``6647aaf`` every one of these
+mutations left the 125 guard tests green):
+
+- G1, the compat exemption is ONE prefix (``_framework_guard.COMPAT_PREFIX``): a new
+  ``policies/dispatch/compat/branch.py`` with ``top.name == "RandomAssignment"``,
+  imported by ``runner.py``, failed ``test_module_has_no_solver_vocabulary[...dispatch.compat.branch]``;
+  ``policies/framework/compat/__init__.py`` importing ``solver_lib`` failed the vocabulary
+  test, ``test_tier_a_imports_obey_the_rules`` and the transitive-gateway test;
+- G2, tier A includes its static import closure (``_framework_guard.CLOSURE_BOUNDARY``
+  is the only reviewed stop besides compat, the solver packages and tier B): a new
+  ``assignment/publish_helpers.py`` with the same name branch, imported by ``app.py``,
+  failed ``test_module_has_no_solver_vocabulary[...publish_helpers]``; with a local
+  ``compat.legacy.wrap_legacy_leaf`` import instead it failed that and
+  ``test_tier_a_imports_obey_the_rules[...publish_helpers]``;
+- the ``candidates`` gap (:func:`surface_comparisons`): ``params.candidates == "spatial"``
+  appended to ``dispatch/base.py`` failed ``test_module_has_no_solver_vocabulary[...dispatch.base]``
+  (``cmp:candidates``).
+
+The closure reaches ``assignment/agent.py`` (the ORSim agent shell, via the package
+``__init__``), whose ``entering_market`` / ``exiting_market`` are the ENGINE's hook names:
+:data:`ENGINE_HOOK_IDENTIFIERS` exempts exactly those two, in identifier positions only,
+pinned to ``orsim.lifecycle.ORSimAgent``.
 """
 
 from __future__ import annotations

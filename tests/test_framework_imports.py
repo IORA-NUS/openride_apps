@@ -74,6 +74,13 @@ Verified to have teeth (FB; mutate / see it fail / restore):
 - ``from apps.container_logistics.policies.solver_lib import provenance`` added to
   ``compat/wire.py`` (compat is never scanned, so no tier-A scan changes) failed the
   transitive-gateway test alone: ``wire`` became a fifth, undocumented gateway.
+
+Round 2 (R3B): tier A now includes its static import closure and the compat exemption is
+one exact prefix (``_framework_guard``, G1/G2), so every rule here also covers a module
+tier A merely imports (a new ``assignment/publish_helpers.py`` taking
+``compat.legacy.wrap_legacy_leaf`` failed ``test_tier_a_imports_obey_the_rules``), and a
+``compat`` directory outside ``policies/compat/`` is scanned. ``FORBIDDEN_PACKAGES`` and
+the import-resolution helpers are the guard's (one copy, shared with the closure).
 """
 
 from __future__ import annotations
