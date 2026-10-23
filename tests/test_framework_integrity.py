@@ -107,6 +107,9 @@ def _register_evil():
             elif m == "mutate_doc":
                 t["t_acme"]["haulier_id"] = "cargo"
                 t["t_acme"]["profile"]["haulier_id"] = "cargo"
+            elif m == "mutate_order":  # relabel cargo's order as acme's: an "own" pair
+                o["o_cargo"]["haulier_id"] = "acme"
+                o["o_cargo"]["profile"]["haulier_id"] = "acme"
             elif m == "mutate_unpaired":
                 # An honest own pair, but another truck's document was rewritten: the share
                 # accounting reads every truck after the commit, so the whole tick is refused.
@@ -177,10 +180,9 @@ def evil():
 def test_h1_a_bind_mutating_its_world_reaches_neither_the_ceiling_nor_the_profile(evil):
     """The reviewer's ``worldmut``: the appended structure stays in the bind's own copy.
 
-    Teeth: making ``_WorldState.value`` return the raw profile value (no deep copy) and
-    computing the ceiling AFTER the binds (``ceiling`` moved below the loop) let the
-    cross-company pair commit, published as shared, with the profile's structures growing
-    ``['pair', 'solo', 'evil']``.
+    Before the fix the pair committed, published as shared, and the profile's structures
+    grew ``['pair', 'solo', 'evil', 'evil']``. Teeth: making ``_WorldState.value`` return
+    the raw profile value (no deep copy) failed this test (the profile grew).
     """
     prof = _litmus_profile({"mode": "widen_ceiling"}, top="Evil")
     before = copy.deepcopy(prof)
@@ -226,7 +228,7 @@ def test_h1_world_values_are_copies():
 # --- H2: the five attacks of the finding, plus the private-state and measure variants -----
 
 
-@pytest.mark.parametrize("mode", ["reassign_permitted", "preseed_id_index", "reassign_raw_trucks", "mutate_doc",
+@pytest.mark.parametrize("mode", ["reassign_permitted", "preseed_id_index", "reassign_raw_trucks", "mutate_doc", "mutate_order",
                                   "mutate_unpaired", "private_state", "measure_dials"])
 def test_h2_tampering_with_the_tick_commits_nothing(evil, mode, caplog):
     """Attacks 1-4 of H2 (and three variants) through ``AssignmentApp.assign`` + ``publish``.
@@ -235,10 +237,11 @@ def test_h2_tampering_with_the_tick_commits_nothing(evil, mode, caplog):
     ``violations == 0``; attack 4 published it ``shared=False`` (hidden from the research
     metric).
 
-    Teeth: ``git checkout 44922b4 -- dispatch/{tick,invariants,runner}.py`` (the code
-    before the fix) failed all seven cases, each by committing a pair; separately, deleting
-    only the ``shared.changed()`` scan from ``DispatchRunner.run`` failed ``mutate_unpaired``,
-    and only ``intact=shared.intact`` from its ``check_result`` call failed ``mutate_doc``.
+    Teeth: ``git checkout 44922b4 -- policies/dispatch/{tick,runner}.py assignment/app.py``
+    (the code before the fix) failed every case, each by committing a pair; separately, deleting only the
+    ``shared.changed()`` scan from ``DispatchRunner.run`` failed ``mutate_unpaired``, and
+    only ``intact=shared.intact`` from its ``check_result`` call failed ``mutate_order``
+    (a mutated TRUCK is also caught by the scan).
     """
     with caplog.at_level(logging.ERROR):
         pairs, published, violations, _app_ = _run("Evil", {"mode": mode})
@@ -253,8 +256,8 @@ def test_h2_attack_5_an_inner_overriding_its_sub_permitted_cannot_skip_the_physi
     A 20ft truck took a 40ft order (own company) before the fix. Now the rewrite is a
     contract violation in the sub-tick (message 19) and nothing is committed.
 
-    Teeth: giving ``Tick.permitted`` a setter and having ``Tick.call`` check with
-    ``sub.permitted`` committed ``(t_acme, o_acme)``.
+    Teeth: ``git checkout 44922b4 -- policies/dispatch/{tick,runner}.py assignment/app.py``
+    committed ``(t_acme, o_acme)``.
     """
     with caplog.at_level(logging.ERROR):
         pairs, _pub, violations, _a = _run("Partitioned", {"inner": {"type": "EvilLeaf", "params": {"mode": "sub_permitted"}}},
@@ -326,7 +329,7 @@ def test_m2_reserved_meta_keys_cover_every_key_the_run_start_meta_writes():
 
 
 def test_m13_a_contract_only_solver_stamps_its_registered_badge():
-    """Teeth: making ``_with_registered_badge`` return ``declaration`` unchanged failed the first assertion."""
+    """Teeth: making ``_with_registered_badge`` always return ``declaration`` unchanged failed it."""
     with isolated_registry():
         @policy(slot="planner", name="Badged", version="1", description="contract-only", badge="central")
         class Badged:
@@ -357,8 +360,8 @@ def test_m13_a_contract_only_solver_stamps_its_registered_badge():
 
 
 def test_l1_a_malformed_cross_company_is_message_23_and_a_bind_crash_is_a_policy_error(evil):
-    """Teeth: ``_pair_set`` reverted to ``frozenset(value)`` raised ``TypeError``; removing the
-    ``except Exception`` of ``_call_bind`` let ``KeyError`` escape."""
+    """Teeth: ``_pair_set`` reduced to ``return frozenset(value)`` raised ``TypeError``; narrowing
+    ``_call_bind``'s ``except Exception`` to ``ZeroDivisionError`` let ``KeyError`` escape."""
     with pytest.raises(PolicyError, match=r"malformed cross-company pair\(s\) \['acme', 'borax'\]"):
         build_runner_for_policy("Evil", {"mode": "declare_lists"}, profile=_litmus_profile())
     with pytest.raises(BindError, match=r"planner policy Evil at planner: bind\(\) raised KeyError: 'boom'") as info:
@@ -371,7 +374,8 @@ def test_l1_a_malformed_cross_company_is_message_23_and_a_bind_crash_is_a_policy
 
 
 def test_l2_run_world_reads_cannot_be_bypassed_and_splats_are_refused():
-    """Teeth: restoring ``RunWorld.keys`` to the ``Mapping`` mixin let ``dict(world)`` mark every key read."""
+    """Teeth: deleting the ``RunWorld.keys`` override (back to the ``Mapping`` mixin) let ``dict(world)``
+    succeed and mark every key read."""
     prof = {"cooperation": {"a": 1}, "k1": 1, "k2": [1, 2], "policies": {"x": 1}, "strategy": "s"}
     world = RunWorld.from_profile(prof)
     assert sorted(world) == ["cooperation", "k1", "k2"] and len(world) == 3
@@ -423,8 +427,8 @@ def test_l3_a_declared_wire_note_key_is_accepted():
 
 
 def test_l5_an_inner_declaring_a_subset_narrows_its_sub_ticks_and_l6_serves_needs_both_ids():
-    """Teeth: removing the ``own_cross`` narrowing from ``Tick.call`` failed the sub-tick assertions;
-    restoring ``carrier_id == owner_id`` first in ``serves`` failed the ``None`` assertion."""
+    """Teeth: disabling the ``own_cross`` narrowing in ``Tick.call`` failed the sub-tick assertions;
+    deleting the missing-id guard of ``serves`` failed the ``None`` assertion."""
     prof = _profile(edges=(("h_a", "h_b"), ("h_a", "h_c")))
     top_decl = Declaration(cross_company={("h_a", "h_b"), ("h_b", "h_a"), ("h_a", "h_c"), ("h_c", "h_a")})
     seen = {}
@@ -475,7 +479,8 @@ class _Boom:
 
 
 def test_l7_a_raising_fold_is_contained_and_marked_invalid(caplog):
-    """Teeth: removing the ``try`` of ``record_tick`` let ``RuntimeError`` escape the tick."""
+    """Teeth: narrowing ``record_tick``'s ``except Exception`` to ``ZeroDivisionError`` let
+    ``RuntimeError`` escape (this test and the app-level one below failed)."""
     store, pushes = {}, []
     with caplog.at_level(logging.ERROR):
         run_stats.record_tick(store, _Boom, {}, CLOCK, lambda k, v: pushes.append((k, v)) or True)
