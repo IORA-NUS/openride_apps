@@ -159,6 +159,8 @@ _PLAN_MESSAGE_KINDS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("only_allowed_pairs", re.compile(r"^pair \(.+\) is not allowed$")),
     ("returns_plan", re.compile(r"^solver_notes key .+ is not one of the result's pairs$")),
     ("returns_plan", re.compile(r"^solver_notes for .+ is not a mapping with string keys$")),
+    # Only with the framework's ``intact`` (runner / ``Tick.call``), never in the battery's own calls.
+    ("returns_plan", re.compile(r"^(truck|order) .+ was modified during the solve \(documents are read-only\)$")),
 )
 # Raised by Result.from_pairs (or the legacy Plan.from_pairs) inside the solve (a pair
 # list cannot repeat a truck legally).

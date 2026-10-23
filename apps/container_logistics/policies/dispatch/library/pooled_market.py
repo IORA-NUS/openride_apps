@@ -75,6 +75,10 @@ __all__ = ["COMPANY_BADGE", "CompanyRule", "PooledMarket", "MARKET_NOTE_KEYS"]
 COMPANY_BADGE = "per company"
 _SAMPLE_SCOPE = "per_company"
 
+#: The per-pair note keys the market publishes as top-level wire fields (declared at bind,
+#: ``Declaration.wire_note_keys``: the framework refuses an undeclared one).
+_WIRE_NOTE_KEYS = frozenset({"pool_id", "market_round"})
+
 #: The keys of ``Result.tick_notes`` (``_market_stats.RoundStatsAggregator.fold`` reads them).
 MARKET_NOTE_KEYS = ("rounds_used", "converged", "candidate_pairs_round1", "candidate_pairs_total", "max_rounds")
 
@@ -175,7 +179,8 @@ class PooledMarket(CompositePolicy):
         if not top:
             return Declaration(provenance=provenance)
         return Declaration(cross_company=cooperation.directed_pairs(arm), provenance=provenance,
-                           run_stats=RoundStatsAggregator, **cooperation.arm_declaration_fields(arm))
+                           run_stats=RoundStatsAggregator, wire_note_keys=_WIRE_NOTE_KEYS,
+                           **cooperation.arm_declaration_fields(arm))
 
     def audit_scopes(self, scope_log: Any, tick: Any) -> list[str]:
         """The battery's scope audit: each company sub-tick holds only that company's trucks,

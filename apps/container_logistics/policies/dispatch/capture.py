@@ -58,6 +58,7 @@ from typing import Any, Iterator, Mapping
 
 from apps.container_logistics.policies.framework.errors import PolicyError
 
+from .bind import world_snapshot
 from .result import Result
 from .tick import DispatchClock, Tick
 
@@ -228,7 +229,7 @@ def context_to_fixture(
         "tick_seed": tick.seed,
         "module_rng_state": module_rng_state,
         "selection": selection_stamp(resolved),
-        "world": dict(tick.world.unread()),
+        "world": world_snapshot(tick.world),
         "accounting_params": dict(tick.measure.dials),
         "declaration": declaration_record(tick._shared.tree),
         "trucks": list(tick.raw_trucks),

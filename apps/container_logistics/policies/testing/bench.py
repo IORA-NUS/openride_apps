@@ -45,6 +45,7 @@ from typing import Any, Iterator, Mapping, Sequence
 from apps.container_logistics.assignment import accounting
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.dispatch import capture
+from apps.container_logistics.policies.dispatch.bind import world_snapshot
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
 from apps.container_logistics.policies.dispatch.tick import Tick
 from apps.container_logistics.policies.framework.errors import PolicyError
@@ -190,7 +191,7 @@ def _bench_one(entry: BenchEntry, params: Mapping[str, Any], fixture: Any) -> di
     with fixture.module_random():
         tick = fixture.context(runner)
         pairs = runner.run(tick).pairs
-    mtt = tick.world.unread().get("max_travel_time_pickup")
+    mtt = world_snapshot(tick.world).get("max_travel_time_pickup")
 
     def own_allowed(t: Any, o: Any) -> bool:
         # The owner reserve's rule (as AssignmentApp): strict own-haulier feasibility.

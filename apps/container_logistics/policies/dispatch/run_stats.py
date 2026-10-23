@@ -14,12 +14,25 @@ and ``agg.push_due(force=True)``: mark + write; then if ``agg.push_due()``: mark
 write. At agent close (:func:`flush`): a forced write of every aggregator. A tick whose
 result was discarded (message 18) is never folded.
 
+Containment (review L7): the aggregator is solver code running inside the assignment
+tick, AFTER the pairs were committed. Anything it raises (construction, ``fold``,
+``push_due``, ``mark_pushed``, ``snapshot``) is logged at ERROR with its traceback, the
+aggregator is retired for the rest of the run, and ``run_config.meta.<meta_key>`` is
+overwritten with :func:`invalid_snapshot` (``{"invalid": true, "error": ...}``) so the
+run record says its stats cannot be trusted. The tick, its pairs and the wire are
+untouched.
+
+Validation (review M2): :func:`check_meta_key`, called from ``bind`` on the top's
+declaration, refuses a ``meta_key`` that is not a plain identifier or that names a key
+the framework itself writes under ``run_config.meta`` (:data:`RESERVED_META_KEYS`).
+
 :func:`patch_run_config_meta` is the run-record writer, moved verbatim from
 ``AssignmentApp._patch_round_stats_to_run_config`` (``assignment/app.py`` at 1e80917)
 with the meta key made generic.
 
-Leaf module: stdlib only at import (the HTTP client and settings are imported inside
-:func:`patch_run_config_meta`); never imports ``apps.container_logistics.assignment.*``.
+Leaf module: stdlib and ``policies.framework.errors`` at import (the HTTP client and
+settings are imported inside :func:`patch_run_config_meta`); never imports
+``apps.container_logistics.assignment.*``.
 Framework side of the boundary: names no solver and no solver concept.
 """
 
@@ -27,9 +40,45 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Callable, Mapping, MutableMapping, Protocol
 
-__all__ = ["RunStatsAggregator", "flush", "patch_run_config_meta", "record_tick"]
+from apps.container_logistics.policies.framework.errors import PolicyError
+
+__all__ = [
+    "RESERVED_META_KEYS",
+    "RunStatsAggregator",
+    "check_meta_key",
+    "flush",
+    "invalid_snapshot",
+    "patch_run_config_meta",
+    "record_tick",
+]
+
+logger = logging.getLogger(__name__)
+
+#: Every key the framework itself writes under ``run_config.meta``: the run-start meta of
+#: ``container_logistics.scenario.scenario_manager.get_run_config_meta`` (``policies`` is
+#: the planner stamp). A run-stats ``meta_key`` naming one would PATCH over it.
+#: ``tests/test_framework_integrity.py`` pins this set against that function's source.
+RESERVED_META_KEYS = frozenset({
+    "facility_rules",
+    "num_analytics_agents",
+    "num_assignment_agents",
+    "num_facility_agents",
+    "num_order_agents",
+    "num_truck_agents",
+    "policies",
+    "rebate",
+    "scenario_display_name",
+    "scenario_slug",
+    "services",
+    "simulation_settings",
+})
+
+# A plain identifier: no "." (the PATCH is dotted, so "policies.planner" would write
+# INSIDE the stamp) and no leading "$" (a Mongo operator).
+_META_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 #: ``push(meta_key, snapshot) -> bool``: writes one snapshot onto the run record.
 Push = Callable[[str, dict[str, Any]], bool]
@@ -57,6 +106,64 @@ class RunStatsAggregator(Protocol):
         """The snapshot before any tick was folded."""
 
 
+def check_meta_key(cls: Any, where: str) -> None:
+    """Refuse run-stats aggregator ``cls`` unless its ``meta_key`` is a free ``run_config.meta`` key (M2).
+
+    Raises ``PolicyError`` (at bind, before any agent spawns) for a missing or
+    non-string key, one that is not a plain identifier, and one in
+    :data:`RESERVED_META_KEYS`.
+    """
+    key = getattr(cls, "meta_key", None)
+    name = getattr(cls, "__qualname__", repr(cls))
+    if not isinstance(key, str) or not _META_KEY.fullmatch(key):
+        raise PolicyError(
+            f"{where}: bind() declared run stats {name} whose meta_key {key!r} is not a plain identifier "
+            "(letters, digits and '_', not starting with a digit). The snapshot is written to "
+            "run_config.meta.<meta_key>; pick a name of your own, e.g. the solver's name in snake_case."
+        )
+    if key in RESERVED_META_KEYS:
+        raise PolicyError(
+            f"{where}: bind() declared run stats {name} whose meta_key {key!r} is a key the framework writes "
+            f"under run_config.meta (reserved: {', '.join(sorted(RESERVED_META_KEYS))}). Its snapshot would "
+            "overwrite that record; pick a name of your own."
+        )
+
+
+class _Retired:
+    """Stands in ``store`` for an aggregator that raised: never folded or pushed again."""
+
+    __slots__ = ("meta_key", "error")
+
+    def __init__(self, meta_key: str, error: str) -> None:
+        self.meta_key = meta_key
+        self.error = error
+
+    def snapshot(self) -> dict[str, Any]:
+        """What the run record now holds for this key (``invalid_snapshot``)."""
+        return invalid_snapshot(self.error)
+
+
+def invalid_snapshot(error: str) -> dict[str, Any]:
+    """The value written to ``run_config.meta.<meta_key>`` once its aggregator raised."""
+    return {"invalid": True, "error": error}
+
+
+def _retire(store: MutableMapping[str, Any], key: str, exc: BaseException, push: Push, what: str) -> _Retired:
+    error = f"{what} raised {type(exc).__name__}: {exc}"
+    logger.error(
+        "RUN STATS DISABLED: the run-stats aggregator for run_config.meta.%s %s. Its stats are marked "
+        "invalid in the run record and it is not called again this run; assignment continues unchanged. "
+        "This is a solver bug: run `openride policy validate planner <name>`.",
+        key, error, exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    retired = store[key] = _Retired(key, error)
+    try:
+        push(key, invalid_snapshot(error))
+    except Exception:  # noqa: BLE001 - provenance never breaks a tick
+        logger.debug("invalid-stats marker for meta.%s not written", key, exc_info=True)
+    return retired
+
+
 def _push_if_due(agg: Any, push: Push, *, force: bool) -> None:
     if agg.push_due(force=force):
         agg.mark_pushed()
@@ -68,21 +175,37 @@ def record_tick(store: MutableMapping[str, Any], cls: type, tick_notes: Mapping[
     """Fold one committed tick into ``store``'s aggregator for ``cls`` and push when due.
 
     ``store`` maps ``meta_key`` -> aggregator instance (the app's, so it survives runner
-    rebuilds); the instance is created from ``cls`` on first use. Returns it.
+    rebuilds); the instance is created from ``cls`` on first use. Returns it. Never
+    raises because of the aggregator: see the module's containment rule (L7).
     """
-    agg = store.get(cls.meta_key)
-    if agg is None:
-        agg = store[cls.meta_key] = cls()
-    if agg.fold(tick_notes, clock):
-        _push_if_due(agg, push, force=True)
-    _push_if_due(agg, push, force=False)
+    key = cls.meta_key
+    agg = store.get(key)
+    if isinstance(agg, _Retired):
+        return agg
+    what = "construction"
+    try:
+        if agg is None:
+            agg = store[key] = cls()
+        what = "fold"
+        forced = agg.fold(tick_notes, clock)
+        what = "push"
+        if forced:
+            _push_if_due(agg, push, force=True)
+        _push_if_due(agg, push, force=False)
+    except Exception as exc:  # noqa: BLE001 - contained (L7)
+        return _retire(store, key, exc, push, what)
     return agg
 
 
-def flush(store: Mapping[str, Any], push: Push) -> None:
-    """A forced push of every aggregator in ``store`` (agent close: the final stamp)."""
-    for agg in list(store.values()):
-        _push_if_due(agg, push, force=True)
+def flush(store: MutableMapping[str, Any], push: Push) -> None:
+    """A forced push of every aggregator in ``store`` (agent close: the final stamp); contained like ticks."""
+    for key, agg in list(store.items()):
+        if isinstance(agg, _Retired):
+            continue
+        try:
+            _push_if_due(agg, push, force=True)
+        except Exception as exc:  # noqa: BLE001 - contained (L7)
+            _retire(store, key, exc, push, "final push")
 
 
 def patch_run_config_meta(app: Any, key: str, value: Any) -> bool:

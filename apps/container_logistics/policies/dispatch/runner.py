@@ -13,8 +13,13 @@ pairs (plan ``plan_contract_final.md`` §2.7), identical for every solver:
    raised inside is a violation; any other exception propagates unchanged (a crashing
    top-level solver aborts the tick, as the partitioned path always did).
 3. ``invariants.check_result`` against the tick, with the verified-pair-aware check
-   (a pair a sub-tick already proved re-checks only ownership-or-declared). Any
-   problem: log ERROR (message 18), count, commit NOTHING this tick.
+   (a pair a sub-tick already proved re-checks only ownership-or-declared), the
+   framework's own index; then every truck of the tick and every committed order must
+   be unmodified since the tick was built (the share accounting reads all the trucks),
+   and the notes must be wire-safe (``invariants.check_wire_notes``: no undeclared
+   framework wire field, plain JSON).
+   Any problem: log ERROR (message 18), count, commit NOTHING this tick. Nothing here
+   is read back from the tick's solver-visible attributes (review H2, L3).
 4. Map the pairs back to the raw documents (first document per id) in result order.
    Returns :class:`TickOutcome` ``(pairs, result)``.
 
@@ -38,7 +43,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from apps.container_logistics.policies.compat.measurement import offline_measurement_dials
 from apps.container_logistics.policies.compat.wire import share_tag_format_for
@@ -46,7 +51,7 @@ from apps.container_logistics.policies.framework.errors import DispatchContractV
 from apps.container_logistics.policies.framework.slots import SLOTS
 
 from .bind import BoundTree, RunWorld, bind_tree
-from .invariants import check_result
+from .invariants import check_result, check_wire_notes
 from .result import Result
 from .tick import DispatchClock, Measure, Tick, direct_execute
 
@@ -90,12 +95,15 @@ class DispatchRunner:
     """Runs one bound planner selection (a ``bind.BoundTree``) for every tick.
 
     ``capture`` is the fixture hook (``before_solve(tick)`` then ``capture(tick=,
-    result=, problems=)``); ``None`` costs one ``if`` per solve. Raises
+    result=, problems=)``); ``None`` costs one ``if`` per solve. ``wire_fields`` are the
+    payload fields the CALLER publishes from its own accounting (``AssignmentApp``: the
+    share-tag keyword set): a note key naming one that the top did not declare in
+    ``Declaration.wire_note_keys`` is a violation (review L3). Raises
     ``PolicyTimingError`` for a timing it cannot execute.
     """
 
     def __init__(self, tree: BoundTree, *, capture: Callable[..., None] | None = None,
-                 profile: Mapping[str, Any] | None = None) -> None:
+                 profile: Mapping[str, Any] | None = None, wire_fields: Iterable[str] = ()) -> None:
         resolved = tree.resolved
         if resolved.timing not in EXECUTABLE_TIMINGS:
             raise PolicyTimingError(
@@ -103,6 +111,7 @@ class DispatchRunner:
                 f"executable timings: {list(EXECUTABLE_TIMINGS)}. Use timing {EXECUTABLE_TIMINGS[0]!r}."
             )
         self.tree = tree
+        self.wire_fields = frozenset(wire_fields)
         self._bound_digest = tree.digest(profile)
         self._capture = capture
         self.stats: dict[str, Any] = {"calls": 0, "violations": 0, "total_ms": 0.0, "max_ms": 0.0}
@@ -174,14 +183,26 @@ class DispatchRunner:
         result, problems = self._solve(tick)
         if capture is not None:
             capture(tick=tick, result=result, problems=list(problems))
+        shared = tick._shared
         if not problems:
-            problems = check_result(result, tick, permitted=tick._top_check())
+            problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index)
+        if not problems:
+            # One pass over every truck (the accounting reads them all) and the committed
+            # orders: a pair judged above on a modified document is refused here.
+            orders = shared.index[1]
+            changed = shared.changed(orders[oid] for _tid, oid in result.pairs)
+            if changed:
+                shown = ", ".join(repr(i) for i in changed[:8]) + (" ..." if len(changed) > 8 else "")
+                problems = [f"document(s) {shown} were modified during the solve (documents are read-only)"]
+        if not problems:
+            declared = getattr(shared.tree.declaration, "wire_note_keys", frozenset())
+            problems = check_wire_notes(result, self.wire_fields - declared)
         if problems:
             self._report_violation(tick, problems)
             return TickOutcome(pairs=[], result=None)
         if result.tick_notes:
             logger.debug("planner %s tick notes: %r", self.resolved.label, sorted(result.tick_notes))
-        return TickOutcome(pairs=tick.docs(result), result=result)
+        return TickOutcome(pairs=tick.docs(result), result=result)  # the framework's own index
 
     def _solve(self, tick: Tick) -> tuple[Any, list[str]]:
         top = tick._shared.tree.top
@@ -214,7 +235,7 @@ class DispatchRunner:
         )
 
 
-def build_runner_for_app(policy: Any, prof: Mapping[str, Any]) -> DispatchRunner:
+def build_runner_for_app(policy: Any, prof: Mapping[str, Any], *, wire_fields: Iterable[str] = ()) -> DispatchRunner:
     """The runner ``AssignmentApp`` uses for its built ``policy`` under assignment profile ``prof``.
 
     ``policy`` is fitted into the profile's selection tree (``bind.bind_profile``:
@@ -231,7 +252,7 @@ def build_runner_for_app(policy: Any, prof: Mapping[str, Any]) -> DispatchRunner
     # Capture records whole ticks of the bound selection (format /3).
     capture = None if settings is None else CaptureRecorder(
         settings, resolved=tree.resolved, rebate_aware=CaptureSettings.rebate_aware_of(prof))
-    return DispatchRunner(tree, capture=capture, profile=prof)
+    return DispatchRunner(tree, capture=capture, profile=prof, wire_fields=wire_fields)
 
 
 def build_runner_for_policy(

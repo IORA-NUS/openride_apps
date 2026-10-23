@@ -175,19 +175,19 @@ def moving_composite():
 
 @pytest.mark.parametrize("move", [False, True], ids=["read-only", "moves-and-restores"])
 def test_mutating_documents_during_a_sub_solve_is_outside_the_contract(moving_composite, move):
-    """The documented boundary of the tick check's shortcut (MINOR-A).
+    """The tick check's shortcut holds even against a solver that mutates documents (MINOR-A, H2).
 
     Golden tick A with a 300 s pickup limit. Read-only, the scripted pairs that break
     the limit are refused in the sub-tick and nothing infeasible is committed. Moving
-    the trucks to the pickups for the sub-solve and restoring them gets those pairs
-    proved in the sub-tick, and the top check (ownership-or-declared only, for proved
-    pairs) commits them. This is why ``DispatchPolicy`` says the documents are read-only.
-    If ``Tick._top_check`` ever keys on a fingerprint of the documents, both cases commit
-    nothing infeasible: change the second expectation and drop the contract text.
+    the trucks to the pickups for the sub-solve and restoring them used to get those
+    pairs proved in the sub-tick and committed by the top check (ownership-or-declared
+    only, for proved pairs). Since the fix loop (review H2) the framework fingerprints
+    every document when the tick is built and ``Tick.call`` refuses a sub-tick result
+    whose paired documents were modified, so BOTH cases commit nothing infeasible (the
+    second expectation changed exactly as this test's earlier docstring instructed).
 
-    Verified to have teeth (pre-WS1, on ``tick_allowed``; the WS1 equivalent is making
-    ``Tick._top_check`` ignore ``verified``): the full check on every pair committed 0
-    infeasible pairs in the moving case.
+    Verified to have teeth: dropping ``intact=shared.intact`` from ``Tick.call``'s
+    ``check_result`` call committed infeasible pairs in the moving case.
     """
     moving_composite.move = move
     prof = _selection_profile({"type": "MoveForSubSolve"})
@@ -196,10 +196,7 @@ def test_mutating_documents_during_a_sub_solve_is_outside_the_contract(moving_co
     pairs = app.assign(_CLOCK, 6)
     infeasible = [(str(t["_id"]), str(o["_id"])) for t, o in pairs
                   if not assign_constraints.pair_allowed_ignoring_haulier(t, o, max_travel_time_pickup=300)]
-    if move:
-        assert infeasible, "the shortcut re-checked the physical half: update the read-only contract text"
-    else:
-        assert infeasible == [], infeasible
+    assert infeasible == [], infeasible
 
 
 # --- MINOR-B: the full composite recipe --------------------------------------------------
