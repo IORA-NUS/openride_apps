@@ -15,6 +15,10 @@ workstream: it removed the last hits, deleted the baseline directory and set
 :data:`REQUIRE_EMPTY_BASELINES`. Every guarded module must now scan to ZERO hits, and
 the only exemption is ``policies/compat/**`` (never scanned, :func:`_expand`).
 
+Tiers are BY DIRECTORY since the final review (M9): every module under
+``policies/framework/``, ``policies/dispatch/`` (minus ``library/``) and
+``policies/testing/`` is tier A unless :data:`TIER_B_OVERRIDES` names it, with a reason.
+
 Re-creating a baseline file can not launder a hit: :func:`compare` reports every line
 of one (``REQUIRE_EMPTY_BASELINES``), and every ``# removed-by:`` tag names a merged
 workstream (:data:`MERGED_WORKSTREAMS`), so it is reported as stale too.
@@ -38,29 +42,57 @@ REQUIRE_EMPTY_BASELINES = True
 
 _POLICIES = "apps/container_logistics/policies"
 
-# Tier A: core runtime. Tier B: world plumbing. Globs relative to the repo root,
-# top level only (``dispatch/*.py`` does NOT include ``dispatch/library/``).
-TIER_A_GLOBS = (
-    f"{_POLICIES}/framework/*.py",
-    f"{_POLICIES}/dispatch/*.py",
-    f"{_POLICIES}/testing/battery.py",
-    f"{_POLICIES}/testing/bench.py",
+# TIERS BY DIRECTORY (final review M9): every ``.py`` under a tier directory is
+# scanned, recursively, so a NEW framework file is covered the moment it exists --
+# nobody has to remember to list it. ``exclude`` cuts out solver-side subtrees. Tier A:
+# core runtime. Tier B: world plumbing. ``policies/compat/**`` is never scanned
+# (:func:`_expand`), whatever a glob says.
+TIER_A_DIRS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (f"{_POLICIES}/framework", ()),
+    (f"{_POLICIES}/dispatch", (f"{_POLICIES}/dispatch/library",)),
+    (f"{_POLICIES}/testing", ()),
+)
+# Single framework files that live in a solver-mixed directory (``assignment/`` also
+# holds the built-in solvers, the market and the spatial index).
+TIER_A_FILES: tuple[str, ...] = (
     "apps/container_logistics/assignment/app.py",
     "apps/container_logistics/assignment/accounting.py",
 )
-TIER_B_GLOBS = (
+TIER_B_FILES: tuple[str, ...] = (
     "apps/container_logistics/scenario/scenario_overrides.py",
     "apps/simulation/run_container_logistics_simulation.py",
     "openride_control/policies.py",
     "openride/policy_cmd.py",
 )
+#: Files of a tier-A directory that are tier B instead, each with its reason. A reviewed
+#: edit here is the only way out of tier A.
+TIER_B_OVERRIDES: dict[str, str] = {
+    f"{_POLICIES}/testing/fixtures.py": (
+        "world plumbing: it BUILDS synthetic worlds (cooperation structures through "
+        "datagen.hauliers, the candidate knobs of a profile); it decides nothing"),
+}
+# Back-compat names (read by older helpers): the globs these directories expand to.
+TIER_A_GLOBS = tuple(f"{d}/**/*.py" for d, _ in TIER_A_DIRS) + TIER_A_FILES
+TIER_B_GLOBS = TIER_B_FILES + tuple(TIER_B_OVERRIDES)
 
 
 def _expand(globs: Iterable[str]) -> list[Path]:
     out: list[Path] = []
     for pattern in globs:
         out += sorted(REPO_ROOT.glob(pattern))
-    return [p for p in dict.fromkeys(out) if "/compat/" not in p.as_posix()]
+    return [p for p in dict.fromkeys(out)
+            if "/compat/" not in p.as_posix() and "__pycache__" not in p.as_posix()]
+
+
+def _tier_a_paths() -> list[Path]:
+    paths: list[Path] = []
+    for directory, excludes in TIER_A_DIRS:
+        for path in _expand([f"{directory}/**/*.py"]):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if any(rel == ex or rel.startswith(ex + "/") for ex in excludes) or rel in TIER_B_OVERRIDES:
+                continue
+            paths.append(path)
+    return paths + _expand(TIER_A_FILES)
 
 
 def dotted(path: Path) -> str:
@@ -72,7 +104,7 @@ def dotted(path: Path) -> str:
 
 
 def tier_a_modules() -> dict[str, Path]:
-    return {dotted(p): p for p in _expand(TIER_A_GLOBS)}
+    return {dotted(p): p for p in _tier_a_paths()}
 
 
 def tier_b_modules() -> dict[str, Path]:

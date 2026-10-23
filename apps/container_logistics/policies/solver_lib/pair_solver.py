@@ -23,6 +23,7 @@ imported inside :meth:`PairSolver.solve_tick`).
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from abc import abstractmethod
 from typing import TYPE_CHECKING, Any
@@ -79,6 +80,19 @@ class PairSolver(DispatchPolicy):
         cost: Cost,
     ) -> Assignment:
         raise NotImplementedError
+
+    def bind(self, params: Any, world: Any, *, top: bool) -> Any:
+        """The helper base's declaration plus its OWN candidate hint: ``"spatial"`` iff ``params.candidates`` is.
+
+        A pair solver's default :meth:`solve_tick` picks its candidate path from its own
+        ``candidates`` param, so it declares that path for a caller that prebuilds
+        pairs (moved from ``DispatchPolicy.bind``, final review M7: the framework's
+        default bind no longer reads a solver's param).
+        """
+        declaration = super().bind(params, world, top=top)
+        if declaration.candidate_hint is None and getattr(params, "candidates", None) == "spatial":
+            declaration = dataclasses.replace(declaration, candidate_hint="spatial")
+        return declaration
 
     def solve_tick(self, tick: "Tick", params: Any) -> Result:
         """``solve_pairs`` on the spatial kind, ``solve`` otherwise; a legacy ``decide`` override wins."""

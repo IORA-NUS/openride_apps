@@ -305,6 +305,6 @@ def register(sub) -> None:
     bench.add_argument("--policy-param", dest="policy_param", action="append", default=[],
                        metavar="ALIAS.PATH=VALUE",
                        help="Param override for one benched entry, repeatable; nested like --policy-param "
-                            "(pr.inner=RandomAssignment, pr.inner.candidates=spatial); VALUE is JSON when it parses")
+                            "(pr.inner=NAME, pr.inner.PARAM=VALUE); VALUE is JSON when it parses")
     bench.add_argument("--json", action="store_true", help="Emit the raw report JSON")
     bench.set_defaults(func=_cmd_bench)

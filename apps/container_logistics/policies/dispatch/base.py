@@ -5,8 +5,8 @@ it): which free truck serves which unassigned order. The contract is the wrapper
 interface ``bind(params, world, *, top) -> Declaration`` and
 ``solve_tick(tick, params) -> Result`` (``dispatch/bind.py``, ``dispatch/tick.py``,
 ``dispatch/result.py``; plan ``plan_contract_final.md`` §2.2); a class may implement it
-directly. This base adds: a default ``bind`` (no cross-company pairs; the candidate
-hint of a ``candidates`` param), a default ``solve_tick`` that runs a LEGACY
+directly. This base adds: a default ``bind`` (no cross-company pairs, no candidate
+hint), a default ``solve_tick`` that runs a LEGACY
 ``decide(ctx) -> Plan`` through ``compat.legacy_context``, and the opt-in injection API (``set_rng``, ``set_tiebreak``,
 ``set_rebate_book``) is moved here verbatim from ``BaseAssignmentSolver`` so the two
 built-ins keep their exact behaviour; ``assignment/solver/base.py`` re-exports
@@ -148,20 +148,29 @@ class DispatchPolicy(ABC):
         return self._rebate_book
 
     def bind(self, params: Any, world: Any, *, top: bool) -> Declaration:
-        """Default run-start declaration: no cross-company pairs; the candidate hint of a ``candidates`` param.
+        """Default run-start declaration: no cross-company pairs and NO candidate hint.
 
         Pure in ``(params, world)``. A top-level policy that commits cross-company pairs
         must declare them (``Declaration.cross_company``) or the framework refuses them.
-        A class that runs a legacy ``decide`` (it keeps the default :meth:`solve_tick`)
-        reads the world keys the legacy adapter may read for it
-        (``compat.legacy_context.legacy_world_reads``).
+        A candidate hint is the solver's own declaration: a class that wants callers to
+        prebuild pairs for it overrides ``bind`` (the built-in pair leaves do, in
+        ``solver_lib``); this default never reads a param to guess one (final review M7:
+        it used to read ``params.candidates``, a built-in's param, so a third-party
+        solver got a hint it never declared). A class that runs a legacy ``decide`` (it
+        keeps the default :meth:`solve_tick`) is served by the legacy adapter, which
+        also owns its old declaration: the world keys the adapter may read for it and
+        the round-2 hint rule (``compat.legacy_context.legacy_world_reads`` /
+        ``legacy_candidate_hint``).
         """
         if type(self).solve_tick is DispatchPolicy.solve_tick:
-            from apps.container_logistics.policies.compat.legacy_context import legacy_world_reads  # local: compat reaches solver_lib
+            from apps.container_logistics.policies.compat.legacy_context import (  # local: compat reaches solver_lib
+                legacy_candidate_hint,
+                legacy_world_reads,
+            )
 
             legacy_world_reads(world)
-        spatial = getattr(params, "candidates", None) == "spatial"
-        return Declaration(candidate_hint="spatial" if spatial else None)
+            return Declaration(candidate_hint=legacy_candidate_hint(params))
+        return Declaration()
 
     def solve_tick(self, tick: "Tick", params: Any) -> "Result":
         """Default decision: the LEGACY ``decide(ctx)`` over ``compat.legacy_context.LegacyDecideContext(tick)``.

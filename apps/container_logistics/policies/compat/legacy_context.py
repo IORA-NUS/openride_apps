@@ -24,6 +24,10 @@ tick in :class:`LegacyDecideContext`, calls ``decide`` and converts the returned
   ``decide`` class: the run-world keys this adapter may read on its behalf (the four
   candidate knobs), so the bind-reads rule (a bind reads every key its solve reads)
   holds for legacy policies too.
+- :func:`legacy_candidate_hint` -- the candidate hint ``DispatchPolicy``'s default
+  ``bind`` declares for a ``decide`` class: the round-2 rule (``"spatial"`` iff its
+  ``params.candidates`` is ``"spatial"``), moved here from ``dispatch/base.py`` (final
+  review M7) so the framework's default bind reads no solver param.
 
 Compat (old inputs). Leaf module at module top (stdlib + ``framework.errors`` + the
 leaf ``dispatch.result``): ``solver_lib`` is imported inside the methods that need it.
@@ -41,7 +45,8 @@ from apps.container_logistics.policies.framework.errors import DispatchContractV
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["LegacyDecideContext", "Plan", "Scope", "legacy_world_reads", "result_from_legacy"]
+__all__ = ["LegacyDecideContext", "Plan", "Scope", "legacy_candidate_hint", "legacy_world_reads",
+           "result_from_legacy"]
 
 #: The legacy candidate kind of a policy without a ``candidates`` param.
 _KIND_WITHOUT_CANDIDATES_PARAM = "sampled"
@@ -245,3 +250,14 @@ def legacy_world_reads(world: Mapping[str, Any]) -> None:
     from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 
     CandidateSettings.from_world(world)
+
+
+def legacy_candidate_hint(params: Any) -> str | None:
+    """The round-2 candidate hint of a legacy ``decide`` class: ``"spatial"`` iff ``params.candidates == "spatial"``.
+
+    Moved verbatim from ``DispatchPolicy.bind`` (final review M7). Under the round-2
+    contract a ``candidates`` param WAS the declaration (this adapter's
+    ``default_candidate_kind`` reads the same param), so a legacy class keeps the hint
+    it always had; a class written against the generic contract declares its own.
+    """
+    return "spatial" if getattr(params, "candidates", None) == "spatial" else None

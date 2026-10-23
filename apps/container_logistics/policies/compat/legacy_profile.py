@@ -8,6 +8,10 @@ carries no compiled ``policies`` block. The legacy keys ``strategy``,
 
 - :func:`use_spatial_matching` reads the legacy flag strictly (absent means true);
 - :func:`legacy_dispatch_from_profile` translates the LEAF keys into an entry;
+- :func:`refuse_legacy_flag_next_to_block` refuses a legacy ``use_spatial_matching``
+  other than ``true`` next to a compiled block (moved verbatim from
+  ``dispatch/profile.resolve_profile_policies``, final review M8: the framework reads no
+  legacy key);
 - :func:`resolve_legacy_profile` wraps that leaf in the profile's decomposition
   (``compat.legacy.wrap_legacy_leaf``), resolves it, and names the legacy keys in any
   error (``_LEGACY_SOURCE_NOTE``).
@@ -39,7 +43,8 @@ from apps.container_logistics.policies.framework.resolve import drop_undeclared_
 
 from .legacy import LEGACY_LEAF_DEFAULT, wrap_legacy_leaf
 
-__all__ = ["legacy_dispatch_from_profile", "resolve_legacy_profile", "use_spatial_matching"]
+__all__ = ["legacy_dispatch_from_profile", "refuse_legacy_flag_next_to_block", "resolve_legacy_profile",
+           "use_spatial_matching"]
 
 _LEGACY_SOURCE_NOTE = (
     "(This profile has no 'policies' block: its selection is translated from the legacy keys "
@@ -65,6 +70,21 @@ def use_spatial_matching(prof: Mapping[str, Any]) -> bool:
             f"a {type(value).__name__})."
         )
     return value
+
+
+def refuse_legacy_flag_next_to_block(prof: Mapping[str, Any]) -> None:
+    """Raise ``PolicyError`` when ``prof`` (which carries a ``policies`` block) sets ``use_spatial_matching`` != true.
+
+    The flag is superseded by the block's own ``candidates`` param; ``true`` (or absent)
+    is the compiled default and is tolerated. Message unchanged from
+    ``dispatch/profile.py``.
+    """
+    if "use_spatial_matching" in prof and prof["use_spatial_matching"] is not True:
+        raise PolicyError(
+            "assignment profile sets use_spatial_matching="
+            f"{prof['use_spatial_matching']!r} next to a 'policies' block; it is superseded "
+            "by policies.planner.params.candidates. Remove use_spatial_matching."
+        )
 
 
 def legacy_dispatch_from_profile(prof: Mapping[str, Any]) -> dict[str, Any]:
