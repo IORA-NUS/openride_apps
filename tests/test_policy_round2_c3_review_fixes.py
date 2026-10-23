@@ -211,8 +211,7 @@ def wide_scope_composite():
     predicate (``OwnRuleScope.narrow``), with either an honest leaf (``FirstOrder``: every
     truck takes the first order ``permitted`` allows) or a rule-blind one (``IgnoresRule``)."""
     with isolated_registry():
-        @policy(slot="planner", name="FirstOrder", version="1", information_model="central",
-                description="every truck takes the first order it is allowed")
+        @policy(slot="planner", name="FirstOrder", version="1", description="every truck takes the first order it is allowed")
         class FirstOrder(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -225,8 +224,7 @@ def wide_scope_composite():
                             return Plan(chains={str(t["_id"]): (str(o["_id"]),)})
                 return Plan(chains={})
 
-        @policy(slot="planner", name="IgnoresRule", version="1", information_model="central",
-                description="the first truck takes the first order, whatever the rule says")
+        @policy(slot="planner", name="IgnoresRule", version="1", description="the first truck takes the first order, whatever the rule says")
         class IgnoresRule(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -235,8 +233,7 @@ def wide_scope_composite():
             def decide(self, ctx):
                 return Plan(chains={str(ctx.raw_trucks[0]["_id"]): (str(ctx.raw_orders[0]["_id"]),)})
 
-        @policy(slot="planner", name="OwnRuleScope", version="1", information_model="per_group",
-                description="one sub-tick narrowed by OwnRuleScope.narrow")
+        @policy(slot="planner", name="OwnRuleScope", version="1", description="one sub-tick narrowed by OwnRuleScope.narrow")
         class OwnRuleScope(CompositePolicy):
             narrow = None
             seen: list = []
@@ -460,8 +457,7 @@ def test_solve_in_thread_reaches_every_top_level_solver_once_per_decision(select
 @pytest.fixture
 def rule_blind():
     with isolated_registry():
-        @policy(slot="planner", name="RuleBlind", version="1", information_model="central",
-                description="pairs the first truck with the first order, ignoring the rule")
+        @policy(slot="planner", name="RuleBlind", version="1", description="pairs the first truck with the first order, ignoring the rule")
         class RuleBlind(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):

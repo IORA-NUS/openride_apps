@@ -301,14 +301,12 @@ def test_unknown_entry_key_rejected():
         _compile(_spec(policies={"planner": {"type": "GreedyNearest", "parms": {}}}))
 
 
-def test_plan_timing_rejected_with_p4_message(tmp_path, monkeypatch):
-    msg = _resolve_error(tmp_path, monkeypatch,
-                         {"planner": {"type": "GreedyNearest", "timing": "plan"}})
-    assert msg == ("policies.planner.timing='plan' is defined but not executable yet: the "
-                   "held-plan dispatcher lands with P4. Use 'online'.")
-    msg = _resolve_error(tmp_path, monkeypatch,
-                         {"planner": {"type": "GreedyNearest", "timing": "weekly"}})
-    assert msg == "policies.planner.timing='weekly' is not a planner timing. Allowed: online, plan."
+def test_plan_timing_is_refused_like_any_unknown_timing(tmp_path, monkeypatch):
+    """WS4b removed the never-executable 'plan' timing; it is now refused like any unknown value."""
+    for timing in ("plan", "weekly"):
+        msg = _resolve_error(tmp_path, monkeypatch,
+                             {"planner": {"type": "GreedyNearest", "timing": timing}})
+        assert msg == f"policies.planner.timing='{timing}' is not a planner timing. Allowed: online."
 
 
 def test_planner_timing_static_rejected_with_translation():

@@ -39,10 +39,10 @@ def _register_dummies():
     class NoParams(PolicyParams):
         pass
 
-    policy(slot="planner", information_model="central", name="TestCatalogA", version="3", description="Dummy A.",
+    policy(slot="planner", name="TestCatalogA", version="3", description="Dummy A.",
            order_sensitive="shuffles on purpose",
            arm_budgets_ms={"candidates=sampled": 900})(type("TestCatalogA", (_TestPolicyBase,), {"Params": Params}))
-    policy(slot="planner", information_model="central", name="TestCatalogB", version="1", description="Dummy B.",
+    policy(slot="planner", name="TestCatalogB", version="1", description="Dummy B.",
            requires=("definitely_not_a_module_xyz",))(type("TestCatalogB", (_TestPolicyBase,), {"Params": NoParams}))
 
 
@@ -58,7 +58,8 @@ def test_the_one_slot_declared_with_kind():
     assert all("status" not in e and "lands_in" not in e for e in catalog.values())
     dispatch = catalog["planner"]
     assert dispatch["default"] == "Partitioned", "round 2: the slot default is the decomposition"
-    assert dispatch["timings"] == ["online", "plan"] and dispatch["executable_timings"] == ["online"]
+    # WS4b (G13): the held-plan timing ``plan`` named the held-tails concept; only ``online``.
+    assert dispatch["timings"] == ["online"] and dispatch["executable_timings"] == ["online"]
 
 
 def test_components_list_three_kinds_with_live_names_schema_and_defaults():
@@ -111,8 +112,8 @@ def test_catalog_is_json_serialisable_and_has_schema_per_dispatch_policy():
     assert a == {
         "name": "TestCatalogA", "version": "3", "description": "Dummy A.",
         "requires": [], "missing": [], "available": True,
-        "information_model": "central", "composite": False, "inner_param": None,
-        "share_tag_format": "audited",
+        "badge": None, "badge_tooltip": None, "composite": False, "inner_param": None,
+        "offload": "self",
         "module_rng": None, "order_sensitive": "shuffles on purpose",
         "arm_budgets_ms": {"candidates=sampled": 900},
         "params_schema": a["params_schema"],

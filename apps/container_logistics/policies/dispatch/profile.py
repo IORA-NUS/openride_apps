@@ -269,8 +269,6 @@ def dispatch_node(name: str, params: Any, *, timing: str, source: ResolvedSource
         timing=timing,
         params=params,
         source=source,
-        information_model=spec.information_model,
-        share_tag_format=spec.share_tag_format,
         inner=inner,
     )
 

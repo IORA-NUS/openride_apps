@@ -324,7 +324,7 @@ def _named_dispatch_registry():
                                         ("RandomAssignment", LeafParams, "central"),
                                         ("Partitioned", _CompositeLike, "per_group"),
                                         ("PooledMarket", _CompositeLike, "per_company")):
-            policy(slot="planner", name=name, version="1", description="x", information_model=model)(
+            policy(slot="planner", name=name, version="1", description="x", badge=model)(
                 type(name, (_Base,), {"Params": params_cls}))
         yield
 

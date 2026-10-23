@@ -9,7 +9,8 @@ What is locked:
   ref's params;
 - the compiled form (``to_profile``) carries each ref's ``version``, reads back
   unchanged (the ``version`` echo is ignored), and the stamp carries ``label``,
-  ``leaf``, ``information_model``, ``share_tag_format`` and the nested params;
+  ``leaf``, ``share_tag_format`` (the compat name rule), the top's provenance badge and
+  the nested params;
 - legacy-provenance params are filtered recursively (undeclared keys of the inner and
   the components dropped at WARNING);
 - TEMPORARY (C2 -> C3): a block that names no dispatch resolves to the slot default
@@ -155,13 +156,17 @@ def test_compiled_form_carries_versions_and_reads_back():
 
 def test_stamp_is_nested_and_labelled():
     """Verified to have teeth: stamping ``params=dict(r.params)`` dropped the ref versions."""
+    from apps.container_logistics.policies.dispatch.bind import bind_profile
+
     with decompositions():
         resolved = resolve_policies_block(_block("Partitioned", inner=_GREEDY))
-        stamp = policies_stamp(resolved, candidate_settings={}, accounting_params={"dual_cycle_bonus_km": 2.0},
+        tree = bind_profile({"policies": {"planner": resolved["planner"].to_profile()}, "policies_format": 2})
+        stamp = policies_stamp(resolved, tree=tree, accounting_params={"dual_cycle_bonus_km": 2.0},
                                source="override")["planner"]
-    assert (stamp["name"], stamp["label"], stamp["leaf"], stamp["information_model"],
+    assert (stamp["name"], stamp["label"], stamp["leaf"], stamp["provenance"]["planner"]["badge"],
             stamp["share_tag_format"]) == ("Partitioned", "Partitioned/GreedyNearest", "GreedyNearest",
-                                           "per_group", "v1")
+                                           "per group", "v1")
+    assert list(stamp["provenance"]) == ["planner", "planner.inner"]
     assert stamp["params"] == {"inner": {"type": "GreedyNearest", "version": "1", "params": {
         "candidates": "spatial", "dual_cycle_bonus_km": 2.0, "dual_cycle_radius_km": 0.5}}}
     json.dumps(stamp)

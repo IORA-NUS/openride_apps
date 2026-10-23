@@ -1,2 +1,0 @@
-id:information_model	1
-id:share_tag_format	1

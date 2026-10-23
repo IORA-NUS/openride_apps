@@ -79,7 +79,10 @@ COMPAT_ALLOWED: dict[str, frozenset[str]] = {
     "wire": frozenset({"share_tag_format_for", "stamp_fields", "split_notes", "render_v1_tag",
                        "render_audited_tag", "wire_fields", "share_tag_renderer"}),
     "run_stats": frozenset({"LegacyAppAccessors"}),
-    "legacy_context": frozenset({"LegacyDecideContext", "Plan"}),
+    # ``legacy_world_reads`` (reviewed WS4b addition): DispatchPolicy's default bind reads,
+    # for a legacy decide() class, the world keys the legacy adapter reads on its behalf
+    # (the battery's contract.world_reads_at_bind holds legacy policies to the bind-reads rule).
+    "legacy_context": frozenset({"LegacyDecideContext", "Plan", "legacy_world_reads"}),
     "defaults": frozenset({"DEFAULT_PLANNER"}),
 }
 CONSTRAINTS_MODULE = f"{_A}.constraints"

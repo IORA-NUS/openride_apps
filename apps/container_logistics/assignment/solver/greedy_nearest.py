@@ -7,7 +7,7 @@ from typing import Iterable, List, Tuple
 from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 from apps.container_logistics.policies.solver_lib import candidates, objective
-from apps.container_logistics.policies.solver_lib.pair_leaf import PairLeafMixin
+from apps.container_logistics.policies.solver_lib.pair_leaf import CENTRAL_BADGE, CENTRAL_BADGE_TOOLTIP, PairLeafMixin
 
 from ..tiebreak import pair_tiebreak
 from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
@@ -18,9 +18,11 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     name="GreedyNearest",
     version="1",
     description="Globally greedy nearest-pair sweep, dual-cycle aware.",
-    # Scope-agnostic leaf: selected at top level it plans the whole tick centrally;
-    # as a composite's inner it decides one scope (round-2 §2.4).
-    information_model="central",
+    # Scope-agnostic leaf: selected at top level it plans the whole tick centrally (its
+    # stamped provenance then carries this badge); as a composite's inner it decides one
+    # scope (round-2 §2.4).
+    badge=CENTRAL_BADGE,
+    badge_tooltip=CENTRAL_BADGE_TOOLTIP,
     # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
     # Measured 2026-10-21, decide() on testing.fixtures.scale() (1000 trucks x 500
     # orders, spatial), 2 x 5 runs, load avg 4.5 on 32 cores: 108.0-133.4 ms, worst

@@ -41,6 +41,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from apps.container_logistics.policies.compat.measurement import accounting_params_for
+from apps.container_logistics.policies.compat.wire import share_tag_format_for
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation, PolicyTimingError
 from apps.container_logistics.policies.framework.slots import SLOTS
 
@@ -59,8 +60,8 @@ __all__ = [
     "EXECUTABLE_TIMINGS",
 ]
 
-# Derived, never restated: when P4 makes 'plan' executable in the slot table, the
-# catalog and this runner change together (review F13).
+# Derived, never restated: the slot table, the catalog and this runner change together
+# (review F13). Only ``online`` is declared (plan G13).
 EXECUTABLE_TIMINGS: tuple[str, ...] = SLOTS["planner"].executable_timings
 
 Pair = tuple[dict[str, Any], dict[str, Any]]
@@ -117,8 +118,10 @@ class DispatchRunner:
         return self.tree.top.instance
 
     @property
-    def share_tag_format(self) -> str:
-        return self.tree.resolved.share_tag_format
+    def tag_format(self) -> str:
+        """The share-tag format the accounting renders this run's tags in (a compat name rule)."""
+        resolved = self.tree.resolved
+        return share_tag_format_for(resolved.name, registered=resolved.source != "unregistered")
 
     def _tree_for(self, profile: Mapping[str, Any] | None) -> BoundTree:
         """The bound tree for ``profile``: re-bound (same instances) when a key its binds read changed."""

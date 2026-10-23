@@ -88,9 +88,19 @@ def test_compiled_version_and_kind_are_ignored_not_trusted():
     assert (resolved["planner"].version, resolved["planner"].kind) == ("1", "operator")
 
 
-def test_non_executable_timing_is_refused_by_the_shared_resolver():
-    with pytest.raises(PolicyError, match="not executable yet"):
+def test_non_executable_timing_is_refused_by_the_shared_resolver(monkeypatch):
+    """WS4b (G13): ``plan`` is no planner timing any more; the generic "declared but not
+    executable" refusal still holds for a slot table that declares one."""
+    from apps.container_logistics.policies.framework import resolve as R
+    from apps.container_logistics.policies.framework.slots import SlotSpec
+
+    with pytest.raises(PolicyError, match=r"timing='plan' is not a planner timing\. Allowed: online\."):
         P.resolve_dispatch_for_profile(_compiled_block(timing="plan"))
+    held = SlotSpec(name="planner", kind="operator", default=R.SLOTS["planner"].default, description="d",
+                    timings=("online", "held"), executable_timings=("online",))
+    monkeypatch.setattr(R, "SLOTS", {"planner": held})
+    with pytest.raises(PolicyError, match="'held' is defined but not executable yet: it lands in a later phase"):
+        P.resolve_dispatch_for_profile(_compiled_block(timing="held"))
 
 
 def test_non_mapping_params_are_a_params_error():

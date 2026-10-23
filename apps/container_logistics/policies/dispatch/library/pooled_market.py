@@ -60,6 +60,7 @@ from apps.container_logistics.policies.framework import PolicyParams, PolicyRef,
 from apps.container_logistics.policies.framework.components import instantiate_component
 from apps.container_logistics.policies.solver_lib import cooperation, objective
 from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
+from apps.container_logistics.policies.solver_lib.provenance import node_provenance
 
 from ..bind import Declaration
 from ..composite import CompositePolicy
@@ -68,7 +69,11 @@ from ._market_stats import RoundStatsAggregator
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CompanyRule", "PooledMarket", "MARKET_NOTE_KEYS"]
+__all__ = ["COMPANY_BADGE", "CompanyRule", "PooledMarket", "MARKET_NOTE_KEYS"]
+
+#: The display badge (catalog and stamped provenance) and the stamped truck-sample scope.
+COMPANY_BADGE = "per company"
+_SAMPLE_SCOPE = "per_company"
 
 #: The keys of ``Result.tick_notes`` (``_market_stats.RoundStatsAggregator.fold`` reads them).
 MARKET_NOTE_KEYS = ("rounds_used", "converged", "candidate_pairs_round1", "candidate_pairs_total", "max_rounds")
@@ -87,7 +92,9 @@ Doc = dict[str, Any]
     version="1",
     description="One planner per company; companies offer orders into shared pools, claim and "
                 "are arbitrated in rounds until the market converges. The pre-v2 'pooled' topology.",
-    information_model="per_company",
+    badge=COMPANY_BADGE,
+    badge_tooltip="Each company decides with only its own trucks, plus the orders shared to it through "
+                  "the pool.",
     # Per-arm budgets for the battery's performance.scale check (round-2 C5 rule:
     # max(3 x worst of 2 x 5 runs, 500)). Measured 2026-10-21 on the whole-tick
     # testing.fixtures.scale() (1000 trucks x 500 orders, one company, no pools),
@@ -155,15 +162,38 @@ class PooledMarket(CompositePolicy):
 
         Reads every world key ``solve_tick`` reads: ``cooperation``,
         ``max_travel_time_pickup`` (the company rule) and the four candidate knobs (the
-        round prebuild).
+        round prebuild, recorded in the provenance with the ``per company`` badge and
+        sample scope). At the top it also declares its run stats (the round provenance
+        aggregator) and the arm's run record (the ``COOPERATION`` stamp setting, the arm id
+        as a run-name segment).
         """
         cooperation.validate_arm(world)
         arm = cooperation.resolve_arm(world)
         world.get("max_travel_time_pickup")
-        CandidateSettings.from_world(world)
+        provenance = node_provenance(world, badge=COMPANY_BADGE, sample_scope=_SAMPLE_SCOPE)
         if not top:
-            return Declaration()
-        return Declaration(cross_company=cooperation.directed_pairs(arm), run_stats=RoundStatsAggregator)
+            return Declaration(provenance=provenance)
+        return Declaration(cross_company=cooperation.directed_pairs(arm), provenance=provenance,
+                           run_stats=RoundStatsAggregator, **cooperation.arm_declaration_fields(arm))
+
+    def audit_scopes(self, scope_log: Any, tick: Any) -> list[str]:
+        """The battery's scope audit: each company sub-tick holds only that company's trucks,
+        and only its own orders or orders of a company its arm partners it with."""
+        arm = cooperation.resolve_arm(tick.world)
+        adjacency = arm.adjacency if arm is not None else {}
+        truck_h = {str(t.get("_id")): assign_constraints.haulier_of(t) for t in tick.raw_trucks}
+        order_h = {str(o.get("_id")): assign_constraints.haulier_of(o) for o in tick.raw_orders}
+        problems: list[str] = []
+        for entry in scope_log:
+            where = f"scope {entry['key']}"
+            t_h = [truck_h.get(t) for t in entry["trucks"]]
+            hid = entry["key"].partition(":")[2] if entry["kind"] == "company" else (t_h[0] if t_h else None)
+            problems += [f"{where} (company {hid}) holds truck {t} of {h}"
+                         for t, h in zip(entry["trucks"], t_h) if h != hid]
+            visible = {hid} | set(adjacency.get(str(hid), frozenset())) if hid is not None else set()
+            problems += [f"{where} (company {hid}) sees order {o} of {order_h.get(o)}, neither its own nor a "
+                         "partner's" for o in entry["orders"] if order_h.get(o) not in visible]
+        return problems
 
     def solve_tick(self, tick: Any, params: Any) -> Result:
         """Run the market for ``tick``'s trucks and orders; the result carries the round provenance."""

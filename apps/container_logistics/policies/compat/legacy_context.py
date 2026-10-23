@@ -20,6 +20,10 @@ tick in :class:`LegacyDecideContext`, calls ``decide`` and converts the returned
   ``"sampled"``); ``candidate_settings``; ``scope`` (a legacy :class:`Scope`).
   NOT served: the composite internals of the old context (``ctx.world``, the scope
   builders); a composite is written against ``tick.restrict`` / ``tick.call``.
+- :func:`legacy_world_reads` -- what ``DispatchPolicy``'s default ``bind`` reads for a
+  ``decide`` class: the run-world keys this adapter may read on its behalf (the four
+  candidate knobs), so the bind-reads rule (a bind reads every key its solve reads)
+  holds for legacy policies too.
 
 Compat (old inputs). Leaf module at module top (stdlib + ``framework.errors`` + the
 leaf ``dispatch.result``): ``solver_lib`` is imported inside the methods that need it.
@@ -37,7 +41,7 @@ from apps.container_logistics.policies.framework.errors import DispatchContractV
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["LegacyDecideContext", "Plan", "Scope", "result_from_legacy"]
+__all__ = ["LegacyDecideContext", "Plan", "Scope", "legacy_world_reads", "result_from_legacy"]
 
 #: The legacy candidate kind of a policy without a ``candidates`` param.
 _KIND_WITHOUT_CANDIDATES_PARAM = "sampled"
@@ -228,3 +232,16 @@ class LegacyDecideContext:
         from apps.container_logistics.policies.solver_lib import objective
 
         return objective.dual_cycle_cost(_unwrap(truck), _unwrap(order), bonus_km=bonus_km, radius_km=radius_km)
+
+
+def legacy_world_reads(world: Mapping[str, Any]) -> None:
+    """Read, from run world ``world``, every key a :class:`LegacyDecideContext` may read.
+
+    That is the four candidate knobs (``candidate_settings``, ``candidate_pairs``,
+    ``sampled_trucks`` parse them with ``CandidateSettings.from_world``). Called from a
+    legacy ``decide`` class's default ``bind``; raises like that parse on an unparseable
+    value.
+    """
+    from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
+
+    CandidateSettings.from_world(world)

@@ -12,8 +12,9 @@ What is locked:
   name and a ``max_rounds`` that is not an int in 1..100 are LOUD; undeclared
   component params are dropped at WARNING (the one legacy tolerance rule);
 - the translation is deterministic (same input -> same JSON bytes), and on valid
-  inputs ``legacy_market_params`` agrees with the runtime's
-  ``pooled_planner.resolve_market_config``.
+  inputs ``legacy_market_params`` agrees with the pre-contract runtime reader
+  ``pooled_planner.resolve_market_config`` (deleted in WS4b with its last caller, the
+  ``COOPERATION`` stamp; kept below verbatim as the test's oracle).
 
 Why: every pre-v2 bundle and every legacy env var goes through this translation, so a
 silent difference here would change which decomposition a run executes. The resolver
@@ -28,6 +29,10 @@ import json
 import logging
 
 import pytest
+
+from apps.container_logistics.assignment.arbitration import DEFAULT_ARBITRATION_RULE
+from apps.container_logistics.assignment.policy.claim import DEFAULT_CLAIM_POLICY
+from apps.container_logistics.assignment.policy.offer import DEFAULT_OFFER_POLICY
 
 from apps.container_logistics.datagen.preprocess import Preprocessor
 from apps.container_logistics.assignment import pooled_planner
@@ -228,6 +233,38 @@ def test_translation_is_deterministic():
     assert a == b == c
 
 
+def _resolve_market_config_oracle(planner):
+    """VERBATIM ``pooled_planner.resolve_market_config`` at 35b5b92 (the pre-contract runtime's
+    fail-soft market reader, deleted in WS4b): the oracle the strict reader must agree with."""
+    market = ((planner or {}).get("market") or {}) if isinstance(planner, dict) else {}
+    if not isinstance(market, dict):
+        market = {}
+
+    def _role(name, default_type):
+        raw = market.get(name)
+        if isinstance(raw, dict):
+            rtype = raw.get("type")
+            params = raw.get("params")
+            return {
+                "type": str(rtype) if rtype else default_type,
+                "params": dict(params) if isinstance(params, dict) else {},
+            }
+        return {"type": default_type, "params": {}}
+
+    try:
+        max_rounds = int(market.get("max_rounds", pooled_planner.DEFAULT_MAX_ROUNDS))
+    except (TypeError, ValueError):
+        max_rounds = pooled_planner.DEFAULT_MAX_ROUNDS
+    max_rounds = max(1, min(pooled_planner.MAX_ROUNDS_CEILING, max_rounds))
+
+    return {
+        "offer": _role("offer", DEFAULT_OFFER_POLICY),
+        "claim": _role("claim", DEFAULT_CLAIM_POLICY),
+        "arbitration": _role("arbitration", DEFAULT_ARBITRATION_RULE),
+        "max_rounds": max_rounds,
+    }
+
+
 def test_legacy_market_params_agree_with_resolve_market_config_on_valid_inputs():
     """On every valid input, the strict reader and the runtime's fail-soft reader agree.
 
@@ -251,7 +288,7 @@ def test_legacy_market_params_agree_with_resolve_market_config_on_valid_inputs()
                                     ("max_rounds", max_rounds)) if v is not None}
         planner = {"topology": "pooled", "market": market}
         strict = legacy.legacy_market_params(planner)
-        soft = pooled_planner.resolve_market_config(planner)
+        soft = _resolve_market_config_oracle(planner)
         assert strict == soft, f"market {market}: strict {strict} != runtime {soft}"
         cells += 1
     assert cells == 5 * 4 * 3 * 4
@@ -269,8 +306,8 @@ def test_constants_match_the_runtime_and_component_defaults():
     assert set(legacy.MARKET_ROLES.values()) == set(COMPONENT_KINDS)
     defaults = legacy.legacy_market_params({})
     assert {r: defaults[r]["type"] for r in legacy.MARKET_ROLES} == {
-        "offer": pooled_planner.DEFAULT_OFFER_POLICY, "claim": pooled_planner.DEFAULT_CLAIM_POLICY,
-        "arbitration": pooled_planner.DEFAULT_ARBITRATION_RULE}
+        "offer": DEFAULT_OFFER_POLICY, "claim": DEFAULT_CLAIM_POLICY,
+        "arbitration": DEFAULT_ARBITRATION_RULE}
 
 
 def test_echoes_invert_the_translation():
@@ -294,4 +331,4 @@ def test_echoes_invert_the_translation():
     }
     assert list(echo) == ["offer", "claim", "arbitration", "max_rounds"]
     assert legacy.market_echo(node.params.to_dict()) == echo
-    assert pooled_planner.resolve_market_config({"market": echo}) == echo, "the echo must read back unchanged"
+    assert _resolve_market_config_oracle({"market": echo}) == echo, "the echo must read back unchanged"

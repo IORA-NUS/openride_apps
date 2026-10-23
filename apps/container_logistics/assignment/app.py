@@ -394,7 +394,7 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         self._share_tags = accounting.render_share_tags(
             accounting.account_shares(outcome.pairs, candidates=candidates,
                                       cost=tick.measure.cost, own_allowed=own_allowed),
-            fmt=runner.share_tag_format,
+            fmt=runner.tag_format,
             solver_notes=outcome.solver_notes,
         )
         stats_cls = runner.tree.top.declaration.run_stats

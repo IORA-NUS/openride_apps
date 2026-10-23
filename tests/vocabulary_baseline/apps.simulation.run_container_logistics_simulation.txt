@@ -1,8 +1,0 @@
-id:TICK_SAMPLE_SCOPE	2
-id:information_model	5
-id:per_company	2
-id:per_group	2
-id:sample_scope_for	2
-sub:market	2
-sub:pooled	1
-sub:topology	2

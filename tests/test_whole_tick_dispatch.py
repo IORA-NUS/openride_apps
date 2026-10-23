@@ -215,8 +215,7 @@ def cross_pairer():
     the refusal below is the framework's check of a pair OUTSIDE the declaration.
     """
     with isolated_registry():
-        @policy(slot="planner", name="CrossPairer", version="1", information_model="central",
-                description="pairs cargo with acme")
+        @policy(slot="planner", name="CrossPairer", version="1", description="pairs cargo with acme")
         class CrossPairer(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -255,8 +254,7 @@ def test_disallowed_cross_company_head_is_discarded_by_the_framework(cross_paire
 def acme_breaker():
     """A leaf that double-books an order in acme's scope only, and is honest elsewhere."""
     with isolated_registry():
-        @policy(slot="planner", name="AcmeBreaker", version="1", information_model="central",
-                description="breaks acme's scope")
+        @policy(slot="planner", name="AcmeBreaker", version="1", description="breaks acme's scope")
         class AcmeBreaker(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -386,8 +384,7 @@ def test_central_leaves_draw_no_module_rng(name, params):
 @pytest.fixture
 def borax_crasher():
     with isolated_registry():
-        @policy(slot="planner", name="BoraxCrasher", version="1", information_model="central",
-                description="raises for borax")
+        @policy(slot="planner", name="BoraxCrasher", version="1", description="raises for borax")
         class BoraxCrasher(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
@@ -430,8 +427,7 @@ def test_market_crash_logs_crashed_prefix_counts_and_skips_company(borax_crasher
 @pytest.fixture
 def rebate_reader():
     with isolated_registry():
-        @policy(slot="planner", name="RebateReader", version="1", information_model="central",
-                description="records ctx.rebates")
+        @policy(slot="planner", name="RebateReader", version="1", description="records ctx.rebates")
         class RebateReader(DispatchPolicy):
             seen: list = []
 

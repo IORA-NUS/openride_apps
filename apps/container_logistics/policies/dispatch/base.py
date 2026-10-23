@@ -153,7 +153,14 @@ class DispatchPolicy(ABC):
 
         Pure in ``(params, world)``. A top-level policy that commits cross-company pairs
         must declare them (``Declaration.cross_company``) or the framework refuses them.
+        A class that runs a legacy ``decide`` (it keeps the default :meth:`solve_tick`)
+        reads the world keys the legacy adapter may read for it
+        (``compat.legacy_context.legacy_world_reads``).
         """
+        if type(self).solve_tick is DispatchPolicy.solve_tick:
+            from apps.container_logistics.policies.compat.legacy_context import legacy_world_reads  # local: compat reaches solver_lib
+
+            legacy_world_reads(world)
         spatial = getattr(params, "candidates", None) == "spatial"
         return Declaration(candidate_hint="spatial" if spatial else None)
 

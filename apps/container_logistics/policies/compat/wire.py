@@ -17,6 +17,11 @@ before the generic contract; nothing here is read by a solver.
 - :func:`share_tag_renderer` -> the per-pair renderer for a format name; the only place
   the format names are spelled.
 - :func:`wire_fields` -> the ``publish()`` keyword set (moved from ``assignment/app.py``).
+- :data:`V1_SHARE_TAG_BUILTINS` / :func:`share_tag_format_for` -> WHICH format a run
+  uses: ``v1`` for exactly the pre-v2 ``Partitioned`` top (an explicit NAME-keyed rule,
+  moved from the registry's retired ``share_tag_format`` registration field; no
+  registration can opt in), ``audited`` for everything else; :func:`stamp_fields` ->
+  the stamp's ``share_tag_format`` entry.
 
 LIMIT, by design: notes surface only on SHARED (cross-company) pairs. Tags exist only
 for the accounts ``accounting.account_shares`` produces, and the truck agent copies
@@ -35,10 +40,13 @@ from typing import Any, Callable, Mapping
 
 __all__ = [
     "LEGACY_NOTE_FIELDS",
+    "V1_SHARE_TAG_BUILTINS",
     "render_audited_tag",
     "render_v1_tag",
+    "share_tag_format_for",
     "share_tag_renderer",
     "split_notes",
+    "stamp_fields",
     "wire_fields",
 ]
 
@@ -53,6 +61,28 @@ _TAG_WIRE_FIELDS = ("owner_haulier_id", "carrier_haulier_id", "benefit_km", "poo
 
 #: The tag key / payload field carrying every note key that is not a legacy field.
 SOLVER_NOTES_FIELD = "solver_notes"
+
+#: THE ``(slot, name)`` tops whose runs render the pre-v2 ``v1`` share tags (byte identity
+#: with pre-v2 partitioned runs); every other top renders ``audited``. Moved from the
+#: registry (``framework/registry.py``, message 15 retired: a registration can no longer
+#: ask for ``v1``). Keyed on the registered NAME, not the class: one class backs one name,
+#: and built-in discovery registers ``Partitioned`` first, so another class claiming the
+#: name fails loud in the registry. Never add to this set.
+V1_SHARE_TAG_BUILTINS = frozenset({("planner", "Partitioned")})
+
+
+def share_tag_format_for(name: str, *, registered: bool = True) -> str:
+    """The share-tag format of a run whose TOP planner is ``name``: ``"v1"`` or ``"audited"``.
+
+    ``registered=False`` (a hand-injected unregistered class, whose name is only its
+    class name) is always ``audited``, as it was when the format was a registration field.
+    """
+    return "v1" if registered and ("planner", name) in V1_SHARE_TAG_BUILTINS else "audited"
+
+
+def stamp_fields(top_name: str) -> dict[str, Any]:
+    """The run stamp's compat entries for top planner ``top_name``: ``{"share_tag_format": ...}``."""
+    return {"share_tag_format": share_tag_format_for(top_name)}
 
 
 def split_notes(note: Mapping[str, Any] | None) -> tuple[dict[str, Any], dict[str, Any]]:

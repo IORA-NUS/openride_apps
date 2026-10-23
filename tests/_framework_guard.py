@@ -41,7 +41,7 @@ BASELINE_DIR = REPO_ROOT / "tests" / "vocabulary_baseline"
 
 # Workstreams that have merged into feat/policy-slots. A baseline line tagged
 # ``# removed-by: WS<n>`` for a merged WS<n> fails the guard. Each WS adds its own id here.
-MERGED_WORKSTREAMS: frozenset[str] = frozenset({"WS0", "WS1", "WS2", "WS3", "WS4a", "WS5"})
+MERGED_WORKSTREAMS: frozenset[str] = frozenset({"WS0", "WS1", "WS2", "WS3", "WS4a", "WS4b", "WS5"})
 # WS8 flips this: every baseline must then be empty (the framework names no solver).
 REQUIRE_EMPTY_BASELINES = False
 

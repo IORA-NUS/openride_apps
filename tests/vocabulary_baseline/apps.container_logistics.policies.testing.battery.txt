@@ -1,7 +1,0 @@
-id:INFORMATION_MODELS	6
-id:information_model	8
-id:per_company	2
-id:per_group	1
-pair:component_of	2
-sub:cooperation	1
-sub:partners	1

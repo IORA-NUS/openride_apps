@@ -265,20 +265,35 @@ def test_override_patches_profile_policies_and_strategy_mirror():
 
 
 def test_stamp_shape():
-    from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
+    """The planner stamp's exact key set and order (WS4b): ``information_model`` and the
+    top-level ``candidate_settings`` are gone; ``provenance`` (per node path),
+    ``declaration`` and ``world_reads`` come from the bound tree.
 
-    stamp = policies_stamp(_greedy(), source="bundle",
-                           candidate_settings=CandidateSettings.from_profile({}).to_dict(),
+    Verified to have teeth: dropping ``world_reads`` from ``policies_stamp`` and writing the
+    provenance under the node NAME instead of its path both failed the equality.
+    """
+    from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
+
+    tree = build_runner_for_policy("GreedyNearest").tree
+    stamp = policies_stamp(_greedy(), source="bundle", tree=tree,
                            accounting_params={"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5})
     assert stamp == {"planner": {
         "name": "GreedyNearest", "version": "1", "kind": "operator", "timing": "online",
-        "label": "GreedyNearest", "leaf": "GreedyNearest", "information_model": "central",
-        "share_tag_format": "audited",
+        "label": "GreedyNearest", "leaf": "GreedyNearest",
         "params": {"candidates": "spatial", "dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5},
         "source": "bundle",
-        "candidate_settings": {"cell_deg": 0.02, "per_order": 40, "max_rings": 8,
-                               "max_trucks_per_scope": 500},
-        "accounting_params": {"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5}}}
+        "share_tag_format": "audited",
+        "accounting_params": {"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5},
+        "provenance": {"planner": {
+            "badge": "central", "sample_scope": "per_haulier",
+            "candidate_settings": {"cell_deg": 0.02, "per_order": 40, "max_rings": 8,
+                                   "max_trucks_per_scope": 500}}},
+        "declaration": {"cross_company": []},
+        "world_reads": ["cooperation", "max_trucks_per_haulier", "spatial_candidates_per_order",
+                        "spatial_cell_deg", "spatial_max_rings"]}}
+    assert list(stamp["planner"]) == [
+        "name", "version", "kind", "timing", "label", "leaf", "params", "source", "share_tag_format",
+        "accounting_params", "provenance", "declaration", "world_reads"]
     json.dumps(stamp)
 
 
@@ -301,11 +316,12 @@ def test_run_config_meta_mirrors_policies(capsys):
     launcher._stamp_effective_policies(mgr, overridden=False)
     stamp = mgr.orsim_settings["POLICIES"]
     assert stamp["planner"]["source"] == "legacy-profile"
-    assert stamp["planner"]["candidate_settings"]["max_trucks_per_scope"] == 40
-    # Round 2 (C4): the line prints the selection label and its information model.
+    top = stamp["planner"]["provenance"]["planner"]
+    assert top["candidate_settings"]["max_trucks_per_scope"] == 40
+    # Round 2 (C4): the line prints the selection label (WS4b: no information model).
     assert ("Policies effective: planner=Partitioned/GreedyNearest v1 timing=online "
-            "information_model=per_group params=") in capsys.readouterr().out
-    assert stamp["planner"]["candidate_settings"]["sample_scope"] == "per_group"
+            "params=") in capsys.readouterr().out
+    assert (top["badge"], top["sample_scope"]) == ("per group", "per_group")
     assert mgr.get_run_config_meta()["policies"] == stamp
 
 
@@ -470,14 +486,14 @@ def test_openride_run_accepts_policy_flags():
 
 
 def test_stamp_candidate_settings_names_the_sample_scope():
-    """``candidate_settings.sample_scope`` says where ``max_trucks_per_scope`` applies:
+    """The top node's provenance ``sample_scope`` says where ``max_trucks_per_scope`` applies:
     per haulier on a central leaf's tick scope, per cooperation group under Partitioned,
     per company under PooledMarket (C3 deviation 6; a central arm can see MORE
-    candidates than the same leaf per group on a cooperating structure).
+    candidates than the same leaf per group on a cooperating structure). WS4b: each solver
+    declares it in its bind provenance (it was the sim main's ``sample_scope_for``).
 
-    Verified to have teeth: stamping a constant ``"per_scope"`` in
-    ``_stamp_effective_policies`` failed every case; mapping by the top NAME instead of
-    its information model is invisible here (equivalent for the built-ins)."""
+    Verified to have teeth: declaring ``per_haulier`` from ``Partitioned.bind`` failed the
+    default case."""
     import types
 
     import apps.simulation.run_container_logistics_simulation as launcher
@@ -488,4 +504,4 @@ def test_stamp_candidate_settings_names_the_sample_scope():
         run_dispatch_overrides(coll, overrides=overrides, solver="GreedyNearest" if not overrides else None)
         sm = types.SimpleNamespace(orsim_settings={}, get_agent_collection=lambda role, c=coll: c)
         launcher._stamp_effective_policies(sm, True)
-        assert sm.orsim_settings["POLICIES"]["planner"]["candidate_settings"]["sample_scope"] == want, overrides
+        assert sm.orsim_settings["POLICIES"]["planner"]["provenance"]["planner"]["sample_scope"] == want, overrides

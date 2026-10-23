@@ -18,7 +18,8 @@ and resets its params; ``{"inner": {"params": {...}}}`` merges into the current 
 merged over the policy's defaults (``framework.resolve.merge_params``) and validated.
 
 Columns: ``policy`` (the alias), ``label`` (the selection, e.g.
-``PooledMarket/RandomAssignment``), ``info_model``, the counts, haversine
+``PooledMarket/RandomAssignment``), ``badge`` (the top node's stamped provenance badge,
+e.g. ``per company``; empty when the solver declares none), the counts, haversine
 ``deadhead_km_*``, ``dual_cycle``, ``cross_company`` (committed cross-company shares)
 and ``benefit_km_total`` (sum of ``owner_reserve_km - awarded_cost_km`` over the
 shares whose both values are finite), solve times and ``violations``.
@@ -112,7 +113,7 @@ class BenchRow:
 
     policy: str
     label: str
-    info_model: str | None
+    badge: str | None
     fixtures: int
     assigned: int
     orders: int
@@ -127,7 +128,7 @@ class BenchRow:
     violations: int
 
 
-BENCH_COLUMNS = ("policy", "label", "info_model", "fixtures", "assigned", "orders", "assign_rate",
+BENCH_COLUMNS = ("policy", "label", "badge", "fixtures", "assigned", "orders", "assign_rate",
                  "deadhead_km_total", "deadhead_km_mean", "dual_cycle", "cross_company", "benefit_km_total",
                  "solve_ms_p50", "solve_ms_max", "violations")
 
@@ -161,7 +162,7 @@ def parse_bench_entries(items: Sequence[str]) -> list[BenchEntry]:
         if not sep:
             alias = name = text
         if not alias or not name:
-            raise PolicyError(f"bench entry {item!r} must be NAME or ALIAS=NAME, e.g. pr=PooledMarket.")
+            raise PolicyError(f"bench entry {item!r} must be NAME or ALIAS=NAME, e.g. b=<a registered policy name>.")
         if alias in seen:
             raise PolicyError(f"bench alias {alias!r} is used twice; give each benched selection its own alias.")
         seen.add(alias)
@@ -206,7 +207,6 @@ def _bench_one(entry: BenchEntry, params: Mapping[str, Any], fixture: Any) -> di
     km = [measure.deadhead_km(t, o) for t, o in pairs]
     return {
         "label": runner.resolved.label,
-        "info_model": runner.resolved.information_model,
         "assigned": len(pairs),
         "orders": len(tick.raw_orders),
         "deadhead": [k for k in km if math.isfinite(k)],
@@ -243,11 +243,11 @@ def bench(
         orders = sum(r["orders"] for r in runs)
         deadhead = [k for r in runs for k in r["deadhead"]]
         ms = [r["ms"] for r in runs]
-        probe = build_runner_for_policy(entry.name, params).resolved
+        probe = build_runner_for_policy(entry.name, params).tree
         rows.append(BenchRow(
             policy=entry.alias,
-            label=probe.label,
-            info_model=probe.information_model,
+            label=probe.resolved.label,
+            badge=probe.declaration.provenance.get("badge"),
             fixtures=len(runs),
             assigned=assigned,
             orders=orders,

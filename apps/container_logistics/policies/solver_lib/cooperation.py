@@ -15,6 +15,10 @@ and the framework enforces exactly that declaration.
 - :func:`validate_arm` -- message 14, verbatim (pools must pair only adjacent
   companies); the built-in solvers call it from their top ``bind``, so the run-start
   binding fails a hand-broken structure before any agent spawns.
+- :func:`stamp` / :func:`arm_declaration_fields` -- what a TOP solver that runs an arm
+  declares for the run record: the ``COOPERATION`` run setting (``{structure_id,
+  components, adjacency, pools}``, the schema the analytics agent's planner rows read,
+  ``analytics/manager.py``) and the arm id as a run-name segment.
 
 Reads only ``world.get("cooperation")``, so a ``RunWorld`` records exactly that key.
 
@@ -24,6 +28,7 @@ Solver helper (``policies/solver_lib``). Not a leaf module: imports
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -35,7 +40,18 @@ from apps.container_logistics.policies.framework.errors import PolicyError
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["Arm", "directed_pairs", "resolve_arm", "validate_arm"]
+__all__ = [
+    "Arm",
+    "COOPERATION_SETTING",
+    "arm_declaration_fields",
+    "directed_pairs",
+    "resolve_arm",
+    "stamp",
+    "validate_arm",
+]
+
+#: The run setting (``orsim_settings`` key -> ``run_config``) a top solver's arm stamp rides in.
+COOPERATION_SETTING = "COOPERATION"
 
 
 @dataclass(frozen=True)
@@ -124,3 +140,37 @@ def validate_arm(world: Mapping[str, Any]) -> None:
                         "them. Pools and adjacency must agree; recompile the scenario (pools "
                         "are canonical)."
                     )
+
+
+def stamp(arm: Arm) -> dict[str, Any]:
+    """The run record of ``arm``: ``{structure_id, components, adjacency, pools}`` (plain JSON).
+
+    The first four keys of the pre-contract ``pooled_planner.effective_cooperation_stamp``,
+    same values (the structure's own ``components`` / ``adjacency`` as authored, ``[]`` /
+    ``{}`` when absent, and the EFFECTIVE pools ``pools_from_structure`` derives). Its
+    ``topology`` and ``market`` keys are gone: the selection and the market config are in
+    ``meta.policies.planner`` (``label``, ``params``), and nothing read them.
+    """
+    structure = arm.structure if isinstance(arm.structure, dict) else {}
+    return json.loads(json.dumps({
+        "structure_id": structure.get("id"),
+        "components": structure.get("components") or [],
+        "adjacency": structure.get("adjacency") or {},
+        "pools": [{"id": p.id, "members": sorted(p.members)}
+                  for p in assign_pools.pools_from_structure(structure)],
+    }))
+
+
+def arm_declaration_fields(arm: Arm | None) -> dict[str, Any]:
+    """``Declaration`` keywords a TOP solver running ``arm`` adds: the stamp and the run-name segment.
+
+    ``{}`` without an arm. ``stamp_settings={"COOPERATION": stamp(arm)}`` and
+    ``run_name_segments=(str(arm.id),)`` when the arm has a truthy id (the pre-contract
+    sim main appended ``· <structure_id>`` under exactly that condition).
+    """
+    if arm is None:
+        return {}
+    fields: dict[str, Any] = {"stamp_settings": {COOPERATION_SETTING: stamp(arm)}}
+    if arm.id:
+        fields["run_name_segments"] = (str(arm.id),)
+    return fields

@@ -6,7 +6,7 @@ from typing import Dict, Iterable, List, Tuple
 from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 from apps.container_logistics.policies.solver_lib import candidates
-from apps.container_logistics.policies.solver_lib.pair_leaf import PairLeafMixin
+from apps.container_logistics.policies.solver_lib.pair_leaf import CENTRAL_BADGE, CENTRAL_BADGE_TOOLTIP, PairLeafMixin
 
 from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
 
@@ -16,9 +16,11 @@ from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Tr
     name="RandomAssignment",
     version="1",
     description="Baseline: shuffled orders, each given a random feasible free truck; ignores cost.",
-    # Scope-agnostic leaf: selected at top level it plans the whole tick centrally;
-    # as a composite's inner it decides one scope (round-2 §2.4).
-    information_model="central",
+    # Scope-agnostic leaf: selected at top level it plans the whole tick centrally (its
+    # stamped provenance then carries this badge); as a composite's inner it decides one
+    # scope (round-2 §2.4).
+    badge=CENTRAL_BADGE,
+    badge_tooltip=CENTRAL_BADGE_TOOLTIP,
     order_sensitive="byte-identical to the pre-v2 shuffle; order independence would change existing results",
     # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
     # Measured 2026-10-21, decide() on testing.fixtures.scale() (1000 trucks x 500
