@@ -318,6 +318,21 @@ full block). The pools warning reads the resolved `policies.planner` top.
     documented in `DispatchPolicy` and pinned by tests. A profile that carries a `policies`
     block needs `policies_format` = the integer 2 (`2.0` and other values are refused as an
     unknown format); a profile with no `policies` block is legacy and accepted.
+16. **`--structure` / `--cooperation-structure` fail loud** (WS7). An id no structure
+    declares, or any structure on a scenario with no cooperation block, is refused with the
+    declared ids (message 26); it used to warn and run the scenario's own arm, labelled as
+    the requested one. A structure on a planner tree whose `bind` reads no `cooperation` is
+    refused too (message 25): every arm would run the same experiment. Both are checked by
+    the sim main (exit 2), `run-simulation`, `openride run` and the dashboard's
+    `validate-run-policies --cooperation-structure` dry run; `run-preflight` reports the
+    tree's `world_reads` and the declared structures so the Run step can disable its
+    dropdown in advance (the dropdown itself stays, doc 21 §2a). Consequence for
+    `scripts/broker_gate.sh`, which REQUIRES `--structure`: it can no longer gate a scenario
+    without a cooperation block (message 26), so such a scenario needs a structure block or
+    a gate without the flag.
+17. **`ORSIM_SHARING_POLICY` / `--sharing-policy` are removed and refused** (WS7). Only the
+    compile step reads `planner.sharing` (`datagen/preprocess.py`), so the run-time patch
+    changed nothing. Set `planner.sharing` in `spec.json` and recompile.
 
 ---
 

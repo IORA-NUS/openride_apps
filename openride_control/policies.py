@@ -11,7 +11,14 @@ Single responsibility: the control plane's policy surface.
   is read (``scenario_overrides.precheck_override_names``); the dry run then uses the
   same ``scenario_overrides.run_dispatch_overrides`` the sim main applies, on a deep
   copy, and never writes. ``--capture-dispatch`` is checked with
-  the sim's own parser (``dispatch.capture.parse_capture_spec``).
+  the sim's own parser (``dispatch.capture.parse_capture_spec``). A
+  ``--cooperation-structure`` is applied on the same copy
+  (``scenario_overrides.apply_cooperation_override``) and refused like the sim main
+  refuses it: an undeclared id (message 26) or a structure the bound planner tree never
+  reads (message 25).
+- ``run-preflight`` (:func:`run_preflight`): bind the scenario's planner tree (after the
+  same overrides) and report the world keys it reads and the declared cooperation
+  structures, so the dashboard can explain which per-run world patches matter.
 - ``policy-validate`` / ``policy-bench`` payloads (plan §4 P3.6) over the contract
   battery and the single-tick bench (``docs/policy_authoring.md``).
 
@@ -34,6 +41,7 @@ __all__ = [
     "load_assignment_collection",
     "validate_run_policy_args",
     "cmd_validate_run_policies",
+    "run_preflight",
     "validate_capture_arg",
     "parse_bench_params",
     "cmd_policy_validate",
@@ -160,6 +168,7 @@ def validate_run_policy_args(
     policies: Sequence[str] = (),
     params: Sequence[str] = (),
     overrides_json: str | None = None,
+    cooperation_structure: str | None = None,
 ) -> dict[str, Any] | str:
     """Dry-run a run's policy flags against the scenario's assignment profile.
 
@@ -168,37 +177,64 @@ def validate_run_policy_args(
     (``scenario_overrides.precheck_override_names``) BEFORE the bundle is read, so a
     bad name is reported as itself and never as a missing scenario; then load the
     bundle and apply both with ``scenario_overrides.run_dispatch_overrides`` (the sim
-    main's one application point) on a deep copy, followed by the run-start checks.
+    main's one application point) on a deep copy, then ``cooperation_structure``
+    (``scenario_overrides.apply_cooperation_override``, message 26), followed by the
+    run-start checks with the patched world keys (message 25) -- the sim main's order.
     Returns the overrides object to ship as ``ORSIM_POLICY_OVERRIDES`` (``{}`` when no
-    flag was given; with neither overrides nor ``solver`` the scenario is not read),
+    policy flag was given; with neither overrides, ``solver`` nor
+    ``cooperation_structure`` the scenario is not read),
     or the error message (``str``) when a name, the merge or the patched profile fails,
     or when the scenario has no readable bundle (never validated against slot
     defaults: that would name the wrong policy). A bundle compiled before policy
     slots goes through the legacy translation, exactly as at run start.
     """
-    from apps.container_logistics.policies.dispatch.profile import (
-        assert_assignment_profiles_resolvable,
-    )
     from apps.container_logistics.policies.framework import PolicyError
-    from apps.container_logistics.scenario.scenario_overrides import (
-        precheck_override_names,
-        run_dispatch_overrides,
-    )
 
     try:
         overrides = build_run_policy_overrides(policies, params, overrides_json)
-        precheck_override_names(overrides, solver)
-        if not overrides and not (solver or "").strip():
+        _precheck_names(overrides, solver)
+        if not overrides and not (solver or "").strip() and not (cooperation_structure or "").strip():
             return {}
         collection = load_assignment_collection(scenario)
         if collection is None:
             return _missing_bundle_message(scenario)
-        collection = copy.deepcopy(collection)
-        run_dispatch_overrides(collection, overrides=overrides, solver=solver)
-        assert_assignment_profiles_resolvable(collection)
+        _dry_run(collection, overrides, solver, cooperation_structure)
     except PolicyError as exc:
         return str(exc)
     return overrides
+
+
+def _precheck_names(overrides: dict[str, Any], solver: str | None) -> None:
+    from apps.container_logistics.scenario.scenario_overrides import precheck_override_names
+
+    precheck_override_names(overrides, solver)
+
+
+def _dry_run(
+    collection: dict[str, Any],
+    overrides: dict[str, Any],
+    solver: str | None,
+    cooperation_structure: str | None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Apply the run's overrides to a deep copy of ``collection`` as the sim main does.
+
+    Returns ``(patched_copy, {agent_id: BoundTree})``. Raises ``PolicyError``.
+    """
+    from apps.container_logistics.policies.dispatch.profile import (
+        assert_assignment_profiles_resolvable,
+    )
+    from apps.container_logistics.scenario.scenario_overrides import (
+        apply_cooperation_override,
+        run_dispatch_overrides,
+    )
+
+    collection = copy.deepcopy(collection)
+    run_dispatch_overrides(collection, overrides=overrides, solver=solver)
+    _, patched_world_keys = apply_cooperation_override(
+        collection, (cooperation_structure or "").strip() or None
+    )
+    trees = assert_assignment_profiles_resolvable(collection, patched_world_keys=patched_world_keys)
+    return collection, trees
 
 
 def cmd_validate_run_policies(
@@ -207,6 +243,7 @@ def cmd_validate_run_policies(
     policies: Sequence[str] = (),
     params: Sequence[str] = (),
     overrides_json: str | None = None,
+    cooperation_structure: str | None = None,
 ) -> dict[str, Any]:
     """``validate-run-policies`` payload: ``{ok, action, overrides}`` or ``{ok:false, action, message}``.
 
@@ -214,13 +251,64 @@ def cmd_validate_run_policies(
     ``run-simulation`` in the background (review F2): the same
     :func:`validate_run_policy_args` ``run-simulation`` runs. ``overrides`` is the
     ``ORSIM_POLICY_OVERRIDES`` object WITHOUT ``solver`` (which ships as
-    ``ORSIM_SOLVER``; round-2 §5 C4).
+    ``ORSIM_SOLVER``; round-2 §5 C4) and without the structure (``ORSIM_COOP_STRUCTURE``).
     """
     action = "validate_run_policies"
-    result = validate_run_policy_args(scenario, solver, policies, params, overrides_json)
+    result = validate_run_policy_args(
+        scenario, solver, policies, params, overrides_json, cooperation_structure
+    )
     if isinstance(result, str):
         return {"ok": False, "action": action, "message": result}
     return {"ok": True, "action": action, "overrides": result}
+
+
+def _structures(collection: dict[str, Any]) -> dict[str, Any]:
+    """``{active, declared}`` of the first assignment profile's cooperation block (world data, opaque)."""
+    behavior = next((b for b in collection.values() if isinstance(b, dict)), {})
+    coop = (behavior.get("profile") or {}).get("cooperation")
+    if not isinstance(coop, dict):
+        return {"active": None, "declared": []}
+    declared = [s.get("id") for s in coop.get("structures", []) if isinstance(s, dict) and s.get("id")]
+    active = coop.get("active")
+    return {"active": active if isinstance(active, str) and active else None, "declared": declared}
+
+
+def run_preflight(
+    scenario: str | None,
+    *,
+    cooperation_structure: str | None = None,
+    solver: str | None = None,
+    policies: Sequence[str] = (),
+    params: Sequence[str] = (),
+    overrides_json: str | None = None,
+) -> dict[str, Any]:
+    """``run-preflight`` payload: what the run would bind, before it is spawned.
+
+    ``{ok: true, action: "run_preflight", world_reads: [...], structures: {active,
+    declared: [...]}}``: ``world_reads`` is the sorted union of the bound planner trees'
+    ``world_reads`` (``dispatch.bind``; which keys a tree reads is what its nodes'
+    ``bind`` read, never a name list), ``structures`` the scenario's declared
+    cooperation structure ids and the active one (after ``cooperation_structure``).
+    The dashboard disables its structure dropdown when ``world_reads`` lacks the
+    cooperation key. Unlike :func:`validate_run_policy_args` it ALWAYS reads the bundle
+    (with no flag at all it reports the scenario's own selection). Any refusal --
+    a name, a missing bundle, message 26 / 25 -- is ``{ok: false, action, message}``.
+    Writes nothing.
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+
+    action = "run_preflight"
+    try:
+        overrides = build_run_policy_overrides(policies, params, overrides_json)
+        _precheck_names(overrides, solver)
+        collection = load_assignment_collection(scenario)
+        if collection is None:
+            return {"ok": False, "action": action, "message": _missing_bundle_message(scenario)}
+        patched, trees = _dry_run(collection, overrides, solver, cooperation_structure)
+    except PolicyError as exc:
+        return {"ok": False, "action": action, "message": str(exc)}
+    reads = sorted(frozenset().union(*(t.world_reads for t in trees.values())))
+    return {"ok": True, "action": action, "world_reads": reads, "structures": _structures(patched)}
 
 
 def validate_capture_arg(text: str | None) -> str | None:

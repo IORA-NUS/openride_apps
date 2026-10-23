@@ -1,11 +1,14 @@
-"""FIX-11 housekeeping (review F11, F15, F16, F17, S1) — one assertion each."""
+"""FIX-11 housekeeping (review F11, F15, F16, S1) — one assertion each.
+
+F17 (the run-time sharing override creating a planner block) is gone with the override
+itself (plan item 34, WS7): ``planner.sharing`` is read only at compile time.
+"""
 
 import logging
 import typing
 
 from apps.container_logistics.assignment.pools import Award, pools_from_structure
 from apps.container_logistics.policies.dispatch.profile import build_policy_tree, resolve_dispatch_for_profile
-from apps.container_logistics.scenario.scenario_overrides import apply_cooperation_override
 
 from tests.test_assignment_cooperation import _coop
 from tests.test_assignment_pooled import _app
@@ -65,13 +68,3 @@ def test_market_components_pick_up_a_behavior_patched_after_construction():
     assert runner.resolved.params.max_rounds == 9, "stale cache survived a profile patch"
     assert runner.policy.params["max_rounds"] == 9, "the instance that runs kept the stale backstop"
     assert type(runner.policy.components()[0]).__name__ == "OfferNonePolicy", "stale market components"
-
-
-def test_sharing_override_creates_a_planner_block_like_the_topology_override_does():
-    """F17: one module created a missing planner block, the adjacent one warned and
-    refused. Aligned on CREATE, because §8 promises old bundles stay runnable under
-    a per-run override without recompiling."""
-    collection = {"assignment_main": {"profile": {"strategy": "GreedyNearest"}}}
-    apply_cooperation_override(collection, sharing="transfer-when-cheaper")
-    planner = collection["assignment_main"]["profile"]["planner"]
-    assert planner["sharing"]["type"] == "transfer-when-cheaper"

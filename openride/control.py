@@ -377,21 +377,32 @@ def known_solvers() -> dict[str, Any]:
     return {"solvers": payload.get("solvers") or [], "default": payload.get("default")}
 
 
+#: ``--sharing-policy`` refusal (plan item 34): ``planner.sharing`` is read only at compile.
+SHARING_POLICY_REMOVED = (
+    "--sharing-policy removed: inert at run time (set planner.sharing in spec.json and recompile)"
+)
+
+
 def validate_run_policies(
     scenario: Optional[str],
     solver: Optional[str],
     policies: Optional[list[str]] = None,
     params: Optional[list[str]] = None,
+    *,
+    cooperation_structure: Optional[str] = None,
 ) -> dict[str, Any]:
-    """Dry-run a run's ``--solver``/``--policy``/``--policy-param`` against the scenario.
+    """Dry-run a run's ``--solver``/``--policy``/``--policy-param``/``--structure`` against the scenario.
 
     In-process, like ``runner.py``'s ``ServiceManager`` use: the same check
-    ``run-simulation`` runs before it spawns. Returns the ``ORSIM_POLICY_OVERRIDES``
-    object (``{}`` when no flag was given); raises ``ControlError`` with the message.
+    ``run-simulation`` runs before it spawns (an undeclared structure, or one the bound
+    planner never reads, is refused here). Returns the ``ORSIM_POLICY_OVERRIDES``
+    object (``{}`` when no policy flag was given); raises ``ControlError`` with the message.
     """
     from openride_control.policies import validate_run_policy_args
 
-    result = validate_run_policy_args(scenario, solver, policies or [], params or [])
+    result = validate_run_policy_args(
+        scenario, solver, policies or [], params or [], cooperation_structure=cooperation_structure
+    )
     if isinstance(result, str):
         err = ControlError(result)
         err.code = "INVALID"

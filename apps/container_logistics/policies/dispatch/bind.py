@@ -21,7 +21,9 @@ the BOUND tree the framework runs every tick (plan ``plan_contract_final.md``
 Framework rules checked here: message 23 (a top declaration outside the ceiling
 ``assignment.constraints.declared_partnerships``, or malformed) and message 24 (a
 non-top node declaring more than the top, or a top-only field). Both are
-``PolicyError`` and fail the run before any agent spawns.
+``PolicyError`` and fail the run before any agent spawns. Message 25
+(:func:`refuse_unread_patches`) is the override layer's check against a bound tree: a
+per-run patch of a world key no node read at bind changes nothing the planner sees.
 
 The framework names no solver here: ownership is ``haulier_of`` on the two
 documents, and who may serve whom across companies is exactly what the top node
@@ -53,6 +55,7 @@ __all__ = [
     "RunWorld",
     "bind_profile",
     "bind_tree",
+    "refuse_unread_patches",
     "world_digest",
 ]
 
@@ -349,6 +352,29 @@ def bind_tree(node: Any, top_instance: Any, profile: Mapping[str, Any] | None) -
                           world_reads=reads, inner=inner, path=path)
     reads_union = frozenset().union(*(b[5] for b in bound))
     return BoundTree(top=inner, world_reads=reads_union)
+
+
+def refuse_unread_patches(tree: BoundTree, patched_world_keys: Any) -> None:
+    """Message 25: refuse a per-run patch of world keys the bound ``tree`` never reads.
+
+    ``patched_world_keys`` are the keys a per-run override wrote into the profile
+    (``scenario_overrides.apply_cooperation_override`` returns them). A key outside
+    ``tree.world_reads`` reached no node's ``bind``, and by the read rule (plan §2.4,
+    M4: a ``bind`` reads every key its ``solve_tick`` will) no tick either, so every
+    value of it would run the same experiment under a different label. Raises
+    ``PolicyError``; a no-op for an empty ``patched_world_keys``.
+    """
+    unread = sorted(set(patched_world_keys or ()) - tree.world_reads)
+    if not unread:
+        return
+    top = tree.top
+    reads = ", ".join(sorted(tree.world_reads)) or "none"
+    raise PolicyError(
+        f"a per-run override patched world key(s) {', '.join(repr(k) for k in unread)}, but the planner "
+        f"selection {top.name} (bound at {top.path}) reads no such key (it reads: {reads}). Every value of "
+        "an unread key runs the same experiment, so the run is refused: drop the override, or select a "
+        "planner whose bind() reads that key."
+    )
 
 
 def bind_profile(profile: Mapping[str, Any], instance: Any = None) -> BoundTree:
