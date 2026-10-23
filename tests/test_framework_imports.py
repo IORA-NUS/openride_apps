@@ -97,16 +97,9 @@ except ImportError:  # run as a script from the repo root
 _P = "apps.container_logistics.policies"
 _A = "apps.container_logistics.assignment"
 
-FORBIDDEN_PACKAGES = (
-    f"{_P}.solver_lib",
-    f"{_P}.dispatch.library",
-    f"{_A}.solver",
-    f"{_A}.pooled_planner",
-    f"{_A}.pools",
-    f"{_A}.policy",
-    f"{_A}.arbitration",
-)
-COMPAT_PACKAGE = f"{_P}.compat"
+#: The solver packages (one list, shared with the tier-A closure, ``_framework_guard``).
+FORBIDDEN_PACKAGES = guard.SOLVER_PACKAGES
+COMPAT_PACKAGE = guard.COMPAT_PACKAGE
 # The END STATE of what each tier-A module takes from compat: exactly the pairs it
 # imports (``test_every_compat_allowance_is_used`` keeps it so -- a stale allowance is a
 # hole). PER MODULE since the final review (M9): ``{tier-A module: {compat module (relative
@@ -196,20 +189,11 @@ TRANSITIVE_SOLVER_GATEWAYS: dict[str, tuple[frozenset[str], str]] = {
 IMPORTS_BASELINE_DIR = guard.BASELINE_DIR / "imports"
 
 
-def _package_of(module: str, path: Path) -> str:
-    return module if path.name == "__init__.py" else module.rpartition(".")[0]
-
-
-def _resolve(node: ast.ImportFrom, package: str) -> str:
-    if not node.level:
-        return node.module or ""
-    base = package.split(".")
-    base = base[: len(base) - (node.level - 1)] if node.level > 1 else base
-    return ".".join(base + ([node.module] if node.module else []))
-
-
-def _under(name: str, package: str) -> bool:
-    return name == package or name.startswith(package + ".")
+_package_of = guard.package_of
+_resolve = guard.resolve_from
+_under = guard.under
+_module_path = guard.module_path
+_static_imports = guard.static_imports
 
 
 def _dotted_attr(node: ast.AST) -> str | None:
@@ -219,17 +203,6 @@ def _dotted_attr(node: ast.AST) -> str | None:
         node = node.value
     if isinstance(node, ast.Name):
         return ".".join([node.id] + parts[::-1])
-    return None
-
-
-def _module_path(dotted_name: str) -> Path | None:
-    """The source file of ``apps.*`` module ``dotted_name`` in this checkout, else ``None``."""
-    if not dotted_name.startswith("apps."):
-        return None
-    base = guard.REPO_ROOT.joinpath(*dotted_name.split("."))
-    for candidate in (base / "__init__.py", base.with_suffix(".py")):
-        if candidate.is_file():
-            return candidate
     return None
 
 
@@ -408,26 +381,6 @@ def test_every_dynamic_import_allowance_is_used_and_tier_a():
 
 
 # --- the transitive reach ---------------------------------------------------------------
-
-def _static_imports(module: str, path: Path) -> set[str]:
-    """Every ``apps.*`` module ``module`` imports anywhere (local imports and package ``__init__`` files included)."""
-    package = _package_of(module, path)
-    targets: set[str] = set()
-    for node in ast.walk(ast.parse(path.read_text())):
-        if isinstance(node, ast.Import):
-            targets |= {a.name for a in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            base = _resolve(node, package)
-            for a in node.names:
-                targets.add(f"{base}.{a.name}" if _module_path(f"{base}.{a.name}") else base)
-    out: set[str] = set()
-    for t in targets:
-        if not t.startswith("apps."):
-            continue
-        parts = t.split(".")
-        out |= {".".join(parts[:i]) for i in range(2, len(parts) + 1)}
-    return {m for m in out if _module_path(m) is not None}
-
 
 def transitive_solver_crossings() -> dict[str, set[str]]:
     """``{crossing module: {forbidden modules it imports}}`` over the static closure of tier A."""

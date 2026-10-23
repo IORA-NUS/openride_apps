@@ -19,6 +19,20 @@ Tiers are BY DIRECTORY since the final review (M9): every module under
 ``policies/framework/``, ``policies/dispatch/`` (minus ``library/``) and
 ``policies/testing/`` is tier A unless :data:`TIER_B_OVERRIDES` names it, with a reason.
 
+THE COMPAT EXEMPTION IS ONE PREFIX (final review round 2, G1): exactly
+``apps/container_logistics/policies/compat/`` (:data:`COMPAT_PREFIX`). A directory named
+``compat`` anywhere else (``dispatch/compat/``, ``framework/compat/``) is scanned like any
+other; the old ``"/compat/" in path`` test exempted all of them.
+
+TIER A INCLUDES ITS STATIC IMPORT CLOSURE (round 2, G2): every ``apps.*`` module a tier-A
+module imports (local imports and parent packages included, as Python executes them),
+transitively, is tier A too, so a new sibling such as ``assignment/publish_helpers.py``
+imported by ``app.py`` is scanned the moment it is imported. The closure stops (does not
+include, does not expand) at :data:`CLOSURE_STOP_PACKAGES` (the compat quarantine and the
+solver packages, whose crossing the import guard reports), at tier-B modules, and at the
+reviewed :data:`CLOSURE_BOUNDARY`, each entry with its reason. A boundary entry is an
+exact module name, never a prefix.
+
 Re-creating a baseline file can not launder a hit: :func:`compare` reports every line
 of one (``REQUIRE_EMPTY_BASELINES``), and every ``# removed-by:`` tag names a merged
 workstream (:data:`MERGED_WORKSTREAMS`), so it is reported as stale too.
@@ -26,6 +40,8 @@ workstream (:data:`MERGED_WORKSTREAMS`), so it is reported as stale too.
 
 from __future__ import annotations
 
+import ast
+import functools
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,6 +57,36 @@ MERGED_WORKSTREAMS: frozenset[str] = frozenset({"WS0", "WS1", "WS2", "WS3", "WS4
 REQUIRE_EMPTY_BASELINES = True
 
 _POLICIES = "apps/container_logistics/policies"
+#: The ONE exempt subtree (G1): never scanned, never in a tier, never in the closure.
+COMPAT_PREFIX = f"{_POLICIES}/compat"
+_P = "apps.container_logistics.policies"
+_A = "apps.container_logistics.assignment"
+COMPAT_PACKAGE = f"{_P}.compat"
+#: Solver-side packages. The import guard forbids tier A to import any of them (its
+#: ``FORBIDDEN_PACKAGES`` is this tuple); the closure does not enter them.
+SOLVER_PACKAGES: tuple[str, ...] = (
+    f"{_P}.solver_lib",
+    f"{_P}.dispatch.library",
+    f"{_A}.solver",
+    f"{_A}.pooled_planner",
+    f"{_A}.pools",
+    f"{_A}.policy",
+    f"{_A}.arbitration",
+)
+CLOSURE_STOP_PACKAGES: tuple[str, ...] = (COMPAT_PACKAGE, *SOLVER_PACKAGES)
+#: Modules tier A imports that are NOT framework code, so the closure stops there (they
+#: are neither scanned as tier A nor expanded). Exact module names; each with its reason.
+CLOSURE_BOUNDARY: dict[str, str] = {
+    f"{_A}.constraints": (
+        "the world schema (cooperation structures, haulier ids, locations): its vocabulary IS the "
+        "world's. Tier A's use of it is pinned by the import guard's rule 3 (CONSTRAINTS_ALLOWED)"),
+    "apps.container_logistics.message_data_models": (
+        "the published wire schema of every payload (the assignment payload's share fields are "
+        "read by trucks and analytics); tier A fills it only through compat.wire"),
+    "apps.agent_transport": (
+        "ecosystem-wide transport selection (imports the chosen broker backend dynamically), "
+        "reached from the ORSim agent shell assignment/agent.py; no dispatch decision"),
+}
 
 # TIERS BY DIRECTORY (final review M9): every ``.py`` under a tier directory is
 # scanned, recursively, so a NEW framework file is covered the moment it exists --
@@ -76,15 +122,22 @@ TIER_A_GLOBS = tuple(f"{d}/**/*.py" for d, _ in TIER_A_DIRS) + TIER_A_FILES
 TIER_B_GLOBS = TIER_B_FILES + tuple(TIER_B_OVERRIDES)
 
 
+def is_compat(path: Path) -> bool:
+    """``path`` lies in THE compat quarantine (:data:`COMPAT_PREFIX`), and nowhere else named compat."""
+    rel = path.resolve().relative_to(REPO_ROOT).as_posix()
+    return rel == COMPAT_PREFIX or rel.startswith(COMPAT_PREFIX + "/")
+
+
 def _expand(globs: Iterable[str]) -> list[Path]:
     out: list[Path] = []
     for pattern in globs:
         out += sorted(REPO_ROOT.glob(pattern))
     return [p for p in dict.fromkeys(out)
-            if "/compat/" not in p.as_posix() and "__pycache__" not in p.as_posix()]
+            if not is_compat(p) and "__pycache__" not in p.relative_to(REPO_ROOT).parts]
 
 
-def _tier_a_paths() -> list[Path]:
+def _tier_a_root_paths() -> list[Path]:
+    """Tier A as listed: the tier directories (minus their excludes) and the single files."""
     paths: list[Path] = []
     for directory, excludes in TIER_A_DIRS:
         for path in _expand([f"{directory}/**/*.py"]):
@@ -93,6 +146,94 @@ def _tier_a_paths() -> list[Path]:
                 continue
             paths.append(path)
     return paths + _expand(TIER_A_FILES)
+
+
+# --- the static import closure (G2) ----------------------------------------------------
+
+def under(name: str, package: str) -> bool:
+    return name == package or name.startswith(package + ".")
+
+
+def package_of(module: str, path: Path) -> str:
+    return module if path.name == "__init__.py" else module.rpartition(".")[0]
+
+
+def resolve_from(node: ast.ImportFrom, package: str) -> str:
+    """The absolute module of ``from <node.module> import ...`` inside ``package``."""
+    if not node.level:
+        return node.module or ""
+    base = package.split(".")
+    base = base[: len(base) - (node.level - 1)] if node.level > 1 else base
+    return ".".join(base + ([node.module] if node.module else []))
+
+
+def module_path(dotted_name: str) -> Path | None:
+    """The source file of ``apps.*`` module ``dotted_name`` in this checkout, else ``None``."""
+    if not dotted_name.startswith("apps."):
+        return None
+    base = REPO_ROOT.joinpath(*dotted_name.split("."))
+    for candidate in (base / "__init__.py", base.with_suffix(".py")):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def static_imports(module: str, path: Path) -> set[str]:
+    """Every ``apps.*`` module ``module`` imports anywhere (local imports and parent packages included)."""
+    package = package_of(module, path)
+    targets: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            targets |= {a.name for a in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            base = resolve_from(node, package)
+            for a in node.names:
+                targets.add(f"{base}.{a.name}" if module_path(f"{base}.{a.name}") else base)
+    out: set[str] = set()
+    for t in targets:
+        if not t.startswith("apps."):
+            continue
+        parts = t.split(".")
+        out |= {".".join(parts[:i]) for i in range(2, len(parts) + 1)}
+    return {m for m in out if module_path(m) is not None}
+
+
+def _closure_stops(module: str, tier_b: set[str]) -> bool:
+    return (any(under(module, pkg) for pkg in CLOSURE_STOP_PACKAGES) or module in tier_b
+            or module in CLOSURE_BOUNDARY)
+
+
+@functools.lru_cache(maxsize=None)
+def _tier_a_closure() -> tuple[tuple[str, str, str], ...]:
+    """``((module, path, first importer), ...)``: the modules the closure ADDS to the listed tier A."""
+    roots = {dotted(p): p for p in _tier_a_root_paths()}
+    tier_b = {dotted(p) for p in _expand(TIER_B_GLOBS)}
+    seen: set[str] = set()
+    added: dict[str, str] = {}
+    stack = sorted(roots)
+    while stack:
+        module = stack.pop()
+        if module in seen:
+            continue
+        seen.add(module)
+        path = roots.get(module) or module_path(module)
+        if path is None:
+            continue
+        for target in sorted(static_imports(module, path)):
+            if target in roots or target in added or _closure_stops(target, tier_b):
+                continue
+            added[target] = module
+            stack.append(target)
+    return tuple((m, str(module_path(m)), importer) for m, importer in sorted(added.items()))
+
+
+def closure_modules() -> dict[str, str]:
+    """``{module: first importer}`` for every module tier A gains by its static import closure."""
+    return {m: importer for m, _path, importer in _tier_a_closure()}
+
+
+def _tier_a_paths() -> list[Path]:
+    return _tier_a_root_paths() + [Path(path) for _m, path, _i in _tier_a_closure()]
 
 
 def dotted(path: Path) -> str:
