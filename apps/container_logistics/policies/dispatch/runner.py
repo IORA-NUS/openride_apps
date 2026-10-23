@@ -14,8 +14,8 @@ pairs (plan ``plan_contract_final.md`` §2.7), identical for every solver:
    top-level solver aborts the tick, as the partitioned path always did).
 3. ``invariants.check_result`` against the tick, with the verified-pair-aware check
    (a pair a sub-tick already proved re-checks only ownership-or-declared), the
-   framework's own index and its document fingerprints; then every document of the
-   tick must be unmodified (the share accounting reads them all), and the notes must
+   framework's own index and its document fingerprints; then every truck of the tick
+   must be unmodified (the share accounting reads them all), and the notes must
    be wire-safe (``invariants.check_wire_notes``: no framework wire field, plain JSON).
    Any problem: log ERROR (message 18), count, commit NOTHING this tick. Nothing here
    is read back from the tick's solver-visible attributes (review H2, L3).
@@ -94,12 +94,15 @@ class DispatchRunner:
     """Runs one bound planner selection (a ``bind.BoundTree``) for every tick.
 
     ``capture`` is the fixture hook (``before_solve(tick)`` then ``capture(tick=,
-    result=, problems=)``); ``None`` costs one ``if`` per solve. Raises
+    result=, problems=)``); ``None`` costs one ``if`` per solve. ``wire_fields`` are the
+    payload fields the CALLER publishes from its own accounting (``AssignmentApp``: the
+    share-tag keyword set): a note key naming one that the top did not declare in
+    ``Declaration.wire_note_keys`` is a violation (review L3). Raises
     ``PolicyTimingError`` for a timing it cannot execute.
     """
 
     def __init__(self, tree: BoundTree, *, capture: Callable[..., None] | None = None,
-                 profile: Mapping[str, Any] | None = None) -> None:
+                 profile: Mapping[str, Any] | None = None, wire_fields: Iterable[str] = ()) -> None:
         resolved = tree.resolved
         if resolved.timing not in EXECUTABLE_TIMINGS:
             raise PolicyTimingError(
@@ -107,6 +110,7 @@ class DispatchRunner:
                 f"executable timings: {list(EXECUTABLE_TIMINGS)}. Use timing {EXECUTABLE_TIMINGS[0]!r}."
             )
         self.tree = tree
+        self.wire_fields = frozenset(wire_fields)
         self._bound_digest = tree.digest(profile)
         self._capture = capture
         self.stats: dict[str, Any] = {"calls": 0, "violations": 0, "total_ms": 0.0, "max_ms": 0.0}
@@ -166,13 +170,8 @@ class DispatchRunner:
         top = tick._shared.tree.top
         return top.solver.solve_tick(tick, top.params)
 
-    def run(self, tick: Tick, *, wire_fields: Iterable[str] = ()) -> TickOutcome:
-        """Solve ``tick`` and return what to commit (no pairs on a violation). Whole ticks only.
-
-        ``wire_fields`` are the payload fields the CALLER publishes from its own
-        accounting (``AssignmentApp``: ``compat.wire.FRAMEWORK_WIRE_FIELDS``): a note key
-        naming one that the top did not declare in ``wire_note_keys`` is a violation.
-        """
+    def run(self, tick: Tick) -> TickOutcome:
+        """Solve ``tick`` and return what to commit (no pairs on a violation). Whole ticks only."""
         if tick.depth != 0:
             raise ValueError(f"DispatchRunner.run takes a whole tick, not sub-tick {tick.scope!r}")
         capture = self._capture
@@ -194,7 +193,7 @@ class DispatchRunner:
                 problems = [f"document(s) {shown} were modified during the solve (documents are read-only)"]
         if not problems:
             declared = shared.tree.declaration.wire_note_keys
-            problems = check_wire_notes(result, frozenset(wire_fields) - declared)
+            problems = check_wire_notes(result, self.wire_fields - declared)
         if problems:
             self._report_violation(tick, problems)
             return TickOutcome(pairs=[], result=None)
@@ -233,7 +232,7 @@ class DispatchRunner:
         )
 
 
-def build_runner_for_app(policy: Any, prof: Mapping[str, Any]) -> DispatchRunner:
+def build_runner_for_app(policy: Any, prof: Mapping[str, Any], *, wire_fields: Iterable[str] = ()) -> DispatchRunner:
     """The runner ``AssignmentApp`` uses for its built ``policy`` under assignment profile ``prof``.
 
     ``policy`` is fitted into the profile's selection tree (``bind.bind_profile``:
@@ -250,7 +249,7 @@ def build_runner_for_app(policy: Any, prof: Mapping[str, Any]) -> DispatchRunner
     # Capture records whole ticks of the bound selection (format /3).
     capture = None if settings is None else CaptureRecorder(
         settings, resolved=tree.resolved, rebate_aware=CaptureSettings.rebate_aware_of(prof))
-    return DispatchRunner(tree, capture=capture, profile=prof)
+    return DispatchRunner(tree, capture=capture, profile=prof, wire_fields=wire_fields)
 
 
 def build_runner_for_policy(

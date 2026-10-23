@@ -48,7 +48,6 @@ import copy
 import dataclasses
 import json
 import logging
-import marshal
 import pickle
 import weakref
 from dataclasses import dataclass, field
@@ -93,17 +92,14 @@ _SCALARS = (str, int, float, bool, type(None))
 def value_fingerprint(value: Any) -> bytes:
     """A byte string equal for two values iff they are structurally identical (framework use).
 
-    ``marshal`` format 0 (no back-references, no interning flags, so the bytes depend
-    on the value's content, types and dict order only, never on reference counts),
-    ~1 us per tick document. A value ``marshal`` refuses (an object, a custom type)
-    falls back to ``pickle``, then to ``repr``.
+    ``pickle`` protocol 5: the bytes depend on the value's content, types, dict order and
+    which sub-objects are SHARED (its memo is identity-based within one dump) -- all of
+    which only a mutation can change -- and never on reference counts or string
+    interning (``marshal`` from format 1 on depends on one or the other). ~1.8 us per tick
+    document. A value ``pickle`` refuses falls back to ``repr``.
     """
     try:
-        return marshal.dumps(value, 0)
-    except (ValueError, TypeError):
-        pass
-    try:
-        return b"p" + pickle.dumps(value, 4)
+        return pickle.dumps(value, 5)
     except Exception:  # noqa: BLE001 - a fingerprint must never raise
         return b"r" + repr(value).encode("utf-8", "replace")
 

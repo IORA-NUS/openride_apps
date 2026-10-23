@@ -68,13 +68,12 @@ class DispatchPolicy(ABC):
     **The documents are READ-ONLY.** ``tick.raw_trucks`` / ``tick.raw_orders`` (and every
     candidate pair built from them) are the tick's own dicts, shared by every sub-tick
     of the tick. A policy must not mutate them, not even temporarily ("move" a truck for a
-    sub-solve and restore it afterwards): the top check trusts a sub-tick's physical
-    verdict for the pairs it already proved (``Tick.call`` records them, keyed on
-    document identity) and re-checks only ownership-or-declared, so a pair proved against
-    a mutated document is committed as proved. Build a modified COPY instead and map
-    its ids back. The cost of verifying this per head (a fingerprint at record and at
-    check, ~0.9 ms per 400-head tick) exceeds what the shortcut saves, so it is a
-    contract, not a check (round-2 Deviations, "Verification review fixes").
+    sub-solve and restore it afterwards). Since the fix loop (review H2) this is CHECKED:
+    the framework fingerprints every document when the tick is built, discards a
+    sub-tick result that pairs a modified document (message 19) and the whole tick if
+    a paired document or any truck was modified (message 18), because the top check trusts a sub-tick's
+    physical verdict for the pairs it proved and the share accounting reads every
+    document after the commit. Build a modified COPY instead and map its ids back.
     """
 
     def __init__(self, params: Optional[Dict[str, Any]] = None):

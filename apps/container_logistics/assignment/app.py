@@ -160,7 +160,9 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         cached_key, cached = getattr(self, "_dispatch_runner_cache", (None, None))
         if cached is not None and cached_key == _key(cached):
             return cached
-        runner = build_runner_for_app(self._solver, prof)
+        # A solver's notes may not set a field publish() writes from its own share tag
+        # (``wire_fields``' keyword set) unless the top declared it (review L3).
+        runner = build_runner_for_app(self._solver, prof, wire_fields=tuple(wire_fields({})))
         if runner.policy is not self._solver and runner.tree.leaf.instance is not self._solver:
             self._solver = runner.policy  # the stale top was rebuilt (bind_instance)
         self._dispatch_runner_cache = (_key(runner), runner)
@@ -382,9 +384,7 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         )
         events_before = runner.stats.get("violations", 0) + runner.stats.get("crashes", 0)
         self._tick_contract_events = 0
-        # A solver's notes may not set a field this app publishes from its own share tag
-        # (``wire_fields``' keyword set) unless the top declared it (review L3).
-        outcome = runner.run(tick, wire_fields=tuple(wire_fields({})))
+        outcome = runner.run(tick)
         self._tick_contract_events = (
             runner.stats.get("violations", 0) + runner.stats.get("crashes", 0) - events_before)
         mtt = prof.get("max_travel_time_pickup")

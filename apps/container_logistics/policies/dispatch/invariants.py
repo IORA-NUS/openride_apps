@@ -77,8 +77,9 @@ def check_result(result: Any, tick: "Tick", *, permitted: Any = None, index: Any
         if tid in trucks and oid in orders:
             t, o = trucks[tid], orders[oid]
             if intact is not None and not (intact(t) and intact(o)):
-                which = [f"{kind} {i!r}" for kind, i, doc in (("truck", tid, t), ("order", oid, o)) if not intact(doc)]
-                problems.append(f"{' and '.join(which)} was modified during the solve (documents are read-only)")
+                which = " and ".join(kind + " " + repr(i) for kind, i, doc in (("truck", tid, t), ("order", oid, o))
+                                     if not intact(doc))
+                problems.append(f"{which} was modified during the solve (documents are read-only)")
             elif not allowed(t, o):
                 problems.append(f"pair ({tid!r}, {oid!r}) is not allowed")
     for key, note in result.solver_notes.items():

@@ -65,6 +65,8 @@ def _cases():
          check_result(Result(pairs=ok, solver_notes={("t001", "o001"): {}}), one)),
         ("note not a str mapping", "returns_plan",
          check_result(Result(pairs=ok, solver_notes={("t000", "o000"): {1: "x"}}), one)),
+        # Only the runner / Tick.call pass the framework's ``intact`` (fix loop, review H2).
+        ("document modified", "returns_plan", check_result(Result(pairs=ok), one, intact=lambda doc: False)),
     ]
 
 

@@ -31,8 +31,9 @@ rewrite through the tick -- its own predicate (``Tick.permitted`` is a read-only
 property handing out that same function), its own id index (no instance ``__dict__``
 to pre-seed; ``__slots__`` and read-only properties throughout), the declared pairs,
 and a fingerprint of every document. A result naming a document that was modified
-during the solve is refused, at the top for EVERY document of the tick (the share
-accounting reads them all after the commit) and in a sub-tick for the paired ones. So
+during the solve is refused: in a sub-tick for the paired documents, at the top for the
+paired documents AND every truck of the tick (the share accounting prices the owner
+reserve over all of them after the commit; an unpaired order is read by nothing). So
 the verified-pair memo is sound: a sub-tick's physical verdict was reached by the
 framework's predicate on unmodified documents. Out of scope, as in any Python: a solver
 that deliberately reaches framework-private state through ``object.__setattr__``,
@@ -49,6 +50,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import pickle
 import random
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -208,6 +210,17 @@ def _narrowed(parent: Callable[[Any, Any], bool], narrow: Callable[[Any, Any], b
 
 
 _set = object.__setattr__
+_dumps = pickle.dumps
+
+
+def _fingerprint(doc: Doc, like: bytes) -> bytes:
+    """``doc``'s fingerprint in the form ``like`` was taken in (the inlined fast path, or the fallback)."""
+    if not like.startswith(b"r"):
+        try:
+            return _dumps(doc, 5)
+        except Exception:  # noqa: BLE001 - became unpicklable: certainly modified
+            return b""
+    return value_fingerprint(doc)
 
 
 class _NoInstanceDict(DispatchContractViolation, AttributeError):
@@ -249,9 +262,11 @@ class _TickShared:
         _set(self, "cross_company", cross_company)
         _set(self, "owns", _ownership(cross_company))
         _set(self, "index", _index(trucks, orders))
-        fingerprints: dict[int, bytes] = {}
-        for doc in trucks + orders:
-            fingerprints.setdefault(id(doc), value_fingerprint(doc))
+        docs = trucks + orders
+        try:  # the fast path of value_fingerprint, inlined (~10% of a tick's framework cost)
+            fingerprints = {id(doc): _dumps(doc, 5) for doc in docs}
+        except Exception:  # noqa: BLE001 - an unpicklable document: the per-document fallback
+            fingerprints = {id(doc): value_fingerprint(doc) for doc in docs}
         _set(self, "_fingerprints", MappingProxyType(fingerprints))
         _set(self, "_docs", (trucks, orders))  # keeps every fingerprinted id alive
         verified: set[tuple[int, int]] = set()
@@ -274,14 +289,19 @@ class _TickShared:
     def intact(self, doc: Doc) -> bool:
         """Whether ``doc`` is one of this tick's documents, unmodified since the tick was built."""
         before = self._fingerprints.get(id(doc))
-        return before is not None and value_fingerprint(doc) == before
+        return before is not None and _fingerprint(doc, before) == before
 
     def changed(self) -> list[str]:
-        """The ids of this tick's documents that were modified since it was built (``[]``: none)."""
+        """The ids of this tick's TRUCKS modified since it was built (``[]``: none).
+
+        Trucks only: after the commit the share accounting reads every truck (the owner
+        reserve) but only the committed orders, which the check has already found intact.
+        """
         out = []
         fingerprints = self._fingerprints
-        for doc in self._docs[0] + self._docs[1]:
-            if value_fingerprint(doc) != fingerprints[id(doc)]:
+        for doc in self._docs[0]:
+            before = fingerprints[id(doc)]
+            if _fingerprint(doc, before) != before:
                 out.append(str(doc.get("_id")) if isinstance(doc, dict) else repr(doc))
         return out
 

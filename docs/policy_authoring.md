@@ -185,12 +185,20 @@ twice and compares, and checks `random.getstate()` and a deep copy of the profil
 
 | Field | Who may set it | Meaning |
 |---|---|---|
-| `cross_company` | TOP only (an inner may declare a subset of the top's) | `frozenset` of `(owner_haulier, carrier_haulier)`: the carrier's trucks may serve the owner's orders. Must lie inside the ceiling (message 23). |
+| `cross_company` | TOP only (an inner may declare a subset of the top's) | `frozenset` of `(owner_haulier, carrier_haulier)`: the carrier's trucks may serve the owner's orders. Must lie inside the ceiling (message 23; a malformed entry, e.g. a list, is its malformed form, not a `TypeError`). An inner's non-empty subset narrows its own sub-ticks (`permitted` and `serves`) to own-or-those pairs; an empty one (every built-in inner's) inherits the caller's. |
 | `candidate_hint` | any node | read by a CALLER through `tick.callee(ref).declaration.candidate_hint`. `PooledMarket` prebuilds spatial pairs once per round for an inner that hints `"spatial"`. Not validated. On the declaration, not in the registry, because it depends on params. |
 | `provenance` | any node | plain JSON, stamped as `run_config.meta.policies.planner.provenance[<node path>]` (paths `planner`, `planner.inner`). The built-ins declare `{badge, sample_scope, candidate_settings}`. |
 | `stamp_settings` | TOP only | merged into the run's settings (`orsim_settings` -> `run_config.meta.simulation_settings`), e.g. the built-ins' `COOPERATION`. A key the run already sets (`POLICIES`, `STREAM_GEO`, ...) is refused, exit 2. |
 | `run_name_segments` | TOP only | appended to the run name, idempotent by segment. The built-ins append the active arm id. |
-| `run_stats` | TOP only | a run-stats aggregator CLASS (§3.5) |
+| `run_stats` | TOP only | a run-stats aggregator CLASS (§3.5); its `meta_key` must be a plain identifier and not a key the framework writes under `run_config.meta` (`run_stats.RESERVED_META_KEYS`: `policies`, `simulation_settings`, ...), refused at bind |
+| `wire_note_keys` | TOP only | the `solver_notes` keys this solver writes into payload fields the framework publishes itself (`PooledMarket`: `pool_id`, `market_round`). Any other note key naming such a field is refused at the tick (message 18), §3.5 |
+
+A `bind` that raises anything but a `PolicyError` is re-raised as `dispatch.bind.BindError` (a
+`PolicyError`) naming the node, so the run start refuses it like every other bind refusal. A
+`bind` after which the assignment profile differs (fingerprinted before the first bind) is a
+`BindError` too; the ceiling is computed before any bind runs. The top's `@policy(badge=...)` is
+added to its stamped provenance when its `bind` declared no `badge` (a contract-only solver);
+`sample_scope` / `candidate_settings` are never invented for it.
 
 **Ownership is never a solver input.** The haulier is a field of every truck and order
 document (`constraints.haulier_of`); the framework reads it off the two documents. A pair is
@@ -211,7 +219,11 @@ minus the selection keys (`policies`, `policies_format`, `policy_capture`, and c
 `strategy`, `solver_params`, `planner`, `use_spatial_matching`). Cooperation reaches a solver
 only as `world.get("cooperation")`; the candidate knobs as `spatial_cell_deg`,
 `spatial_candidates_per_order`, `spatial_max_rings`, `max_trucks_per_haulier`. Every key read
-through `[]`, `get` or `in` is recorded; iterating records every key.
+through `[]`, `get` or `in` is recorded (an absent key too); iterating (`list(world)`,
+`len(world)`) reveals the key list and records nothing. Every value is the world's own deep
+copy (mutating it changes nothing anyone else sees). Bulk access (`keys()`, `items()`,
+`values()`, `dict(world)`, `**world`) raises `TypeError`: read the keys you use one by one. There
+is no unrecorded read path on the object (`dispatch.bind.world_snapshot` is framework-only).
 
 **Rule: a `bind` reads every world key its `solve_tick` will read.** The keys a node read at
 bind are frozen on its `BoundNode.world_reads`; the tree's union is stamped
@@ -334,7 +346,11 @@ built-in decompositions are `children`; with the flag off nothing changes.
 - **`Result.solver_notes`**: `{(truck_id, order_id): {str: JSON}}`, keys a subset of the
   result's pairs (else message 18/19). The framework never interprets them. The wire layer
   (`compat/wire.py`) routes two key NAMES, `pool_id` and `market_round`, to their old
-  top-level payload fields; every other key rides in a `solver_notes` tag key / payload field
+  top-level payload fields, and accepts them only from a top that declared them in
+  `Declaration.wire_note_keys` (`PooledMarket` does); a note key naming any field the app
+  publishes from its own share tag (`shared`, `owner_haulier_id`, `benefit_km`, ...) that the
+  top did not declare discards the tick (message 18), and so does a note that is not plain
+  JSON (an object, NaN, infinity). Every other key rides in a `solver_notes` tag key / payload field
   (`AssignedHaulTripPayload.solver_notes`), which is **omitted when empty**, and the truck
   agent copies it into the trip's `collaboration` block. **Limit: notes surface only on SHARED
   (cross-company) pairs**; a note on a self-serve is dropped. A composite must merge its inner
@@ -346,7 +362,9 @@ built-in decompositions are `children`; with the flag off nothing changes.
   holds one instance per `meta_key`, folds every committed tick (never a discarded one,
   message 18), writes `snapshot()` to `run_config.meta.<meta_key>` when due, and force-flushes
   at agent close. `PooledMarket`'s `_market_stats.RoundStatsAggregator` (`meta_key="market"`)
-  is the built-in one. `tick_notes` and `run_stats` of a nested node are not consumed: they are
+  is the built-in one. An aggregator that raises (construction, `fold`, a push) is logged at
+  ERROR (`RUN STATS DISABLED`), retired for the run, and its `run_config.meta.<meta_key>` is
+  overwritten with `{"invalid": true, "error": ...}`; the tick and its pairs are unaffected. `tick_notes` and `run_stats` of a nested node are not consumed: they are
   top-only by design.
 
 ### 3.6 Solver helpers (`policies/solver_lib/`)
@@ -412,11 +430,17 @@ rule/structure/components/pools, candidate kinds, `candidate_pairs`. Not availab
 `tick.travel`, facility ids, order time windows, held plan tails (the `plan` timing was
 removed; only `online` exists).
 
-**The documents are read-only.** The top check trusts a sub-tick's physical verdict for the
-pairs it already proved (`tick.call` records them by document identity) and re-checks only
-ownership-or-declared, so a pair proved against a mutated (even temporarily) document is
-committed as proved. Build copies and map their ids back. A contract, not a check (verifying it
-measured ~0.9 ms per tick).
+**The tick and its documents are read-only, and that is CHECKED** (fix loop, review H2).
+Every tick attribute is a read-only property (assigning one, or reaching for an instance
+`__dict__`, is a `DispatchContractViolation`: message 18 at the top, 19 in a sub-tick); the
+framework checks with its own predicate, index and declared pairs, never with anything read
+back from the tick. Every document is fingerprinted when the tick is built: a sub-tick result
+pairing a document modified since is discarded, and the whole tick is discarded if a paired
+document or ANY of its trucks was modified (the share accounting prices the owner reserve over
+every truck after the commit), so the top
+check's trust in a sub-tick's physical verdict (`tick.call` records the pairs by document
+identity) is sound. Build copies and map their ids back. `tick.scratch` is the one mutable
+member. `tick.serves(carrier, owner)` is `False` when either id is missing.
 
 ## 6. What the framework owns, and its refusals
 
