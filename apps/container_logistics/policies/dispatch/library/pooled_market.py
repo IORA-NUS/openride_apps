@@ -142,6 +142,7 @@ class PooledMarket(CompositePolicy):
 
     def __init__(self, params=None, **kw: Any) -> None:
         super().__init__(params, **kw)
+        _require_inner_injections(self)
         self._components: tuple[Any, Any, Any] | None = None
 
     def components(self) -> tuple[Any, Any, Any]:
@@ -167,7 +168,6 @@ class PooledMarket(CompositePolicy):
         aggregator) and the arm's run record (the ``COOPERATION`` stamp setting, the arm id
         as a run-name segment).
         """
-        _require_inner_injections(self)
         cooperation.validate_arm(world)
         arm = cooperation.resolve_arm(world)
         world.get("max_travel_time_pickup")
@@ -339,7 +339,7 @@ def _by_haulier(docs: Any) -> dict[str, list[Doc]]:
 
 
 def _require_inner_injections(market: Any) -> None:
-    """Refuse (at bind, before any tick) an inner without ``set_rng`` / ``set_tiebreak``.
+    """Refuse (at construction, i.e. at run start, before any tick) an inner without ``set_rng`` / ``set_tiebreak``.
 
     The market seeds its inner's decision RNG and tie-break with the tick's own before
     any draw (:meth:`PooledMarket.solve_tick`, pre-v2 order S4); that is what makes its
@@ -347,6 +347,8 @@ def _require_inner_injections(market: Any) -> None:
     ``solve_tick`` without the optional ``DispatchPolicy`` helper base) has no injection
     API, so it would otherwise crash mid-tick with an ``AttributeError``. Found by WS8
     litmus (b); every built-in leaf has the API, so nothing that ran before changes.
+    Checked in ``__init__`` (``build_policy_tree`` builds the tree at run start, before
+    ``bind``), not in ``bind``, which stays pure in ``(params, world)``.
     """
     inner = getattr(market, "inner", None)
     missing = [m for m in ("set_rng", "set_tiebreak") if not callable(getattr(inner, m, None))]

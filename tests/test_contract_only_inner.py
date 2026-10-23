@@ -11,12 +11,13 @@ Plan ``plan_contract_final.md`` §2.1/§2.2: a registered planner class needs on
   offers it (every built-in does, so nothing that ran before changes).
 - ``PooledMarket.solve_tick`` seeds its inner with ``set_rng`` / ``set_tiebreak`` before
   any draw (pre-v2 order S4). A contract-only inner crashed mid-tick with
-  ``AttributeError``; ``PooledMarket.bind`` now refuses it at run start, naming the API.
+  ``AttributeError``; ``PooledMarket.__init__`` now refuses it when the tree is built at
+  run start (``bind`` stays pure in ``(params, world)``), naming the API.
 
 Verified to have teeth (WS8, mutate / see it fail / restore): restoring the
 ``isinstance(inner, DispatchPolicy)`` TypeError in ``CompositePolicy.__init__`` failed
 ``test_partitioned_runs_a_contract_only_inner``; removing the
-``_require_inner_injections(self)`` call from ``PooledMarket.bind`` failed
+``_require_inner_injections(self)`` call from ``PooledMarket.__init__`` failed
 ``test_pooled_market_refuses_an_inner_without_the_injection_api_at_bind``; making
 ``CompositePolicy._forward`` skip every call failed
 ``test_injections_still_reach_an_inner_that_offers_them``.
@@ -84,7 +85,7 @@ def test_injections_still_reach_an_inner_that_offers_them():
         assert top.inner.tiebreak_seed == 11
 
 
-def test_pooled_market_refuses_an_inner_without_the_injection_api_at_bind():
+def test_pooled_market_refuses_an_inner_without_the_injection_api_at_run_start():
     with isolated_registry():
         _toy_class()
         with pytest.raises(PolicyError, match=r"PooledMarket: its inner ContractOnlyLeaf has no "

@@ -305,7 +305,7 @@ class PerCompany(CompositePolicy):
   framework never `isinstance`-checks either.
 - **`PooledMarket` needs the injection API on its inner.** It seeds its inner with
   `set_rng(tick.rng)` / `set_tiebreak(tick.seed)` before any draw, so an inner without
-  them is refused at run start (`PooledMarket.bind`: `PooledMarket: its inner <Class> has no
+  them is refused at run start (`PooledMarket.__init__`, when the tree is built: `PooledMarket: its inner <Class> has no
   set_rng / set_tiebreak. ...`). Subclass `DispatchPolicy`, or define both methods.
   `Partitioned` does not inject (its groups keep the inner's own RNG), so it takes any leaf.
 - **Randomness.** A sub-tick's `rng` is the callee INSTANCE's injected RNG (the `random`
