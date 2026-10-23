@@ -38,8 +38,9 @@ __all__ = ["CompositePolicy"]
 class CompositePolicy(DispatchPolicy):
     """A dispatch policy with an ``inner`` per-scope solver it delegates each scope to.
 
-    ``inner`` is a built leaf policy; ``inner_node`` its resolved selection (name,
-    params, candidate kind) for the runner and the stamp. The three injections are
+    ``inner`` is a built leaf policy (any registered class: the ``DispatchPolicy`` base
+    is not required of it, WS8 litmus (b)); ``inner_node`` its resolved selection
+    (name, params) for the runner and the stamp. The three injections are
     recorded here (so ``self.rng`` etc. agree) AND forwarded to ``inner`` by default.
     A composite whose scopes must keep the inner's OWN randomness (``Partitioned``:
     the pre-v2 partitioned path never injected one, its groups draw from the
@@ -51,26 +52,36 @@ class CompositePolicy(DispatchPolicy):
         self,
         params: Optional[Dict[str, Any]] = None,
         *,
-        inner: DispatchPolicy,
+        inner: Any,
         inner_node: ResolvedDispatch,
     ):
         super().__init__(params)
-        if not isinstance(inner, DispatchPolicy):
-            raise TypeError(
-                f"{type(self).__name__}: inner must be a DispatchPolicy (got {type(inner).__name__})."
-            )
         self.inner = inner
         self.inner_node = inner_node
 
+    def _forward(self, method: str, value: Any) -> None:
+        """Call ``inner.<method>(value)`` when the inner offers that injection.
+
+        The inner is duck-typed (plan ``plan_contract_final.md`` §2.1/§2.2: the
+        ``DispatchPolicy`` base is optional, a registered class only needs
+        ``solve_tick``), so an inner without the injection API simply does not receive
+        it; ``tick.call`` then reads its ``rng`` / ``tiebreak_seed`` / ``rebate_book``
+        with the documented defaults. Every built-in inner has the API, so this is
+        byte-identical for them.
+        """
+        forward = getattr(self.inner, method, None)
+        if callable(forward):
+            forward(value)
+
     def set_rng(self, rng: Optional[_random_module.Random]) -> None:
         super().set_rng(rng)
-        self.inner.set_rng(rng)
+        self._forward("set_rng", rng)
 
     def set_tiebreak(self, tick_seed: Optional[int]) -> None:
         super().set_tiebreak(tick_seed)
-        self.inner.set_tiebreak(tick_seed)
+        self._forward("set_tiebreak", tick_seed)
 
     def set_rebate_book(self, book: Optional[RebateBook]) -> None:
         super().set_rebate_book(book)
-        self.inner.set_rebate_book(book)
+        self._forward("set_rebate_book", book)
 

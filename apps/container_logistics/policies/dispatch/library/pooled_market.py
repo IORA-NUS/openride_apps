@@ -56,7 +56,7 @@ from typing import Any, Mapping
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.assignment import pooled_planner
 from apps.container_logistics.assignment.pools import PoolMarket
-from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
+from apps.container_logistics.policies.framework import PolicyError, PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework.components import instantiate_component
 from apps.container_logistics.policies.solver_lib import cooperation, objective
 from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
@@ -167,6 +167,7 @@ class PooledMarket(CompositePolicy):
         aggregator) and the arm's run record (the ``COOPERATION`` stamp setting, the arm id
         as a run-name segment).
         """
+        _require_inner_injections(self)
         cooperation.validate_arm(world)
         arm = cooperation.resolve_arm(world)
         world.get("max_travel_time_pickup")
@@ -335,3 +336,24 @@ def _by_haulier(docs: Any) -> dict[str, list[Doc]]:
         if hid:  # a truck/order with no haulier can never match
             out.setdefault(hid, []).append(doc)
     return out
+
+
+def _require_inner_injections(market: Any) -> None:
+    """Refuse (at bind, before any tick) an inner without ``set_rng`` / ``set_tiebreak``.
+
+    The market seeds its inner's decision RNG and tie-break with the tick's own before
+    any draw (:meth:`PooledMarket.solve_tick`, pre-v2 order S4); that is what makes its
+    company sub-ticks reproducible. A contract-only leaf (one that implements
+    ``solve_tick`` without the optional ``DispatchPolicy`` helper base) has no injection
+    API, so it would otherwise crash mid-tick with an ``AttributeError``. Found by WS8
+    litmus (b); every built-in leaf has the API, so nothing that ran before changes.
+    """
+    inner = getattr(market, "inner", None)
+    missing = [m for m in ("set_rng", "set_tiebreak") if not callable(getattr(inner, m, None))]
+    if missing:
+        raise PolicyError(
+            f"PooledMarket: its inner {type(inner).__name__} has no {' / '.join(missing)}. The market "
+            "seeds its inner's decision RNG and tie-break per tick, so an inner of PooledMarket must "
+            "provide the injection API (subclass apps.container_logistics.policies.dispatch.base."
+            "DispatchPolicy, or define set_rng(rng) and set_tiebreak(seed))."
+        )
