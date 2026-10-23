@@ -143,6 +143,16 @@ def load_assignment_collection(scenario: str | None) -> dict[str, Any] | None:
     return None if loaded is None else loaded[0]
 
 
+def _bundle_settings_keys(scenario: str | None) -> tuple[str, ...]:
+    """The keys of the scenario bundle's ``settings`` (``()`` without a bundle).
+
+    A second read through the sidecar right after :func:`load_assignment_collection`'s
+    (a stat hit, ~1 ms; a hash check only on the first read after a bundle change).
+    """
+    loaded = _load_run_inputs(scenario)
+    return () if loaded is None else loaded[1]
+
+
 def _load_run_inputs(scenario: str | None) -> tuple[dict[str, Any], tuple[str, ...]] | None:
     """``(assignment collection, bundle settings keys)``; ``None`` when there is no bundle.
 
@@ -285,12 +295,12 @@ def validate_run_policy_args(
         _precheck_names(overrides, solver)
         env = sim_environ(environ, scenario=scenario, solver=solver, overrides=overrides,
                           cooperation_structure=cooperation_structure)
-        loaded = _load_run_inputs(_env_scenario(env))
-        if loaded is None:
+        collection = load_assignment_collection(_env_scenario(env))
+        if collection is None:
             if not _env_requests_a_patch(env):
                 return {}
             return _missing_bundle_message(_env_scenario(env))
-        _dry_run(loaded[0], env, settings_keys=loaded[1])
+        _dry_run(collection, env, settings_keys=_bundle_settings_keys(_env_scenario(env)))
     except PolicyError as exc:
         return str(exc)
     return overrides
@@ -415,10 +425,10 @@ def run_preflight(
         _precheck_names(overrides, solver)
         env = sim_environ(environ, scenario=scenario, solver=solver, overrides=overrides,
                           cooperation_structure=cooperation_structure)
-        loaded = _load_run_inputs(_env_scenario(env))
-        if loaded is None:
+        collection = load_assignment_collection(_env_scenario(env))
+        if collection is None:
             return {"ok": False, "action": action, "message": _missing_bundle_message(_env_scenario(env))}
-        patched, trees = _dry_run(loaded[0], env, settings_keys=loaded[1])
+        patched, trees = _dry_run(collection, env, settings_keys=_bundle_settings_keys(_env_scenario(env)))
     except PolicyError as exc:
         return {"ok": False, "action": action, "message": str(exc)}
     reads = sorted(frozenset().union(*(t.world_reads for t in trees.values())))

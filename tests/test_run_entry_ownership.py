@@ -27,7 +27,8 @@ What is pinned, by finding:
 
 Verified to have teeth (mutate / see it fail / restore), one per pin:
 
-- M1: removing ``or k in FRAMEWORK_RUN_SETTINGS`` from ``_apply_run_declaration`` failed
+- M1: removing ``or k in FRAMEWORK_RUN_SETTINGS`` from ``_apply_run_declaration`` (the check now
+  lives in ``scenario.run_declaration.check_run_declaration``, round 3 M-A) failed
   ``test_a_solver_may_not_stamp_a_framework_run_setting`` for STREAM_GEO,
   PERSIST_ROUTE_GEO, ORDER_LIFECYCLE (MIN_STEP_WALL_TIME_MS stayed refused: the bundle
   holds it); writing ``scenario_manager.orsim_settings["STREAM_GEO"] = False`` directly in
