@@ -446,12 +446,13 @@ def test_n5_the_live_profile_is_not_reachable_through_the_world_state():
 
 
 def test_n5_a_profile_that_widens_the_ceiling_mid_run_is_refused():
-    """TEETH: ``run_ceiling=None`` in ``AssignmentApp._dispatch_runner`` (each rebuilt runner pinning
-    its own ceiling): the widened profile bound and committed ``t_acme -> o_cargo``."""
+    """TEETH: ``run_ceiling=None`` in ``AssignmentApp._dispatch_runner``: the widened profile re-bound."""
 
     with isolated_registry():
         _toy(lambda tick, t, o: Result())
         app = _app(_lprofile({}, top="Probe"))
+        # AssignmentApp.__init__'s eager bind (``_app`` builds via __new__): the run start.
+        app._run_ceiling = app._dispatch_runner(app._assignment_profile()).tree.ceiling
         app.assign(SIM_CLOCK, 1)
         app.behavior["profile"]["cooperation"]["structures"].append(
             {"id": "evil", "adjacency": {"acme": ["cargo"], "cargo": ["acme"]}})
@@ -467,8 +468,9 @@ def test_n5_a_runner_rebind_cannot_widen_its_run_ceiling():
         from apps.container_logistics.policies.dispatch.runner import DispatchRunner
 
         base = _lprofile({}, top="Probe")
-        runner = DispatchRunner(bind_profile(base), profile=base)
-        assert runner.run_ceiling == frozenset(DECLARED)
+        tree = bind_profile(base)
+        assert tree.ceiling == frozenset(DECLARED)
+        runner = DispatchRunner(tree, profile=base, run_ceiling=tree.ceiling)
         wide = copy.deepcopy(base)
         wide["cooperation"]["structures"].append({"id": "evil", "adjacency": {"acme": ["cargo"], "cargo": ["acme"]}})
         with pytest.raises(PolicyError, match="did not declare at run start"):

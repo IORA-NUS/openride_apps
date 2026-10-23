@@ -76,8 +76,9 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         # (truck_id, order_id) -> collaboration tag for the current tick's matches.
         self._share_tags: Dict[Tuple[str, str], Dict[str, Any]] = {}
         # The eager bind: the same ``bind_profile`` the sim main's stamp binds with, the
-        # runner every tick reuses while the profile is unchanged.
-        self._dispatch_runner(prof)
+        # runner every tick reuses while the profile is unchanged. Its ceiling is the run
+        # start's: no runner built later may widen it (review N5).
+        self._run_ceiling = self._dispatch_runner(prof).tree.ceiling
 
     @property
     def managed_statemachine(self):
@@ -189,10 +190,10 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             return cached
         # A solver's notes may not set a field publish() writes from its own share tag
         # (``wire_fields``' keyword set) unless the top declared it (review L3).
-        # The run-start cross-company ceiling carries over to every rebuilt runner: a
-        # profile that widens it mid-run is refused (review N5).
+        # The run-start cross-company ceiling (``__init__``'s bind) bounds every rebuilt
+        # runner: a profile that widens it mid-run is refused (review N5).
         runner = build_runner_for_app(self._solver, prof, wire_fields=tuple(wire_fields({})),
-                                      run_ceiling=getattr(cached, "run_ceiling", None))
+                                      run_ceiling=getattr(self, "_run_ceiling", None))
         if runner.policy is not self._solver and runner.tree.leaf.instance is not self._solver:
             self._solver = runner.policy  # the stale top was rebuilt (bind_instance)
         self._dispatch_runner_cache = (_key(runner), runner)

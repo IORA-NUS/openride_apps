@@ -108,10 +108,10 @@ class DispatchRunner:
     ``PolicyTimingError`` for a timing it cannot execute.
 
     ``run_ceiling`` is the run-start cross-company ceiling no re-bind may widen (review
-    N5). Default: the bound tree's own ceiling when the runner is built against a run
-    ``profile`` (the agent, the sim main); ``None`` (no bound) for a runner built without
-    one (battery, bench, capture replay), whose worlds legitimately differ per fixture.
-    The agent passes its first runner's ceiling to every rebuilt runner.
+    N5): the agent passes the ceiling of the tree it bound at ``__init__`` (its run start)
+    to every runner it builds; a tree, or a later re-bind, whose ceiling is wider is
+    refused (``PolicyError``). ``None`` (the default): no bound -- a runner reused across
+    fixtures whose worlds legitimately differ (battery, bench, capture, tests).
     """
 
     def __init__(self, tree: BoundTree, *, capture: Callable[..., None] | None = None,
@@ -124,8 +124,6 @@ class DispatchRunner:
                 f"executable timings: {list(EXECUTABLE_TIMINGS)}. Use timing {EXECUTABLE_TIMINGS[0]!r}."
             )
         self.tree = tree
-        if run_ceiling is None and profile is not None:
-            run_ceiling = tree.ceiling
         if run_ceiling is not None:
             _refuse_wider_ceiling(tree, frozenset(run_ceiling))
         self.run_ceiling: frozenset | None = None if run_ceiling is None else frozenset(run_ceiling)
@@ -154,8 +152,8 @@ class DispatchRunner:
         """The bound tree for ``profile``: re-bound (same instances) when a key its binds read changed.
 
         A re-bind whose ceiling is wider than :attr:`run_ceiling` is refused
-        (``PolicyError``) and the runner keeps its tree; with no ``run_ceiling`` the first
-        re-bind against a real profile does not pin one (see the class docstring).
+        (``PolicyError``) and the runner keeps its tree (no bound when ``run_ceiling`` is
+        ``None``; see the class docstring).
         """
         digest = self.tree.digest(profile)
         if digest != self._bound_digest:
@@ -273,9 +271,8 @@ def build_runner_for_app(policy: Any, prof: Mapping[str, Any], *, wire_fields: I
 
     ``policy`` is fitted into the profile's selection tree (``bind.bind_profile``:
     reused as the top, or wrapped as the innermost leaf) and bound against ``prof``.
-    ``run_ceiling`` is the agent's run-start ceiling (its first runner's
-    :attr:`DispatchRunner.run_ceiling`; ``None``: this runner's own, i.e. this is the
-    first). Raises ``PolicyError`` when it fits neither, a declaration is refused, or the
+    ``run_ceiling`` is the agent's run-start ceiling (the ceiling of the tree its
+    ``__init__`` bound; ``None``: no bound). Raises ``PolicyError`` when it fits neither, a declaration is refused, or the
     profile's ceiling is wider than ``run_ceiling`` (review N5).
     """
     # Local imports: capture and bind_profile resolve through the registry, which
@@ -297,7 +294,7 @@ def _refuse_wider_ceiling(tree: BoundTree, run_ceiling: frozenset) -> None:
     if wider:
         shown = ", ".join(f"({o!r}, {c!r})" for o, c in wider[:8]) + (" ..." if len(wider) > 8 else "")
         raise PolicyError(
-            f"planner policy {tree.top.name}: the assignment profile's cooperation menu now declares "
+            f"planner policy {tree.top.name}: the assignment profile now declares "
             f"cross-company pair(s) {shown} (owner, carrier) that it did not declare at run start. The "
             "cross-company ceiling is fixed when the run starts; a profile that widens it mid-run is refused "
             "(nothing in a run may add a partnership the scenario did not declare)."
