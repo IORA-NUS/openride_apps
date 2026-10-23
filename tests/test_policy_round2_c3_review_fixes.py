@@ -36,7 +36,7 @@ from apps.container_logistics.policies.dispatch import runner as runner_module
 from apps.container_logistics.policies.dispatch import tick as tick_module
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.composite import CompositePolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.profile import build_policy_tree, resolve_dispatch_for_profile
 from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy

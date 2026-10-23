@@ -39,9 +39,9 @@ from apps.container_logistics.policies.dispatch import runner as runner_module
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.bind import Declaration
 from apps.container_logistics.policies.dispatch.composite import CompositePolicy
-from apps.container_logistics.policies.dispatch.legacy import check_policies_format
+from apps.container_logistics.policies.compat.legacy import check_policies_format
 from apps.container_logistics.policies.dispatch.library.partitioned import cooperation_groups
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.result import Result
 from apps.container_logistics.policies.framework import PolicyError, PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework.registry import get_policy_spec, isolated_registry

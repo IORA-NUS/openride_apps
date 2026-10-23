@@ -2,9 +2,10 @@
 
 Plan ``plan_contract_final.md`` §7.3 (WS0), H2 and M11 (decision (f): the framework
 never imports the solver-helper library). Tier A is the core runtime listed in
-``tests/_framework_guard.py``. Three rules, each hit counted per module against
-``tests/vocabulary_baseline/imports/<dotted.module>.txt`` (shrink-only, ``# removed-by:``
-tags as in ``_framework_guard``):
+``tests/_framework_guard.py``. Three rules; END STATE (WS8): every tier-A module has ZERO
+hits (the shrink-only per-module baselines WS0 started with, under
+``tests/vocabulary_baseline/imports/``, are deleted; see ``_framework_guard``), and the
+compat allow-list is exactly what tier A imports:
 
 1. ``forbidden:<module>`` -- tier A may not import, by ANY spelling (``import``,
    ``from``, ``as``, a relative import, a local import inside a function, or
@@ -29,6 +30,10 @@ Verified to have teeth (WS0, mutate / see it fail / restore):
   failed rule 2;
 - ``assign_constraints.pools_of_structure(None)`` added to ``assignment/app.py`` failed
   rule 3.
+
+Verified to have teeth (WS8, end state): re-adding ``wrap_legacy_leaf`` to
+``dispatch/profile.py``'s ``compat.legacy`` import failed ``test_tier_a_imports_obey_the_rules``
+(``compat:legacy:wrap_legacy_leaf`` occurs 1x, allows 0).
 """
 
 from __future__ import annotations
@@ -59,30 +64,46 @@ FORBIDDEN_PACKAGES = (
     f"{_A}.arbitration",
 )
 COMPAT_PACKAGE = f"{_P}.compat"
-# The END STATE of what the framework takes from compat (plan §7.3). Keys are module
-# names relative to ``policies.compat``.
+# The END STATE (WS8) of what the framework takes from compat: exactly the pairs tier A
+# imports (``test_every_compat_allowance_is_used`` keeps it so -- a stale allowance is a
+# hole). Keys are module names relative to ``policies.compat``. Each entry says WHY the
+# framework still needs an old-input / wire-format rule.
 COMPAT_ALLOWED: dict[str, frozenset[str]] = {
-    # wrap_legacy_leaf (WS2, reviewed): dispatch/profile.py's legacy_dispatch_from_profile
-    # translates a profile with no ``policies`` block (an old bundle) through it -- the
-    # framework has always called this translation; WS2 only moved it into compat. It
-    # leaves the list when the legacy-profile translation itself moves into compat.
-    "legacy": frozenset({"check_policies_format", "LEGACY_LEAF_DEFAULT", "wrap_legacy_leaf"}),
+    # dispatch/profile.py: the bundle-format marker check (a round-1 flat block is
+    # refused at run start instead of silently running a different arm).
+    "legacy": frozenset({"check_policies_format"}),
+    # dispatch/profile.py: a profile with NO ``policies`` block (an old bundle) is
+    # translated from its legacy keys. WS8 moved the whole translation here, replacing
+    # the WS2 allowances ``wrap_legacy_leaf`` and ``LEGACY_LEAF_DEFAULT``.
+    "legacy_profile": frozenset({"resolve_legacy_profile"}),
+    # dispatch/profile.py: message 13, a compiled bundle's legacy mirrors (still written
+    # by compile, bundle bytes unchanged) must agree with its ``policies`` block.
     "mirrors": frozenset({"check_mirrors"}),
-    "measurement": frozenset({"accounting_params_for", "framework_accounting_cost"}),
+    # dispatch/runner.py: an OFFLINE tick's measurement dials ("first node wins", plan
+    # §2.5 M5). WS8 replaced ``accounting_params_for`` (a banned identifier) with this
+    # framework-named entry; the rule itself stays in compat (plan §11 later phase).
+    "measurement": frozenset({"offline_measurement_dials"}),
+    # dispatch/bind.py: RunWorld excludes the legacy selection keys from the world.
     "selection_keys": frozenset({"LEGACY_SELECTION_KEYS"}),
+    # dispatch/bind.py: a hand-injected solver with no @policy registration.
     "unregistered": frozenset({"UnregisteredPairLeaf", "legacy_spatial_rule"}),
+    # dispatch/capture.py: reading format-/2 capture fixtures.
     "capture_v2": frozenset({"read_fixture_v2"}),
-    # ``share_tag_renderer`` (reviewed WS3 addition): ``accounting.render_share_tags``
-    # dispatches on an opaque format name and must still refuse an unknown one. Doing that
-    # in accounting would mean spelling the banned ``"v1"`` there; the renderer lookup keeps
-    # every format name (and the refusal message) inside compat.wire.
-    "wire": frozenset({"share_tag_format_for", "stamp_fields", "split_notes", "render_v1_tag",
-                       "render_audited_tag", "wire_fields", "share_tag_renderer"}),
+    # The wire formats that name old solver provenance: runner.py picks the tag format,
+    # resolve.py stamps it, app.py builds the payload keywords, accounting.py dispatches
+    # on the opaque format name (``share_tag_renderer``, reviewed WS3: spelling the
+    # banned ``"v1"`` in accounting would be the alternative).
+    "wire": frozenset({"share_tag_format_for", "stamp_fields", "wire_fields", "share_tag_renderer"}),
+    # assignment/app.py: ``AssignmentApp.round_stats()``, which the frozen golden harness
+    # calls (tests/golden/harness.py).
     "run_stats": frozenset({"LegacyAppAccessors"}),
-    # ``legacy_world_reads`` (reviewed WS4b addition): DispatchPolicy's default bind reads,
-    # for a legacy decide() class, the world keys the legacy adapter reads on its behalf
-    # (the battery's contract.world_reads_at_bind holds legacy policies to the bind-reads rule).
-    "legacy_context": frozenset({"LegacyDecideContext", "Plan", "legacy_world_reads"}),
+    # dispatch/base.py, testing/battery.py: a legacy ``decide(ctx)`` class runs through
+    # the adapter; ``legacy_world_reads`` (reviewed WS4b) makes DispatchPolicy's default
+    # bind read the world keys the adapter reads for it, so the bind-reads rule
+    # (battery contract.world_reads_at_bind) holds for legacy policies. Still needed
+    # after WS8: legacy decide() classes (tests, third parties) are not shims.
+    "legacy_context": frozenset({"LegacyDecideContext", "legacy_world_reads"}),
+    # framework/slots.py: the slot default.
     "defaults": frozenset({"DEFAULT_PLANNER"}),
 }
 CONSTRAINTS_MODULE = f"{_A}.constraints"
@@ -94,7 +115,6 @@ CONSTRAINTS_ALLOWED = frozenset("""
 """.split())
 
 IMPORTS_BASELINE_DIR = guard.BASELINE_DIR / "imports"
-SHRINK_CMD = "python -m tests.test_framework_imports --shrink"
 
 
 def _package_of(module: str, path: Path) -> str:
@@ -180,16 +200,30 @@ _SCANS = scan_all()
 
 
 @pytest.mark.parametrize("module", sorted(_SCANS))
-def test_tier_a_imports_stay_within_their_baseline(module):
-    baseline = guard.read_baseline(IMPORTS_BASELINE_DIR / f"{module}.txt")
-    problems = guard.compare(module, _SCANS[module], baseline, SHRINK_CMD)
+def test_tier_a_imports_obey_the_rules(module):
+    problems = guard.compare(module, _SCANS[module], guard.read_baseline(IMPORTS_BASELINE_DIR / f"{module}.txt"))
     assert not problems, "\n".join(problems)
 
 
-def test_every_tier_a_module_has_an_imports_baseline_and_none_is_orphaned():
-    missing = [m for m in _SCANS if not (IMPORTS_BASELINE_DIR / f"{m}.txt").exists()]
-    assert not missing, f"no imports baseline for {missing} (an empty file means 'no hits')"
-    assert not guard.orphan_baselines(IMPORTS_BASELINE_DIR, _SCANS)
+def _compat_imports() -> set[tuple[str, str]]:
+    """Every ``(compat module, symbol)`` a tier-A module imports."""
+    used: set[tuple[str, str]] = set()
+    for module, path in guard.tier_a_modules().items():
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.ImportFrom):
+                target = _resolve(node, _package_of(module, path))
+                if _under(target, COMPAT_PACKAGE) and target != COMPAT_PACKAGE:
+                    used |= {(target[len(COMPAT_PACKAGE) + 1:], a.name) for a in node.names}
+    return used
+
+
+def test_every_compat_allowance_is_used():
+    """The allow-list is the END STATE: exactly what tier A imports, nothing spare (WS8).
+
+    Verified to have teeth (WS8): re-adding ``wrap_legacy_leaf`` to ``"legacy"`` failed it.
+    """
+    allowed = {(m, sym) for m, syms in COMPAT_ALLOWED.items() for sym in syms}
+    assert allowed - _compat_imports() == set(), "allow-listed but never imported (a stale hole)"
 
 
 _RUNNER = Path(guard.REPO_ROOT, "apps/container_logistics/policies/dispatch/runner.py")
@@ -227,7 +261,3 @@ def test_the_compat_allow_list_names_only_compat_modules():
     """Every allow-listed module is a bare compat sibling name (no dots, no solver packages)."""
     assert all("." not in m for m in COMPAT_ALLOWED)
     assert not CONSTRAINTS_ALLOWED & {"active_cooperation_structure", "share_adjacency", "share_eligible"}
-
-
-if __name__ == "__main__":
-    raise SystemExit(guard.main(IMPORTS_BASELINE_DIR, scan_all, sys.argv[1:]))

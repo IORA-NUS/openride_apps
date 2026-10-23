@@ -33,7 +33,7 @@ import pytest
 
 from apps.container_logistics.policies.compat.legacy_context import LegacyDecideContext
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
 from apps.container_logistics.policies.framework import PolicyParams, param, policy
 from apps.container_logistics.policies.framework.registry import isolated_registry

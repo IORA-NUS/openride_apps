@@ -34,7 +34,7 @@ import pytest
 
 from apps.container_logistics.assignment.policy.offer import OFFER_REGISTRY, OfferAllPolicy, OfferSparePolicy
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.profile import resolve_profile_policies
 from apps.container_logistics.policies.framework import (
     PolicyDependencyError,
@@ -257,8 +257,7 @@ if first:
 from apps.container_logistics.policies.framework import components
 offer = "apps.container_logistics.assignment.policy.offer"
 before = offer in sys.modules
-legacy = any(m in sys.modules for m in ("apps.container_logistics.policies.dispatch.legacy",
-                                         "apps.container_logistics.policies.compat.legacy"))
+legacy = "apps.container_logistics.policies.compat.legacy" in sys.modules
 kinds = list(components.COMPONENT_KINDS)
 print(json.dumps({"before": before, "kinds": kinds, "after": offer in sys.modules, "legacy": legacy}))
 """

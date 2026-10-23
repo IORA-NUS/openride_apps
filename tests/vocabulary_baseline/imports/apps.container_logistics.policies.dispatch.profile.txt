@@ -1,1 +1,0 @@
-compat:mirrors:mirror_dispatch_selection	1	# removed-by: WS8

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import pytest
 
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.framework import (
     SUPPORTED_SCHEMA_KEYWORDS,
     PolicyParams,

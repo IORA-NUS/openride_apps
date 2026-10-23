@@ -20,7 +20,7 @@ from apps.container_logistics.assignment.policy.claim import (
 )
 from apps.container_logistics.assignment.pools import Bid, PoolMarket
 from apps.container_logistics.assignment.solver import get_solver
-from apps.container_logistics.policies.dispatch import legacy
+from apps.container_logistics.policies.compat import legacy
 from apps.container_logistics.policies.framework import PolicyError, UnknownPolicyError
 
 from tests.test_assignment_cooperation import (

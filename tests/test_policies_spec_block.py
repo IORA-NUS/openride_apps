@@ -199,7 +199,7 @@ def test_compiled_profile_carries_the_round2_format_marker(tmp_path, monkeypatch
     is gone, verification review MINOR-11) let the round-1 profile through (exit code
     assertion)."""
     import apps.simulation.run_container_logistics_simulation as launcher
-    from apps.container_logistics.policies.dispatch.legacy import check_policies_format
+    from apps.container_logistics.policies.compat.legacy import check_policies_format
     from apps.container_logistics.policies.dispatch.profile import assert_assignment_profiles_resolvable
     from apps.container_logistics.scenario.scenario_overrides import apply_policy_overrides
 

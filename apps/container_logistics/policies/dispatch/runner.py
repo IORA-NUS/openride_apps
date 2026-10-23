@@ -40,7 +40,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
-from apps.container_logistics.policies.compat.measurement import accounting_params_for
+from apps.container_logistics.policies.compat.measurement import offline_measurement_dials
 from apps.container_logistics.policies.compat.wire import share_tag_format_for
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation, PolicyTimingError
 from apps.container_logistics.policies.framework.slots import SLOTS
@@ -146,11 +146,11 @@ class DispatchRunner:
         """The whole tick for this runner's selection under assignment profile ``profile``.
 
         ``dials`` are the measurement's accounting dials (live: ``AssignmentApp._solver_params``);
-        ``None`` means the offline rule ``compat.measurement.accounting_params_for``.
+        ``None`` means the offline rule ``compat.measurement.offline_measurement_dials``.
         """
         tree = self._tree_for(profile)
         prof = profile or {}
-        measure = Measure(accounting_params_for(tree.resolved) if dials is None else dials)
+        measure = Measure(offline_measurement_dials(tree.resolved) if dials is None else dials)
         return Tick.top(
             tree=tree, trucks=candidates, orders=orders, world=RunWorld.from_profile(prof),
             max_travel_time_pickup=prof.get("max_travel_time_pickup"), clock=clock, seed=seed,

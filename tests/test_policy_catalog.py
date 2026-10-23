@@ -16,7 +16,7 @@ from apps.container_logistics.policies.framework import SLOTS, PolicyParams, par
 from apps.container_logistics.policies.framework.catalog import component_catalog, policy_catalog
 from apps.container_logistics.policies.framework.registry import isolated_registry
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 
 
 class _TestPolicyBase(DispatchPolicy):
@@ -189,7 +189,7 @@ def test_legacy_solver_registry_agrees_with_policy_registry():
     the class identity assertion.
     """
     from apps.container_logistics.assignment.solver import DEFAULT_SOLVER, SOLVER_REGISTRY
-    from apps.container_logistics.policies.dispatch.legacy import LEGACY_LEAF_DEFAULT
+    from apps.container_logistics.policies.compat.legacy import LEGACY_LEAF_DEFAULT
     from apps.container_logistics.policies.framework import get_policy_spec
 
     for name, cls in SOLVER_REGISTRY.items():

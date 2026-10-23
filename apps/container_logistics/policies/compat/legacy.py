@@ -22,7 +22,7 @@ echoes compile writes back into those keys. Plan
   now means a CENTRAL one) is refused at run start instead of silently changing arm.
 
 The LEAF entry handed to :func:`wrap_legacy_leaf` is already translated by the caller
-(``dispatch/profile.legacy_dispatch_from_profile`` for a bundle profile); its name and
+(``compat/legacy_profile.legacy_dispatch_from_profile`` for a bundle profile); its name and
 params are validated by the resolver, not here. Component names, by contrast, are
 validated here, because ``planner.market`` is read only when the topology is pooled.
 
@@ -31,7 +31,7 @@ component registries are reached through ``framework.components``, imported insi
 the function that needs them); never imports ``apps.container_logistics.assignment.*``.
 
 Moved verbatim from ``policies/dispatch/legacy.py`` (35b5b92, lines 1-374) into the
-compat quarantine; the old path is a re-export shim until the shims are removed.
+compat quarantine; the old path's re-export shim was deleted in WS8.
 """
 
 from __future__ import annotations

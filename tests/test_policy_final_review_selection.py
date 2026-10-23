@@ -139,7 +139,7 @@ def _register_leaf(name, *, str_param=False):
     from dataclasses import dataclass
 
     from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-    from apps.container_logistics.policies.dispatch.plan import Plan
+    from apps.container_logistics.policies.compat.legacy_context import Plan
     from apps.container_logistics.policies.framework import PolicyParams, param, policy
 
     @policy(slot="planner", name=name, version="1", description="test leaf")
@@ -304,7 +304,7 @@ def test_a_format2_bundle_compiled_before_the_slot_rename_gets_the_hint_and_reco
     """A format-2 bundle compiled before ``dispatch`` -> ``planner`` still holds
     ``policies.dispatch``: refused with the rename hint AND the recompile fix, for both
     the marked and the unmarked (round-1) form."""
-    from apps.container_logistics.policies.dispatch.legacy import check_policies_format
+    from apps.container_logistics.policies.compat.legacy import check_policies_format
 
     entry = {"type": "Partitioned", "version": "1", "kind": "operator", "timing": "online",
              "params": {"inner": {"type": "GreedyNearest", "params": {}}}}

@@ -38,7 +38,7 @@ from apps.container_logistics.assignment.solver import get_solver
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
 from apps.container_logistics.policies.dispatch.bind import Declaration
 from apps.container_logistics.policies.dispatch.library import partitioned as partitioned_module
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.dispatch.profile import build_policy_tree, resolve_dispatch_for_profile
 from apps.container_logistics.policies.framework import PolicyParams, policy
 from apps.container_logistics.policies.framework.registry import isolated_registry

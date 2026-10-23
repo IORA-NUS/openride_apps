@@ -354,8 +354,8 @@ def parse_bench_params(names: Sequence[str], args: Sequence[str] = ()) -> dict[s
         path = path_text.split(".") if path_text else []
         if not sep or not dot or not alias or not path or not all(path):
             raise PolicyError(
-                f"--policy-param {arg!r} must be ALIAS.PATH=VALUE, e.g. GreedyNearest.dual_cycle_bonus_km=0 "
-                "or pr.inner=RandomAssignment."
+                f"--policy-param {arg!r} must be ALIAS.PATH=VALUE, e.g. NAME.PARAM=VALUE for a bare "
+                "NAME entry, or b.inner=OTHER for an ALIAS=NAME entry."
             )
         if alias not in aliases:
             raise PolicyError(f"--policy-param {arg!r} names {alias!r}, which is not benched ({aliases}).")
@@ -461,7 +461,8 @@ def cmd_policy_bench(
             raise PolicyError(f"no bench for slot {slot!r}; only 'planner' has one.")
         names = [n.strip() for n in str(policies or "").split(",") if n.strip()]
         if not names:
-            raise PolicyError("--policies needs at least one policy name, e.g. GreedyNearest,RandomAssignment.")
+            raise PolicyError("--policies needs at least one policy name (NAME or ALIAS=NAME, comma-separated; "
+                              "`openride policy list planner` lists them).")
         for entry in parse_bench_entries(names):
             get_policy_spec(slot, entry.name)
         if (fixtures_dir is None) == (synthetic is None):

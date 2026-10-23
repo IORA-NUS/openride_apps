@@ -1,2 +1,0 @@
-sub:market	2	# removed-by: WS8
-sub:topology	2	# removed-by: WS8

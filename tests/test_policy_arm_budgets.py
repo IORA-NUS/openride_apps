@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import pytest
 
 from apps.container_logistics.policies.dispatch.base import DispatchPolicy
-from apps.container_logistics.policies.dispatch.plan import Plan
+from apps.container_logistics.policies.compat.legacy_context import Plan
 from apps.container_logistics.policies.framework import PolicyParams, PolicyRef, param, policy, ref
 from apps.container_logistics.policies.framework.registry import get_policy_spec, isolated_registry, list_policies
 from apps.container_logistics.policies.testing import battery

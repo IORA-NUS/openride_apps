@@ -1,5 +1,0 @@
-id:wrap_legacy_leaf	1	# removed-by: WS8
-sub:market	4	# removed-by: WS8
-sub:partitioned	1	# removed-by: WS8
-sub:pooled	1	# removed-by: WS8
-sub:topology	2	# removed-by: WS8

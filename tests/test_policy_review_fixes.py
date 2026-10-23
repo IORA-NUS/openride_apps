@@ -25,6 +25,7 @@ from pathlib import Path
 
 import pytest
 
+from apps.container_logistics.policies.compat.legacy_profile import legacy_dispatch_from_profile
 from apps.container_logistics.policies.dispatch import profile as P
 from apps.container_logistics.policies.framework import (
     SLOTS,
@@ -114,7 +115,7 @@ def test_legacy_drop_rule_is_implemented_once(caplog):
     from apps.container_logistics.policies.framework import resolve as R
 
     with caplog.at_level(logging.WARNING, logger=R.__name__):
-        entry = P.legacy_dispatch_from_profile(
+        entry = legacy_dispatch_from_profile(
             {"strategy": "RandomAssignment", "solver_params": {"dual_cycle_bonus_km": 5.0}})
     assert entry["params"] == {}
     assert [r.levelno for r in caplog.records if "not declared by planner RandomAssignment" in r.getMessage()] \
