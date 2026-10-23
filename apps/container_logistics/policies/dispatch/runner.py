@@ -13,8 +13,12 @@ pairs (plan ``plan_contract_final.md`` §2.7), identical for every solver:
    raised inside is a violation; any other exception propagates unchanged (a crashing
    top-level solver aborts the tick, as the partitioned path always did).
 3. ``invariants.check_result`` against the tick, with the verified-pair-aware check
-   (a pair a sub-tick already proved re-checks only ownership-or-declared). Any
-   problem: log ERROR (message 18), count, commit NOTHING this tick.
+   (a pair a sub-tick already proved re-checks only ownership-or-declared), the
+   framework's own index and its document fingerprints; then every document of the
+   tick must be unmodified (the share accounting reads them all), and the notes must
+   be wire-safe (``invariants.check_wire_notes``: no framework wire field, plain JSON).
+   Any problem: log ERROR (message 18), count, commit NOTHING this tick. Nothing here
+   is read back from the tick's solver-visible attributes (review H2, L3).
 4. Map the pairs back to the raw documents (first document per id) in result order.
    Returns :class:`TickOutcome` ``(pairs, result)``.
 
@@ -41,12 +45,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
 from apps.container_logistics.policies.compat.measurement import offline_measurement_dials
-from apps.container_logistics.policies.compat.wire import share_tag_format_for
+from apps.container_logistics.policies.compat.wire import reserved_note_keys_for, share_tag_format_for
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation, PolicyTimingError
 from apps.container_logistics.policies.framework.slots import SLOTS
 
 from .bind import BoundTree, RunWorld, bind_tree
-from .invariants import check_result
+from .invariants import check_result, check_wire_notes
 from .result import Result
 from .tick import DispatchClock, Measure, Tick, direct_execute
 
@@ -174,14 +178,25 @@ class DispatchRunner:
         result, problems = self._solve(tick)
         if capture is not None:
             capture(tick=tick, result=result, problems=list(problems))
+        shared = tick._shared
         if not problems:
-            problems = check_result(result, tick, permitted=tick._top_check())
+            problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index,
+                                    intact=shared.intact)
+        if not problems:
+            changed = shared.changed()
+            if changed:
+                shown = ", ".join(repr(i) for i in changed[:8]) + (" ..." if len(changed) > 8 else "")
+                problems = [f"document(s) {shown} were modified during the solve (documents are read-only)"]
+        if not problems:
+            resolved = shared.tree.resolved
+            problems = check_wire_notes(result, reserved_note_keys_for(
+                resolved.name, registered=resolved.source != "unregistered"))
         if problems:
             self._report_violation(tick, problems)
             return TickOutcome(pairs=[], result=None)
         if result.tick_notes:
             logger.debug("planner %s tick notes: %r", self.resolved.label, sorted(result.tick_notes))
-        return TickOutcome(pairs=tick.docs(result), result=result)
+        return TickOutcome(pairs=tick.docs(result), result=result)  # the framework's own index
 
     def _solve(self, tick: Tick) -> tuple[Any, list[str]]:
         top = tick._shared.tree.top

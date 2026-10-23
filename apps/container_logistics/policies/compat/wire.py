@@ -17,6 +17,10 @@ before the generic contract; nothing here is read by a solver.
 - :func:`share_tag_renderer` -> the per-pair renderer for a format name; the only place
   the format names are spelled.
 - :func:`wire_fields` -> the ``publish()`` keyword set (moved from ``assignment/app.py``).
+- :data:`LEGACY_NOTE_SOURCES` / :func:`reserved_note_keys_for` -> which note keys a
+  run's top may NOT use (review L3): every framework wire field, except the legacy
+  fields for exactly the ``PooledMarket`` top whose market provenance they are (an
+  explicit NAME-keyed compat rule, like the share-tag format's).
 - :data:`V1_SHARE_TAG_BUILTINS` / :func:`share_tag_format_for` -> WHICH format a run
   uses: ``v1`` for exactly the pre-v2 ``Partitioned`` top (an explicit NAME-keyed rule,
   moved from the registry's retired ``share_tag_format`` registration field; no
@@ -39,10 +43,13 @@ from __future__ import annotations
 from typing import Any, Callable, Mapping
 
 __all__ = [
+    "FRAMEWORK_WIRE_FIELDS",
     "LEGACY_NOTE_FIELDS",
+    "LEGACY_NOTE_SOURCES",
     "V1_SHARE_TAG_BUILTINS",
     "render_audited_tag",
     "render_v1_tag",
+    "reserved_note_keys_for",
     "share_tag_format_for",
     "share_tag_renderer",
     "split_notes",
@@ -69,6 +76,26 @@ SOLVER_NOTES_FIELD = "solver_notes"
 #: and built-in discovery registers ``Partitioned`` first, so another class claiming the
 #: name fails loud in the registry. Never add to this set.
 V1_SHARE_TAG_BUILTINS = frozenset({("planner", "Partitioned")})
+
+#: Every payload field the framework writes from a share tag (plus the notes field itself).
+FRAMEWORK_WIRE_FIELDS = ("shared",) + _TAG_WIRE_FIELDS + (SOLVER_NOTES_FIELD,)
+
+#: THE ``(slot, name)`` tops whose notes may write :data:`LEGACY_NOTE_FIELDS` (the market's
+#: round provenance, byte identity with every pooled run). Any other top writing
+#: ``pool_id`` / ``market_round`` would forge that provenance on the wire. Never add to it.
+LEGACY_NOTE_SOURCES = frozenset({("planner", "PooledMarket")})
+
+
+def reserved_note_keys_for(name: str, *, registered: bool = True) -> frozenset[str]:
+    """The note keys a run whose TOP planner is ``name`` may not use: framework wire fields.
+
+    :data:`FRAMEWORK_WIRE_FIELDS`, minus :data:`LEGACY_NOTE_FIELDS` for a registered
+    top in :data:`LEGACY_NOTE_SOURCES`.
+    """
+    reserved = frozenset(FRAMEWORK_WIRE_FIELDS)
+    if registered and ("planner", name) in LEGACY_NOTE_SOURCES:
+        reserved -= frozenset(LEGACY_NOTE_FIELDS)
+    return reserved
 
 
 def share_tag_format_for(name: str, *, registered: bool = True) -> str:

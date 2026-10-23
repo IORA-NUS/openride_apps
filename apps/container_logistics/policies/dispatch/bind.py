@@ -9,7 +9,9 @@ the BOUND tree the framework runs every tick (plan ``plan_contract_final.md``
   the selection keys. Whatever a solver needs from the scenario (cooperation menu,
   candidate knobs, ``max_travel_time_pickup``) it reads from here; the keys a node
   reads at bind are frozen on its :class:`BoundNode` (``world_reads``), and the
-  tree's union keys the runner caches.
+  tree's union keys the runner caches. Every value it hands out is the reading
+  world's own DEEP COPY, so no solver can reach the profile the sim main ships to the
+  agents through it (review H1).
 - :class:`Declaration` -- what a node declares at bind: the cross-company
   ``(owner_haulier, carrier_haulier)`` pairs (TOP only, inside the scenario's
   declared ceiling), a ``candidate_hint`` a caller may read, plus provenance / stamp
@@ -21,7 +23,13 @@ the BOUND tree the framework runs every tick (plan ``plan_contract_final.md``
 Framework rules checked here: message 23 (a top declaration outside the ceiling
 ``assignment.constraints.declared_partnerships``, or malformed) and message 24 (a
 non-top node declaring more than the top, or a top-only field). Both are
-``PolicyError`` and fail the run before any agent spawns. Message 25
+``PolicyError`` and fail the run before any agent spawns. Also refused here, against a
+DISHONEST solver (review H1, L1, M2): a ``bind`` that changed the profile (the
+ceiling is computed BEFORE any bind runs, and the profile's fingerprint is compared
+after every bind), a ``bind`` that raised anything but a ``PolicyError`` (re-raised as
+:class:`BindError` naming the node), and a run-stats aggregator whose ``meta_key``
+would overwrite a framework key of ``run_config.meta``
+(``run_stats.check_meta_key``). Message 25
 (:func:`refuse_unread_patches`) is the override layer's check against a bound tree: a
 per-run patch of a world key no node read at bind changes nothing the planner sees.
 
@@ -36,8 +44,13 @@ module top; ``assignment.constraints``, ``dispatch.profile`` and
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import json
 import logging
+import marshal
+import pickle
+import weakref
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping
@@ -45,9 +58,12 @@ from typing import Any, Iterator, Mapping
 from apps.container_logistics.policies.compat.selection_keys import LEGACY_SELECTION_KEYS
 from apps.container_logistics.policies.framework.errors import PolicyError
 
+from .run_stats import check_meta_key
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "BindError",
     "BoundNode",
     "BoundTree",
     "Declaration",
@@ -56,8 +72,14 @@ __all__ = [
     "bind_profile",
     "bind_tree",
     "refuse_unread_patches",
+    "value_fingerprint",
     "world_digest",
+    "world_snapshot",
 ]
+
+
+class BindError(PolicyError):
+    """A ``bind`` that broke the bind contract: raised a non-``PolicyError``, or changed the profile."""
 
 #: Profile keys the FRAMEWORK uses to select and capture a planner: never world data.
 FRAMEWORK_SELECTION_KEYS: tuple[str, ...] = ("policies", "policies_format", "policy_capture")
@@ -65,21 +87,85 @@ _EXCLUDED = frozenset(FRAMEWORK_SELECTION_KEYS) | frozenset(LEGACY_SELECTION_KEY
 _TOP_PATH = "planner"
 
 
+_SCALARS = (str, int, float, bool, type(None))
+
+
+def value_fingerprint(value: Any) -> bytes:
+    """A byte string equal for two values iff they are structurally identical (framework use).
+
+    ``marshal`` format 0 (no back-references, no interning flags, so the bytes depend
+    on the value's content, types and dict order only, never on reference counts),
+    ~1 us per tick document. A value ``marshal`` refuses (an object, a custom type)
+    falls back to ``pickle``, then to ``repr``.
+    """
+    try:
+        return marshal.dumps(value, 0)
+    except (ValueError, TypeError):
+        pass
+    try:
+        return b"p" + pickle.dumps(value, 4)
+    except Exception:  # noqa: BLE001 - a fingerprint must never raise
+        return b"r" + repr(value).encode("utf-8", "replace")
+
+
+class _WorldState:
+    """What one :class:`RunWorld` holds: the values, the keys read, the copies handed out."""
+
+    __slots__ = ("data", "reads", "copies")
+
+    def __init__(self, data: Mapping[str, Any]) -> None:
+        self.data = dict(data)
+        self.reads: set[Any] = set()
+        self.copies: dict[str, Any] = {}
+
+    def value(self, key: str) -> Any:
+        """``data[key]`` as this world's own deep copy (made once per key; scalars as they are)."""
+        try:
+            return self.copies[key]
+        except KeyError:
+            pass
+        raw = self.data[key]
+        value = raw if type(raw) in _SCALARS else copy.deepcopy(raw)
+        self.copies[key] = value
+        return value
+
+
+#: Each world's state, held OFF the instance: a ``RunWorld`` has no attribute that reads
+#: a value without recording it or that resets the record (review L2).
+_WORLD_STATE: "weakref.WeakKeyDictionary[RunWorld, _WorldState]" = weakref.WeakKeyDictionary()
+
+
 class RunWorld(Mapping):
     """Read-only, read-tracking view of an assignment profile minus the selection keys.
 
     Excluded: :data:`FRAMEWORK_SELECTION_KEYS` and
-    ``compat.selection_keys.LEGACY_SELECTION_KEYS``. Values are the profile's own
-    objects (read-only by contract). Every key accessed through ``[]``, ``get`` or
-    ``in`` is recorded in :attr:`reads`; iterating records every key. Framework code
-    that must not count as a solver read (capture, the stamp) uses :meth:`unread`.
+    ``compat.selection_keys.LEGACY_SELECTION_KEYS``.
+
+    Semantics, pinned by ``tests/test_framework_integrity.py`` (review H1, L2):
+
+    - **Values are copies.** ``world[key]`` / ``world.get(key)`` return this world's own
+      deep copy of the profile value (made on the first read of that key, then the same
+      object on every later read through this world). Mutating it changes nothing the
+      framework, another tick or the agents see.
+    - **Reads are recorded per key.** ``world[key]``, ``world.get(key)`` and
+      ``key in world`` record ``key`` in :attr:`reads` (an absent key too).
+    - **The key list is free.** ``iter(world)``, ``list(world)``, ``sorted(world)`` and
+      ``len(world)`` reveal which keys exist and record nothing.
+    - **No bulk value access.** ``keys()``, ``items()``, ``values()``, ``dict(world)`` and
+      ``**world`` raise ``TypeError``: a splat would either record every key (and so
+      silently disable message 25 for every key) or record none (and hide the reads).
+      Read the keys you use, one by one.
+    - **Nothing on the instance bypasses the record.** The state lives in a
+      framework-private table, not in attributes; framework code that must not count
+      as a solver read (capture, bench) uses :func:`world_snapshot`. ``copy.copy`` /
+      ``copy.deepcopy`` return the world itself (its values are already copies, and
+      reads through it keep being recorded); pickling is refused.
     """
 
-    __slots__ = ("_data", "_reads")
+    __slots__ = ("__weakref__",)
 
     def __init__(self, data: Mapping[str, Any]) -> None:
-        self._data = MappingProxyType(dict(data))
-        self._reads: set[str] = set()
+        _WORLD_STATE[self] = _WorldState(data)
 
     @classmethod
     def from_profile(cls, profile: Mapping[str, Any] | None) -> "RunWorld":
@@ -87,35 +173,111 @@ class RunWorld(Mapping):
         return cls({k: v for k, v in (profile or {}).items() if k not in _EXCLUDED})
 
     def __getitem__(self, key: str) -> Any:
-        self._reads.add(key)
-        return self._data[key]
+        state = _WORLD_STATE[self]
+        state.reads.add(key)
+        return state.value(key)
 
     def get(self, key: str, default: Any = None) -> Any:
-        self._reads.add(key)
-        return self._data.get(key, default)
+        state = _WORLD_STATE[self]
+        state.reads.add(key)
+        return state.value(key) if key in state.data else default
 
     def __contains__(self, key: object) -> bool:
-        self._reads.add(key)  # type: ignore[arg-type]
-        return key in self._data
+        state = _WORLD_STATE[self]
+        state.reads.add(key)
+        return key in state.data
 
     def __iter__(self) -> Iterator[str]:
-        self._reads.update(self._data)
-        return iter(self._data)
+        return iter(tuple(_WORLD_STATE[self].data))
 
     def __len__(self) -> int:
-        return len(self._data)
+        return len(_WORLD_STATE[self].data)
 
     def __repr__(self) -> str:
-        return f"RunWorld({sorted(self._data)})"
+        return f"RunWorld({sorted(_WORLD_STATE[self].data)})"
+
+    def _no_bulk(self, what: str) -> TypeError:
+        return TypeError(
+            f"RunWorld.{what} is not supported: read the world keys you use one by one "
+            "(world[key] / world.get(key)) so the framework records exactly those reads; "
+            "iterate the world for its key list."
+        )
+
+    def keys(self) -> Any:  # dict(world) and **world call keys(): refused with them
+        raise self._no_bulk("keys() (and dict(world) / **world)")
+
+    def items(self) -> Any:
+        raise self._no_bulk("items()")
+
+    def values(self) -> Any:
+        raise self._no_bulk("values()")
+
+    def __eq__(self, other: object) -> bool:
+        return self is other
+
+    __hash__ = object.__hash__
+
+    def __copy__(self) -> "RunWorld":
+        return self
+
+    def __deepcopy__(self, memo: Any) -> "RunWorld":
+        return self
+
+    def __reduce_ex__(self, protocol: Any) -> Any:
+        raise TypeError("a RunWorld cannot be pickled; read the world keys you use one by one")
 
     @property
     def reads(self) -> frozenset[str]:
-        """Every key read so far."""
-        return frozenset(self._reads)
+        """Every key read so far (a fresh frozenset: changing it changes nothing)."""
+        return frozenset(_WORLD_STATE[self].reads)
 
-    def unread(self) -> Mapping[str, Any]:
-        """The underlying read-only mapping, WITHOUT recording reads (framework use only)."""
-        return self._data
+
+def world_snapshot(world: RunWorld) -> dict[str, Any]:
+    """A deep copy of ``world``'s values, WITHOUT recording reads (framework use only: capture, bench)."""
+    return copy.deepcopy(_WORLD_STATE[world].data)
+
+
+@dataclass(frozen=True)
+class _Malformed:
+    """A ``cross_company`` entry that could not even be held in a set (e.g. a list): kept as its repr.
+
+    Never well-formed, so :func:`_check_top` reports it in message 23's malformed form
+    instead of the declaration raising a bare ``TypeError`` inside the solver (review L1).
+    """
+
+    text: str
+
+    def __repr__(self) -> str:
+        return self.text
+
+
+def _pair_set(value: Any) -> frozenset:
+    """``frozenset(value)``; an unhashable entry, or a value that is not iterable, becomes a :class:`_Malformed`."""
+    if not value:
+        return frozenset()
+    try:
+        return frozenset(value)
+    except TypeError:
+        pass
+    try:
+        items = list(value)
+    except TypeError:
+        return frozenset({_Malformed(repr(value))})
+    out = set()
+    for item in items:
+        try:
+            hash(item)
+        except TypeError:
+            item = _Malformed(repr(item))
+        out.add(item)
+    return frozenset(out)
+
+
+def _pair_order(pair: Any) -> tuple:
+    """Sort key: well-formed pairs in their natural order first, anything else by repr."""
+    if isinstance(pair, tuple) and all(isinstance(x, str) for x in pair):
+        return (0, pair, "")
+    return (1, (), repr(pair))
 
 
 @dataclass(frozen=True)
@@ -141,7 +303,7 @@ class Declaration:
     run_stats: type | None = None
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "cross_company", frozenset(self.cross_company or ()))
+        object.__setattr__(self, "cross_company", _pair_set(self.cross_company))
         object.__setattr__(self, "provenance", MappingProxyType(dict(self.provenance or {})))
         object.__setattr__(self, "stamp_settings", MappingProxyType(dict(self.stamp_settings or {})))
         object.__setattr__(self, "run_name_segments", tuple(self.run_name_segments or ()))
@@ -248,28 +410,54 @@ def world_digest(profile: Mapping[str, Any] | None, keys: frozenset[str]) -> str
 
 
 def _call_bind(solver: Any, params: Any, world: RunWorld, *, top: bool, where: str) -> Declaration:
+    """``solver.bind(params, world, top=top)``; anything but a ``PolicyError`` becomes a :class:`BindError` (L1)."""
     bind = getattr(solver, "bind", None)
     if bind is None:
         return Declaration()
-    declaration = bind(params, world, top=top)
+    try:
+        declaration = bind(params, world, top=top)
+    except PolicyError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - re-raised as a PolicyError naming the node
+        raise BindError(
+            f"{where}: bind() raised {type(exc).__name__}: {exc}. A bind() must return a Declaration or "
+            "raise a PolicyError; fix the solver's bind()."
+        ) from exc
     if not isinstance(declaration, Declaration):
         raise PolicyError(f"{where}: bind() returned {type(declaration).__name__}, expected a Declaration.")
     return declaration
 
 
-def _check_top(declaration: Declaration, profile: Mapping[str, Any], where: str) -> None:
-    """Message 23: the top's ``cross_company`` is well-formed and inside the declared ceiling."""
-    from apps.container_logistics.assignment import constraints as assign_constraints  # local: leaf module
+def _profile_fingerprint(profile: Mapping[str, Any]) -> bytes:
+    return value_fingerprint(dict(profile))
 
-    bad = sorted(repr(p) for p in declaration.cross_company
-                 if not (isinstance(p, tuple) and len(p) == 2 and all(isinstance(x, str) and x for x in p)
-                         and p[0] != p[1]))
+
+def _check_profile_unchanged(before: bytes, profile: Mapping[str, Any], where: str) -> None:
+    """Refuse a ``bind`` after which the profile differs (review H1): it reaches the agents."""
+    if _profile_fingerprint(profile) != before:
+        raise BindError(
+            f"{where}: bind() changed the assignment profile. A bind() is pure in (params, world): the "
+            "profile is world data the sim main ships to every agent, and the cross-company ceiling is "
+            "computed from it. Read the world, never write it."
+        )
+
+
+def _check_top(declaration: Declaration, ceiling: frozenset, where: str) -> None:
+    """Message 23: the top's ``cross_company`` is well-formed and inside the declared ``ceiling``.
+
+    ``ceiling`` is ``constraints.declared_partnerships`` of the profile, computed by
+    :func:`bind_tree` BEFORE any node's ``bind`` ran (review H1). Also refuses a run-stats
+    aggregator whose ``meta_key`` is not a free ``run_config.meta`` key (review M2).
+    """
+    bad = sorted((repr(p) for p in declaration.cross_company
+                  if not (isinstance(p, tuple) and len(p) == 2 and all(isinstance(x, str) and x for x in p)
+                          and p[0] != p[1])))
     if bad:
         raise PolicyError(
             f"{where}: bind() declared malformed cross-company pair(s) {', '.join(bad)}; each must be an "
             "(owner_haulier, carrier_haulier) pair of two different non-empty strings."
         )
-    outside = sorted(declaration.cross_company - assign_constraints.declared_partnerships(dict(profile or {})))
+    outside = sorted(declaration.cross_company - ceiling)
     if outside:
         shown = ", ".join(f"({o!r}, {c!r})" for o, c in outside[:8]) + (" ..." if len(outside) > 8 else "")
         raise PolicyError(
@@ -278,11 +466,13 @@ def _check_top(declaration: Declaration, profile: Mapping[str, Any], where: str)
             "scenario's structure menu pairs them (the union of every structure's adjacency); fix the "
             "solver's bind() or the scenario's structures."
         )
+    if declaration.run_stats is not None:
+        check_meta_key(declaration.run_stats, where)
 
 
 def _check_inner(declaration: Declaration, top: Declaration, where: str) -> None:
     """Message 24: a non-top node declares nothing the top did not, and no top-only field."""
-    wider = sorted(declaration.cross_company - top.cross_company)
+    wider = sorted(declaration.cross_company - top.cross_company, key=_pair_order)
     extras = [name for name, value in (("stamp_settings", declaration.stamp_settings),
                                        ("run_name_segments", declaration.run_name_segments),
                                        ("run_stats", declaration.run_stats)) if value]
@@ -297,6 +487,22 @@ def _check_inner(declaration: Declaration, top: Declaration, where: str) -> None
             "declares cross-company pairs (an inner may declare a subset), stamp settings, run-name segments "
             "and run stats."
         )
+
+
+def _with_registered_badge(declaration: Declaration, spec: Any) -> Declaration:
+    """The top's declaration with its ``@policy(badge=...)`` in the provenance, when the solver left it out (M13).
+
+    A contract-only solver's ``bind`` (``DispatchPolicy``'s default) stamps no
+    provenance, so its run would carry no badge although it registered one. Only the
+    badge is filled in: ``sample_scope`` / ``candidate_settings`` describe how a solver
+    used ``solver_lib.candidates``, which the framework cannot know, so it never
+    claims them. A declaration that already carries a ``badge`` (every built-in top) is
+    returned unchanged, so no built-in stamp moves a byte.
+    """
+    badge = getattr(spec, "badge", None) if spec is not None else None
+    if badge is None or "badge" in declaration.provenance:
+        return declaration
+    return dataclasses.replace(declaration, provenance={"badge": badge, **declaration.provenance})
 
 
 def _solver_for(node: Any, instance: Any, profile: Mapping[str, Any]) -> Any:
@@ -314,11 +520,20 @@ def bind_tree(node: Any, top_instance: Any, profile: Mapping[str, Any] | None) -
     (the construction protocol of ``dispatch.profile.build_policy_tree``, so each
     child instance IS the object at ``parent.inner``), calls each wrapper's ``bind``
     pre-order with a fresh :class:`RunWorld`, and checks messages 23 / 24. Pure in
-    ``(params, world)``. Raises ``PolicyError``.
+    ``(params, world)``, and held to it against a dishonest solver: the ceiling is
+    computed before the first ``bind``, every world value a ``bind`` reads is its own
+    copy, and the profile's fingerprint must be unchanged after each ``bind``. Raises
+    ``PolicyError``.
     """
+    from apps.container_logistics.assignment import constraints as assign_constraints  # local: leaf module
     from apps.container_logistics.policies.framework.registry import spec_for_class
 
-    prof = dict(profile or {})
+    source = profile or {}
+    before = _profile_fingerprint(source)
+    # The ceiling, from a deep copy taken before ANY bind ran (declared_partnerships reads only
+    # this key), so no bind can widen it (review H1).
+    ceiling = assign_constraints.declared_partnerships(copy.deepcopy({"cooperation": source.get("cooperation")}))
+    prof = dict(source)
     chain: list[tuple[Any, Any, str]] = []
     n, inst, path = node, top_instance, _TOP_PATH
     while n is not None:
@@ -339,12 +554,14 @@ def bind_tree(node: Any, top_instance: Any, profile: Mapping[str, Any] | None) -
         solver = _solver_for(n, inst, prof)
         world = RunWorld.from_profile(prof)
         declaration = _call_bind(solver, n.params, world, top=(i == 0), where=where)
+        _check_profile_unchanged(before, source, where)
+        spec = spec_for_class(type(inst)) if n.source != "unregistered" else None
         if i == 0:
-            _check_top(declaration, prof, where)
+            _check_top(declaration, ceiling, where)
+            declaration = _with_registered_badge(declaration, spec)
             top_declaration = declaration
         else:
             _check_inner(declaration, top_declaration, where)
-        spec = spec_for_class(type(inst)) if n.source != "unregistered" else None
         bound.append((n, spec, inst, solver, declaration, world.reads, path))
     inner: BoundNode | None = None
     for n, spec, inst, solver, declaration, reads, path in reversed(bound):

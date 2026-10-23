@@ -4,7 +4,7 @@ What is locked (plan ``plan_contract_final.md`` §2.3-§2.7, WS1 commit 1.2):
 
 - ``Result.from_pairs`` refuses a repeated truck; ``invariants.check_result`` reports
   every malformed result;
-- ``RunWorld`` hides the selection keys and records every read, ``unread()`` none;
+- ``RunWorld`` hides the selection keys and records every value read (iteration none);
 - ``bind_tree`` refuses a top declaration outside the ceiling (message 23) and a nested
   node declaring more than the top or a top-only field (message 24);
 - ``Tick.restrict`` refuses documents that are not the tick's (by identity), narrows
@@ -152,16 +152,22 @@ def test_check_result_reports_every_malformed_result():
 # --- RunWorld ------------------------------------------------------------------------
 
 def test_run_world_hides_selection_keys_and_records_reads():
-    """Teeth: making ``get`` skip ``_reads.add`` failed the ``reads`` assertion."""
+    """Teeth: making ``get`` skip ``reads.add`` failed the ``reads`` assertion.
+
+    Semantics changed by the fix loop (review L2): iterating the world reveals its key
+    list and records NOTHING (it used to record every key, which silently disabled
+    message 25); values read are recorded per key. ``tests/test_framework_integrity.py``
+    pins the rest (no splat, no bypass, copies).
+    """
     world = RunWorld.from_profile({**_profile(), "policy_capture": {"dir": "x"}, "policies_format": 2,
                                    "planner": {}, "use_spatial_matching": True})
-    assert sorted(world.unread()) == ["cooperation", "max_travel_time_pickup", "spatial_cell_deg"]
+    assert sorted(world) == ["cooperation", "max_travel_time_pickup", "spatial_cell_deg"]
     assert world.reads == frozenset()
     assert world.get("strategy") is None and "solver_params" not in world
     assert world["spatial_cell_deg"] == 0.05
     assert world.reads == {"strategy", "solver_params", "spatial_cell_deg"}
     list(world)
-    assert world.reads >= {"cooperation", "max_travel_time_pickup"}
+    assert world.reads == {"strategy", "solver_params", "spatial_cell_deg"}
     with pytest.raises(KeyError):
         world["policies"]
 

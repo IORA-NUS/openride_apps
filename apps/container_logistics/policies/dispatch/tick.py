@@ -25,6 +25,19 @@ that never reads it builds none). A sub-tick's ``rng``, ``tiebreak_seed`` and
 by default), bound by :meth:`Tick.call`; its ``sample_rng`` is what the caller passed
 to ``restrict`` (``None`` = the sub-tick's ``rng``).
 
+Integrity against a DISHONEST solver (review H2, L5, L6): the framework checks a
+result with state it took when :meth:`Tick.top` was built and that no solver can
+rewrite through the tick -- its own predicate (``Tick.permitted`` is a read-only
+property handing out that same function), its own id index (no instance ``__dict__``
+to pre-seed; ``__slots__`` and read-only properties throughout), the declared pairs,
+and a fingerprint of every document. A result naming a document that was modified
+during the solve is refused, at the top for EVERY document of the tick (the share
+accounting reads them all after the commit) and in a sub-tick for the paired ones. So
+the verified-pair memo is sound: a sub-tick's physical verdict was reached by the
+framework's predicate on unmodified documents. Out of scope, as in any Python: a solver
+that deliberately reaches framework-private state through ``object.__setattr__``,
+``gc`` or closure cells. That is a review finding, not a contract a test can pin.
+
 Message 19 (a sub-tick result discarded) is logged here; message 18 (the whole tick)
 by the runner.
 
@@ -34,7 +47,6 @@ Framework side of the boundary. Not a leaf module: it calls ``assignment.constra
 
 from __future__ import annotations
 
-import functools
 import hashlib
 import logging
 import random
@@ -45,6 +57,7 @@ from typing import Any, Callable, Iterable, Mapping
 from apps.container_logistics.assignment import constraints as assign_constraints
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation
 
+from .bind import value_fingerprint
 from .invariants import check_result
 from .result import Result
 from .views import OrderView, TruckView, order_view, truck_view
@@ -110,7 +123,11 @@ class Measure:
     __slots__ = ("dials",)
 
     def __init__(self, dials: Mapping[str, Any] | None) -> None:
-        self.dials = MappingProxyType(dict(dials or {}))
+        object.__setattr__(self, "dials", MappingProxyType(dict(dials or {})))
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # The accounting prices the committed pairs with this object after the solve.
+        raise DispatchContractViolation(f"Measure.{name} is read-only")
 
     def cost(self, t: Doc, o: Doc) -> float:
         """Deadhead km minus the dual-cycle bonus under :attr:`dials` (``inf`` without geometry)."""
@@ -190,20 +207,94 @@ def _narrowed(parent: Callable[[Any, Any], bool], narrow: Callable[[Any, Any], b
     return permitted
 
 
-class _TickShared:
-    """What every tick and sub-tick of one decision shares (framework-private)."""
+_set = object.__setattr__
 
-    __slots__ = ("tree", "stats", "scope_log", "capture", "verified", "cross_company", "owns")
+
+class _NoInstanceDict(DispatchContractViolation, AttributeError):
+    """``tick.__dict__``: a contract violation (message 18/19) that ``hasattr`` still reads as absent."""
+
+
+class _TickShared:
+    """What every tick and sub-tick of one decision shares (framework-private, sealed).
+
+    Built once, by :meth:`Tick.top`, BEFORE the solver runs, and never re-derived from
+    anything a solver can rewrite (review H2):
+
+    - ``index`` -- ``(trucks_by_id, orders_by_id)`` over the whole tick's documents,
+      first document per id, read-only: the top check and the commit
+      (:meth:`Tick.docs`) look pairs up here, so only the tick's own documents are
+      ever committed;
+    - fingerprints of every document (``bind.value_fingerprint``, keyed by ``id()``):
+      :meth:`intact` / :meth:`changed` tell whether a document was modified since the
+      tick was built, so a pair (or the accounting that follows) can never be judged on
+      a document the solver rewrote;
+    - the verified-pair memo, held in closures, written only by :meth:`Tick.call` after
+      the FRAMEWORK's check of a sub-tick passed against intact documents.
+
+    Every attribute is read-only after construction (assignment raises
+    ``DispatchContractViolation``); ``stats`` and ``scope_log`` are the caller's
+    mutable records.
+    """
+
+    __slots__ = ("tree", "stats", "scope_log", "capture", "cross_company", "owns", "index",
+                 "_fingerprints", "_docs", "remember", "proved", "_sealed")
 
     def __init__(self, *, tree: Any, stats: dict[str, Any], scope_log: list | None, capture: Any,
-                 cross_company: frozenset[tuple[str, str]]) -> None:
-        self.tree = tree
-        self.stats = stats
-        self.scope_log = scope_log
-        self.capture = capture
-        self.verified: set[tuple[int, int]] = set()
-        self.cross_company = cross_company
-        self.owns = _ownership(cross_company)
+                 cross_company: frozenset[tuple[str, str]], trucks: tuple[Doc, ...],
+                 orders: tuple[Doc, ...]) -> None:
+        _set(self, "tree", tree)
+        _set(self, "stats", stats)
+        _set(self, "scope_log", scope_log)
+        _set(self, "capture", capture)
+        _set(self, "cross_company", cross_company)
+        _set(self, "owns", _ownership(cross_company))
+        _set(self, "index", _index(trucks, orders))
+        fingerprints: dict[int, bytes] = {}
+        for doc in trucks + orders:
+            fingerprints.setdefault(id(doc), value_fingerprint(doc))
+        _set(self, "_fingerprints", MappingProxyType(fingerprints))
+        _set(self, "_docs", (trucks, orders))  # keeps every fingerprinted id alive
+        verified: set[tuple[int, int]] = set()
+
+        def remember(t: Doc, o: Doc) -> None:
+            verified.add((id(t), id(o)))
+
+        def proved(t: Doc, o: Doc) -> bool:
+            return bool(verified) and (id(t), id(o)) in verified
+
+        _set(self, "remember", remember)
+        _set(self, "proved", proved)
+        _set(self, "_sealed", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise DispatchContractViolation(f"the tick's framework state is read-only (attempted to set {name!r})")
+
+    __delattr__ = __setattr__  # type: ignore[assignment]
+
+    def intact(self, doc: Doc) -> bool:
+        """Whether ``doc`` is one of this tick's documents, unmodified since the tick was built."""
+        before = self._fingerprints.get(id(doc))
+        return before is not None and value_fingerprint(doc) == before
+
+    def changed(self) -> list[str]:
+        """The ids of this tick's documents that were modified since it was built (``[]``: none)."""
+        out = []
+        fingerprints = self._fingerprints
+        for doc in self._docs[0] + self._docs[1]:
+            if value_fingerprint(doc) != fingerprints[id(doc)]:
+                out.append(str(doc.get("_id")) if isinstance(doc, dict) else repr(doc))
+        return out
+
+
+def _index(trucks: Iterable[Doc], orders: Iterable[Doc]) -> tuple[Mapping[str, Doc], Mapping[str, Doc]]:
+    """``(trucks_by_id, orders_by_id)``, the FIRST document per ``str(_id)``, as read-only mappings."""
+    by_truck: dict[str, Doc] = {}
+    for t in trucks:
+        by_truck.setdefault(str(t.get("_id")), t)
+    by_order: dict[str, Doc] = {}
+    for o in orders:
+        by_order.setdefault(str(o.get("_id")), o)
+    return MappingProxyType(by_truck), MappingProxyType(by_order)
 
 
 def report_scope_violation(name: str, version: str, tick: "Tick", problems: list[str], *,
@@ -219,12 +310,23 @@ def report_scope_violation(name: str, version: str, tick: "Tick", problems: list
 
 
 class Tick:
-    """One decision's inputs. Plain class: ``functools.cached_property`` needs ``__dict__``.
+    """One decision's inputs.
 
     Built by :meth:`top` (the runner) and :meth:`restrict` (a narrowed sub-tick) only.
     Solvers read it and never mutate it or its documents (the read-only contract of
-    ``DispatchPolicy``).
+    ``DispatchPolicy``), and the framework holds them to it (review H2): every
+    attribute is read-only (assigning one raises ``DispatchContractViolation``, i.e.
+    message 18 at the top, 19 in a sub-tick), there is no instance ``__dict__`` to
+    pre-seed, the predicate the framework checks with is its own (:attr:`permitted`
+    hands out that same function, but replacing it replaces nothing), and a document
+    modified during the solve fails the check (``_TickShared.intact`` / ``changed``).
+    ``scratch`` is the one mutable member: a dict the framework never reads.
     """
+
+    __slots__ = ("_shared", "_raw_trucks", "_raw_orders", "_clock", "_seed", "_world", "_measure",
+                 "_execute", "_permitted", "_depth", "_scope", "_candidates", "_scratch", "_sample_rng",
+                 "_parent", "_used", "_node", "_params", "_rng", "_tiebreak_seed", "_rebates",
+                 "_cross_company", "_index", "_trucks", "_orders", "_members")
 
     def __init__(
         self,
@@ -243,28 +345,53 @@ class Tick:
         sample_rng: Any,
         candidates: tuple[Pair, ...] | None,
         parent: "Tick | None",
+        cross_company: frozenset[tuple[str, str]] | None = None,
+        index: tuple[Mapping[str, Doc], Mapping[str, Doc]] | None = None,
     ) -> None:
-        self._shared = shared
-        self.raw_trucks = raw_trucks
-        self.raw_orders = raw_orders
-        self.clock = clock
-        self.seed = seed
-        self.world = world
-        self.measure = measure
-        self.execute = execute
-        self.permitted = permitted
-        self.depth = depth
-        self.scope = scope
-        self.candidates = candidates
-        self.scratch: dict[str, Any] = {}
-        self._sample_rng = sample_rng
-        self._parent = parent
-        self._used = False
-        self._node: Any = None
-        self._params: Any = None
-        self._rng: Any = None
-        self.tiebreak_seed: int | None = None
-        self.rebates: Any = None
+        _set(self, "_shared", shared)
+        _set(self, "_raw_trucks", raw_trucks)
+        _set(self, "_raw_orders", raw_orders)
+        _set(self, "_clock", clock)
+        _set(self, "_seed", seed)
+        _set(self, "_world", world)
+        _set(self, "_measure", measure)
+        _set(self, "_execute", execute)
+        _set(self, "_permitted", permitted)
+        _set(self, "_depth", depth)
+        _set(self, "_scope", scope)
+        _set(self, "_candidates", candidates)
+        _set(self, "_scratch", {})
+        _set(self, "_sample_rng", sample_rng)
+        _set(self, "_parent", parent)
+        _set(self, "_used", False)
+        _set(self, "_node", None)
+        _set(self, "_params", None)
+        _set(self, "_rng", None)
+        _set(self, "_tiebreak_seed", None)
+        _set(self, "_rebates", None)
+        _set(self, "_cross_company", shared.cross_company if cross_company is None else cross_company)
+        _set(self, "_index", _index(raw_trucks, raw_orders) if index is None else index)
+        _set(self, "_trucks", None)
+        _set(self, "_orders", None)
+        _set(self, "_members", None)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        raise DispatchContractViolation(
+            f"Tick.{name} is read-only: a solver reads the tick and never rewrites it (scope "
+            f"{self._scope}); keep per-tick memos in tick.scratch.")
+
+    def __delattr__(self, name: str) -> None:
+        raise DispatchContractViolation(f"Tick.{name} is read-only (scope {self._scope}).")
+
+    def __getattr__(self, name: str) -> Any:
+        # Only reached when normal lookup failed. There is no instance __dict__ to
+        # pre-seed (e.g. a forged ``id_index``); say so as a contract violation, which is
+        # also an AttributeError so ``hasattr`` / ``getattr(..., default)`` still work.
+        if name == "__dict__":
+            raise _NoInstanceDict(
+                f"Tick has no instance __dict__ (scope {object.__getattribute__(self, '_scope')}): its state is "
+                "read-only; keep per-tick memos in tick.scratch.")
+        raise AttributeError(f"{type(self).__name__!r} object has no attribute {name!r}")
 
     # --- construction -------------------------------------------------------
 
@@ -285,22 +412,101 @@ class Tick:
         scope_log: list | None = None,
         capture: Any = None,
     ) -> "Tick":
-        """The whole tick for bound selection ``tree`` (``DispatchRunner.tick``). Draws and builds no RNG."""
+        """The whole tick for bound selection ``tree`` (``DispatchRunner.tick``). Draws and builds no RNG.
+
+        Takes the framework's snapshot (index, document fingerprints) here, before any
+        solver code runs.
+        """
         cross = frozenset(tree.declaration.cross_company)
+        raw_trucks, raw_orders = tuple(trucks), tuple(orders)
         shared = _TickShared(tree=tree, stats=stats if stats is not None else {}, scope_log=scope_log,
-                             capture=capture, cross_company=cross)
-        tick = cls(shared=shared, raw_trucks=tuple(trucks), raw_orders=tuple(orders), clock=clock, seed=seed,
+                             capture=capture, cross_company=cross, trucks=raw_trucks, orders=raw_orders)
+        tick = cls(shared=shared, raw_trucks=raw_trucks, raw_orders=raw_orders, clock=clock, seed=seed,
                    world=world, measure=measure, execute=execute,
                    permitted=_top_permitted(cross, max_travel_time_pickup), depth=0, scope=TOP_SCOPE,
-                   sample_rng=None, candidates=None, parent=None)
+                   sample_rng=None, candidates=None, parent=None, index=shared.index)
         top = tree.top
-        tick._node = top
-        tick._params = top.params
-        tick.tiebreak_seed = seed
-        tick.rebates = getattr(top.instance, "rebate_book", None)
+        _set(tick, "_node", top)
+        _set(tick, "_params", top.params)
+        _set(tick, "_tiebreak_seed", seed)
+        _set(tick, "_rebates", getattr(top.instance, "rebate_book", None))
         return tick
 
     # --- what a solver reads --------------------------------------------------
+
+    @property
+    def raw_trucks(self) -> tuple[Doc, ...]:
+        """This (sub-)tick's truck documents."""
+        return self._raw_trucks
+
+    @property
+    def raw_orders(self) -> tuple[Doc, ...]:
+        """This (sub-)tick's order documents."""
+        return self._raw_orders
+
+    @property
+    def permitted(self) -> Callable[[Any, Any], bool]:
+        """``permitted(truck, order)``: the predicate the framework checks this tick's result with.
+
+        At the top: own (both hauliers present and equal) or a declared ``(owner,
+        carrier)``, AND physically feasible. In a sub-tick: the parent's, narrowed by the
+        caller's ``narrow`` and by the callee's own non-empty ``cross_company``. Views or
+        documents.
+        """
+        return self._permitted
+
+    @property
+    def clock(self) -> DispatchClock:
+        return self._clock
+
+    @property
+    def seed(self) -> int:
+        """The per-tick seed (``tick_seed``), inherited by sub-ticks."""
+        return self._seed
+
+    @property
+    def world(self) -> Any:
+        """The read-tracking run world (``bind.RunWorld``); its values are copies."""
+        return self._world
+
+    @property
+    def measure(self) -> Measure:
+        return self._measure
+
+    @property
+    def execute(self) -> Callable[..., Any]:
+        """``execute(fn, *args)``: a plain call, or ``solve_in_thread``'s thread-pool call."""
+        return self._execute
+
+    @property
+    def depth(self) -> int:
+        """0 at the top, +1 per ``restrict``."""
+        return self._depth
+
+    @property
+    def scope(self) -> str:
+        """``"tick"`` at the top, the caller's key below."""
+        return self._scope
+
+    @property
+    def candidates(self) -> tuple[Pair, ...] | None:
+        """Caller-built pairs handed to ``restrict`` (a hint, not validated), or ``None``."""
+        return self._candidates
+
+    @property
+    def scratch(self) -> dict[str, Any]:
+        """A per-tick-object dict for the solver's memos; the framework never reads it."""
+        return self._scratch
+
+    @property
+    def tiebreak_seed(self) -> int | None:
+        """Top: the tick seed. Sub: the callee instance's injected tie-break (``None`` if none)."""
+        return self._tiebreak_seed
+
+    @property
+    def rebates(self) -> Any:
+        """The node instance's injected rebate book (``None`` unless ``planner.rebate_aware``)."""
+        return self._rebates
 
     @property
     def params(self) -> Any:
@@ -310,8 +516,8 @@ class Tick:
     @property
     def rng(self) -> Any:
         """The decision RNG. Top: ``random.Random(seed)``, built on first read. Sub: the callee's own."""
-        if self._rng is None and self.depth == 0:
-            self._rng = random.Random(self.seed)
+        if self._rng is None and self._depth == 0:
+            _set(self, "_rng", random.Random(self._seed))
         return self._rng
 
     @property
@@ -319,34 +525,41 @@ class Tick:
         """What a cap sample draws from: the caller's choice at ``restrict`` (``None`` = :attr:`rng`)."""
         return self.rng if self._sample_rng is None else self._sample_rng
 
-    @functools.cached_property
+    @property
     def trucks(self) -> tuple[TruckView, ...]:
         """Typed views of ``raw_trucks`` (``haulier_id`` = ``constraints.haulier_of``), built on first access."""
-        return tuple(truck_view(t) for t in self.raw_trucks)
+        if self._trucks is None:
+            _set(self, "_trucks", tuple(truck_view(t) for t in self._raw_trucks))
+        return self._trucks
 
-    @functools.cached_property
+    @property
     def orders(self) -> tuple[OrderView, ...]:
         """Typed views of ``raw_orders``, built on first access."""
-        return tuple(order_view(o) for o in self.raw_orders)
+        if self._orders is None:
+            _set(self, "_orders", tuple(order_view(o) for o in self._raw_orders))
+        return self._orders
 
-    @functools.cached_property
-    def id_index(self) -> tuple[dict[str, Doc], dict[str, Doc]]:
-        """``(trucks_by_id, orders_by_id)``, the FIRST document per id (``check_result`` and commit share it)."""
-        trucks: dict[str, Doc] = {}
-        for t in self.raw_trucks:
-            trucks.setdefault(str(t.get("_id")), t)
-        orders: dict[str, Doc] = {}
-        for o in self.raw_orders:
-            orders.setdefault(str(o.get("_id")), o)
-        return trucks, orders
+    @property
+    def id_index(self) -> tuple[Mapping[str, Doc], Mapping[str, Doc]]:
+        """``(trucks_by_id, orders_by_id)``, the FIRST document per id, read-only (``check_result`` and commit share it)."""
+        return self._index
 
-    @functools.cached_property
     def _member_ids(self) -> tuple[frozenset[int], frozenset[int]]:
-        return frozenset(id(t) for t in self.raw_trucks), frozenset(id(o) for o in self.raw_orders)
+        if self._members is None:
+            _set(self, "_members", (frozenset(id(t) for t in self._raw_trucks),
+                                    frozenset(id(o) for o in self._raw_orders)))
+        return self._members
 
     def serves(self, carrier_id: Any, owner_id: Any) -> bool:
-        """Whether ``carrier_id``'s trucks may serve ``owner_id``'s orders: own, or a declared pair."""
-        return carrier_id == owner_id or (owner_id, carrier_id) in self._shared.cross_company
+        """Whether ``carrier_id``'s trucks may serve ``owner_id``'s orders: own, or a declared pair.
+
+        ``False`` when either id is missing (``None`` or empty), exactly like
+        :attr:`permitted`'s ownership half (review L6). In a sub-tick whose callee
+        declared its own ``cross_company``, only those pairs count.
+        """
+        if carrier_id is None or owner_id is None or carrier_id == "" or owner_id == "":
+            return False
+        return carrier_id == owner_id or (owner_id, carrier_id) in self._cross_company
 
     # --- nesting --------------------------------------------------------------
 
@@ -371,25 +584,26 @@ class Tick:
         """
         sub_trucks = tuple(_unwrap(t) for t in trucks)
         sub_orders = tuple(_unwrap(o) for o in orders)
-        truck_ids, order_ids = self._member_ids
+        truck_ids, order_ids = self._member_ids()
         for t in sub_trucks:
             if id(t) not in truck_ids:
                 raise DispatchContractViolation(
-                    f"restrict(scope={scope!r}): truck {t.get('_id')!r} is not a document of scope {self.scope}")
+                    f"restrict(scope={scope!r}): truck {t.get('_id')!r} is not a document of scope {self._scope}")
         for o in sub_orders:
             if id(o) not in order_ids:
                 raise DispatchContractViolation(
-                    f"restrict(scope={scope!r}): order {o.get('_id')!r} is not a document of scope {self.scope}")
-        sub = Tick(shared=self._shared, raw_trucks=sub_trucks, raw_orders=sub_orders, clock=self.clock,
-                   seed=self.seed, world=self.world, measure=self.measure, execute=self.execute,
-                   permitted=self.permitted if narrow is None else _narrowed(self.permitted, narrow),
-                   depth=self.depth + 1, scope=str(scope), sample_rng=sample_rng,
-                   candidates=None if candidates is None else tuple(candidates), parent=self)
+                    f"restrict(scope={scope!r}): order {o.get('_id')!r} is not a document of scope {self._scope}")
+        sub = Tick(shared=self._shared, raw_trucks=sub_trucks, raw_orders=sub_orders, clock=self._clock,
+                   seed=self._seed, world=self._world, measure=self._measure, execute=self._execute,
+                   permitted=self._permitted if narrow is None else _narrowed(self._permitted, narrow),
+                   depth=self._depth + 1, scope=str(scope), sample_rng=sample_rng,
+                   candidates=None if candidates is None else tuple(candidates), parent=self,
+                   cross_company=self._cross_company)
         log = self._shared.scope_log
         if log is not None:
             log.append({
-                "kind": sub.scope.partition(":")[0],
-                "key": sub.scope,
+                "kind": sub._scope.partition(":")[0],
+                "key": sub._scope,
                 "round": None,
                 "trucks": [str(t.get("_id")) for t in sub_trucks],
                 "orders": [str(o.get("_id")) for o in sub_orders],
@@ -405,27 +619,36 @@ class Tick:
 
         ``sub`` must come from THIS tick's :meth:`restrict` and serve one call only.
         The child's params, ``rng``, ``tiebreak_seed`` and ``rebates`` (its instance's)
-        are bound onto ``sub``; the solve goes through ``sub.execute`` when the child
-        offloads itself. A ``DispatchContractViolation`` raised inside and any
-        ``check_result`` problem are reported (message 19) and counted; any other
-        exception propagates. A passing result's pairs are remembered, so the top
-        check re-checks only their ownership half.
+        are bound onto ``sub``; a child that declared a non-empty ``cross_company`` (a
+        subset of the top's, message 24) has ``sub`` narrowed to own-or-those pairs
+        (review L5; an empty declaration, every built-in inner's, inherits the caller's).
+        The solve goes through ``sub.execute`` when the child offloads itself. A
+        ``DispatchContractViolation`` raised inside and any ``check_result`` problem
+        (checked with the FRAMEWORK's predicate for ``sub``, on intact documents) are
+        reported (message 19) and counted; any other exception propagates. A passing
+        result's pairs are remembered, so the top check re-checks only their ownership
+        half.
         """
         if not isinstance(sub, Tick) or sub._parent is not self:
             raise DispatchContractViolation(
-                f"tick.call in scope {self.scope}: the sub-tick was not made by this tick's restrict()")
+                f"tick.call in scope {self._scope}: the sub-tick was not made by this tick's restrict()")
         if sub._used:
             raise DispatchContractViolation(
-                f"tick.call in scope {self.scope}: sub-tick {sub.scope} was already used by a call; "
+                f"tick.call in scope {self._scope}: sub-tick {sub._scope} was already used by a call; "
                 "restrict() a fresh one per call")
-        sub._used = True
+        _set(sub, "_used", True)
         child = self.callee(ref)
         instance = child.instance
-        sub._node = child
-        sub._params = child.params
-        sub._rng = getattr(instance, "rng", random)
-        sub.tiebreak_seed = getattr(instance, "tiebreak_seed", None)
-        sub.rebates = getattr(instance, "rebate_book", None)
+        _set(sub, "_node", child)
+        _set(sub, "_params", child.params)
+        _set(sub, "_rng", getattr(instance, "rng", random))
+        _set(sub, "_tiebreak_seed", getattr(instance, "tiebreak_seed", None))
+        _set(sub, "_rebates", getattr(instance, "rebate_book", None))
+        own_cross = child.declaration.cross_company
+        if own_cross:
+            narrowed = frozenset(own_cross) & sub._cross_company
+            _set(sub, "_cross_company", narrowed)
+            _set(sub, "_permitted", _narrowed(sub._permitted, _ownership(narrowed)))
         shared = self._shared
         capture = shared.capture
         if capture is not None:
@@ -434,7 +657,7 @@ class Tick:
                 before(sub)
         try:
             if child.offload == "self":
-                result = sub.execute(child.solver.solve_tick, sub, child.params)
+                result = sub._execute(child.solver.solve_tick, sub, child.params)
             else:
                 result = child.solver.solve_tick(sub, child.params)
             problems: list[str] = []
@@ -443,19 +666,24 @@ class Tick:
         if capture is not None:
             capture(tick=sub, result=result, problems=list(problems))
         if not problems:
-            problems = check_result(result, sub)
+            problems = check_result(result, sub, permitted=sub._permitted, index=sub._index,
+                                    intact=shared.intact)
         if problems:
             report_scope_violation(child.name, child.version, sub, problems, stats=shared.stats)
             return None
-        trucks, orders = sub.id_index
-        verified = shared.verified
+        trucks, orders = sub._index
+        remember = shared.remember
         for tid, oid in result.pairs:
-            verified.add((id(trucks[tid]), id(orders[oid])))
+            remember(trucks[tid], orders[oid])
         return result
 
     def docs(self, result: Result) -> list[Pair]:
-        """``result``'s pairs as this tick's documents (first document per id), in pair order."""
-        trucks, orders = self.id_index
+        """``result``'s pairs as this tick's documents (first document per id), in pair order.
+
+        Looked up in the index the framework built with the tick, never in anything the
+        solver handed back, so only the tick's own documents are committed.
+        """
+        trucks, orders = self._index
         return [(trucks[tid], orders[oid]) for tid, oid in result.pairs]
 
     def note_incident(self) -> None:
@@ -466,20 +694,21 @@ class Tick:
     # --- framework-private ------------------------------------------------------
 
     def _top_check(self) -> Callable[[Doc, Doc], bool]:
-        """The top tick's check predicate: :meth:`permitted`, minus physical work a sub-tick proved.
+        """The top tick's check predicate: the framework's :attr:`permitted`, minus physical work a sub-tick proved.
 
-        A pair a sub-tick check passed (``call``) re-checks only ownership-or-declared;
-        every other pair gets the full :meth:`permitted`. Equal to ``permitted`` for
-        every pair, provided the documents are not mutated in between (the read-only
-        contract).
+        A pair a sub-tick check passed (``call``: the framework's predicate for that
+        sub-tick, on intact documents) re-checks only ownership-or-declared; every other
+        pair gets the full predicate. Equal to ``permitted`` for every pair, because the
+        top check also refuses any document modified since the tick was built
+        (``_TickShared.intact``).
         """
         shared = self._shared
-        verified = shared.verified
+        proved = shared.proved
         owns = shared.owns
-        permitted = self.permitted
+        permitted = self._permitted
 
         def check(t: Doc, o: Doc) -> bool:
-            if verified and (id(t), id(o)) in verified:
+            if proved(t, o):
                 return owns(t, o)
             return permitted(t, o)
 
