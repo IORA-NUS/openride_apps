@@ -382,7 +382,9 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         )
         events_before = runner.stats.get("violations", 0) + runner.stats.get("crashes", 0)
         self._tick_contract_events = 0
-        outcome = runner.run(tick)
+        # A solver's notes may not set a field this app publishes from its own share tag
+        # (``wire_fields``' keyword set) unless the top declared it (review L3).
+        outcome = runner.run(tick, wire_fields=tuple(wire_fields({})))
         self._tick_contract_events = (
             runner.stats.get("violations", 0) + runner.stats.get("crashes", 0) - events_before)
         mtt = prof.get("max_travel_time_pickup")

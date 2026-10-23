@@ -293,6 +293,11 @@ class Declaration:
     - ``stamp_settings`` -- TOP only; merged into the run's settings (WS4b).
     - ``run_name_segments`` -- TOP only; appended to the run name (WS4b).
     - ``run_stats`` -- TOP only; a run-stats aggregator CLASS (WS4a).
+    - ``wire_note_keys`` -- TOP only; the ``solver_notes`` keys this solver writes into
+      fields the framework publishes on the wire itself (a market's ``pool_id`` /
+      ``market_round``). Any other note key naming such a field is refused at the tick
+      (message 18; ``invariants.check_wire_notes``, review L3), so a solver can never
+      claim, say, market provenance it did not declare at bind.
     """
 
     cross_company: frozenset[tuple[str, str]] = frozenset()
@@ -301,12 +306,14 @@ class Declaration:
     stamp_settings: Mapping[str, Any] = field(default_factory=dict)
     run_name_segments: tuple[str, ...] = ()
     run_stats: type | None = None
+    wire_note_keys: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cross_company", _pair_set(self.cross_company))
         object.__setattr__(self, "provenance", MappingProxyType(dict(self.provenance or {})))
         object.__setattr__(self, "stamp_settings", MappingProxyType(dict(self.stamp_settings or {})))
         object.__setattr__(self, "run_name_segments", tuple(self.run_name_segments or ()))
+        object.__setattr__(self, "wire_note_keys", _pair_set(self.wire_note_keys))
 
 
 @dataclass(frozen=True, eq=False)
@@ -468,6 +475,9 @@ def _check_top(declaration: Declaration, ceiling: frozenset, where: str) -> None
         )
     if declaration.run_stats is not None:
         check_meta_key(declaration.run_stats, where)
+    keys = sorted((repr(k) for k in declaration.wire_note_keys if not (isinstance(k, str) and k)), key=str)
+    if keys:
+        raise PolicyError(f"{where}: bind() declared wire_note_keys {', '.join(keys)}; each must be a non-empty string.")
 
 
 def _check_inner(declaration: Declaration, top: Declaration, where: str) -> None:
@@ -475,7 +485,8 @@ def _check_inner(declaration: Declaration, top: Declaration, where: str) -> None
     wider = sorted(declaration.cross_company - top.cross_company, key=_pair_order)
     extras = [name for name, value in (("stamp_settings", declaration.stamp_settings),
                                        ("run_name_segments", declaration.run_name_segments),
-                                       ("run_stats", declaration.run_stats)) if value]
+                                       ("run_stats", declaration.run_stats),
+                                       ("wire_note_keys", declaration.wire_note_keys)) if value]
     if wider or extras:
         what = []
         if wider:
@@ -530,9 +541,9 @@ def bind_tree(node: Any, top_instance: Any, profile: Mapping[str, Any] | None) -
 
     source = profile or {}
     before = _profile_fingerprint(source)
-    # The ceiling, from a deep copy taken before ANY bind ran (declared_partnerships reads only
-    # this key), so no bind can widen it (review H1).
-    ceiling = assign_constraints.declared_partnerships(copy.deepcopy({"cooperation": source.get("cooperation")}))
+    # The ceiling, from a deep copy of the profile taken before ANY bind ran, so no bind
+    # can widen it (review H1).
+    ceiling = assign_constraints.declared_partnerships(copy.deepcopy(dict(source)))
     prof = dict(source)
     chain: list[tuple[Any, Any, str]] = []
     n, inst, path = node, top_instance, _TOP_PATH

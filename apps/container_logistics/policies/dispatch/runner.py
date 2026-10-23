@@ -42,10 +42,10 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from apps.container_logistics.policies.compat.measurement import offline_measurement_dials
-from apps.container_logistics.policies.compat.wire import reserved_note_keys_for, share_tag_format_for
+from apps.container_logistics.policies.compat.wire import share_tag_format_for
 from apps.container_logistics.policies.framework.errors import DispatchContractViolation, PolicyTimingError
 from apps.container_logistics.policies.framework.slots import SLOTS
 
@@ -166,8 +166,13 @@ class DispatchRunner:
         top = tick._shared.tree.top
         return top.solver.solve_tick(tick, top.params)
 
-    def run(self, tick: Tick) -> TickOutcome:
-        """Solve ``tick`` and return what to commit (no pairs on a violation). Whole ticks only."""
+    def run(self, tick: Tick, *, wire_fields: Iterable[str] = ()) -> TickOutcome:
+        """Solve ``tick`` and return what to commit (no pairs on a violation). Whole ticks only.
+
+        ``wire_fields`` are the payload fields the CALLER publishes from its own
+        accounting (``AssignmentApp``: ``compat.wire.FRAMEWORK_WIRE_FIELDS``): a note key
+        naming one that the top did not declare in ``wire_note_keys`` is a violation.
+        """
         if tick.depth != 0:
             raise ValueError(f"DispatchRunner.run takes a whole tick, not sub-tick {tick.scope!r}")
         capture = self._capture
@@ -188,9 +193,8 @@ class DispatchRunner:
                 shown = ", ".join(repr(i) for i in changed[:8]) + (" ..." if len(changed) > 8 else "")
                 problems = [f"document(s) {shown} were modified during the solve (documents are read-only)"]
         if not problems:
-            resolved = shared.tree.resolved
-            problems = check_wire_notes(result, reserved_note_keys_for(
-                resolved.name, registered=resolved.source != "unregistered"))
+            declared = shared.tree.declaration.wire_note_keys
+            problems = check_wire_notes(result, frozenset(wire_fields) - declared)
         if problems:
             self._report_violation(tick, problems)
             return TickOutcome(pairs=[], result=None)
