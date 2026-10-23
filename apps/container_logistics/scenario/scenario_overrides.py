@@ -9,6 +9,12 @@ points (:func:`apply_policy_overrides`, :func:`apply_solver_override`) are
 compatibility shims with no run-path caller; the legacy env helpers themselves are
 imported from ``policies/compat/legacy_env.py`` (no re-export here). Everything
 here patches the loaded behaviors in memory; the on-disk bundle is never written.
+
+The run's own ``ORSIM_*`` inputs are read here too (:func:`policy_overrides_from_env`,
+:func:`solver_from_env`, :func:`structure_from_env`, :func:`refuse_removed_sharing_env`),
+each from an ``environ`` mapping it is handed, so the sim main (``os.environ``) and
+the control-plane dry run (the environment the spawned sim will inherit) read them
+with ONE implementation and one set of messages (final review L8).
 """
 
 import copy
@@ -20,6 +26,62 @@ from copy import deepcopy
 from apps.container_logistics.policies.compat import legacy_env as _legacy_env
 
 from .validation_config import smoke_scenario_config_bundle
+
+
+#: Removed per-run variable (plan item 34): ``planner.sharing`` is read only at
+#: compile time (``datagen/preprocess.py``), so patching it at run start changed nothing.
+REMOVED_SHARING_ENV = "ORSIM_SHARING_POLICY"
+
+#: The run's per-run selection variables (read by the functions below).
+POLICY_OVERRIDES_ENV = "ORSIM_POLICY_OVERRIDES"
+SOLVER_ENV = "ORSIM_SOLVER"
+STRUCTURE_ENV = "ORSIM_COOP_STRUCTURE"
+
+
+def refuse_removed_sharing_env(environ):
+    """Raise ``PolicyError`` when ``environ`` sets the removed ``ORSIM_SHARING_POLICY``.
+
+    It used to be ignored silently; a stray value inherited from the launching shell
+    would otherwise make every run exit 2 out of sight (final review L8).
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+
+    value = (environ or {}).get(REMOVED_SHARING_ENV, "").strip()
+    if value:
+        raise PolicyError(
+            f"{REMOVED_SHARING_ENV}={value!r} is removed: set planner.sharing in spec.json and "
+            "recompile; the run-time override was inert."
+        )
+
+
+def policy_overrides_from_env(environ):
+    """``ORSIM_POLICY_OVERRIDES`` (JSON) from ``environ``, ``{}`` when unset/blank.
+
+    ``ORSIM_SOLVER`` travels separately (:func:`solver_from_env`). Raises ``PolicyError``
+    for malformed JSON or a non-object.
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+
+    raw = (environ or {}).get(POLICY_OVERRIDES_ENV, "").strip()
+    if not raw:
+        return {}
+    try:
+        overrides = json.loads(raw)
+    except ValueError as exc:
+        raise PolicyError(f"{POLICY_OVERRIDES_ENV} is not valid JSON ({exc}): {raw!r}") from exc
+    if not isinstance(overrides, dict):
+        raise PolicyError(f"{POLICY_OVERRIDES_ENV} must be a JSON object of slot -> entry (got {raw!r}).")
+    return overrides
+
+
+def solver_from_env(environ):
+    """``ORSIM_SOLVER`` (the innermost per-scope solver) from ``environ``, ``None`` when unset/blank."""
+    return (environ or {}).get(SOLVER_ENV, "").strip() or None
+
+
+def structure_from_env(environ):
+    """``ORSIM_COOP_STRUCTURE`` (the cooperation structure id) from ``environ``, ``None`` when unset/blank."""
+    return (environ or {}).get(STRUCTURE_ENV, "").strip() or None
 
 
 def known_solvers():
@@ -433,9 +495,11 @@ def apply_cooperation_override(assignment_collection, structure=None):
     which refuses a patch the bound planner tree never reads (message 25).
 
     Fail-loud (message 26, ``PolicyError``, raised before anything is mutated): an id
-    no structure declares, or any structure on a profile with no cooperation block.
-    It used to warn and run the scenario's own arm, so a typo produced a run labelled
-    as one experiment that was another.
+    no structure declares, any structure on a profile with no cooperation block, or any
+    structure when the collection has NO assignment agent at all (there is no arm to
+    select, so the override would be a silent no-op; final review L9). It used to warn
+    and run the scenario's own arm, so a typo produced a run labelled as one
+    experiment that was another.
     """
     from apps.container_logistics.datagen.hauliers import structure_id_slug
     from apps.container_logistics.policies.framework import PolicyError
@@ -462,9 +526,15 @@ def apply_cooperation_override(assignment_collection, structure=None):
                 "or fix the typo (it is never replaced by the scenario's own arm)."
             )
         blocks.append(coop)
+    if not blocks:
+        raise PolicyError(
+            f"cooperation structure override {structure!r}: the scenario has no assignment agent "
+            "(declared structures: none), so there is no arm to select. Drop the override, or "
+            "use a scenario with an assignment agent."
+        )
     for coop in blocks:
         coop["active"] = wanted
-    return (wanted, frozenset({"cooperation"})) if blocks else (None, frozenset())
+    return wanted, frozenset({"cooperation"})
 
 
 @contextmanager

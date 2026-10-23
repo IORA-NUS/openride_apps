@@ -8,6 +8,7 @@ here. The runtime still loads only ``scenario.json``.
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Optional
 
 from apps.container_logistics.datagen.demand import recommended_early_order_count
@@ -19,7 +20,10 @@ from apps.container_logistics.datagen.overrides import (
 from apps.container_logistics.datagen.preprocess import Preprocessor, SpecValidationError
 from apps.container_logistics.policies.compat import legacy as _legacy
 from apps.container_logistics.policies.compat.mirrors import mirror_dispatch_selection
-from apps.container_logistics.policies.dispatch.profile import as_dispatch_node
+from apps.container_logistics.policies.dispatch.profile import (
+    as_dispatch_node,
+    assert_assignment_profiles_resolvable,
+)
 from apps.container_logistics.policies.framework import (
     PolicyError,
     ResolvedPolicy,
@@ -284,6 +288,12 @@ def compile_spec_to_bundle(
     _patch_assignment_profiles(
         result.assignment, resolved_policies, compiled.policies_provenance.get("planner", "legacy")
     )
+    # The run-start check, at compile (final review L10): the bundle format, mirrors and
+    # the planner BINDING (messages 13, 14, 23, 24) of the profiles about to be written,
+    # so a bundle the sim main would refuse is never written. Cheap (~0.5 ms warm on the
+    # 1000-truck bundle) and read-only: a deep copy is bound, so a solver's ``bind`` can
+    # not leave anything in the written bundle. Raises ``PolicyError``.
+    assert_assignment_profiles_resolvable(copy.deepcopy(result.assignment))
 
     orsim_settings = dict(compiled.orsim_settings)
     orsim_settings["BEHAVIOR_REVISION"] = spec.behavior_revision

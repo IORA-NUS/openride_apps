@@ -25,6 +25,48 @@ def _sim_clock_http_param(value: Any) -> str:
     raise TypeError(f"Unsupported sim_clock type: {type(value)!r}")
 
 
+#: The run setting (``orsim_settings`` key -> ``run_config``) the cooperation record rides in.
+COOPERATION_SETTING = "COOPERATION"
+
+
+def cooperation_record(world: Optional[Mapping[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The run's ``COOPERATION`` record, derived from WORLD data (final review M3).
+
+    ``world`` is an assignment profile (or a run world over one) AFTER any per-run
+    ``--structure`` override; only its ``cooperation`` key is read. Returns ``None``
+    when it has no active structure (own-haulier only: no planner rows), else
+    ``{structure_id, components, adjacency, pools}`` as plain JSON -- the record
+    :meth:`AnalyticsManager.set_cooperation` reads for the planner-scope breakdown rows
+    and gains attribution. The structure's own ``components`` / ``adjacency`` as
+    authored (``[]`` / ``{}`` when absent) and the EFFECTIVE pools
+    (``assignment.pools.pools_from_structure``).
+
+    FRAMEWORK-owned: the sim main writes it (``_apply_run_declaration``) for every run
+    with an arm, whatever the solver declared, so the analytics never depends on a
+    solver choosing to stamp it. It equals the built-in solvers' own
+    ``solver_lib.cooperation.stamp(resolve_arm(world))`` byte for byte
+    (``tests/test_run_entry_ownership.py`` pins it on every structure of the compiled
+    smoke bundle and a hand-written block), which keeps the built-ins' run settings identical.
+    """
+    # Local imports: the assignment package is not on this module's import path.
+    from apps.container_logistics.assignment import constraints as assign_constraints
+    from apps.container_logistics.assignment import pools as assign_pools
+
+    structure = assign_constraints.active_cooperation_structure(
+        {"cooperation": (world or {}).get("cooperation")}
+    )
+    if structure is None:
+        return None
+    structure = structure if isinstance(structure, dict) else {}
+    return json.loads(json.dumps({
+        "structure_id": structure.get("id"),
+        "components": structure.get("components") or [],
+        "adjacency": structure.get("adjacency") or {},
+        "pools": [{"id": p.id, "members": sorted(p.members)}
+                  for p in assign_pools.pools_from_structure(structure)],
+    }))
+
+
 class AnalyticsManager(ResourceClientMixin, ORSimManager):
     """Fetches haul-trip and order snapshots from OpenRide and persists KPI rows."""
 
@@ -60,7 +102,8 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         self._run_start_time: Optional[Any] = None
         # Collaboration (haulier job sharing): run-wide counters for the scalar
         # KPIs, plus the active structure's planner groups (set by the analytics
-        # app from orsim_settings["COOPERATION"]; empty => no planner scope rows).
+        # app from orsim_settings["COOPERATION"], which the sim main derives from the
+        # world's active arm, `cooperation_record`; empty => no planner scope rows).
         self._shared_trip_count: int = 0
         self._total_benefit_km: float = 0.0
         self._coop_structure_id: Optional[str] = None
@@ -68,6 +111,9 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
 
     def set_cooperation(self, coop: Optional[Dict[str, Any]]) -> None:
         """Receive the active cooperation structure (shipped via orsim_settings).
+
+        ``coop`` is the framework's :func:`cooperation_record` of the run's world (never
+        a solver's own choice, final review M3), or ``None`` without an arm.
 
         Only multi-member components become planner groups — a solo haulier's
         "planner" is just the company itself (already a haulier row)."""

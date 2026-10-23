@@ -1,3 +1,17 @@
+"""The container-logistics sim main: load the scenario, apply the run's overrides, bind, spawn.
+
+Single responsibility: the run-start ENTRY PATH. ``main()`` reads the run's
+``ORSIM_*`` inputs (``scenario_overrides`` holds the readers the control-plane dry run
+shares), patches the loaded behaviors in memory, runs the run-start policy check and
+binding, writes the framework's run settings (:data:`FRAMEWORK_RUN_SETTINGS`, only
+through :func:`_set_run_setting`) and hands everything to ``SimulationRuntime``.
+
+Every policy refusal before an agent spawns is exit 2 with the message printed
+(:func:`_refuse_invalid_policy_config`); ``main()`` maps ANY ``PolicyError`` raised by
+its policy section to it, so a bind-time error never surfaces as a traceback and
+exit 1.
+"""
+
 import logging
 import os
 import sys
@@ -6,10 +20,15 @@ from types import SimpleNamespace
 from apps.container_logistics.scenario.scenario_config import default_scenario_name
 from apps.container_logistics.scenario.scenario_manager import ScenarioManager
 from apps.container_logistics.scenario.scenario_overrides import (
+    REMOVED_SHARING_ENV as _REMOVED_SHARING_ENV,  # noqa: F401 - kept importable from here
     apply_cooperation_override,
     current_policies_for_profile,
     dispatch_override_label,  # noqa: F401 - re-exported (the run-name label format lives there)
+    policy_overrides_from_env,
+    refuse_removed_sharing_env,
     run_dispatch_overrides,
+    solver_from_env,
+    structure_from_env,
 )
 from apps.simulation.container_logistics_wiring import (
     build_agent_source,
@@ -49,6 +68,41 @@ def _refuse_invalid_policy_config(error: PolicyError) -> None:
     sys.exit(2)
 
 
+#: EVERY run setting ``main()`` itself writes into ``scenario_manager.orsim_settings``
+#: (which ships to the agents and becomes ``run_config.meta``). The ONE list: every
+#: write goes through :func:`_set_run_setting`, which refuses a key missing from it, and
+#: ``tests/test_run_entry_ownership.py`` fails on a subscript write that bypasses
+#: the helper. :func:`_apply_run_declaration` refuses a solver ``stamp_settings`` key in
+#: this set (or already in the settings), whether or not this run writes it: a key the
+#: framework writes later (``STREAM_GEO`` in headless mode, ``PERSIST_ROUTE_GEO``,
+#: ``ORDER_LIFECYCLE``) would otherwise silently overwrite the solver's value, or the
+#: solver's would stand on a run where the framework does not write it.
+#: ``COOPERATION`` is framework-owned too (final review M3): derived from the run's
+#: active arm in WORLD data, never from what a solver chose to stamp.
+FRAMEWORK_RUN_SETTINGS = frozenset({
+    "POLICIES",
+    "COOPERATION",
+    "STREAM_GEO",
+    "MIN_STEP_WALL_TIME_MS",
+    "PERSIST_ROUTE_GEO",
+    "ORDER_LIFECYCLE",
+})
+
+
+def _set_run_setting(scenario_manager, key: str, value) -> None:
+    """``scenario_manager.orsim_settings[key] = value`` for a key in :data:`FRAMEWORK_RUN_SETTINGS`.
+
+    Raises ``KeyError`` for any other key: a new framework-written setting is added to
+    the list first, so the solver collision guard can never miss it (final review M1).
+    """
+    if key not in FRAMEWORK_RUN_SETTINGS:
+        raise KeyError(
+            f"run setting {key!r} is not in FRAMEWORK_RUN_SETTINGS; add it there so the "
+            "stamp_settings collision guard refuses it."
+        )
+    scenario_manager.orsim_settings[key] = value
+
+
 def _assert_policies_resolvable_or_exit(assignment_collection, patched_world_keys=frozenset()) -> None:
     """Exit 2 (via :func:`_refuse_invalid_policy_config`) on an unresolvable dispatch policy.
 
@@ -63,19 +117,12 @@ def _assert_policies_resolvable_or_exit(assignment_collection, patched_world_key
         _refuse_invalid_policy_config(exc)
 
 
-#: Removed per-run variable (plan item 34): ``planner.sharing`` is read only at
-#: compile time (``datagen/preprocess.py``), so patching it at run start changed nothing.
-_REMOVED_SHARING_ENV = "ORSIM_SHARING_POLICY"
-
-
 def _refuse_removed_sharing_env_or_exit() -> None:
-    """Exit 2 when the removed ``ORSIM_SHARING_POLICY`` is set (it used to be ignored silently)."""
-    value = os.environ.get(_REMOVED_SHARING_ENV, "").strip()
-    if value:
-        _refuse_invalid_policy_config(PolicyError(
-            f"{_REMOVED_SHARING_ENV}={value!r} is removed: set planner.sharing in spec.json and "
-            "recompile; the run-time override was inert."
-        ))
+    """Exit 2 when the removed ``ORSIM_SHARING_POLICY`` is set (``scenario_overrides.refuse_removed_sharing_env``)."""
+    try:
+        refuse_removed_sharing_env(os.environ)
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
 
 
 def _apply_cooperation_override_or_exit(assignment_collection) -> tuple[str | None, frozenset]:
@@ -84,7 +131,7 @@ def _apply_cooperation_override_or_exit(assignment_collection) -> tuple[str | No
     Returns ``scenario_overrides.apply_cooperation_override``'s ``(applied_id,
     patched_world_keys)``, ``(None, frozenset())`` when the variable is unset.
     """
-    structure = os.environ.get("ORSIM_COOP_STRUCTURE", "").strip() or None
+    structure = structure_from_env(os.environ)
     try:
         return apply_cooperation_override(assignment_collection, structure)
     except PolicyError as exc:
@@ -95,8 +142,7 @@ def _resolve_solver() -> str | None:
     # Per-run per-scope solver override (set by the control layer / frontend). Applied to
     # the loaded assignment behavior in-memory before agents spawn — no scenario regen, no
     # celery restart (the solver registry already lives in the worker). See CLAUDE.md.
-    value = os.environ.get("ORSIM_SOLVER", "").strip()
-    return value or None
+    return solver_from_env(os.environ)
 
 
 def _resolve_policy_overrides() -> dict:
@@ -104,20 +150,9 @@ def _resolve_policy_overrides() -> dict:
 
     ``ORSIM_SOLVER`` travels separately (the innermost per-scope solver, round-2 §3.3);
     :func:`_apply_dispatch_overrides_or_exit` combines the two. Raises ``PolicyError``
-    for malformed JSON.
+    for malformed JSON (``scenario_overrides.policy_overrides_from_env``).
     """
-    import json
-
-    raw = os.environ.get("ORSIM_POLICY_OVERRIDES", "").strip()
-    if not raw:
-        return {}
-    try:
-        overrides = json.loads(raw)
-    except ValueError as exc:
-        raise PolicyError(f"ORSIM_POLICY_OVERRIDES is not valid JSON ({exc}): {raw!r}") from exc
-    if not isinstance(overrides, dict):
-        raise PolicyError(f"ORSIM_POLICY_OVERRIDES must be a JSON object of slot -> entry (got {raw!r}).")
-    return overrides
+    return policy_overrides_from_env(os.environ)
 
 
 def _apply_dispatch_overrides_or_exit(assignment_collection) -> tuple[dict, dict]:
@@ -197,7 +232,7 @@ def _stamp_effective_policies(scenario_manager, overridden: bool):
         )
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
-    scenario_manager.orsim_settings["POLICIES"] = stamp
+    _set_run_setting(scenario_manager, "POLICIES", stamp)
     d = stamp["planner"]
     print(
         f"Policies effective: planner={d['label']} v{d['version']} timing={d['timing']} "
@@ -207,28 +242,62 @@ def _stamp_effective_policies(scenario_manager, overridden: bool):
     return tree
 
 
-def _apply_run_declaration(scenario_manager, tree, run_name: str | None) -> str | None:
-    """Merge the top declaration's ``stamp_settings`` and run-name segments; return the run name.
+def _first_assignment_profile(scenario_manager):
+    """The first assignment behavior's ``profile`` (post-override), ``{}`` without one."""
+    get = getattr(scenario_manager, "get_agent_collection", None)
+    collection = (get("assignment") if get is not None else None) or {}
+    behavior = next(iter(collection.values()), None)
+    return (behavior.get("profile") if isinstance(behavior, dict) else None) or {}
 
-    ``stamp_settings`` (e.g. a solver's ``COOPERATION`` record, which the analytics agent
-    reads for its planner rows) are merged into ``orsim_settings``, which ships them to
-    the agents at spawn (the STREAM_GEO pattern). A key the settings already hold
-    (``POLICIES``, ``STREAM_GEO``, ...) is REFUSED (exit 2): a solver may add run
-    settings, never overwrite the framework's. ``run_name_segments`` are appended
-    after the legacy segments, idempotent by SEGMENT (not substring, so ``chain``
-    never matches ``chain2``): the ``--structure`` path already appended its
+
+def _apply_run_declaration(scenario_manager, tree, run_name: str | None, profile=None) -> str | None:
+    """Write the framework's ``COOPERATION``, merge the top's ``stamp_settings`` and run-name segments.
+
+    ``COOPERATION`` (the record the analytics agent builds its planner-scope rows and
+    gains attribution from, ``analytics.manager.cooperation_record``) is FRAMEWORK-owned
+    (final review M3): derived from the active arm of ``profile``'s cooperation block
+    (world data, after any ``--structure`` override; default: the first assignment
+    profile) and written whenever the run has an arm, whatever the solver declared --
+    so a contract-only solver gets planner rows too. A solver that ALSO declares a
+    ``COOPERATION`` stamp setting (the built-ins do) must declare exactly that record;
+    any other value is refused (exit 2). Written at the place the solver's value used
+    to be merged, so the built-ins' settings are byte-identical.
+
+    The other ``stamp_settings`` are merged into ``orsim_settings``, which ships them to
+    the agents at spawn (the STREAM_GEO pattern). A key the settings already hold, or
+    any key in :data:`FRAMEWORK_RUN_SETTINGS` (``POLICIES``, ``STREAM_GEO``,
+    ``PERSIST_ROUTE_GEO``, ``ORDER_LIFECYCLE``, ``MIN_STEP_WALL_TIME_MS``, ...; written
+    later in ``main()`` or not on this run), is REFUSED (exit 2): a solver may add run
+    settings, never replace or pre-empt the framework's. ``run_name_segments`` are
+    appended after the legacy segments, idempotent by SEGMENT (not substring, so
+    ``chain`` never matches ``chain2``): the ``--structure`` path already appended its
     ``· <structure>`` and must not get ``… · chain · chain``.
     """
+    from apps.container_logistics.analytics.manager import COOPERATION_SETTING, cooperation_record
+
     if tree is None:
         return run_name
     declaration = tree.declaration
-    clash = sorted(k for k in declaration.stamp_settings if k in scenario_manager.orsim_settings)
+    record = cooperation_record(_first_assignment_profile(scenario_manager) if profile is None else profile)
+    declared = dict(declaration.stamp_settings)
+    if COOPERATION_SETTING in declared and declared[COOPERATION_SETTING] != record:
+        _refuse_invalid_policy_config(PolicyError(
+            f"planner policy {tree.top.name} declared run setting {COOPERATION_SETTING}="
+            f"{declared[COOPERATION_SETTING]!r}, but the run's active cooperation arm is "
+            f"{record!r}. {COOPERATION_SETTING} is framework-owned (derived from the world's "
+            "cooperation block); drop it from stamp_settings or declare exactly that record."
+        ))
+    declared.pop(COOPERATION_SETTING, None)
+    clash = sorted(k for k in declared
+                   if k in scenario_manager.orsim_settings or k in FRAMEWORK_RUN_SETTINGS)
     if clash:
         _refuse_invalid_policy_config(PolicyError(
             f"planner policy {tree.top.name} declared run setting(s) {', '.join(clash)} that the run "
-            "already sets; a solver's stamp_settings may add settings, never replace one."
+            "already sets or the framework owns; a solver's stamp_settings may add settings, never replace one."
         ))
-    scenario_manager.orsim_settings.update(declaration.stamp_settings)
+    if record is not None:
+        _set_run_setting(scenario_manager, COOPERATION_SETTING, record)
+    scenario_manager.orsim_settings.update(declared)
     for segment in declaration.run_name_segments:
         segments = [seg.strip() for seg in (run_name or "").split("·")]
         if segment not in segments:
@@ -282,7 +351,7 @@ def apply_order_lifecycle_service_mode(scenario_manager, run_name: str | None) -
     # (3) Service agents read orsim_settings (ships via scheduler['orsim_settings'], validated
     #     with allow_unknown); SimulationRuntime reads it to decide whether to pre-create
     #     order documents.
-    scenario_manager.orsim_settings["ORDER_LIFECYCLE"] = "service"
+    _set_run_setting(scenario_manager, "ORDER_LIFECYCLE", "service")
     # (4) TruckTripManager has no orsim_settings, so re-target its ORDER_* events via the truck
     #     behavior profile (ships via spec['behavior'] at spawn — the stream_geo pattern). Done
     #     before the agent source is built so the patched behaviors ship.
@@ -387,70 +456,80 @@ def main():
         scenario_manager.orsim_settings
     )
 
-    # Per-run dispatch selection (ORSIM_POLICY_OVERRIDES, the legacy dispatch
-    # variables of compat/legacy_env.py and ORSIM_SOLVER = the innermost per-scope
-    # solver): patch the loaded assignment behaviors in place so this run uses the
-    # requested policy/params on the identical (unchanged) scenario data — enabling
-    # apples-to-apples comparisons on one scenario dir. ONE application point; the
-    # legacy segments are appended at their old place below.
-    dispatch_overrides, dispatch_labels = _apply_dispatch_overrides_or_exit(
-        scenario_manager.get_agent_collection("assignment")
-    )
-    policies_overridden = bool(dispatch_overrides)
-    dispatch_label = dispatch_labels["planner"]
-    if dispatch_label:
-        print(f"Assignment dispatch override: {dispatch_label}")
-        # Surface the chosen policy (and overridden params) in run lists with zero
-        # kafka/schema changes; format in dispatch_override_label.
-        run_name = f"{run_name} · {dispatch_label}" if run_name else dispatch_label
-    capture_dir = _apply_capture_env_or_exit(
-        scenario_manager.get_agent_collection("assignment"), datahub_dir, run_id
-    )
-    if capture_dir:
-        print(f"Dispatch context capture: {capture_dir}")
-
-    # Per-run cooperation-structure override (collaboration plan §7): same mechanism as
-    # the solver override — pure data patched onto the loaded assignment profile before
-    # agents spawn; the on-disk bundle is never touched. Fail-loud: an undeclared id (or
-    # a scenario with no cooperation block) exits 2 (message 26), and the patched world
-    # keys go to the run-start check below, which refuses a patch the bound planner tree
-    # never reads (message 25). It runs BEFORE that check so the check sees the patch.
-    _refuse_removed_sharing_env_or_exit()
-    applied_structure, patched_world_keys = _apply_cooperation_override_or_exit(
-        scenario_manager.get_agent_collection("assignment")
-    )
-    if applied_structure:
-        print(f"Cooperation structure override: {applied_structure}")
-        run_name = (
-            f"{run_name} · {applied_structure}" if run_name else applied_structure
+    # The policy section. Every refusal in it is a ``PolicyError``: the helpers exit 2
+    # themselves, and the ``except`` below maps any ``PolicyError`` that still escapes
+    # (a bind-time error raised outside them, final review L1) to the same exit 2 with
+    # the message printed -- never a traceback and exit 1.
+    try:
+        # Per-run dispatch selection (ORSIM_POLICY_OVERRIDES, the legacy dispatch
+        # variables of compat/legacy_env.py and ORSIM_SOLVER = the innermost per-scope
+        # solver): patch the loaded assignment behaviors in place so this run uses the
+        # requested policy/params on the identical (unchanged) scenario data — enabling
+        # apples-to-apples comparisons on one scenario dir. ONE application point; the
+        # legacy segments are appended at their old place below.
+        dispatch_overrides, dispatch_labels = _apply_dispatch_overrides_or_exit(
+            scenario_manager.get_agent_collection("assignment")
         )
-
-    # The legacy dispatch variables' run-name segments (compat/legacy_env.py), applied
-    # above with the other dispatch inputs. They stay HERE so run names keep their
-    # pre-v2 order (solver · structure · legacy segment) and stay byte-identical.
-    for legacy_segment in dispatch_labels["legacy"]:
-        print(f"Legacy dispatch override: {legacy_segment}")
-        # Surface the segment in run lists (same trick as the solver override)
-        # so runs are self-describing in the picker.
-        run_name = (
-            f"{run_name} · {legacy_segment}" if run_name else legacy_segment
+        policies_overridden = bool(dispatch_overrides)
+        dispatch_label = dispatch_labels["planner"]
+        if dispatch_label:
+            print(f"Assignment dispatch override: {dispatch_label}")
+            # Surface the chosen policy (and overridden params) in run lists with zero
+            # kafka/schema changes; format in dispatch_override_label.
+            run_name = f"{run_name} · {dispatch_label}" if run_name else dispatch_label
+        capture_dir = _apply_capture_env_or_exit(
+            scenario_manager.get_agent_collection("assignment"), datahub_dir, run_id
         )
+        if capture_dir:
+            print(f"Dispatch context capture: {capture_dir}")
 
-    # Fail loud before any agent spawns: an unknown dispatch policy would otherwise
-    # only surface agent-side, in the celery journal.
-    _assert_policies_resolvable_or_exit(
-        scenario_manager.get_agent_collection("assignment"), patched_world_keys
-    )
-    bound_tree = _stamp_effective_policies(scenario_manager, policies_overridden)
+        # Per-run cooperation-structure override (collaboration plan §7): same mechanism as
+        # the solver override — pure data patched onto the loaded assignment profile before
+        # agents spawn; the on-disk bundle is never touched. Fail-loud: an undeclared id (or
+        # a scenario with no cooperation block) exits 2 (message 26), and the patched world
+        # keys go to the run-start check below, which refuses a patch the bound planner tree
+        # never reads (message 25). It runs BEFORE that check so the check sees the patch.
+        _refuse_removed_sharing_env_or_exit()
+        applied_structure, patched_world_keys = _apply_cooperation_override_or_exit(
+            scenario_manager.get_agent_collection("assignment")
+        )
+        if applied_structure:
+            print(f"Cooperation structure override: {applied_structure}")
+            run_name = (
+                f"{run_name} · {applied_structure}" if run_name else applied_structure
+            )
 
-    # The top solver's run declaration: its stamp settings (e.g. the EFFECTIVE
-    # cooperation record the analytics agent builds planner-scope breakdown rows and
-    # gains attribution from, carried by scheduler['orsim_settings'] like STREAM_GEO)
-    # and its run-name segments. A solver that runs a cooperation arm names it here on
-    # EVERY run that has one, not just on the --structure path: Compare compares RUNS,
-    # and the run name is what tells two arms of one scenario apart in the picker
-    # (`lib/runNameMeta.ts::parseRunNameTags`).
-    run_name = _apply_run_declaration(scenario_manager, bound_tree, run_name)
+        # The legacy dispatch variables' run-name segments (compat/legacy_env.py), applied
+        # above with the other dispatch inputs. They stay HERE so run names keep their
+        # pre-v2 order (solver · structure · legacy segment) and stay byte-identical.
+        for legacy_segment in dispatch_labels["legacy"]:
+            print(f"Legacy dispatch override: {legacy_segment}")
+            # Surface the segment in run lists (same trick as the solver override)
+            # so runs are self-describing in the picker.
+            run_name = (
+                f"{run_name} · {legacy_segment}" if run_name else legacy_segment
+            )
+
+        # Fail loud before any agent spawns: an unknown dispatch policy would otherwise
+        # only surface agent-side, in the celery journal.
+        _assert_policies_resolvable_or_exit(
+            scenario_manager.get_agent_collection("assignment"), patched_world_keys
+        )
+        bound_tree = _stamp_effective_policies(scenario_manager, policies_overridden)
+
+        # The framework's COOPERATION record (the active arm of the world's cooperation
+        # block, which the analytics agent builds planner-scope breakdown rows and gains
+        # attribution from, carried by scheduler['orsim_settings'] like STREAM_GEO), then
+        # the top solver's run declaration: its other stamp settings and its run-name
+        # segments. A solver that runs a cooperation arm names it here on
+        # EVERY run that has one, not just on the --structure path: Compare compares RUNS,
+        # and the run name is what tells two arms of one scenario apart in the picker
+        # (`lib/runNameMeta.ts::parseRunNameTags`).
+        run_name = _apply_run_declaration(
+            scenario_manager, bound_tree, run_name, _first_assignment_profile(scenario_manager)
+        )
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
 
     # Headless mode (CLI fast-path): suppress the per-tick truck-location Kafka publishing,
     # which exists purely to feed the LIVE frontend map. KPI/breakdown/run_status publishing
@@ -468,7 +547,7 @@ def main():
     if os.environ.get("ORSIM_HEADLESS", "").strip().lower() in ("1", "true", "yes", "on"):
         # Run-level marker for "the live visual streams are off". Mirrored into each truck's
         # behavior profile below, which is what the publish hot path actually reads.
-        scenario_manager.orsim_settings["STREAM_GEO"] = False
+        _set_run_setting(scenario_manager, "STREAM_GEO", False)
         # TruckApp has no orsim_settings, so disable its per-step location emit via the
         # truck behavior profile (ships via spec['behavior'] at spawn — like the solver
         # override patches the assignment collection in place). Done before the agent source
@@ -478,7 +557,7 @@ def main():
             _behavior.setdefault("profile", {})["stream_geo"] = False
         # The per-step pacing floor exists purely so the live dashboard has a
         # steady stream to render; headless runs have no viewer — run flat out.
-        scenario_manager.orsim_settings["MIN_STEP_WALL_TIME_MS"] = 0
+        _set_run_setting(scenario_manager, "MIN_STEP_WALL_TIME_MS", 0)
         print(
             "Headless mode: truck-location streaming disabled "
             f"(STREAM_GEO=False, {len(truck_collection)} trucks muted, step pacing floor off)"
@@ -495,7 +574,7 @@ def main():
         "no",
         "off",
     )
-    scenario_manager.orsim_settings["PERSIST_ROUTE_GEO"] = _persist_route_geo
+    _set_run_setting(scenario_manager, "PERSIST_ROUTE_GEO", _persist_route_geo)
     print(f"Route geometry persistence: PERSIST_ROUTE_GEO={_persist_route_geo}")
 
     # Order-lifecycle mode (docs/order_lifecycle_service_plan.md). In ``service`` mode orders

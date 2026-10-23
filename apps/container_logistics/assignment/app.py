@@ -53,13 +53,20 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             agent_helper=agent_helper,
         )
         # Plug-and-play dispatch selection: the compiled ``policies.planner`` block,
-        # or the legacy keys (``strategy``/``solver_params``/``planner.topology``/
-        # ``planner.market``), resolves to a selection TREE of registered dispatch
-        # policies (e.g. Partitioned/GreedyNearest). An unknown name raises (no
+        # or the legacy keys, resolves to a selection TREE of registered dispatch
+        # policies. It is checked and BOUND HERE, eagerly, failing loud (final review
+        # M12): ``_check_selection_at_start`` runs the sim main's own run-start check
+        # (bundle format -- a round-1 flat block is refused with the sim main's
+        # message --, resolution, mirrors, binding), then the tree is built and bound
+        # exactly as every tick binds it. Any refusal raises out of ``__init__``, so
+        # ORSim logs ONE error and marks the agent failed: the agent refuses to run
+        # instead of logging the same error on every tick. An unknown name raises (no
         # fallback); only that error gets the stale-worker suffix -- a param or timing
         # error is not explained by it.
         prof = self.behavior.get("profile") or {}
+        agent_id = str(getattr(agent_helper, "unique_id", None) or "assignment")
         try:
+            self._check_selection_at_start(agent_id, prof)
             self._solver = self._build_dispatch_policy(prof)
         except UnknownPolicyError as exc:
             raise type(exc)(f"{exc}{_STALE_WORKER_HINT}") from exc
@@ -68,6 +75,9 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         self._warned_haulier_block = False
         # (truck_id, order_id) -> collaboration tag for the current tick's matches.
         self._share_tags: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # The eager bind: the same ``bind_profile`` the sim main's stamp binds with, the
+        # runner every tick reuses while the profile is unchanged.
+        self._dispatch_runner(prof)
 
     @property
     def managed_statemachine(self):
@@ -118,6 +128,23 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
     # pooled_planner), so a module-top import here would cycle through
     # ``assignment/__init__`` (tests/test_policy_import_cycles.py pins it). The leaf
     # ``policies.framework`` and ``assignment.accounting`` are safe at module top.
+
+    @staticmethod
+    def _check_selection_at_start(agent_id: str, prof: Dict[str, Any]) -> None:
+        """The sim main's run-start check on this agent's profile (raises ``PolicyError``).
+
+        ``dispatch.profile.assert_assignment_profiles_resolvable``: the
+        ``policies_format`` marker (``compat.legacy.check_policies_format``, the sim
+        main's check and message), resolution, the legacy mirrors (message 13) and the
+        binding (messages 14, 23, 24), the agent id prefixed as at run start. A worker
+        reached by a stale bundle (smoke/stress paths, an old scheduler) is refused
+        here exactly as the sim main would have refused it.
+        """
+        from apps.container_logistics.policies.dispatch.profile import (  # local: cycle rule
+            assert_assignment_profiles_resolvable,
+        )
+
+        assert_assignment_profiles_resolvable({agent_id: {"profile": prof}})
 
     @staticmethod
     def _build_dispatch_policy(prof: Dict[str, Any]):
