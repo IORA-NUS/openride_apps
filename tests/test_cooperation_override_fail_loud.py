@@ -62,11 +62,8 @@ def _payload(argv, capsys):
 @pytest.fixture
 def non_reader():
     """``NonReader``: a planner whose ``bind`` reads no world key (so no ``cooperation``)."""
-    # ``information_model`` is still required at registration until WS4b deletes it.
-    legacy_meta = ({"information_model": "central"}
-                   if "information_model" in inspect.signature(policy).parameters else {})
     with isolated_registry():
-        @policy(slot="planner", name="NonReader", version="1", description="reads no world key", **legacy_meta)
+        @policy(slot="planner", name="NonReader", version="1", description="reads no world key")
         class NonReader(DispatchPolicy):
             @dataclass(frozen=True)
             class Params(PolicyParams):
