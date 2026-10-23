@@ -14,8 +14,9 @@ pairs (plan ``plan_contract_final.md`` §2.7), identical for every solver:
    top-level solver aborts the tick, as the partitioned path always did).
 3. ``invariants.check_result`` against the tick, with the verified-pair-aware check
    (a pair a sub-tick already proved re-checks only ownership-or-declared), the
-   framework's own index and its document fingerprints; then every truck of the tick
-   must be unmodified (the share accounting reads them all), and the notes must
+   framework's own index; then every truck of the tick and every committed order must
+   be unmodified since the tick was built (the share accounting reads all the trucks),
+   and the notes must
    be wire-safe (``invariants.check_wire_notes``: no framework wire field, plain JSON).
    Any problem: log ERROR (message 18), count, commit NOTHING this tick. Nothing here
    is read back from the tick's solver-visible attributes (review H2, L3).
@@ -184,10 +185,12 @@ class DispatchRunner:
             capture(tick=tick, result=result, problems=list(problems))
         shared = tick._shared
         if not problems:
-            problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index,
-                                    intact=shared.intact)
+            problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index)
         if not problems:
-            changed = shared.changed()
+            # One pass over every truck (the accounting reads them all) and the committed
+            # orders: a pair judged above on a modified document is refused here.
+            orders = shared.index[1]
+            changed = shared.changed(orders[oid] for _tid, oid in result.pairs)
             if changed:
                 shown = ", ".join(repr(i) for i in changed[:8]) + (" ..." if len(changed) > 8 else "")
                 problems = [f"document(s) {shown} were modified during the solve (documents are read-only)"]

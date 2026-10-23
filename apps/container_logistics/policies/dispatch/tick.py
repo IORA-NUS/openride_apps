@@ -32,7 +32,7 @@ property handing out that same function), its own id index (no instance ``__dict
 to pre-seed; ``__slots__`` and read-only properties throughout), the declared pairs,
 and a fingerprint of every document. A result naming a document that was modified
 during the solve is refused: in a sub-tick for the paired documents, at the top for the
-paired documents AND every truck of the tick (the share accounting prices the owner
+committed orders AND every truck of the tick (the share accounting prices the owner
 reserve over all of them after the commit; an unpaired order is read by nothing). So
 the verified-pair memo is sound: a sub-tick's physical verdict was reached by the
 framework's predicate on unmodified documents. Out of scope, as in any Python: a solver
@@ -49,6 +49,7 @@ Framework side of the boundary. Not a leaf module: it calls ``assignment.constra
 from __future__ import annotations
 
 import hashlib
+import itertools
 import logging
 import pickle
 import random
@@ -296,17 +297,17 @@ class _TickShared:
         before = self._fingerprints.get(id(doc))
         return before is not None and _fingerprint(doc, before) == before
 
-    def changed(self) -> list[str]:
-        """The ids of this tick's TRUCKS modified since it was built (``[]``: none).
+    def changed(self, orders: Iterable[Doc] = ()) -> list[str]:
+        """The ids of this tick's trucks, and of ``orders``, modified since it was built (``[]``: none).
 
-        Trucks only: after the commit the share accounting reads every truck (the owner
-        reserve) but only the committed orders, which the check has already found intact.
+        Every truck, because after the commit the share accounting reads all of them (the
+        owner reserve); of the orders only the committed ones (``orders``) are read again.
         """
         out = []
         fingerprints = self._fingerprints
-        for doc in self._docs[0]:
-            before = fingerprints[id(doc)]
-            if _fingerprint(doc, before) != before:
+        for doc in itertools.chain(self._docs[0], orders):
+            before = fingerprints.get(id(doc))
+            if before is None or _fingerprint(doc, before) != before:
                 out.append(str(doc.get("_id")) if isinstance(doc, dict) else repr(doc))
         return out
 
@@ -724,8 +725,9 @@ class Tick:
         A pair a sub-tick check passed (``call``: the framework's predicate for that
         sub-tick, on intact documents) re-checks only ownership-or-declared; every other
         pair gets the full predicate. Equal to ``permitted`` for every pair, because the
-        top check also refuses any document modified since the tick was built
-        (``_TickShared.intact``).
+        runner then refuses the tick if any truck or committed order was modified since
+        the tick was built (``_TickShared.changed``), and a sub-tick's verdict was reached
+        on intact documents (``Tick.call``).
         """
         shared = self._shared
         proved = shared.proved

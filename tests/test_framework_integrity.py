@@ -238,10 +238,10 @@ def test_h2_tampering_with_the_tick_commits_nothing(evil, mode, caplog):
     metric).
 
     Teeth: ``git checkout 44922b4 -- policies/dispatch/{tick,runner}.py assignment/app.py``
-    (the code before the fix) failed every case, each by committing a pair; separately, deleting only the
-    ``shared.changed()`` scan from ``DispatchRunner.run`` failed ``mutate_unpaired``, and
-    only ``intact=shared.intact`` from its ``check_result`` call failed ``mutate_order``
-    (a mutated TRUCK is also caught by the scan).
+    (the code before the fix) failed every case, each by committing a pair; separately, replacing the
+    ``shared.changed(...)`` scan in ``DispatchRunner.run`` with ``[]`` failed
+    ``mutate_doc``, ``mutate_order`` and ``mutate_unpaired``, and passing it no committed
+    orders (``shared.changed()``) failed ``mutate_order`` alone.
     """
     with caplog.at_level(logging.ERROR):
         pairs, published, violations, _app_ = _run("Evil", {"mode": mode})

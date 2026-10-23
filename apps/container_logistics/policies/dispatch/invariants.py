@@ -13,8 +13,9 @@ What makes the check hold against a DISHONEST solver (review H2): the framework'
 callers pass the state it took when the tick was built -- ``permitted`` (the tick's own
 predicate: at the top ownership-or-declared AND physical, with the verified-pair memo
 of sub-ticks the framework itself checked), ``index`` (the tick's own documents by id)
-and ``intact`` (whether a document is unmodified since then) -- never anything read
-back from an attribute a solver could have rewritten. So at the top a cross-company
+and, from ``Tick.call``, ``intact`` (whether a document is unmodified since then; the
+runner instead scans every truck and committed order once, after this check) -- never
+anything read back from an attribute a solver could have rewritten. So at the top a cross-company
 pair the top did not declare, or a physically infeasible pair, is a violation whatever
 solver produced it, however it tampered with the tick. Called with the defaults (tests,
 the battery), it reads ``tick.permitted`` / ``tick.id_index``, which are read-only
