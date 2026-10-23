@@ -10,8 +10,12 @@ the BOUND tree the framework runs every tick (plan ``plan_contract_final.md``
   candidate knobs, ``max_travel_time_pickup``) it reads from here; the keys a node
   reads at bind are frozen on its :class:`BoundNode` (``world_reads``), and the
   tree's union keys the runner caches. Every value it hands out is the reading
-  world's own DEEP COPY, so no solver can reach the profile the sim main ships to the
-  agents through it (review H1).
+  world's own DEEP COPY, and the world itself holds only a FROZEN copy of the profile
+  (taken when it is built: each value pickled, immutable bytes), so no solver can reach
+  the profile the sim main ships to the agents through it -- not through a value, and
+  not through the framework-private state table either (review H1, N5). Its bulk-access
+  refusals are contract violations (:class:`WorldAccessError`, also a ``TypeError``;
+  review N9).
 - :class:`Declaration` -- what a node declares at bind: the cross-company
   ``(owner_haulier, carrier_haulier)`` pairs (TOP only, inside the scenario's
   declared ceiling), a ``candidate_hint`` a caller may read, plus provenance / stamp
@@ -55,7 +59,7 @@ from types import MappingProxyType
 from typing import Any, Iterator, Mapping
 
 from apps.container_logistics.policies.compat.selection_keys import LEGACY_SELECTION_KEYS
-from apps.container_logistics.policies.framework.errors import PolicyError
+from apps.container_logistics.policies.framework.errors import DispatchContractViolation, PolicyError
 
 from .run_stats import check_meta_key
 
@@ -68,6 +72,8 @@ __all__ = [
     "Declaration",
     "FRAMEWORK_SELECTION_KEYS",
     "RunWorld",
+    "SolverInitError",
+    "WorldAccessError",
     "bind_profile",
     "bind_tree",
     "refuse_unread_patches",
@@ -79,6 +85,24 @@ __all__ = [
 
 class BindError(PolicyError):
     """A ``bind`` that broke the bind contract: raised a non-``PolicyError``, or changed the profile."""
+
+
+class SolverInitError(PolicyError):
+    """A solver class whose construction (``__init__``) raised something other than a ``PolicyError`` (L1).
+
+    Raised by ``dispatch.profile.build_policy_tree`` naming the solver, so every run-start
+    path (sim main: exit 2; ``validate-run-policies``: a JSON refusal) reports it like a
+    refused ``bind``.
+    """
+
+
+class WorldAccessError(DispatchContractViolation, TypeError):
+    """A refused :class:`RunWorld` access (bulk read, pickling): a contract violation that is still a ``TypeError``.
+
+    Inside ``solve_tick`` it is message 18/19 (the tick or scope is discarded) instead of an
+    exception that aborts every tick; inside ``bind`` a ``PolicyError`` that fails the run
+    with this message (review N9). ``except TypeError`` code keeps working.
+    """
 
 #: Profile keys the FRAMEWORK uses to select and capture a planner: never world data.
 FRAMEWORK_SELECTION_KEYS: tuple[str, ...] = ("policies", "policies_format", "policy_capture")
@@ -104,13 +128,63 @@ def value_fingerprint(value: Any) -> bytes:
         return b"r" + repr(value).encode("utf-8", "replace")
 
 
+class _Pickled:
+    """A frozen world value: its ``pickle`` bytes (immutable); every read unpickles a fresh deep copy."""
+
+    __slots__ = ("blob",)
+
+    def __init__(self, blob: bytes) -> None:
+        self.blob = blob
+
+
+class _Copied:
+    """A frozen world value ``pickle`` refused: a private deep copy, deep-copied again on every read."""
+
+    __slots__ = ("value", "error")
+
+    def __init__(self, value: Any, error: BaseException | None) -> None:
+        self.value = value
+        self.error = error
+
+
+def _freeze(value: Any) -> Any:
+    """``value`` frozen at world construction: scalars as they are, anything else :class:`_Pickled`."""
+    if type(value) in _SCALARS:
+        return value
+    try:
+        return _Pickled(pickle.dumps(value, 5))
+    except Exception:  # noqa: BLE001 - not picklable: a private deep copy
+        pass
+    try:
+        return _Copied(copy.deepcopy(value), None)
+    except Exception as exc:  # noqa: BLE001 - not copyable either: raised on read, as before
+        return _Copied(None, exc)
+
+
+def _thaw(frozen: Any) -> Any:
+    """A fresh deep copy of a :func:`_freeze` d value (``pickle.loads`` equals ``copy.deepcopy`` on profile data)."""
+    kind = type(frozen)
+    if kind is _Pickled:
+        return pickle.loads(frozen.blob)
+    if kind is _Copied:
+        if frozen.error is not None:
+            raise frozen.error
+        return copy.deepcopy(frozen.value)
+    return frozen
+
+
 class _WorldState:
-    """What one :class:`RunWorld` holds: the values, the keys read, the copies handed out."""
+    """What one :class:`RunWorld` holds: the FROZEN values, the keys read, the copies handed out.
+
+    ``data`` is a read-only mapping of frozen values (:func:`_freeze`), taken when the
+    world is built, so nothing reachable from here is the caller's profile (review N5):
+    mutating a thawed copy, or the state table itself, changes no other tick and no agent.
+    """
 
     __slots__ = ("data", "reads", "copies")
 
     def __init__(self, data: Mapping[str, Any]) -> None:
-        self.data = dict(data)
+        self.data = MappingProxyType({k: _freeze(v) for k, v in data.items()})
         self.reads: set[Any] = set()
         self.copies: dict[str, Any] = {}
 
@@ -120,8 +194,7 @@ class _WorldState:
             return self.copies[key]
         except KeyError:
             pass
-        raw = self.data[key]
-        value = raw if type(raw) in _SCALARS else copy.deepcopy(raw)
+        value = _thaw(self.data[key])
         self.copies[key] = value
         return value
 
@@ -148,14 +221,17 @@ class RunWorld(Mapping):
     - **The key list is free.** ``iter(world)``, ``list(world)``, ``sorted(world)`` and
       ``len(world)`` reveal which keys exist and record nothing.
     - **No bulk value access.** ``keys()``, ``items()``, ``values()``, ``dict(world)`` and
-      ``**world`` raise ``TypeError``: a splat would either record every key (and so
+      ``**world`` raise :class:`WorldAccessError` (a ``TypeError`` and a contract
+      violation: message 18/19 in a tick, a refused bind at run start): a splat would either record every key (and so
       silently disable message 25 for every key) or record none (and hide the reads).
       Read the keys you use, one by one.
     - **Nothing on the instance bypasses the record.** The state lives in a
       framework-private table, not in attributes; framework code that must not count
       as a solver read (capture, bench) uses :func:`world_snapshot`. ``copy.copy`` /
       ``copy.deepcopy`` return the world itself (its values are already copies, and
-      reads through it keep being recorded); pickling is refused.
+      reads through it keep being recorded); pickling is refused (:class:`WorldAccessError`).
+    - **The profile is not reachable.** The world holds a frozen copy taken when it was
+      built; the caller's profile is never referenced (review N5).
     """
 
     __slots__ = ("__weakref__",)
@@ -192,8 +268,8 @@ class RunWorld(Mapping):
     def __repr__(self) -> str:
         return f"RunWorld({sorted(_WORLD_STATE[self].data)})"
 
-    def _no_bulk(self, what: str) -> TypeError:
-        return TypeError(
+    def _no_bulk(self, what: str) -> WorldAccessError:
+        return WorldAccessError(
             f"RunWorld.{what} is not supported: read the world keys you use one by one "
             "(world[key] / world.get(key)) so the framework records exactly those reads; "
             "iterate the world for its key list."
@@ -220,7 +296,7 @@ class RunWorld(Mapping):
         return self
 
     def __reduce_ex__(self, protocol: Any) -> Any:
-        raise TypeError("a RunWorld cannot be pickled; read the world keys you use one by one")
+        raise WorldAccessError("a RunWorld cannot be pickled; read the world keys you use one by one")
 
     @property
     def reads(self) -> frozenset[str]:
@@ -230,7 +306,7 @@ class RunWorld(Mapping):
 
 def world_snapshot(world: RunWorld) -> dict[str, Any]:
     """A deep copy of ``world``'s values, WITHOUT recording reads (framework use only: capture, bench)."""
-    return copy.deepcopy(_WORLD_STATE[world].data)
+    return {k: _thaw(v) for k, v in _WORLD_STATE[world].data.items()}
 
 
 @dataclass(frozen=True)
@@ -355,10 +431,16 @@ class BoundNode:
 
 @dataclass(frozen=True, eq=False)
 class BoundTree:
-    """The bound selection: :attr:`top` and its ``inner`` chain (single ``inner``, G8)."""
+    """The bound selection: :attr:`top` and its ``inner`` chain (single ``inner``, G8).
+
+    ``ceiling`` is the cross-company ceiling the top's declaration was checked against
+    (``constraints.declared_partnerships`` of the profile, taken before any bind ran); the
+    runner keeps the run-start one and refuses a re-bind that widens it (review N5).
+    """
 
     top: BoundNode
     world_reads: frozenset[str]
+    ceiling: frozenset = frozenset()
 
     @property
     def resolved(self) -> Any:
@@ -575,7 +657,7 @@ def bind_tree(node: Any, top_instance: Any, profile: Mapping[str, Any] | None) -
         inner = BoundNode(node=n, spec=spec, instance=inst, solver=solver, declaration=declaration,
                           world_reads=reads, inner=inner, path=path)
     reads_union = frozenset().union(*(b[5] for b in bound))
-    return BoundTree(top=inner, world_reads=reads_union)
+    return BoundTree(top=inner, world_reads=reads_union, ceiling=frozenset(ceiling))
 
 
 def refuse_unread_patches(tree: BoundTree, patched_world_keys: Any) -> None:

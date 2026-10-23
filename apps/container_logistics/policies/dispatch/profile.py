@@ -263,17 +263,37 @@ def build_policy_tree(node: ResolvedDispatch, reuse: DispatchPolicy | None = Non
                 f"cannot instantiate the unregistered planner policy {node.name!r}; "
                 "pass the instance as reuse."
             )
-        return get_policy_spec("planner", node.name).cls(params=node.params.to_dict())
+        spec = get_policy_spec("planner", node.name)
+        return _construct(spec, lambda: spec.cls(params=node.params.to_dict()))
     spec = get_policy_spec("planner", node.name)
     inner = build_policy_tree(node.inner, reuse)
     try:
-        return spec.cls(params=node.params.to_dict(), inner=inner, inner_node=node.inner)
+        return _construct(spec, lambda: spec.cls(params=node.params.to_dict(), inner=inner, inner_node=node.inner),
+                          passthrough=TypeError)
     except TypeError as exc:
         raise PolicyError(
             f"planner policy {spec.name!r} has an '{INNER_PARAM}' but its class "
             f"{spec.cls.__qualname__} does not accept the construction keywords "
             f"cls(params=..., inner=..., inner_node=...) ({exc}); subclass "
             "dispatch/composite.py CompositePolicy or accept them."
+        ) from exc
+
+
+def _construct(spec: Any, build: Any, *, passthrough: type | tuple = ()) -> Any:
+    """``build()``; anything but a ``PolicyError`` (or ``passthrough``) becomes a ``bind.SolverInitError`` naming the solver (L1)."""
+    from .bind import SolverInitError
+
+    try:
+        return build()
+    except PolicyError:
+        raise
+    except passthrough:
+        raise
+    except Exception as exc:  # noqa: BLE001 - re-raised as a PolicyError naming the solver
+        raise SolverInitError(
+            f"planner policy {spec.name} v{spec.version}: constructing {spec.cls.__qualname__} raised "
+            f"{type(exc).__name__}: {exc}. A solver's __init__ must succeed for its validated params or "
+            "raise a PolicyError; fix the solver's __init__."
         ) from exc
 
 

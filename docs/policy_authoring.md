@@ -59,10 +59,17 @@ constructor, a default `bind`, the injection API (`set_rng`, `set_tiebreak`,
 `solver_lib.pair_solver.PairSolver` (`solve(trucks, orders, *, pair_allowed, cost)`), which
 the two built-in leaves implement and call from their own `solve_tick`.
 
-What the framework then does, identically for every solver (§6): checks the result
-(`invariants.check_result`: in-scope ids, no truck or order twice, every pair `permitted`),
-discards it on a violation (message 18), commits the pairs, prices the share accounting, folds
-the top's run stats, publishes.
+What the framework then does, identically for every solver (§6): reads the result ONCE into
+plain data (`invariants.normalise_result`: ids must be exact `str`, notes become plain JSON),
+checks that copy (`invariants.check_result`: in-scope ids, no truck or order twice, every pair
+`permitted`), refuses it if any truck or committed order was modified during the solve (the
+last step before the commit), discards it on a violation (message 18), commits exactly the
+documents the check judged, prices the share accounting, folds the top's run stats, publishes.
+Everything after the solve works on that copy: no object your solver returned is read twice.
+
+A solver's `__init__` that raises anything but a `PolicyError` is re-raised as
+`dispatch.bind.SolverInitError` (a `PolicyError`) naming the solver, at every run start: the sim
+main exits 2 and `validate-run-policies` answers `{"ok": false, "message": ...}`.
 
 ## 2. Write a leaf (worked example)
 
@@ -221,9 +228,17 @@ only as `world.get("cooperation")`; the candidate knobs as `spatial_cell_deg`,
 `spatial_candidates_per_order`, `spatial_max_rings`, `max_trucks_per_haulier`. Every key read
 through `[]`, `get` or `in` is recorded (an absent key too); iterating (`list(world)`,
 `len(world)`) reveals the key list and records nothing. Every value is the world's own deep
-copy (mutating it changes nothing anyone else sees). Bulk access (`keys()`, `items()`,
-`values()`, `dict(world)`, `**world`) raises `TypeError`: read the keys you use one by one. There
-is no unrecorded read path on the object (`dispatch.bind.world_snapshot` is framework-only).
+copy (mutating it changes nothing anyone else sees), and the world itself holds only a frozen
+copy of the profile taken when it was built: the agent's live profile is not reachable through
+it, not even through the framework's private state table. Bulk access (`keys()`, `items()`,
+`values()`, `dict(world)`, `**world`) and pickling raise `dispatch.bind.WorldAccessError`, a
+contract violation that is also a `TypeError`: in `solve_tick` the tick is discarded (message
+18/19), in `bind` the run start refuses it. Read the keys you use one by one. There is no
+unrecorded read path on the object (`dispatch.bind.world_snapshot` is framework-only).
+
+**The ceiling is fixed at run start.** A re-bind (a world key a `bind` read changed) whose
+ceiling is wider than the run-start one is refused (`PolicyError`: `... declares cross-company
+pair(s) ... that it did not declare at run start ...`); a narrower one re-binds normally.
 
 **Rule: a `bind` reads every world key its `solve_tick` will read.** The keys a node read at
 bind are frozen on its `BoundNode.world_reads`; the tree's union is stamped
@@ -349,7 +364,11 @@ built-in decompositions are `children`; with the flag off nothing changes.
 ### 3.5 `solver_notes`, `tick_notes`, `run_stats`
 
 - **`Result.solver_notes`**: `{(truck_id, order_id): {str: JSON}}`, keys a subset of the
-  result's pairs (else message 18/19). The framework never interprets them. The wire layer
+  result's pairs (else message 18/19). Read ONCE, right after `solve_tick` returns, into plain
+  JSON with exact builtin types (`dict`, `list`, `str`, `int`, `float`, `bool`, `None`; a
+  `tuple` becomes a `list`, a subclass its base type, exactly as the wire's JSON spells it); the
+  checks and the wire use that copy, so a mapping that answers differently on a second read
+  cannot reach the wire. The framework never interprets them. The wire layer
   (`compat/wire.py`) routes two key NAMES, `pool_id` and `market_round`, to their old
   top-level payload fields, and accepts them only from a top that declared them in
   `Declaration.wire_note_keys` (`PooledMarket` does); a note key naming any field the app
@@ -360,14 +379,19 @@ built-in decompositions are `children`; with the flag off nothing changes.
   agent copies it into the trip's `collaboration` block. **Limit: notes surface only on SHARED
   (cross-company) pairs**; a note on a self-serve is dropped. A composite must merge its inner
   results' `solver_notes` if they should survive (`Partitioned` does).
-- **`Result.tick_notes`**: per-tick JSON, read ONLY by the top's run-stats aggregator.
+- **`Result.tick_notes`**: per-tick JSON, read ONLY by the top's run-stats aggregator, which
+  receives the plain copy. A top's `tick_notes` that are not a JSON mapping with string keys
+  discard the tick (message 18: `tick_notes[...] is not plain JSON (...)`). A sub-tick's notes
+  are not checked for JSON there: they reach the run only through the top's own result.
 - **`Declaration.run_stats`** (top only, message 24): a class implementing
   `dispatch.run_stats.RunStatsAggregator` (`meta_key`, `fold(tick_notes, clock) -> forced`,
   `push_due(*, force=False)`, `mark_pushed()`, `snapshot()`, `empty_snapshot()`). The app
   holds one instance per `meta_key`, folds every committed tick (never a discarded one,
   message 18), writes `snapshot()` to `run_config.meta.<meta_key>` when due, and force-flushes
-  at agent close. `PooledMarket`'s `_market_stats.RoundStatsAggregator` (`meta_key="market"`)
-  is the built-in one. An aggregator that raises (construction, `fold`, a push) is logged at
+  at agent close. Every write goes to the CLASS `meta_key` checked at bind, re-checked each tick;
+  an instance attribute `self.meta_key` redirects nothing, and a class key changed after bind to
+  one that fails the rule writes nothing (`RUN STATS REFUSED`). `PooledMarket`'s
+  `_market_stats.RoundStatsAggregator` (`meta_key="market"`) is the built-in one. An aggregator that raises (construction, `fold`, a push) is logged at
   ERROR (`RUN STATS DISABLED`), retired for the run, and its `run_config.meta.<meta_key>` is
   overwritten with `{"invalid": true, "error": ...}`; the tick and its pairs are unaffected. `tick_notes` and `run_stats` of a nested node are not consumed: they are
   top-only by design.
@@ -627,10 +651,29 @@ read (message 13).
 
 ## 13. Known limits
 
+**Threat model.** The guarantees in this guide (ownership, feasibility, read-only documents,
+the wire, the stamp) hold against a solver's honest bugs and against crafted VALUES flowing
+through the contract: `str` / `dict` / `tuple` subclasses, non-JSON notes, mutation of
+documents, of world values or of tick state, and anything that would silently corrupt the
+research metric. They do NOT hold against interpreter-level tampering, which is out of scope
+and documented as a limit: reflection (closure `cell_contents`, `object.__setattr__` on
+framework objects, `__class__` swaps, `gc` referents) and monkeypatching framework classes or
+modules (`Tick`, `invariants.check_result`, `assignment.constraints`, ...); nor against name
+spellings obfuscated to evade the static vocabulary guard (concatenation, `.lower()`,
+`__module__`). No Python framework can stop code in its own interpreter from rewriting it.
+**A monkeypatch persists**: agents run in the long-lived celery workers, so a solver that
+patches a framework module leaves it patched for every later run in that worker until
+`systemctl --user restart openride-celery`. Treat a solver that does any of this as hostile
+code, not as a solver.
+
+
 - Single `inner` per node; no nested decompositions; no per-company inner.
 - Only the `online` timing exists; held tails / day-ahead planning are not a framework concept
   (a tour solver's wrapper turns tours into pairs).
 - `solver_notes` surface only on shared pairs; `tick_notes` / `run_stats` only from the top.
+- A document modified by code that outlives the tick (a thread the solver started, still
+  writing after the commit) is outside the per-tick scan; it is interpreter-level concurrency,
+  not a value the contract can judge.
 - The scope audit is a tripwire, not a proof; the module-RNG attribution cannot separate a draw
   through a function bound at import.
 - Central `--policy planner=X` and `--solver X` give the same run-name segment.
