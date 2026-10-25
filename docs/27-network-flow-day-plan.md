@@ -4,9 +4,8 @@
 > `feat/policy-slots` @ 88ea74b). NOT merged into `feat/policy-slots`, NOT in the main tree
 > `/home/user/openride_apps`, never run live.** The adversarial review of c943e10
 > (`REVIEW_NF.md`, "Verification of c943e10") says it is ready for live gates on
-> `consortium_collab_7d_wh` launched with `--assignment-cadence 6`. One MAJOR remains open
-> (V-M1, differing per-haulier hours on a cooperative arm, §8). It is being fixed in the FX3
-> round.
+> `consortium_collab_7d_wh` launched with `--assignment-cadence 6`. The one MAJOR it left
+> (V-M1, differing per-haulier hours on a cooperative arm, §8) was fixed in the FX3 round.
 >
 > This repo has no `docs/reference/features/` directory, so the file sits under `docs/`.
 > Its number continues the out-of-repo index (`/home/user/docs/reference/features/`, 01-26).
@@ -241,8 +240,12 @@ the 4 GiB cap. With 06-20 hours: two-pairs 4.6 s / 357 MB, full 15.7 s / 2 GB (W
   `mcf_applicable`, so it takes the MIP, gets ~12 s, finds nothing and falls back to greedy
   with `accepted_poor` on every re-plan, while the run is still named NetworkFlowDay. The
   measured full arm: 1,577 served of a 2,144 bound (0.736). Two arms would then differ by
-  solver quality, not cooperation. Not hit by the gate scenario (uniform hours). **Being
-  fixed (FX3).** Until then, run no per-haulier-hours experiment.
+  solver quality, not cooperation. **Fixed (FX3):** with `nf_backend` auto or mincostflow, bind
+  refuses a cooperative group whose hauliers' working hours differ, naming the remedies
+  (equal hours; `nf_backend=mip` with a larger `nf_max_hold_s`/`nf_time_limit_s`; or
+  `nf_backend=greedy`). Size/area differences are only visible per plan: they are counted as
+  `incidents.inexact_components`, and any fallback marks `run_config.meta.day_plan.quality`
+  `degraded` with a `RUN STATS WARNING` log line at run end.
 - **The time model was fit on a congested baseline** (a GreedyNearest run whose depot gates
   queue a median 6.8-20 h each; WS-H found a median predicted job of 10.6 h). Its hold-out MAE
   is ~2.5 h. Under 06-20 hours only ~41 % of day-1 orders were plannable (WS-H). A plan's
