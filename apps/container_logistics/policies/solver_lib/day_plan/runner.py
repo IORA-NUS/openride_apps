@@ -168,20 +168,28 @@ def _kill(proc) -> None:
 
 def solve(inputs: Mapping[str, Any], *, backend: str = "auto", time_limit_s: float | None = 60.0,
           timeout_s: float | None = None, memory_cap_bytes: int = DEFAULT_MEMORY_CAP_BYTES,
-          python: str | None = None, child_args: list[str] | None = None) -> dict[str, Any]:
+          python: str | None = None, child_args: list[str] | None = None,
+          deadline_s: float | None = None, accept_poor: bool = False) -> dict[str, Any]:
     """Solve ``inputs`` in a child; returns ``{"itineraries", "unplanned", "stats"}``.
 
     ``backend``: ``auto`` (exact min-cost flow where it applies, MIP + guard elsewhere),
     ``mincostflow`` (same), ``mip`` (MIP everywhere), ``greedy`` (no OR-Tools).
     ``time_limit_s`` bounds each MIP component; ``timeout_s`` (default
     ``time_limit_s + 15``, or 120 s) is the hard wall-time kill of the whole child.
+    ``deadline_s`` (seconds from now, default ``timeout_s - 1``) is the child's ONE solve
+    deadline across all components (M2): MIP components share what is left and the rest
+    goes greedy, so the child answers before it is killed. ``accept_poor``: keep a greedy
+    fallback under the quality guard instead of refusing (the caller has no plan to keep).
     ``python`` / ``child_args`` replace the interpreter / ``-m <child>`` (tests only).
     ``stats`` gains ``wall_ms`` (spawn to answer, parent side) and ``green``.
     Raises :class:`SolveTimeout`, :class:`SolveCrashed` or :class:`SolveRejected`.
     """
     if timeout_s is None:
         timeout_s = (float(time_limit_s) + 15.0) if time_limit_s is not None else 120.0
-    request = {"inputs": inputs, "backend": backend, "time_limit_s": time_limit_s}
+    if deadline_s is None:
+        deadline_s = max(0.5, float(timeout_s) - 1.0)
+    request = {"inputs": inputs, "backend": backend, "time_limit_s": time_limit_s,
+               "deadline_epoch": time.time() + float(deadline_s), "accept_poor": bool(accept_poor)}
     argv = [python or sys.executable] + (child_args if child_args is not None else ["-m", CHILD_MODULE])
     t0 = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="day_plan_") as tmp:

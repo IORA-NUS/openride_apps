@@ -193,3 +193,31 @@ def test_driven_by_the_framework_run_stats_writer(day0):
     assert pushed[-1][1]["days"]["d0"]["replans_failed"] == {"crashed": 1}
     run_stats.flush(store, lambda k, v: pushed.append((k, v)) or True)
     assert DayPlanStats.empty_snapshot()["totals"]["plan_jobs"] == 0
+
+
+def test_moved_split_survival_fallbacks_and_incidents_are_folded(day0):
+    _, _, inp = day0
+    solve = _fake_solve(inp, {T(0): [O(0), O(2)], T(1): [O(1)]})
+    solve["stats"].update(prev_arcs={"prev_job_arcs": 4, "prev_job_arcs_feasible": 3, "prev_start_arcs": 2,
+                                     "prev_start_arcs_feasible": 2, "prev_arcs_kept": 4},
+                          fallbacks={"deadline": 2}, accepted_poor=True)
+    ws = {"id": "d0v2", "jobs_moved": 5, "moved_truck": 3, "moved_position": 1, "moved_to_unplanned": 1,
+          "planned": 3, "unplanned": 1}
+    note = plan_note(inp, outcome="solved", version="d0v2", write_summary=ws, solve=solve)
+    assert note["plan"]["moved"] == {"truck": 3, "position": 1, "to_unplanned": 1}
+    note["plan"].update(fallback="greedy", fallback_reason="timeout")
+    agg = DayPlanStats()
+    agg.fold(merge_notes(note, {"late_steps": 2, "store_failed": "version: down", "backend_fallback": "greedy"}),
+             Clock(0))
+    agg.fold({"day": 0, "no_plan": 1, "uncommitted": 3}, Clock(6))
+    snap = agg.snapshot()
+    d0 = snap["days"]["d0"]
+    assert d0["plan_jobs_moved"] == 5 and d0["plan_jobs_moved_by"] == {"position": 1, "to_unplanned": 1, "truck": 3}
+    assert d0["prev_arcs"]["prev_job_arcs_feasible"] == 3 and d0["fallback_plans"] == 1
+    assert snap["totals"]["plan_jobs_moved_by"] == {"position": 1, "to_unplanned": 1, "truck": 3}
+    assert snap["incidents"] == {
+        "accepted_poor": 1, "backend_fallback": {"greedy": 1}, "component_fallbacks": {"deadline": 2},
+        "fallback_failed": 0, "late_plans": 1, "late_steps_max": 2, "no_plan_ticks": 1,
+        "plan_fallbacks": {"timeout": 1}, "store_failed": 1, "uncommitted_pairs": 3}
+    json.dumps(snap)
+    assert DayPlanStats.empty_snapshot()["incidents"]["no_plan_ticks"] == 0
