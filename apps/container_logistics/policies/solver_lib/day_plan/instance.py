@@ -29,12 +29,16 @@ Rules (plan §4, design §6a, critique M11 / D3 / D5 / D6 / D8 / D9 / D12f):
   picked up). Every online truck is offered (D6), not only free ones. Each LATER window
   is a second start ``{truck}@w{k}`` (``of`` = the truck, ready at the window start, at
   the same anchor); the child appends its chain to the truck's.
-- **chain propagation** (M3, ``propagate_chains``) -- on a same-day re-plan, each truck's
+- **chain propagation** (M3, ``propagate_chains``, OFF by default: it cuts re-plan moves
+  ~45 % but costs ~6.5 % of the jobs done, see :class:`DayPlanParams`) -- on a same-day
+  re-plan, each truck's
   still-``planned`` jobs of the previous version are walked from the truck's ready time:
   a job's release becomes ``max(r, bound)`` (fitted to the shift), the bound being what the
   arc rule needs -- ``ready - s_head`` for the head, ``e_i - s_i`` after job ``i`` -- and
   its end never moves earlier. A late head's EXCESS lateness flows down the chain, the old
-  chain stays a feasible set of arcs, and an unchanged world changes nothing.
+  chain stays a feasible set of arcs, and an unchanged world changes nothing. A job pushed
+  more than ``propagate_max_push_min`` past its own start ends the walk (the rest of that
+  chain is re-planned freely).
 - **jobs** -- orders whose document state is ``created`` / ``unassigned``, not locked in
   the store (``dispatched`` / ``done``), not failed terminally (``cancelled`` /
   ``taken``), with ``request_step * step_seconds < window_end_s``. Release
@@ -124,7 +128,13 @@ class DayPlanParams:
     detour: float = 1.3                          # haversine x detour = planning km
     speed_kmh: float = 35.0                      # only for max_reposition_s
     replan_idle_trucks: bool = True             # D9
-    propagate_chains: bool = True               # M3: old chains carry their predecessors' ends
+    # M3 (opt-in, a trade-off measured 2026-10-25 on real day 1, full arm, 06-20 hours, the
+    # e2e with jobs ending at dispatch + predicted duration): off = 3,682 jobs moved / 1,907
+    # done; on = 2,193 moved / 1,783 done (-6.5 %); capped at 10 / 30 / 90 min = 3,572 /
+    # 3,147 / 2,257 moved, 1,898 / 1,839 / 1,789 done. The objective is distance only, so a
+    # late truck that keeps its chain costs nothing in the model but service in the world.
+    propagate_chains: bool = False              # old chains carry their excess lateness
+    propagate_max_push_min: Optional[float] = None  # a chain pushed further is re-planned freely
     deadline_margin_steps: Optional[int] = None  # None: one dispatch cadence (M11)
     hash_position_decimals: int = 4             # ~11 m
 
@@ -572,6 +582,10 @@ def build_inputs(
                 rj = fit(max(base, need), wins, o, {})
                 if rj is None:
                     break  # the chain falls out of the shift here: the rest is re-planned freely
+                own = fit(base, wins, o, {})
+                if p.propagate_max_push_min is not None and rj - (base if own is None else own) \
+                        > float(p.propagate_max_push_min) * 60.0:
+                    break  # too late to keep: free trucks may take the rest at its own release
                 ej = job_end(o, rj)
                 if rj > base:
                     prop_r[j] = rj

@@ -690,3 +690,18 @@ def test_degradations_reach_the_run_stats():
         a = Sim({"nf_backend": "auto"})
         a.plan(trucks, orders, 0)
         assert a.stats["day_plan"].snapshot()["incidents"]["backend_fallback"] == {"greedy": 1}
+
+
+def test_cadence_world_key_is_the_one_the_sim_ships():
+    from apps.container_logistics.scenario.run_declaration import PLANNING_CADENCE_PROFILE_KEY
+
+    assert nfd.CADENCE_WORLD_KEY == PLANNING_CADENCE_PROFILE_KEY
+
+
+def test_propagation_params_reach_the_instance():
+    spec = get_policy_spec("planner", "NetworkFlowDay")
+    dp = nfd.NetworkFlowDay._day_params(spec.params_cls.from_mapping({}, where="t"))
+    assert dp.propagate_chains is False and dp.propagate_max_push_min is None
+    dp = nfd.NetworkFlowDay._day_params(spec.params_cls.from_mapping(
+        {"nf_propagate_chains": True, "nf_propagate_max_push_min": 30.0}, where="t"))
+    assert dp.propagate_chains is True and dp.propagate_max_push_min == 30.0

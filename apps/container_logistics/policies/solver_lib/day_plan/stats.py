@@ -53,8 +53,8 @@ note is counted in ``incidents`` (``store_failed``, ``backend_fallback`` {backen
 ``fallback_failed``, ``component_fallbacks`` {reason: n}, ``accepted_poor``,
 ``uncommitted_pairs``).
 
-**Push cadence.** Forced (``fold`` returns ``True``) on a new day, a failed re-plan and a
-rebuild; otherwise every :data:`PUSH_EVERY` folded ticks.
+**Push cadence.** Forced (``fold`` returns ``True``) on a new day, a failed re-plan, a
+fallback plan (or a failed fallback) and a rebuild; otherwise every :data:`PUSH_EVERY` folded ticks.
 """
 
 from __future__ import annotations
@@ -212,9 +212,8 @@ class DayPlanStats:
 
     def _fold_incidents(self, notes: Mapping[str, Any]) -> bool:
         forced = False
-        if notes.get("store_failed"):
+        if notes.get("store_failed"):  # counted, not forced: a dead Redis notes it on EVERY tick
             self._count("store_failed")
-            forced = True
         if notes.get("backend_fallback"):
             self._count("backend_fallback", notes["backend_fallback"])
         if notes.get("late_steps"):

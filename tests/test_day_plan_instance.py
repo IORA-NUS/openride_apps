@@ -311,6 +311,9 @@ def test_store_job_fields_avoid_reserved_names():
 # ------------------------------------------------------ M3 chain propagation, M4 windows
 
 
+PROP = {"propagate_chains": True}
+
+
 def _chain_state(n=4, gap=12):
     """A previous version: truck 0 serves orders 0..n-1, one every ``gap`` steps from step 100."""
     t0 = oid("truck", 0)
@@ -323,7 +326,7 @@ def _chain_state(n=4, gap=12):
 
 def test_unchanged_world_propagates_nothing():
     t0, orders, first, st = _chain_state()
-    again = build([truck(0, "acme")], orders, state=st.state())
+    again = build([truck(0, "acme")], orders, state=st.state(), params=PROP)
     assert [(j["r"], j["e"]) for j in again["jobs"]] == [(j["r"], j["e"]) for j in first["jobs"]]
     off = build([truck(0, "acme")], orders, state=st.state(), params={"propagate_chains": False})
     assert [(j["r"], j["e"]) for j in off["jobs"]] == [(j["r"], j["e"]) for j in first["jobs"]]
@@ -336,7 +339,7 @@ def test_a_late_truck_pushes_its_old_chain_just_enough_to_stay_feasible():
     t0, orders, first, st = _chain_state()
     eng = order(9, "acme", 99, "port_000", "depot_000", state="assigned")
     late = build([truck(0, "acme")], orders, state=st.state(), engaged={t0: eng}, now_s=100 * STEP_S,
-                 dispatched_at_s={oid("order", 9): 99 * STEP_S})
+                 dispatched_at_s={oid("order", 9): 99 * STEP_S}, params=PROP)
     off = build([truck(0, "acme")], orders, state=st.state(), engaged={t0: eng}, now_s=100 * STEP_S,
                 dispatched_at_s={oid("order", 9): 99 * STEP_S}, params={"propagate_chains": False})
     ready = late["trucks"][0]["ready_s"]
@@ -383,3 +386,15 @@ def test_a_class_window_decides_eligibility_per_class():
     late = order(1, "acme", 165, "port_000", "customer_000")  # 11:00: ends after acme's 12:00
     j = job(build([truck(0, "acme"), truck(1, "cargo")], [late], hours=hours, arm={"cargo": ["acme"]}), 1)
     assert j["classes"] == [cargo] and j["r"] == 165 * STEP_S
+
+
+def test_propagation_is_off_by_default_and_a_push_cap_ends_the_walk():
+    t0, orders, first, st = _chain_state()
+    eng = order(9, "acme", 99, "port_000", "depot_000", state="assigned")
+    kw = dict(state=st.state(), engaged={t0: eng}, now_s=100 * STEP_S, dispatched_at_s={oid("order", 9): 99 * STEP_S})
+    default = build([truck(0, "acme")], orders, **kw)
+    off = build([truck(0, "acme")], orders, params={"propagate_chains": False}, **kw)
+    on = build([truck(0, "acme")], orders, params=PROP, **kw)
+    assert [j["r"] for j in default["jobs"]] == [j["r"] for j in off["jobs"]] != [j["r"] for j in on["jobs"]]
+    capped = build([truck(0, "acme")], orders, params=dict(PROP, propagate_max_push_min=1.0), **kw)
+    assert [j["r"] for j in capped["jobs"]] == [j["r"] for j in off["jobs"]], "the head alone is pushed > 1 min"

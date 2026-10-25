@@ -338,6 +338,12 @@ class NetworkFlowDay(DispatchPolicy):
         nf_stability_bonus_m: float = param(50.0, ge=0, le=100000,
                                             help="Discount on the previous version's arcs (m): re-plans move "
                                                  "fewer jobs.")
+        nf_propagate_chains: bool = param(
+            False, help="Re-plans push each old chain by its truck's excess lateness so it stays feasible: "
+                        "~45 % fewer jobs moved, ~6.5 % fewer done (distance-only objective).")
+        nf_propagate_max_push_min: float | None = param(
+            None, ge=0, le=1440, help="With nf_propagate_chains: a chain pushed more than this (min) is "
+                                      "re-planned freely from there; unset = no cap.")
         nf_mip_gap: float | None = param(0.01, ge=0, le=1, help="Relative MIP gap; unset = solver default.")
         nf_mip_k_succ: int | None = param(10, ge=1, help="Successor / start arcs kept per job on the MIP path; "
                                                          "unset = all.")
@@ -608,6 +614,8 @@ class NetworkFlowDay(DispatchPolicy):
             mip_arc_budget=int(params.nf_mip_arc_budget),
             guard_threshold=float(params.nf_guard_threshold),
             replan_idle_trucks=bool(params.nf_replan_idle_trucks),
+            propagate_chains=bool(params.nf_propagate_chains),
+            propagate_max_push_min=params.nf_propagate_max_push_min,
         )
 
     @staticmethod
