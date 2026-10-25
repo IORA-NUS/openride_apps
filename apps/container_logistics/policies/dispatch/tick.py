@@ -56,6 +56,15 @@ leaves it patched for every later run in that worker until ``openride-celery`` i
 restarted. Obfuscated name spellings that evade the static vocabulary guard are out of
 scope for the same reason.
 
+Planning members (F1/F3; all defaulted, so an ordinary tick is exactly what it always
+was): ``kind`` (``"dispatch"``, or ``"plan"`` for a top that declared
+``Declaration.planning``; a planning tick commits no pairs, R6), ``planning`` (its
+:class:`PlanningWindow`, else ``None``), ``engaged`` (``{truck_id: order doc}`` of busy
+trucks), ``lookup`` (``{order_id: doc}`` the top's previous ``Result.prefetch`` asked
+for) and ``run_id`` (``""`` offline). They live on the decision's shared state, so every
+sub-tick reads the top's; the engaged / lookup documents are fingerprinted like the
+tick's own and a solver that rewrites one has the whole tick refused.
+
 Message 19 (a sub-tick result discarded) is logged here; message 18 (the whole tick)
 by the runner.
 
@@ -87,6 +96,9 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "DispatchClock",
     "Measure",
+    "PLANNING_REASONS",
+    "PlanningWindow",
+    "TICK_KINDS",
     "TOP_SCOPE",
     "Tick",
     "direct_execute",
@@ -124,6 +136,44 @@ class DispatchClock:
     sim_clock: str
     time_step: int
     horizon_steps: int | None = None
+
+
+#: ``Tick.kind``: an ordinary decision (``"dispatch"``, every tick so far) or a PLANNING
+#: tick (``"plan"``) of a top that declared ``Declaration.planning``; a planning tick
+#: commits no pairs (refusal R6, message 18).
+TICK_KINDS: tuple[str, ...] = ("dispatch", "plan")
+#: ``PlanningWindow.reason``: the window opened at a day start, or by the declared interval.
+PLANNING_REASONS: tuple[str, ...] = ("day_start", "interval")
+
+
+@dataclass(frozen=True)
+class PlanningWindow:
+    """What a planning tick plans for (``Tick.planning``; ``None`` on a dispatch tick).
+
+    ``day`` is the run day (``start_step // steps_per_day``) on the ELAPSED axis (steps
+    since the run's reference time); ``[start_step, end_step)`` the window the tick's
+    orders were read up to (``end_step`` is the window's end under ``foresight == "day"``,
+    ``now_step + 1`` under ``"none"``); ``now_step`` the step being decided;
+    ``step_seconds`` the sim seconds per step. A separate value, not new fields of
+    :class:`DispatchClock` (aggregators receive the clock, and capture records it).
+    """
+
+    reason: str
+    day: int
+    start_step: int
+    end_step: int
+    now_step: int
+    step_seconds: int
+
+    def __post_init__(self) -> None:
+        if self.reason not in PLANNING_REASONS:
+            raise ValueError(f"PlanningWindow.reason {self.reason!r} is not one of {list(PLANNING_REASONS)}")
+        for name in ("day", "start_step", "end_step", "now_step", "step_seconds"):
+            value = getattr(self, name)
+            if type(value) is not int:
+                raise ValueError(f"PlanningWindow.{name} must be an int (got {value!r})")
+        if self.step_seconds < 1 or self.end_step < self.start_step:
+            raise ValueError(f"PlanningWindow: step_seconds >= 1 and end_step >= start_step required (got {self!r})")
 
 
 def _unwrap(entity: Any) -> Doc:
@@ -270,11 +320,14 @@ class _TickShared:
     """
 
     __slots__ = ("tree", "stats", "scope_log", "capture", "cross_company", "owns", "index",
-                 "_fingerprints", "_docs", "verify", "proved", "_sealed")
+                 "_fingerprints", "_docs", "verify", "proved", "_sealed",
+                 "kind", "planning", "engaged", "lookup", "run_id", "_aux")
 
     def __init__(self, *, tree: Any, stats: dict[str, Any], scope_log: list | None, capture: Any,
                  cross_company: frozenset[tuple[str, str]], trucks: tuple[Doc, ...],
-                 orders: tuple[Doc, ...]) -> None:
+                 orders: tuple[Doc, ...], kind: str = "dispatch", planning: "PlanningWindow | None" = None,
+                 engaged: Mapping[str, Doc] = MappingProxyType({}),
+                 lookup: Mapping[str, Doc] = MappingProxyType({}), run_id: str = "") -> None:
         _set(self, "tree", tree)
         _set(self, "stats", stats)
         _set(self, "scope_log", scope_log)
@@ -282,13 +335,23 @@ class _TickShared:
         _set(self, "cross_company", cross_company)
         _set(self, "owns", _ownership(cross_company))
         _set(self, "index", _index(trucks, orders))
-        docs = trucks + orders
+        _set(self, "kind", kind)
+        _set(self, "planning", planning)
+        _set(self, "engaged", engaged)
+        _set(self, "lookup", lookup)
+        _set(self, "run_id", run_id)
+        # The engaged / lookup documents: fingerprinted like the tick's own, and scanned by
+        # changed(), so a solver that rewrites one has its whole tick refused (empty on every
+        # ordinary dispatch tick: the default path scans nothing more).
+        aux = tuple(itertools.chain(engaged.values(), lookup.values())) if (engaged or lookup) else ()
+        _set(self, "_aux", aux)
+        docs = trucks + orders + aux
         try:  # the fast path of value_fingerprint, inlined (~10% of a tick's framework cost)
             fingerprints = {id(doc): _dumps(doc, 5) for doc in docs}
         except Exception:  # noqa: BLE001 - an unpicklable document: the per-document fallback
             fingerprints = {id(doc): value_fingerprint(doc) for doc in docs}
         _set(self, "_fingerprints", MappingProxyType(fingerprints))
-        _set(self, "_docs", (trucks, orders))  # keeps every fingerprinted id alive
+        _set(self, "_docs", (trucks, orders))  # keeps every fingerprinted id alive (aux: ``_aux``)
         verified: set[tuple[int, int]] = set()
         intact = self.intact
 
@@ -339,14 +402,37 @@ class _TickShared:
 
         Every truck, because after the commit the share accounting reads all of them (the
         owner reserve); of the orders only the committed ones (``orders``) are read again.
+        Every ``engaged`` / ``lookup`` document too: they are read-only like the tick's own
+        (critique minor 6), and the caller keeps reading them after the tick.
         """
         out = []
         fingerprints = self._fingerprints
-        for doc in itertools.chain(self._docs[0], orders):
+        for doc in itertools.chain(self._docs[0], self._aux, orders):
             before = fingerprints.get(id(doc))
             if before is None or _fingerprint(doc, before) != before:
                 out.append(str(doc.get("_id")) if isinstance(doc, dict) else repr(doc))
         return out
+
+
+_EMPTY: Mapping[str, Doc] = MappingProxyType({})
+
+
+def _doc_mapping(value: Mapping[Any, Doc] | None, what: str) -> Mapping[str, Doc]:
+    """``{str(key): document}`` as a read-only mapping (one shared empty mapping for ``None`` / empty).
+
+    The documents themselves are fingerprinted by :class:`_TickShared` (a solver that
+    rewrites one has its tick refused); a value that is not a mapping is a caller's bug.
+    """
+    if not value:
+        return _EMPTY
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Tick.top: {what} must be a mapping of id -> document (got {type(value).__name__})")
+    out: dict[str, Doc] = {}
+    for key, doc in value.items():
+        if not isinstance(doc, Mapping):
+            raise ValueError(f"Tick.top: {what}[{key!r}] must be a document mapping (got {type(doc).__name__})")
+        out[str(key)] = doc
+    return MappingProxyType(out)
 
 
 def _index(trucks: Iterable[Doc], orders: Iterable[Doc]) -> tuple[Mapping[str, Doc], Mapping[str, Doc]]:
@@ -474,16 +560,37 @@ class Tick:
         stats: dict[str, Any] | None = None,
         scope_log: list | None = None,
         capture: Any = None,
+        kind: str = "dispatch",
+        planning: PlanningWindow | None = None,
+        engaged: Mapping[Any, Doc] | None = None,
+        lookup: Mapping[Any, Doc] | None = None,
+        run_id: str = "",
     ) -> "Tick":
         """The whole tick for bound selection ``tree`` (``DispatchRunner.tick``). Draws and builds no RNG.
 
         Takes the framework's snapshot (index, document fingerprints) here, before any
-        solver code runs.
+        solver code runs. The planning members (all defaulted, so an ordinary dispatch tick
+        is exactly what it always was): ``kind`` (:data:`TICK_KINDS`; ``"plan"`` needs a
+        :class:`PlanningWindow` ``planning``, ``"dispatch"`` takes none), ``engaged``
+        (``{truck_id: order document}``: the order each busy truck is serving), ``lookup``
+        (``{order_id: order document}``: the documents the top's previous ``prefetch``
+        asked for, any state) and ``run_id`` (``""`` offline: battery, bench, capture).
+        Raises ``ValueError`` for a malformed planning member (a framework caller's bug).
         """
+        if kind not in TICK_KINDS:
+            raise ValueError(f"Tick.top: kind {kind!r} is not one of {list(TICK_KINDS)}")
+        if (kind == "plan") != (planning is not None) or (planning is not None
+                                                         and not isinstance(planning, PlanningWindow)):
+            raise ValueError(f"Tick.top: a 'plan' tick needs a PlanningWindow and a 'dispatch' tick none "
+                             f"(kind={kind!r}, planning={planning!r})")
+        if type(run_id) is not str:
+            raise ValueError(f"Tick.top: run_id must be a str (got {run_id!r})")
         cross = frozenset(tree.declaration.cross_company)
         raw_trucks, raw_orders = tuple(trucks), tuple(orders)
         shared = _TickShared(tree=tree, stats=stats if stats is not None else {}, scope_log=scope_log,
-                             capture=capture, cross_company=cross, trucks=raw_trucks, orders=raw_orders)
+                             capture=capture, cross_company=cross, trucks=raw_trucks, orders=raw_orders,
+                             kind=kind, planning=planning, engaged=_doc_mapping(engaged, "engaged"),
+                             lookup=_doc_mapping(lookup, "lookup"), run_id=run_id)
         tick = cls(shared=shared, raw_trucks=raw_trucks, raw_orders=raw_orders, clock=clock, seed=seed,
                    world=world, measure=measure, execute=execute,
                    permitted=_top_permitted(cross, max_travel_time_pickup), depth=0, scope=TOP_SCOPE,
@@ -606,6 +713,33 @@ class Tick:
     def id_index(self) -> tuple[Mapping[str, Doc], Mapping[str, Doc]]:
         """``(trucks_by_id, orders_by_id)``, the FIRST document per id, read-only (``check_result`` and commit share it)."""
         return self._index
+
+    # --- planning members (shared by every sub-tick of one decision) -------------
+
+    @property
+    def kind(self) -> str:
+        """``"dispatch"`` (every ordinary tick) or ``"plan"`` (a planning tick: it commits no pairs, R6)."""
+        return self._shared.kind
+
+    @property
+    def planning(self) -> PlanningWindow | None:
+        """The :class:`PlanningWindow` of a planning tick; ``None`` on a dispatch tick."""
+        return self._shared.planning
+
+    @property
+    def engaged(self) -> Mapping[str, Doc]:
+        """``{truck_id: order document}`` for the busy trucks the caller handed in (empty by default). Read-only."""
+        return self._shared.engaged
+
+    @property
+    def lookup(self) -> Mapping[str, Doc]:
+        """``{order_id: order document}`` the top's previous ``Result.prefetch`` asked for (any state). Read-only."""
+        return self._shared.lookup
+
+    @property
+    def run_id(self) -> str:
+        """The run's id; ``""`` offline (battery, bench, capture replay): keep solver state in memory then."""
+        return self._shared.run_id
 
     def _member_ids(self) -> tuple[frozenset[int], frozenset[int]]:
         if self._members is None:

@@ -24,6 +24,9 @@ pairs (plan ``plan_contract_final.md`` §2.7), identical for every solver:
    plain JSON; ``tick_notes`` plain JSON); and LAST, every truck of the tick and every
    committed order must be unmodified since the tick was built (the share accounting
    reads all the trucks).
+   A PLANNING tick (``Tick.kind == "plan"``) that returns any pair is a problem too
+   (R6: ``a planning tick commits no pairs (got N)``), and so is a malformed or
+   oversized ``Result.prefetch`` (R7).
    Any problem: log ERROR (message 18), count, commit NOTHING this tick. Nothing here
    is read back from the tick's solver-visible attributes (review H2, L3).
 4. Commit exactly the documents the check judged, in result order (no second lookup by
@@ -59,7 +62,7 @@ from apps.container_logistics.policies.framework.slots import SLOTS
 from .bind import BoundTree, RunWorld, bind_tree
 from .invariants import check_result, check_wire_notes, normalise_result
 from .result import Result
-from .tick import DispatchClock, Measure, Tick, direct_execute
+from .tick import DispatchClock, Measure, PlanningWindow, Tick, direct_execute
 
 logger = logging.getLogger(__name__)
 
@@ -175,19 +178,34 @@ class DispatchRunner:
         execute: Callable[..., Any] = direct_execute,
         dials: Mapping[str, Any] | None = None,
         scope_log: list[dict[str, Any]] | None = None,
+        kind: str = "dispatch",
+        planning: PlanningWindow | None = None,
+        engaged: Mapping[str, Any] | None = None,
+        lookup: Mapping[str, Any] | None = None,
+        run_id: str = "",
     ) -> Tick:
         """The whole tick for this runner's selection under assignment profile ``profile``.
 
         ``dials`` are the measurement's accounting dials (live: ``AssignmentApp._solver_params``);
         ``None`` means the offline rule ``compat.measurement.offline_measurement_dials``.
+        ``kind`` / ``planning`` / ``engaged`` / ``lookup`` / ``run_id`` are forwarded to
+        ``Tick.top`` (their defaults build the ordinary dispatch tick). A ``"plan"`` tick
+        for a selection whose top declared no ``planning`` is refused (``PolicyError``): only
+        a planning top is ever asked to plan.
         """
         tree = self._tree_for(profile)
+        if kind == "plan" and tree.declaration.planning is None:
+            raise PolicyError(
+                f"planner policy {tree.top.name} declared no planning (Declaration.planning), so it is never "
+                "handed a planning tick; build a dispatch tick instead."
+            )
         prof = profile or {}
         measure = Measure(offline_measurement_dials(tree.resolved) if dials is None else dials)
         return Tick.top(
             tree=tree, trucks=candidates, orders=orders, world=RunWorld.from_profile(prof),
             max_travel_time_pickup=prof.get("max_travel_time_pickup"), clock=clock, seed=seed,
             measure=measure, execute=execute, stats=self.stats, scope_log=scope_log, capture=self._capture,
+            kind=kind, planning=planning, engaged=engaged, lookup=lookup, run_id=run_id,
         )
 
     def solve_unchecked(self, tick: Tick) -> Any:
@@ -214,8 +232,13 @@ class DispatchRunner:
             # Read the result ONCE, into plain data: after this line no solver-supplied
             # object is iterated, hashed or compared (review N2/N3).
             result, tick_note_problems = normalise_result(result, strict=True)
-            problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index,
-                                    judged=judged, normalised=True)
+            if shared.kind == "plan" and isinstance(result, Result) and result.pairs:
+                # R6: a planning tick decides the plan, never a commit (read off the
+                # framework's own state, not a solver-visible attribute).
+                problems = [f"a planning tick commits no pairs (got {len(result.pairs)})"]
+            else:
+                problems = check_result(result, tick, permitted=tick._top_check(), index=shared.index,
+                                        judged=judged, normalised=True)
         if not problems:
             declared = getattr(shared.tree.declaration, "wire_note_keys", frozenset())
             problems = check_wire_notes(result, self.wire_fields - declared) + tick_note_problems
