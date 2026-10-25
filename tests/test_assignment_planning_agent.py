@@ -12,7 +12,13 @@ callback would see its ``hold`` still unsent. Pinned:
 - a non-planning step is ``ORSimAgent.handle_orsim_agent_message`` unchanged (no hold,
   reply inside the callback);
 - a step message arriving while the planning greenlet runs is queued and answered after
-  it, never concurrently;
+  it, never concurrently -- and the queue stays exclusive through the DRAIN (FX1 B1: a
+  message delivered while a drained step is inside the app is queued too); a step backlog
+  collapses to the newest step (superseded steps are answered ``completed``,
+  ``did_step: False``, ``superseded_by``, with no work and no cadence draw); a queued
+  ``shutdown`` is always kept;
+- a failure before the planning greenlet exists (spawn / spec / bootstrap) clears the
+  planning flags and runs the step through orsim's own handler (FX1 minor 7);
 - M1: the heartbeat self-kill is suppressed until the reply is out, across a plan AND a
   dispatch together longer than ``STEP_TIMEOUT`` (teeth: orsim's own heartbeat check
   kills the same step);
@@ -358,3 +364,148 @@ def test_end_to_end_real_app_plans_then_dispatches_through_the_greenlet(monkeypa
         assert [(m["truck_id"], m["order"]["_id"]) for _t, m in real.messenger.published] == [("t1", "o1")]
         assert [m["action"] for m in _replies(agent)] == ["hold", "completed"]
         assert real._step_seconds == 240 and real._sim_horizon_steps == 2520
+
+
+# --- FX1 B1: the queue stays exclusive through the drain; a step backlog collapses ----------
+
+def _overlap_probe(app, agent):
+    """Record every app entry made while another step is still inside the app."""
+    overlaps = []
+
+    def enter():
+        if app.busy:
+            overlaps.append(agent.current_time_step)
+        app.busy = True
+
+    app._enter = enter
+    return overlaps
+
+
+def _completed(agent):
+    return [m for m in _replies(agent) if m["action"] in ("completed", "shutdown")]
+
+
+def test_a_message_delivered_during_the_drain_is_queued_not_run_concurrently(monkeypatch):
+    """Review B1's repro: a step arriving while the DRAIN is inside the app (5003012 ran it
+    concurrently: assign(2) inside assign(1), step 2 answered before step 1)."""
+    agent, app = _agent(monkeypatch, plan_seconds=0.05, assign_seconds=0.05, steps_per_action=1)
+    overlaps = _overlap_probe(app, agent)
+    _deliver(agent, _step(0))
+    eventlet.sleep(0.001)
+    _deliver(agent, _step(1))  # queued behind the planning step
+    _spin(agent, lambda: any(c[:2] == ("assign", 1) for c in app.calls))
+    assert agent._planning_active is False and app.busy  # the drain is inside assign(1)
+    _deliver(agent, _step(2))  # arrives DURING the drain
+    assert [c[:2] for c in app.calls][-1] == ("assign", 1), "step 2 must not start inside step 1"
+    _spin(agent, lambda: len(_completed(agent)) >= 3)
+    eventlet.sleep(0.01)
+    assert not overlaps, overlaps
+    assert [(m["action"], m["time_step"]) for m in _replies(agent)] == [
+        ("hold", 0), ("completed", 0), ("completed", 1), ("completed", 2)]
+    assert [c[:2] for c in app.calls] == [("plan", 0), ("assign", 0), ("assign", 1), ("assign", 2)]
+    assert agent._pending_messages is not None and not agent._pending_messages
+    assert agent._draining == 0 and agent.message_processing_active is False
+    # Idle again: the next step is orsim's inline handler (no queue, no greenlet).
+    _deliver(agent, _step(3))
+    assert _replies(agent)[-1]["time_step"] == 3 and app.calls[-1] == ("assign", 3)
+
+
+def test_a_step_backlog_collapses_to_the_newest_step(monkeypatch):
+    agent, app = _agent(monkeypatch, plan_seconds=0.05, steps_per_action=1)
+    overlaps = _overlap_probe(app, agent)
+    draws = []
+    monkeypatch.setattr(agent_mod, "random", lambda: draws.append(agent.current_time_step) or 0.0)
+    _deliver(agent, _step(0))
+    eventlet.sleep(0.001)
+    for t in (1, 2, 3):  # e.g. the hold expired and the scheduler stepped on three times
+        _deliver(agent, _step(t))
+    _spin(agent, lambda: len(_completed(agent)) == 4)
+    replies = _replies(agent)
+    assert [(m["action"], m["time_step"]) for m in replies] == [
+        ("hold", 0), ("completed", 0), ("completed", 1), ("completed", 2), ("completed", 3)]
+    # Superseded steps: orsim's shape, no work, pointing at the step that replaced them.
+    for m in replies[2:4]:
+        assert set(m) == REPLY_KEYS | {"superseded_by"}
+        assert m["did_step"] is False and m["superseded_by"] == 3
+    assert set(replies[4]) == REPLY_KEYS and replies[4]["did_step"] is True
+    assert [c[:2] for c in app.calls] == [("plan", 0), ("assign", 0), ("assign", 3)]
+    assert draws == [0, 3]  # no cadence draw for a superseded step
+    assert agent.current_time_step == 3 and not overlaps
+
+
+def test_a_queued_shutdown_is_kept_and_supersedes_the_steps_before_it(monkeypatch):
+    agent, app = _agent(monkeypatch, plan_seconds=0.05, steps_per_action=1)
+    _deliver(agent, _step(0))
+    eventlet.sleep(0.001)
+    _deliver(agent, _step(1))
+    _deliver(agent, {"action": "shutdown", "time_step": 2})
+    _spin(agent, lambda: len(_completed(agent)) == 3)
+    assert [(m["action"], m["time_step"], m.get("superseded_by")) for m in _replies(agent)] == [
+        ("hold", 0, None), ("completed", 0, None), ("completed", 1, 2), ("shutdown", 2, None)]
+    assert agent._shutdown is True
+    assert [c[:2] for c in app.calls] == [("plan", 0), ("assign", 0)]
+
+
+def test_a_queued_step_older_than_one_handled_is_never_processed(monkeypatch):
+    agent, app = _agent(monkeypatch, plan_seconds=0.05, steps_per_action=1)
+    _deliver(agent, _step(0))
+    eventlet.sleep(0.001)
+    _deliver(agent, _step(0))  # a duplicate of the planning step itself
+    _spin(agent, lambda: len(_completed(agent)) == 2)
+    assert [(m["action"], m["time_step"], m.get("superseded_by")) for m in _replies(agent)] == [
+        ("hold", 0, None), ("completed", 0, None), ("completed", 0, 0)]
+    assert [c[:2] for c in app.calls] == [("plan", 0), ("assign", 0)]
+
+
+def test_queueing_keeps_the_owning_steps_bookkeeping(monkeypatch):
+    """A queued arrival must not reset the step in flight's heartbeat clock or its log."""
+    agent, app = _agent(monkeypatch, plan_seconds=0.05)
+    _deliver(agent, _step(0))
+    eventlet.sleep(0.001)
+    before = agent.start_time
+    agent.add_step_log("in flight")
+    eventlet.sleep(0.01)
+    _deliver(agent, _step(1))
+    assert agent.start_time == before
+    assert any("in flight" in str(v) for v in agent.step_log.values())
+    _spin(agent, lambda: len(_completed(agent)) == 2)
+
+
+# --- FX1 minor 7: a failure before the planning greenlet exists ------------------------------
+
+@pytest.mark.parametrize("where", ["spawn", "spec", "bootstrap"])
+def test_a_failure_before_the_greenlet_falls_back_to_orsims_handler(monkeypatch, where):
+    agent, app = _agent(monkeypatch)
+    if where == "spawn":
+        monkeypatch.setattr(eventlet, "spawn", mock.Mock(side_effect=RuntimeError("no hub")))
+    elif where == "spec":
+        monkeypatch.setattr(app, "planning_spec", mock.Mock(side_effect=RuntimeError("bad spec")))
+    else:
+        real = agent.bootstrap_step
+        calls = []
+
+        def bootstrap(t):
+            calls.append(t)
+            if len(calls) == 1:
+                raise RuntimeError("bad clock")
+            return real(t)
+
+        monkeypatch.setattr(agent, "bootstrap_step", bootstrap)
+    _deliver(agent, _step(0))  # must not raise out of the paho callback
+    assert agent._planning_active is False and agent._planning_gt is None
+    assert agent.message_processing_active is False and not agent._busy()
+    replies = _replies(agent)
+    assert replies[-1]["action"] == "completed" and replies[-1]["time_step"] == 0
+    assert [m["action"] for m in replies] == (["hold", "completed"] if where == "spawn" else ["completed"])
+    assert [c[:2] for c in app.calls] == [("plan", 0), ("assign", 0)]  # the step ran, inline
+    _deliver(agent, _step(6))  # and the agent keeps answering
+    assert _replies(agent)[-1]["time_step"] == 6 and app.calls[-1] == ("assign", 6)
+
+
+def test_a_failure_the_inline_fallback_cannot_survive_is_orsims_error_reply(monkeypatch):
+    agent, app = _agent(monkeypatch)
+    monkeypatch.setattr(agent, "bootstrap_step", mock.Mock(side_effect=RuntimeError("bad clock")))
+    _deliver(agent, _step(0))
+    [reply] = _replies(agent)
+    assert reply["action"] == "error" and "bad clock" in reply["details"]
+    assert agent._planning_active is False and agent.message_processing_active is False

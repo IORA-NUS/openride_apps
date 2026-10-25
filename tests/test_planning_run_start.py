@@ -366,3 +366,87 @@ def test_r5_top_only_is_refused_as_solver(monkeypatch):
     with pytest.raises(PolicyError) as exc:
         SO.precheck_override_names({}, "Partitioned")
     assert "DayToy" not in str(exc.value)
+
+
+# --- FX1 M1: the run's EFFECTIVE dispatch cadence ships to a planning top -------------------
+
+
+def _applied(behavior):
+    return behavior.get("steps_per_action", 1)
+
+
+def test_a_planning_run_ships_the_applied_cadence(smoke, monkeypatch):
+    _root, _slug, _spec, bundle = smoke
+    authored = {_applied(b) for b in bundle["agents"]["assignment"].values()}
+    settings, name, coll = _run_main(monkeypatch, bundle["agents"]["assignment"],
+                                     {"ORSIM_ORDER_LIFECYCLE": "service"}, DAY)
+    for behavior in coll["assignment"].values():
+        shipped = behavior["profile"][RD.PLANNING_CADENCE_PROFILE_KEY]
+        assert type(shipped) is int and shipped == _applied(behavior)
+    assert {b["profile"][RD.PLANNING_CADENCE_PROFILE_KEY] for b in coll["assignment"].values()} == authored
+    assert "cadence:" not in name and "ASSIGNMENT_CADENCE" not in settings
+
+
+def test_a_planning_run_ships_the_overridden_cadence(smoke, monkeypatch):
+    _root, _slug, _spec, bundle = smoke
+    assert all(_applied(b) != 6 for b in bundle["agents"]["assignment"].values())  # the override is visible
+    settings, name, coll = _run_main(monkeypatch, bundle["agents"]["assignment"],
+                                     {"ORSIM_ORDER_LIFECYCLE": "service", "ORSIM_ASSIGNMENT_CADENCE": "6"}, DAY)
+    for behavior in coll["assignment"].values():
+        assert behavior["steps_per_action"] == 6
+        assert behavior["profile"][RD.PLANNING_CADENCE_PROFILE_KEY] == 6
+    assert settings["ASSIGNMENT_CADENCE"] == {"steps": 6, "source": "override"}
+    assert name.split(" · ")[-1] == "cadence:6", name
+
+
+def test_a_default_run_with_a_cadence_override_ships_no_planning_cadence(smoke, monkeypatch):
+    _root, _slug, _spec, bundle = smoke
+    settings, name, coll = _run_main(monkeypatch, bundle["agents"]["assignment"],
+                                     {"ORSIM_ASSIGNMENT_CADENCE": "6"}, None)
+    for behavior in coll["assignment"].values():
+        assert behavior["steps_per_action"] == 6
+        assert RD.PLANNING_CADENCE_PROFILE_KEY not in behavior["profile"]
+        assert SO.PLANNING_MAX_WAIT_PROFILE_KEY not in behavior["profile"]
+
+
+def test_ship_planning_cadence_helper():
+    coll = {"a": {"steps_per_action": 28, "profile": {}}, "b": {}, "x": "not a behavior"}
+    assert RD.ship_planning_cadence(coll) == 2
+    assert coll["a"]["profile"]["assignment_cadence_steps"] == 28
+    assert coll["b"]["profile"]["assignment_cadence_steps"] == 1  # the agent's own default gate
+    assert RD.planning_cadence_mismatches(coll) == []
+    assert RD.ship_planning_cadence(coll, 6) == 2 and coll["a"]["profile"]["assignment_cadence_steps"] == 6
+    # Shipped before the override was applied: the cross-check catches the drift.
+    assert RD.planning_cadence_mismatches(coll) == [("a", 6, 28), ("b", 6, 1)]
+    assert RD.planning_cadence_mismatches({"c": {"steps_per_action": 3, "profile": {}}}) == []
+
+
+def test_a_shipped_cadence_the_behavior_does_not_run_is_refused(monkeypatch):
+    import types
+
+    coll = {"a": {"steps_per_action": 28, "profile": {RD.PLANNING_CADENCE_PROFILE_KEY: 6}}}
+    sm = types.SimpleNamespace(orsim_settings={}, get_agent_collection=lambda role: coll)
+    with pytest.raises(PolicyError, match="planning cadence"):
+        L._check_planning_cadence(sm)
+
+
+# --- FX1 minor 9: the stamps spell out their time axis ---------------------------------------
+
+
+def test_the_planning_and_working_hours_stamps_name_the_elapsed_axis(monkeypatch):
+    import types
+
+    hours = {"axis": "elapsed", "hauliers": {"acme": [21600, 72000]}}
+    coll = {"a": {"steps_per_action": 28, "profile": {"working_hours": copy.deepcopy(hours)}}}
+    sm = types.SimpleNamespace(orsim_settings={"REFERENCE_TIME": "2020-01-01 08:00:00"},
+                               get_agent_collection=lambda role: coll)
+    monkeypatch.delenv("ORSIM_ASSIGNMENT_CADENCE", raising=False)
+    monkeypatch.delenv("ORSIM_MAX_ORDERS_PER_TICK", raising=False)
+    with contextlib.redirect_stdout(io.StringIO()):
+        L._apply_assignment_run_inputs_or_exit(sm, "base")
+        L._apply_planning_record(sm, {**DAY, "oracle": True, "axis": "elapsed"}, "base")
+    for key in ("WORKING_HOURS", "PLANNING"):
+        assert sm.orsim_settings[key]["axis"] == "elapsed", key
+        assert sm.orsim_settings[key]["axis_origin"] == "2020-01-01 08:00:00", key
+    assert coll["a"]["profile"]["working_hours"] == hours  # the agents' record is untouched
+    assert RD.axis_explicit_record({"hauliers": {}}) == {"hauliers": {}, "axis": "elapsed"}

@@ -37,6 +37,8 @@ class AssignmentAgent(TransportSelectingAgent, ORSimAgent):
        ``finally``;
     3. a message arriving meanwhile (only after a hold expiry, or a shutdown) is queued
        and handled, in order, after the greenlet; it never runs concurrently on the app.
+       The queue stays exclusive through the drain, and a step backlog collapses to the
+       newest step (see "the exclusive message queue" below).
 
     The heartbeat self-kill (``STEP_TIMEOUT`` while processing) is suppressed while the
     greenlet is alive, i.e. until the reply is published (critique M1). Every other
@@ -109,41 +111,111 @@ class AssignmentAgent(TransportSelectingAgent, ORSimAgent):
                            horizon_steps=settings.get("SIMULATION_LENGTH_IN_STEPS"))
         return due if isinstance(due, Due) else None
 
+    # --- the exclusive message queue (FX1 B1) --------------------------------------------
+    #
+    # Once a planning step has spawned its greenlet, the paho callback may deliver further
+    # messages while ANOTHER greenlet is still working on the app (the plan, then every
+    # message drained behind it). So every message is QUEUED while ``_busy()``: a planning
+    # step is active, a drain is in progress, or the queue is non-empty. One greenlet at a
+    # time owns the app; the queue is drained strictly in order on that greenlet.
+    #
+    # COLLAPSE. A backlog of ``step`` messages (only possible after a hold expiry, a hold the
+    # scheduler ignored, or a plan slower than hold + grace) is collapsed to the NEWEST
+    # step. The scheduler publishes step N+1 only after step N's barrier ended, so every
+    # step but the newest queued one is already in the past for it: a reply to it is
+    # never tallied (``_handle_reply`` counts ``time_step == self.time`` only), and replaying
+    # it would only run a stale dispatch tick on a stale clock and push the newest step
+    # past ``STEP_TIMEOUT`` again (review B1). A superseded step is still ANSWERED, in
+    # order, with orsim's ``completed`` shape and ``did_step: False`` plus
+    # ``superseded_by: <newest step>`` -- no ``bootstrap_step`` (the clock never moves
+    # backwards), no app work, no cadence ``random()`` draw. The answer keeps one reply per
+    # delivered step; it can only reinstate a pruned agent (as any late reply does), which
+    # the newest step's reply would do anyway. A step at or below the newest step already
+    # handled is likewise answered as superseded. ``shutdown`` (it also supersedes the
+    # steps before it: the run is ending) and every other non-step message are NEVER
+    # dropped; they are handled in order. A run that never declares planning never queues.
+
+    _draining = 0  # drains in progress (a count, so an overlapping finally cannot clear it)
+    _newest_step_handled = None
+
+    def _busy(self):
+        return bool(self._planning_active or self._draining or self._pending_messages)
+
+    def _enqueue(self, payload):
+        if self._pending_messages is None:
+            self._pending_messages = deque()
+        self._pending_messages.append(payload)
+
+    def on_receive_message(self, client, userdata, message):
+        if self._busy() and self.message_handlers.get(message.topic) == self.handle_orsim_agent_message:
+            # Queue WITHOUT orsim's per-message bookkeeping (``start_time``,
+            # ``message_processing_active``, ``step_log``): those belong to the step the
+            # owning greenlet is processing, and resetting them would stretch its heartbeat
+            # window and wipe its step log.
+            try:
+                payload = json.loads(message.payload.decode("utf-8"))
+            except Exception:
+                return super().on_receive_message(client, userdata, message)
+            self._enqueue(payload)
+            return None
+        return super().on_receive_message(client, userdata, message)
+
     def handle_orsim_agent_message(self, payload):
-        if self._planning_active:
-            # Never two steps on one app: answered after the planning step's reply.
-            if self._pending_messages is None:
-                self._pending_messages = deque()
-            self._pending_messages.append(payload)
+        if self._busy():
+            # Never two steps on one app: handled, in order, by the owning greenlet.
+            self._enqueue(payload)
             self.add_step_log("queued behind a planning step")
             return
+        self._dispatch_message(payload)
+
+    def _dispatch_message(self, payload):
+        """One message on the (exclusive) owner: a planning step, or orsim's handler."""
         time_step = payload.get("time_step") if isinstance(payload, dict) else None
+        if isinstance(payload, dict) and payload.get("action") == "step" and type(time_step) is int:
+            if self._newest_step_handled is None or time_step > self._newest_step_handled:
+                self._newest_step_handled = time_step
         if not (isinstance(payload, dict) and payload.get("action") == "step"
                 and self._planning_due_for(time_step) is not None):
             return super().handle_orsim_agent_message(payload)
         self._start_planning_step(payload)
 
     def _start_planning_step(self, payload):
-        import eventlet  # orsim's rule: never at module top (monkey patching)
+        """Publish the hold and hand the step to a greenlet; inline fallback on any failure.
 
-        self.add_step_log("In handle_orsim_agent_message (planning step)")
+        Review minor 7: an exception here (``bootstrap_step``, the spec, the import, the
+        spawn) would otherwise escape the paho callback with ``_planning_active`` set, and the
+        agent would queue every later message for good with its heartbeat suppressed. Every
+        failure before the greenlet exists clears the flag and runs the step through
+        orsim's own handler instead (which answers ``completed`` -- releasing any hold that
+        did go out -- or orsim's ``error`` reply).
+        """
         started = self.start_time
-        self.bootstrap_step(payload["time_step"])
-        spec = self.app.planning_spec() or {}
-        hold = {
-            "agent_id": self.unique_id,
-            "time_step": self.current_time_step,
-            "action": "hold",
-            "hold_seconds": spec.get("max_hold_seconds"),
-            "reason": "planning",
-        }
-        self._planning_active = True
         try:
-            self.messenger.client.publish(self._scheduler_topic(), json.dumps(hold))
+            import eventlet  # orsim's rule: never at module top (monkey patching)
+
+            self.add_step_log("In handle_orsim_agent_message (planning step)")
+            self.bootstrap_step(payload["time_step"])
+            spec = self.app.planning_spec() or {}
+            hold = {
+                "agent_id": self.unique_id,
+                "time_step": self.current_time_step,
+                "action": "hold",
+                "hold_seconds": spec.get("max_hold_seconds"),
+                "reason": "planning",
+            }
+            self._planning_active = True
+            try:
+                self.messenger.client.publish(self._scheduler_topic(), json.dumps(hold))
+            except Exception:
+                logging.exception("AssignmentAgent %s: could not publish the planning hold for step %s",
+                                  self.unique_id, self.current_time_step)
+            self._planning_gt = eventlet.spawn(self._planning_step, payload, started)
         except Exception:
-            logging.exception("AssignmentAgent %s: could not publish the planning hold for step %s",
-                              self.unique_id, self.current_time_step)
-        self._planning_gt = eventlet.spawn(self._planning_step, payload, started)
+            logging.exception("AssignmentAgent %s: could not start the planning step for %r; "
+                              "running it inline", self.unique_id, payload)
+            self._planning_active = False
+            self._planning_gt = None
+            return super().handle_orsim_agent_message(payload)
         # on_receive_message logs end_time - start_time after this returns.
         self.end_time = time.time()
 
@@ -182,15 +254,71 @@ class AssignmentAgent(TransportSelectingAgent, ORSimAgent):
             self.message_processing_active = False
         self._drain_pending_messages()
 
-    def _drain_pending_messages(self):
-        """Handle the messages queued behind a planning step, in order (stops at the next planning step)."""
+    def _next_pending(self):
+        """Pop the next queued message; ``(payload, newest)`` -- ``newest`` is ``None`` to handle
+        it, else the step that supersedes it (a later queued step/shutdown, or one handled)."""
         queue = self._pending_messages
-        while queue and not self._planning_active:
-            payload = queue.popleft()
-            self.start_time = time.time()
-            self.message_processing_active = True
-            self.reset_step_log()
-            self.handle_orsim_agent_message(payload)
+        payload = queue.popleft()
+        step = payload.get("time_step") if isinstance(payload, dict) else None
+        if not (isinstance(payload, dict) and payload.get("action") == "step") or type(step) is not int:
+            return payload, None
+        later = [m.get("time_step") for m in queue
+                 if isinstance(m, dict) and m.get("action") in ("step", "shutdown")]
+        newest = max((t for t in later if type(t) is int), default=None)
+        if newest is not None and newest > step:
+            return payload, newest
+        if self._newest_step_handled is not None and step <= self._newest_step_handled:
+            return payload, self._newest_step_handled
+        return payload, None
+
+    def _answer_superseded(self, payload, newest):
+        """orsim's ``completed`` reply for a step collapsed into ``newest`` (no work, no draw)."""
+        step = payload.get("time_step") if isinstance(payload, dict) else None
+        response_payload = {
+            "agent_id": self.unique_id,
+            "time_step": step,
+            "action": "completed" if self._shutdown == False else "shutdown",  # noqa: E712 (orsim's)
+            "did_step": False,
+            "run_time": 0.0,
+            "superseded_by": newest,
+        }
+        logging.warning("AssignmentAgent %s: step %s superseded by step %s in the queue behind a "
+                        "planning step; answered without work", self.unique_id, step, newest)
+        try:
+            self.messenger.client.publish(self._scheduler_topic(), json.dumps(response_payload))
+        except Exception:
+            logging.exception("AssignmentAgent %s: could not answer superseded step %s",
+                              self.unique_id, step)
+
+    def _drain_pending_messages(self):
+        """Handle the queued messages in order on THIS greenlet; arrivals meanwhile queue.
+
+        Stops when a drained message starts a new planning step (its greenlet drains the
+        rest) or the queue is empty.
+        """
+        self._draining += 1
+        try:
+            while self._pending_messages and not self._planning_active:
+                payload, newest = self._next_pending()
+                if newest is not None:
+                    self._answer_superseded(payload, newest)
+                    continue
+                self.start_time = time.time()
+                self.message_processing_active = True
+                self.payload_cache = payload
+                self.reset_step_log()
+                try:
+                    self._dispatch_message(payload)
+                except Exception:
+                    # orsim's handler catches the step's own errors; this is a failure
+                    # outside it (e.g. the reply publish). Keep the queue moving.
+                    logging.exception("AssignmentAgent %s: a queued message failed: %r",
+                                      self.unique_id, payload)
+                    self.message_processing_active = False
+                if self._planning_active:
+                    break
+        finally:
+            self._draining -= 1
 
     def handle_heartbeat_failure(self):
         if self._planning_active:
