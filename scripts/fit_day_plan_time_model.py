@@ -16,8 +16,10 @@ MongoDB is read READ-ONLY (``find`` only): ``run_config`` (settings + scenario s
 What is fitted (see ``time_model.py`` for the semantics):
 
 - ``job_seconds``: per-cell median of (haul completion - award) over completed trips,
-  cells = pickup type x dropoff type x dispatch hour bucket (elapsed axis) x
-  pickup->dropoff km bucket, with backoff tables for sparse cells;
+  one table per lookup level, most specific first: ``facility`` (pair x queuing
+  facility, ``time_model.facility_key``) -> ``pair_hour`` (pair x dispatch hour bucket
+  on the elapsed axis) -> ``pair`` -> ``global`` (``--levels`` changes the chain;
+  ``cell`` = pair x hour x km bucket is available);
 - ``deadhead``: least squares ``award -> pickup-queue arrival`` on great-circle km
   (reposition origin -> pickup), over trips that drove a repositioning leg.
 
@@ -25,7 +27,8 @@ Accuracy is reported by HOLD-OUT BY DAY (leave one release day out, refit on the
 days, predict the held-out day) as MAE and P90 -- both of |residual| and of the signed
 residual ``actual - predicted`` -- overall and per feature group. The recommended
 ``nf_late_slack_min`` is the P90 of the signed hold-out residual, rounded up to 5 min
-(critique minor 14: a fixed 15 min would be wrong under a right-skewed queue).
+(critique minor 14: a fixed 15 min would be wrong under a right-skewed queue); the
+same rule per pickup/dropoff type pair goes into ``MODEL["late_slack"]``.
 
 A refit is a ``version`` bump of the wrapper (plan §3); the module's ``DIGEST`` covers
 everything that moves a prediction.
@@ -51,10 +54,13 @@ if str(REPO) not in sys.path:
 
 from apps.container_logistics.policies.solver_lib.day_plan.time_model import (  # noqa: E402
     SCHEMA_VERSION,
+    JobFeatures,
     TimeModel,
+    facility_key,
     haversine_km,
     hour_bucket,
     km_bucket,
+    level_key,
     location_type,
     model_digest,
     validate_model,
@@ -64,6 +70,7 @@ DEFAULT_OUT = REPO / "apps/container_logistics/policies/solver_lib/day_plan/time
 DEFAULT_HOUR_BUCKET_HOURS = 4
 DEFAULT_KM_EDGES = (5.0, 10.0, 15.0, 20.0, 30.0)
 DEFAULT_MIN_CELL_N = 30
+DEFAULT_LEVELS = ("facility", "pair_hour", "pair")
 STEPS_PER_DAY_SECONDS = 86400.0
 SLACK_ROUND_MIN = 5
 
@@ -104,6 +111,8 @@ class Row:
     latency_s: float  # award - release (baseline dispatch latency; report only)
     deadhead_km: Optional[float]  # reposition origin -> pickup, if a leg was driven
     deadhead_s: Optional[float]  # award -> pickup-queue arrival
+    pickup_name: Optional[str] = None  # facility names (per-facility level)
+    dropoff_name: Optional[str] = None
 
 
 # ----------------------------------------------------------------------------- helpers
@@ -229,6 +238,8 @@ def rows_from_docs(
                 latency_s=dispatch_s - release_s,
                 deadhead_km=dh_km,
                 deadhead_s=dh_s,
+                pickup_name=str(pname) if pname else None,
+                dropoff_name=str(dname) if dname else None,
             )
         )
     rows.sort(key=lambda r: (r.dispatch_s, r.order))  # input order never matters
@@ -238,13 +249,20 @@ def rows_from_docs(
 # --------------------------------------------------------------------------------- fit
 
 
-def _cell_keys(row: Row, hb_hours: int, edges: Sequence[float]) -> tuple[str, str, str]:
-    hb = hour_bucket(row.dispatch_s, hb_hours)
-    kb = km_bucket(row.km, edges)
-    return (
-        f"{row.pickup}|{row.dropoff}|{hb}|{kb}",
-        f"{row.pickup}|{row.dropoff}|{hb}",
-        f"{row.pickup}|{row.dropoff}",
+def _features(row: Row, hb_hours: int, edges: Sequence[float]) -> JobFeatures:
+    return JobFeatures(
+        row.pickup,
+        row.dropoff,
+        hour_bucket(row.dispatch_s, hb_hours),
+        km_bucket(row.km, edges),
+        facility_key(row.pickup_name, row.dropoff_name),
+    )
+
+
+def _row_model_features(model: TimeModel, row: Row) -> JobFeatures:
+    """What the planner would pass: facility NAMES when known, else the type codes."""
+    return model.features(
+        row.pickup_name or row.pickup, row.dropoff_name or row.dropoff, row.dispatch_s, row.km
     )
 
 
@@ -278,14 +296,18 @@ def fit(
     hour_bucket_hours: int = DEFAULT_HOUR_BUCKET_HOURS,
     km_edges: Sequence[float] = DEFAULT_KM_EDGES,
     min_cell_n: int = DEFAULT_MIN_CELL_N,
+    levels: Sequence[str] = DEFAULT_LEVELS,
 ) -> dict:
-    """The model mapping (schema 1) from ``rows``. Deterministic in the row SET."""
+    """The model mapping (schema 2, no late_slack) from ``rows``. Deterministic in the row SET."""
     if not rows:
         raise ValueError("cannot fit a time model on zero rows")
-    groups: list[dict[str, list[float]]] = [defaultdict(list), defaultdict(list), defaultdict(list)]
+    groups: dict[str, dict[str, list[float]]] = {lv: defaultdict(list) for lv in levels}
     for row in rows:
-        for table, key in zip(groups, _cell_keys(row, hour_bucket_hours, km_edges)):
-            table[key].append(row.job_s)
+        f = _features(row, hour_bucket_hours, km_edges)
+        for level in levels:
+            key = level_key(level, f)
+            if key is not None:
+                groups[level][key].append(row.job_s)
 
     def table(g: Mapping[str, list[float]]) -> dict:
         return {k: [_round(statistics.median(v)), len(v)] for k, v in sorted(g.items())}
@@ -299,15 +321,15 @@ def fit(
             "hour_of": "dispatch",
             "km": "haversine pickup->dropoff",
             "location_type": "facility-name prefix: port->CT, customer->CU, depot/yard->MT",
+            "facility": "depot id(s) when the pair touches a depot, else the pickup facility id",
         },
         "job_seconds": {
             "target": "haul completion (sim_clock) - award (meta.award_time_step)",
             "estimator": "median",
             "min_cell_n": int(min_cell_n),
+            "levels": list(levels),
             "global": _round(statistics.median([r.job_s for r in rows])),
-            "cell": table(groups[0]),
-            "pair_hour": table(groups[1]),
-            "pair": table(groups[2]),
+            **{level: table(groups[level]) for level in levels},
         },
         "deadhead": _deadhead_fit(rows),
     }
@@ -361,7 +383,7 @@ def holdout_by_day(rows: Sequence[Row], **fit_kw: Any) -> dict:
         model = TimeModel(fit(train, **fit_kw))
         res_day: list[float] = []
         for r in test:
-            f = model.features(r.pickup, r.dropoff, r.dispatch_s, r.km)
+            f = _row_model_features(model, r)
             pred, level = model.lookup(f)
             res = r.job_s - pred
             res_day.append(res)
@@ -399,6 +421,19 @@ def recommend_late_slack_min(p90_signed_s: float, round_to: int = SLACK_ROUND_MI
     return int(math.ceil(minutes / round_to) * round_to) if minutes > 0 else 0
 
 
+def late_slack_table(holdout: Mapping) -> dict:
+    """``MODEL["late_slack"]`` from a hold-out report: per pair and overall, seconds."""
+    by_pair = {
+        pair.replace("->", "|"): float(60 * recommend_late_slack_min(summary["p90_signed_s"]))
+        for pair, summary in sorted(holdout["by_group"].get("pair", {}).items())
+    }
+    return {
+        "by_pair_s": by_pair,
+        "default_s": float(60 * recommend_late_slack_min(holdout["overall"]["p90_signed_s"])),
+        "rule": "P90 of signed hold-out residual (actual - predicted), rounded up to 5 min",
+    }
+
+
 # ------------------------------------------------------------------------------ render
 
 
@@ -415,6 +450,9 @@ def render_module(
     validate_model(model)
     overall = report["holdout"]["overall"]
     slack = recommend_late_slack_min(overall["p90_signed_s"])
+    by_pair_min = {
+        k: int(v // 60) for k, v in sorted((model.get("late_slack") or {}).get("by_pair_s", {}).items())
+    }
     digest = model_digest(model)
     pp = lambda obj: pprint.pformat(obj, width=100, sort_dicts=True)  # noqa: E731
     return (
@@ -434,6 +472,8 @@ def render_module(
         f"P90_SECONDS = {overall['p90_abs_s']!r}  # P90 of |actual - predicted|\n"
         f"P90_SIGNED_SECONDS = {overall['p90_signed_s']!r}  # P90 of actual - predicted (late)\n"
         f"RECOMMENDED_LATE_SLACK_MIN = {slack!r}\n"
+        "#: Per pickup|dropoff type pair, minutes (same rule; MODEL['late_slack'] in seconds).\n"
+        f"LATE_SLACK_MIN_BY_PAIR = {pp(by_pair_min)}\n"
         "\n"
         f"BASELINE = {pp(dict(baseline))}\n"
         "\n"
@@ -457,10 +497,13 @@ def build(
 ) -> tuple[str, dict, dict]:
     """Fit on ALL rows, evaluate by day hold-out, render. Returns (source, model, report)."""
     model = fit(rows, **fit_kw)
+    holdout = holdout_by_day(rows, **fit_kw)
+    model["late_slack"] = late_slack_table(holdout)
+    validate_model(model)
     report = {
         "n": len(rows),
         "skipped": dict(sorted(skipped.items())),
-        "holdout": holdout_by_day(rows, **fit_kw),
+        "holdout": holdout,
         "target": target_shapes(rows),
         "deadhead_n": model["deadhead"]["n"],
     }
@@ -528,6 +571,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:  # pragma: no cover - CLI
     ap.add_argument("--note", default="", help="why this baseline was chosen (recorded)")
     ap.add_argument("--hour-bucket-hours", type=int, default=DEFAULT_HOUR_BUCKET_HOURS)
     ap.add_argument("--min-cell-n", type=int, default=DEFAULT_MIN_CELL_N)
+    ap.add_argument("--levels", default=",".join(DEFAULT_LEVELS), help="lookup chain, most specific first")
     ap.add_argument("--allow-unusable", action="store_true", help="fit despite baseline problems")
     ap.add_argument("--dry-run", action="store_true", help="print the report, write nothing")
     args = ap.parse_args(argv)
@@ -567,6 +611,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:  # pragma: no cover - CLI
         baseline=baseline,
         hour_bucket_hours=args.hour_bucket_hours,
         min_cell_n=args.min_cell_n,
+        levels=tuple(args.levels.split(",")),
     )
     pprint.pprint({"n": report["n"], "skipped": report["skipped"], "holdout": report["holdout"]}, width=110)
     print("late slack (min):", recommend_late_slack_min(report["holdout"]["overall"]["p90_signed_s"]))

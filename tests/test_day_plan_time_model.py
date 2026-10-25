@@ -41,16 +41,19 @@ fitmod = _load_script()
 
 def _tiny_model(**over):
     model = {
-        "schema_version": 1,
+        "schema_version": 2,
         "features": {"hour_bucket_hours": 6, "km_edges": [10.0], "hour_axis": "elapsed"},
         "job_seconds": {
             "min_cell_n": 2,
+            "levels": ["facility", "cell", "pair_hour", "pair"],
             "global": 1000.0,
+            "facility": {"MT|CU|depot_007": [50.0, 3], "CT|CU|port_000": [60.0, 1]},
             "cell": {"CT|CU|0|0": [100.0, 5], "CT|CU|1|0": [150.0, 1]},
             "pair_hour": {"CT|CU|1": [200.0, 4]},
             "pair": {"CT|CU": [300.0, 9], "CU|CT": [400.0, 1]},
         },
         "deadhead": {"intercept_s": 60.0, "per_km_s": 90.0},
+        "late_slack": {"by_pair_s": {"CT|CU": 600.0, "MT|CU": 3000.0}, "default_s": 1200.0},
     }
     model.update(over)
     return model
@@ -76,6 +79,16 @@ def test_data_module_schema_and_digest():
     assert data.RECOMMENDED_LATE_SLACK_MIN == fitmod.recommend_late_slack_min(data.P90_SIGNED_SECONDS)
     assert data.BASELINE["problems"] == []
     assert data.MODEL["features"]["hour_axis"] == "elapsed"
+    assert data.MODEL["job_seconds"]["levels"] == ["facility", "pair_hour", "pair"]
+    slack = data.MODEL["late_slack"]
+    assert slack["default_s"] == 60 * data.RECOMMENDED_LATE_SLACK_MIN
+    assert data.LATE_SLACK_MIN_BY_PAIR == {k: int(v // 60) for k, v in slack["by_pair_s"].items()}
+    for pair, summary in data.REPORT["holdout"]["by_group"]["pair"].items():
+        assert data.LATE_SLACK_MIN_BY_PAIR[pair.replace("->", "|")] == fitmod.recommend_late_slack_min(
+            summary["p90_signed_s"]
+        )
+    assert all(v % 5 == 0 for v in data.LATE_SLACK_MIN_BY_PAIR.values())
+    assert model.late_slack_seconds("depot_001", "customer_002") == 60 * data.LATE_SLACK_MIN_BY_PAIR["MT|CU"]
 
 
 def test_modules_do_no_io_at_import():
@@ -133,6 +146,24 @@ def test_location_type(value, code):
     assert tm.location_type(value) == code
 
 
+@pytest.mark.parametrize(
+    "pickup, dropoff, key",
+    [
+        ("depot_003", "customer_001", "depot_003"),  # depot pair -> the depot
+        ("customer_001", "depot_003", "depot_003"),
+        ("port_000", "depot_003", "depot_003"),
+        ("depot_001", "depot_002", "depot_001+depot_002"),
+        ("port_000", "customer_001", "port_000"),  # otherwise -> pickup facility
+        ("customer_001", "port_000", "customer_001"),
+        ("CT", "CU", None),  # codes carry no facility id
+        ("MT", "customer_001", None),
+        (None, "port_000", None),
+    ],
+)
+def test_facility_key(pickup, dropoff, key):
+    assert tm.facility_key(pickup, dropoff) == key
+
+
 def test_hour_bucket_is_on_the_elapsed_axis():
     assert tm.hour_bucket(0, 4) == 0
     assert tm.hour_bucket(4 * 3600 - 1, 4) == 0
@@ -163,6 +194,35 @@ def test_haversine_known_distance():
 
 
 # ---------------------------------------------------------------------------- predictions
+
+
+def test_facility_level_is_most_specific():
+    m = TimeModel(_tiny_model())
+    assert m.lookup(m.features("depot_007", "customer_9", 3600, 3.0)) == (50.0, "facility")
+    # facility cell too small (n=1 < 2) -> next level (cell CT|CU|0|0)
+    assert m.lookup(m.features("port_000", "customer_9", 3600, 3.0)) == (100.0, "cell")
+    # unseen facility, or codes only -> skips the facility level
+    assert m.lookup(m.features("depot_099", "customer_9", 3600, 3.0))[1] != "facility"
+    assert m.lookup(m.features("MT", "CU", 3600, 3.0))[1] != "facility"
+
+
+def test_levels_order_is_the_models():
+    raw = _tiny_model()
+    raw["job_seconds"]["levels"] = ["pair"]
+    m = TimeModel(raw)
+    assert m.lookup(m.features("depot_007", "customer_9", 3600, 3.0)) == (1000.0, "global")
+    assert m.lookup(m.features("port_000", "customer_9", 3600, 3.0)) == (300.0, "pair")
+
+
+def test_late_slack_seconds():
+    m = TimeModel(_tiny_model())
+    assert m.late_slack_seconds("CT", "CU") == 600.0
+    assert m.late_slack_seconds("depot_007", "customer_1") == 3000.0
+    assert m.late_slack_seconds("CU", "CT") == 1200.0  # unseen pair -> overall
+    raw = _tiny_model()
+    raw.pop("late_slack")
+    with pytest.raises(TimeModelError):
+        TimeModel(raw).late_slack_seconds("CT", "CU")
 
 
 def test_backoff_levels():
@@ -215,6 +275,9 @@ def test_digest_ignores_fit_report_but_tracks_coefficients():
     c = _tiny_model()
     c["job_seconds"]["global"] = 1001.0
     assert tm.model_digest(a) != tm.model_digest(c)
+    e = _tiny_model()
+    e["late_slack"]["default_s"] = 1.0  # the slack table moves plans, so it is covered
+    assert tm.model_digest(a) != tm.model_digest(e)
     assert tm.model_digest(_tiny_model()) == tm.model_digest(_tiny_model())
 
 
@@ -222,7 +285,15 @@ def test_digest_ignores_fit_report_but_tracks_coefficients():
     "mutate",
     [
         lambda m: m.pop("deadhead"),
-        lambda m: m.update(schema_version=2),
+        lambda m: m.update(schema_version=1),
+        lambda m: m["job_seconds"].update(levels=[]),
+        lambda m: m["job_seconds"].update(levels=["pair", "pair"]),
+        lambda m: m["job_seconds"].update(levels=["bogus"]),
+        lambda m: m["job_seconds"].update(levels=["pair", "km_only"]),
+        lambda m: m["job_seconds"].pop("facility"),
+        lambda m: m["late_slack"].update(default_s=-1.0),
+        lambda m: m["late_slack"]["by_pair_s"].update({"CT|CU": float("inf")}),
+        lambda m: m.update(late_slack={"default_s": 1.0}),
         lambda m: m["features"].update(hour_bucket_hours=5),
         lambda m: m["features"].update(km_edges=[10.0, 5.0]),
         lambda m: m["features"].update(km_edges=[]),
@@ -347,6 +418,26 @@ def test_fit_recovers_pair_medians_and_holdout_mae():
     assert set(report["per_day"]) == {"0", "1", "2", "3"}
     assert set(report["by_group"]["pair"]) == {"CT->CU", "CU->MT", "MT->CT"}
     assert set(report["by_group"]["depot_leg"]) == {"touches_MT", "no_MT"}
+    # every synthetic pair has one queuing facility with 160 rows -> the facility level answers
+    assert set(report["by_group"]["level"]) == {"facility"}
+    assert set(model["job_seconds"]["facility"]) == {"CT|CU|port_000", "CU|MT|depot_003", "MT|CT|depot_004"}
+    slack = fitmod.late_slack_table(report)
+    assert set(slack["by_pair_s"]) == {"CT|CU", "CU|MT", "MT|CT"}
+    assert all(0 < v <= 900 and v % 300 == 0 for v in slack["by_pair_s"].values())
+
+
+def test_facility_level_beats_pair_when_facilities_differ():
+    """Two depots with different queues under one pair: the facility level separates them."""
+    rows, _ = _rows()
+    slow = [
+        fitmod.Row(**{**r.__dict__, "pickup_name": "depot_009", "job_s": r.job_s + 20000.0})
+        for r in rows
+        if r.pickup == "MT"
+    ]
+    mixed = rows + slow
+    by_fac = fitmod.holdout_by_day(mixed, min_cell_n=5)["overall"]["mae_s"]
+    by_pair = fitmod.holdout_by_day(mixed, min_cell_n=5, levels=("pair",))["overall"]["mae_s"]
+    assert by_fac < 450.0 < 3000.0 < by_pair
 
 
 def test_render_round_trip_is_deterministic_and_loadable():
@@ -372,6 +463,8 @@ def test_render_round_trip_is_deterministic_and_loadable():
     assert namespace["RECOMMENDED_LATE_SLACK_MIN"] == fitmod.recommend_late_slack_min(
         namespace["P90_SIGNED_SECONDS"]
     )
+    assert namespace["MODEL"]["late_slack"] == fitmod.late_slack_table(report1["holdout"])
+    assert set(namespace["LATE_SLACK_MIN_BY_PAIR"]) == {"CT|CU", "CU|MT", "MT|CT"}
 
 
 @pytest.mark.parametrize("p90, minutes", [(0, 0), (-50, 0), (1, 5), (300, 5), (301, 10), (21120, 355)])

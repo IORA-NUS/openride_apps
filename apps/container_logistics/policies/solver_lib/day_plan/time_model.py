@@ -15,7 +15,7 @@ times and the laden leg, as the baseline run measured them. The plan's job end i
 
     e_i = r_i + latency_seconds(cadence, step) + job_seconds(features_i)
 
-Features (each a small bucket, so the cell table stays dense):
+Features (each a small bucket, so the tables stay dense):
 
 - pickup / dropoff location type: ``CT`` (port), ``CU`` (customer), ``MT`` (depot /
   yard). The order profile's ``*_location_type`` field is NOT usable -- every order in
@@ -23,13 +23,18 @@ Features (each a small bucket, so the cell table stays dense):
   also accepts a facility name and maps its prefix (``port_002`` -> ``CT``);
 - hour bucket of the DISPATCH moment on the ELAPSED-since-REFERENCE_TIME axis (plan
   D5: the same axis as the demand curve and the day boundaries), never wall clock;
-- pickup -> dropoff great-circle km bucket.
+- pickup -> dropoff great-circle km bucket;
+- the QUEUING facility (:func:`facility_key`): for a pair that touches a depot, the
+  depot id(s) -- the depot gates are where this scenario queues (median 6.8-20 h per
+  depot on the baseline); otherwise the pickup facility id.
 
-Estimator: the per-cell MEDIAN (the MAE-optimal point), backed off through coarser cells
-(``pair+hour+km`` -> ``pair+hour`` -> ``pair`` -> global) when a cell has fewer than
-``min_cell_n`` baseline trips. Medians under a right-skewed queue under-predict the
-tail on purpose; the planner absorbs that with ``nf_late_slack_min``, which the fit
-recommends from the P90 of the signed hold-out residual (critique minor 14).
+Estimator: the per-cell MEDIAN (the MAE-optimal point), looked up through the model's
+ordered ``job_seconds.levels`` (shipped: ``facility`` -> ``pair_hour`` -> ``pair``,
+then ``global``); a level answers only when its cell has ``>= min_cell_n`` baseline
+trips. Medians under a right-skewed queue under-predict the tail on purpose; the
+planner absorbs that with a late slack, which the fit sets from the P90 of the signed
+hold-out residual (critique minor 14) -- per pickup/dropoff pair
+(:meth:`TimeModel.late_slack_seconds`) and overall (``RECOMMENDED_LATE_SLACK_MIN``).
 """
 
 from __future__ import annotations
@@ -46,16 +51,21 @@ __all__ = [
     "JobFeatures",
     "TimeModel",
     "TimeModelError",
+    "facility_key",
     "haversine_km",
     "hour_bucket",
     "km_bucket",
     "latency_seconds",
+    "level_key",
     "location_type",
     "model_digest",
     "validate_model",
 ]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+#: Lookup levels a model may list in ``job_seconds.levels`` (most specific first).
+LEVELS: tuple[str, ...] = ("facility", "cell", "pair_hour", "pair")
 
 #: Location-type codes, the facility ``code`` vocabulary of the bundles.
 LOCATION_TYPES: tuple[str, ...] = ("CT", "CU", "MT")
@@ -113,6 +123,26 @@ def location_type(value: Optional[str]) -> str:
     return _NAME_PREFIX.get(prefix, UNKNOWN_TYPE)
 
 
+def facility_key(pickup: Optional[str], dropoff: Optional[str]) -> Optional[str]:
+    """Id of the facility (or facilities) whose queue dominates the job, or ``None``.
+
+    A pair touching a depot keys on the depot id(s) (``"depot_003"``; both, joined by
+    ``+``, for depot -> depot); any other pair keys on the pickup facility id. Needs
+    facility NAMES (``port_002``); a bare code (``"CT"``) or label gives ``None``, and the
+    lookup falls through to the next level.
+    """
+    names = (pickup, dropoff)
+    types = tuple(location_type(n) for n in names)
+    if "MT" in types:
+        chosen = [n for n, t in zip(names, types) if t == "MT"]
+    else:
+        chosen = [pickup]
+    for name in chosen:
+        if not name or "_" not in str(name) or location_type(name) == UNKNOWN_TYPE:
+            return None
+    return "+".join(str(n).strip() for n in chosen)
+
+
 def hour_bucket(elapsed_seconds: float, bucket_hours: int) -> int:
     """Bucket of the hour-of-run-day on the ELAPSED axis (``0 .. 24/bucket_hours - 1``)."""
     if bucket_hours <= 0 or 24 % bucket_hours:
@@ -154,6 +184,7 @@ class JobFeatures:
     dropoff_type: str
     hour_bucket: int
     km_bucket: int
+    facility: Optional[str] = None
 
 
 # ------------------------------------------------------------------------------ model
@@ -166,10 +197,12 @@ def _canonical(obj: Any) -> str:
 def model_digest(model: Mapping[str, Any]) -> str:
     """``blake2b16:<hex>`` over the canonical JSON of what moves a prediction.
 
-    Covers ``schema_version``, ``features``, ``job_seconds`` and ``deadhead`` -- not the
-    fit report (MAE, dates), so re-rendering the same coefficients keeps the digest.
+    Covers ``schema_version``, ``features``, ``job_seconds``, ``deadhead`` and
+    ``late_slack`` (when present) -- not the fit report (MAE, dates), so re-rendering the
+    same coefficients keeps the digest.
     """
-    payload = {key: model[key] for key in ("schema_version", "features", "job_seconds", "deadhead")}
+    keys = ("schema_version", "features", "job_seconds", "deadhead", "late_slack")
+    payload = {key: model[key] for key in keys if key in model}
     return "blake2b16:" + hashlib.blake2b(_canonical(payload).encode("utf-8"), digest_size=8).hexdigest()
 
 
@@ -206,7 +239,15 @@ def validate_model(model: Mapping[str, Any]) -> None:
     glob = js.get("global")
     if not isinstance(glob, (int, float)) or not math.isfinite(glob) or glob < 0:
         raise TimeModelError("job_seconds.global must be a finite number >= 0")
-    for level in ("cell", "pair_hour", "pair"):
+    levels = js.get("levels")
+    if (
+        not isinstance(levels, list)
+        or not levels
+        or any(level not in LEVELS for level in levels)
+        or len(set(levels)) != len(levels)
+    ):
+        raise TimeModelError(f"job_seconds.levels must be a non-empty list of distinct {LEVELS}")
+    for level in levels:
         table = js.get(level)
         if not isinstance(table, dict):
             raise TimeModelError(f"job_seconds.{level} must be a dict")
@@ -227,10 +268,33 @@ def validate_model(model: Mapping[str, Any]) -> None:
         value = dh.get(key)
         if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
             raise TimeModelError(f"deadhead.{key} must be a finite number >= 0")
+    if "late_slack" in model:
+        ls = model["late_slack"]
+        if not isinstance(ls, Mapping) or not isinstance(ls.get("by_pair_s"), Mapping):
+            raise TimeModelError("late_slack must be a dict with a by_pair_s dict")
+        values = [("default_s", ls.get("default_s"))] + [
+            (f"by_pair_s[{k!r}]", v) for k, v in ls["by_pair_s"].items()
+        ]
+        for name, value in values:
+            if not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+                raise TimeModelError(f"late_slack.{name} must be a finite number >= 0")
 
 
 def _key(*parts: Any) -> str:
     return "|".join(str(p) for p in parts)
+
+
+def level_key(level: str, f: JobFeatures) -> Optional[str]:
+    """The table key of ``f`` at ``level`` (``None``: the level does not apply)."""
+    if level == "facility":
+        return None if f.facility is None else _key(f.pickup_type, f.dropoff_type, f.facility)
+    if level == "cell":
+        return _key(f.pickup_type, f.dropoff_type, f.hour_bucket, f.km_bucket)
+    if level == "pair_hour":
+        return _key(f.pickup_type, f.dropoff_type, f.hour_bucket)
+    if level == "pair":
+        return _key(f.pickup_type, f.dropoff_type)
+    raise TimeModelError(f"unknown level {level!r}")
 
 
 class TimeModel:
@@ -247,13 +311,13 @@ class TimeModel:
         self.km_edges: tuple[float, ...] = tuple(float(e) for e in feats["km_edges"])
         js = self._model["job_seconds"]
         self._min_n: int = js["min_cell_n"]
-        self._cell: dict[str, list] = js["cell"]
-        self._pair_hour: dict[str, list] = js["pair_hour"]
-        self._pair: dict[str, list] = js["pair"]
+        self._levels: tuple[tuple[str, dict], ...] = tuple((lv, js[lv]) for lv in js["levels"])
         self._global: float = float(js["global"])
         dh = self._model["deadhead"]
         self._dh_a: float = float(dh["intercept_s"])
         self._dh_b: float = float(dh["per_km_s"])
+        ls = self._model.get("late_slack")
+        self._slack: Optional[dict] = ls
         self.digest: str = model_digest(self._model)
 
     # -- construction ------------------------------------------------------------
@@ -286,23 +350,24 @@ class TimeModel:
         km: float,
     ) -> JobFeatures:
         """Bucket raw inputs: location types (code, label or facility name), the
-        dispatch moment in seconds since REFERENCE_TIME, and pickup->dropoff km."""
+        dispatch moment in seconds since REFERENCE_TIME, and pickup->dropoff km.
+        Pass facility NAMES to enable the per-facility level (:func:`facility_key`)."""
         return JobFeatures(
             location_type(pickup),
             location_type(dropoff),
             hour_bucket(dispatch_elapsed_s, self.hour_bucket_hours),
             km_bucket(km, self.km_edges),
+            facility_key(pickup, dropoff),
         )
 
     # -- predictions -------------------------------------------------------------
 
     def lookup(self, f: JobFeatures) -> tuple[float, str]:
         """``(seconds, level)`` -- the cell median and which backoff level answered."""
-        for level, table, key in (
-            ("cell", self._cell, _key(f.pickup_type, f.dropoff_type, f.hour_bucket, f.km_bucket)),
-            ("pair_hour", self._pair_hour, _key(f.pickup_type, f.dropoff_type, f.hour_bucket)),
-            ("pair", self._pair, _key(f.pickup_type, f.dropoff_type)),
-        ):
+        for level, table in self._levels:
+            key = level_key(level, f)
+            if key is None:
+                continue
             entry = table.get(key)
             if entry is not None and entry[1] >= self._min_n:
                 return float(entry[0]), level
@@ -321,6 +386,17 @@ class TimeModel:
     ) -> float:
         """:meth:`job_seconds` straight from raw inputs (see :meth:`features`)."""
         return self.job_seconds(self.features(pickup, dropoff, dispatch_elapsed_s, km))
+
+    def late_slack_seconds(self, pickup: Optional[str], dropoff: Optional[str]) -> float:
+        """Late slack for a job of this pickup/dropoff type pair (codes or names).
+
+        The P90 of the signed hold-out residual for the pair, rounded up to 5 min; the
+        overall figure for a pair the baseline never saw.
+        """
+        if self._slack is None:
+            raise TimeModelError("this time model carries no late_slack table")
+        key = _key(location_type(pickup), location_type(dropoff))
+        return float(self._slack["by_pair_s"].get(key, self._slack["default_s"]))
 
     def deadhead_seconds(self, km: float) -> float:
         """Seconds a truck spends reaching a pickup ``km`` great-circle km away.
