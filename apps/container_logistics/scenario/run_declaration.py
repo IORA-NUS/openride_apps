@@ -37,6 +37,24 @@ The rules, in the order they are checked:
 ``FRAMEWORK_READ_SETTINGS`` is a static list, pinned against the code that reads the
 settings by ``tests/test_run_declaration.py`` (an AST scan of orsim and ``apps/``), so
 a new framework reader with a key missing here fails that test instead of drifting.
+
+A top that declares PLANNING ticks (``Declaration.planning``: ``{at_day_start,
+every_steps, foresight, max_hold_seconds}``; the shape itself is the bind contract's
+check) is checked here too, after rules 1-3, at every entry path:
+
+4. **R4** -- ``max_hold_seconds`` above :data:`PLANNING_HOLD_CAP_SECONDS` is refused (a
+   held step stops every agent's clock; see the constant).
+5. **R3** -- ``foresight == "day"`` reads orders before the simulation releases them,
+   which only the order-lifecycle ``service`` mode can serve (orders pre-created with
+   their request step). Refused when ``lifecycle_mode == "agents"``. Compile passes
+   ``lifecycle_mode=None`` (the mode is a per-run input, so compile does not refuse);
+   the dry run passes the mode the launch environment selects, the sim main the mode
+   it resolved -- BEFORE this check, so nothing is stamped before a refusal.
+
+The admissible declaration comes back as ``RunDeclarationPlan.planning``: the record the
+sim main stamps as run setting ``PLANNING`` (the declaration plus ``oracle`` and
+``axis: "elapsed"``); :func:`planning_run_name_segment` gives its ``oracle:day``
+run-name segment and :func:`planning_orphan_timeout` the raised ``ORPHAN_TIMEOUT``.
 """
 
 from __future__ import annotations
@@ -59,6 +77,12 @@ __all__ = [
     "RunDeclarationPlan",
     "reserved_run_settings",
     "check_run_declaration",
+    "declared_planning",
+    "planning_run_name_segment",
+    "planning_orphan_timeout",
+    "PLANNING_HOLD_CAP_SECONDS",
+    "PLANNING_AXIS",
+    "FRAMEWORK_SEGMENT_PREFIXES",
     "append_run_name_segments",
     "cooperation_record",
 ]
@@ -76,6 +100,14 @@ FRAMEWORK_RUN_SETTINGS = frozenset({
     "MIN_STEP_WALL_TIME_MS",
     "PERSIST_ROUTE_GEO",
     "ORDER_LIFECYCLE",
+    # Day-plan framework additions (NetworkFlowDay build, F1/F4/F4b/F5): written only on
+    # runs that declare planning / override the cadence / carry working hours, so a
+    # default run's settings are unchanged.
+    "PLANNING",
+    "ORPHAN_TIMEOUT",
+    "ASSIGNMENT_CADENCE",
+    "MAX_ORDERS_PER_TICK",
+    "WORKING_HOURS",
 })
 
 #: Every ``orsim_settings`` key framework code (orsim, the scheduler, the runtime, the
@@ -86,6 +118,7 @@ FRAMEWORK_RUN_SETTINGS = frozenset({
 FRAMEWORK_READ_SETTINGS = frozenset({
     "AGENT_LAUNCH_TIMEOUT",
     "ALLOW_POST_HORIZON_DRAIN",
+    "ASSIGNMENT_CADENCE",
     "BEHAVIOR_REVISION",
     "CONCURRENT_SCHEDULERS",
     "COOPERATION",
@@ -107,6 +140,7 @@ FRAMEWORK_READ_SETTINGS = frozenset({
     "PERF_SLOW_AGENT_TOP_N",
     "PERF_TICK_EVERY_STEP",
     "PERSIST_ROUTE_GEO",
+    "PLANNING",
     "POLICIES",
     "POST_HORIZON_DRAIN_MAX_STEPS",
     "POST_HORIZON_GRACE_STEPS",
@@ -126,12 +160,37 @@ FRAMEWORK_READ_SETTINGS = frozenset({
     "UNASSIGNED_ORDER_MAX_WAIT_STEPS",
     "UNASSIGNED_ORDER_SLEEP_STEPS",
     "USE_OSRM_AT_ASSIGNMENT",
+    "WORKING_HOURS",
 })
 
 #: The run-name segment separator (``" · "`` joins segments; readers split on it).
 RUN_NAME_SEPARATOR = "·"
 
 _LIFECYCLE_PREFIX = "lifecycle:"
+
+#: Run-name segment prefixes the FRAMEWORK writes for the day-plan run inputs
+#: (``oracle:day`` for a planning declaration with day foresight, ``cadence:N`` for
+#: ``--assignment-cadence``, ``orders:N`` for ``--max-orders-per-tick``). A solver
+#: segment with one of them would label the run with an input it did not get.
+FRAMEWORK_SEGMENT_PREFIXES = ("oracle:", "cadence:", "orders:")
+
+#: The largest ``max_hold_seconds`` a planning declaration may ask for (refusal R4).
+#: A held step stops every agent's clock, and a run's whole wall time must stay well
+#: inside the Celery/Redis broker's 6 h ``visibility_timeout`` (past it every agent task
+#: is redelivered as a duplicate agent): the cap would be ``min(600, (6 h - expected
+#: wall) / solves)``; with ~140-170 planning solves per 7-day run that is a few minutes,
+#: kept as this constant (plan N1-N3 D2, F1 item 10).
+PLANNING_HOLD_CAP_SECONDS = 300
+
+#: The time axis day boundaries and working hours are measured on: seconds ELAPSED since
+#: ``REFERENCE_TIME`` (the axis the demand curve is authored on; plan D5).
+PLANNING_AXIS = "elapsed"
+
+#: ``ORPHAN_TIMEOUT`` (s) the agents use when the run sets none (``openride_agent.py``).
+DEFAULT_ORPHAN_TIMEOUT = 180
+
+#: The order-lifecycle mode whose orders exist only from their request step (R3).
+_AGENTS_LIFECYCLE = "agents"
 
 
 class RunDeclarationError(PolicyError):
@@ -145,12 +204,15 @@ class RunDeclarationPlan:
     ``cooperation`` is the framework's ``COOPERATION`` record (``None``: the run has no
     active arm, write nothing); ``settings`` the top's other stamp settings, in their
     declared order, to merge into the run's settings; ``run_name_segments`` the
-    segments to append (:func:`append_run_name_segments`).
+    segments to append (:func:`append_run_name_segments`); ``planning`` the ``PLANNING``
+    run-setting record when the top declares planning ticks (``None``: it does not, and
+    nothing planning-related is written).
     """
 
     cooperation: Any = None
     settings: Mapping[str, Any] = field(default_factory=dict)
     run_name_segments: tuple[str, ...] = ()
+    planning: Mapping[str, Any] | None = None
 
 
 def reserved_run_settings() -> frozenset[str]:
@@ -220,6 +282,9 @@ def _segment_problem(segment: Any, *, declared: list[str], active: str | None,
                 f"arm is {active!r}: the run would be labelled as the wrong arm")
     if text.startswith(_LIFECYCLE_PREFIX):
         return f"{segment!r} is the framework's order-lifecycle tag ({_LIFECYCLE_PREFIX}...)"
+    prefix = next((p for p in FRAMEWORK_SEGMENT_PREFIXES if text.startswith(p)), None)
+    if prefix is not None:
+        return f"{segment!r} is a framework run-input tag ({prefix}...)"
     if text in _framework_segments():
         return f"{segment!r} is a legacy dispatch segment the framework writes"
     if _looks_like_dispatch_label(text, policy_names):
@@ -234,16 +299,79 @@ def _planner_policy_names() -> frozenset[str]:
     return frozenset(spec.name for spec in list_policies("planner"))
 
 
+def declared_planning(tree: Any) -> Mapping[str, Any] | None:
+    """The top's ``Declaration.planning`` mapping, or ``None`` (no tree / not declared).
+
+    Read with ``getattr``: a ``Declaration`` without the field (older contract) declares
+    no planning.
+    """
+    declaration = getattr(tree, "declaration", None) if tree is not None else None
+    planning = getattr(declaration, "planning", None)
+    return planning if isinstance(planning, Mapping) and planning else None
+
+
+def _planning_record(name: str, planning: Mapping[str, Any], lifecycle_mode: str | None) -> dict[str, Any]:
+    """R4, then R3; the ``PLANNING`` run-setting record (declaration + ``oracle`` + ``axis``)."""
+    hold = planning.get("max_hold_seconds")
+    if isinstance(hold, bool) or not isinstance(hold, int) or hold > PLANNING_HOLD_CAP_SECONDS:
+        raise RunDeclarationError(
+            f"planner policy {name} declares max_hold_seconds {hold!r}, above the planning hold cap "
+            f"{PLANNING_HOLD_CAP_SECONDS} s (a held step stops every agent's clock; runs must stay well "
+            "inside the 6 h broker visibility timeout). Lower the solver's time limit."
+        )
+    foresight = planning.get("foresight")
+    if foresight == "day" and lifecycle_mode == _AGENTS_LIFECYCLE:
+        raise RunDeclarationError(
+            f"planner policy {name} declares planning foresight 'day', which reads orders before the "
+            "simulation releases them; that needs ORDER_LIFECYCLE=service (orders pre-created with their "
+            "request step). This run uses 'agents' (ORSIM_ORDER_LIFECYCLE=agents): drop that override or "
+            "select an online planner."
+        )
+    record = {str(k): v for k, v in planning.items()}
+    record["oracle"] = foresight == "day"
+    record["axis"] = PLANNING_AXIS
+    return record
+
+
+def planning_run_name_segment(planning: Mapping[str, Any] | None) -> str | None:
+    """``"oracle:day"`` for a ``PLANNING`` record with day foresight, else ``None``."""
+    if isinstance(planning, Mapping) and planning.get("oracle"):
+        return "oracle:day"
+    return None
+
+
+def planning_orphan_timeout(planning: Mapping[str, Any] | None, current: Any) -> int | None:
+    """The raised ``ORPHAN_TIMEOUT`` for a planning run, or ``None`` (no raise needed).
+
+    ``max(current or 180, 2 * max_hold_seconds + 60)``: an agent that hears no scheduler
+    message for ``ORPHAN_TIMEOUT`` shuts itself down, and a held step sends none (plan D1c).
+    ``None`` when there is no planning record or the current value already suffices.
+    """
+    if not isinstance(planning, Mapping):
+        return None
+    hold = planning.get("max_hold_seconds")
+    if isinstance(hold, bool) or not isinstance(hold, int):
+        return None
+    try:
+        base = int(current) if current is not None else DEFAULT_ORPHAN_TIMEOUT
+    except (TypeError, ValueError):
+        base = DEFAULT_ORPHAN_TIMEOUT
+    wanted = max(DEFAULT_ORPHAN_TIMEOUT, 2 * hold + 60)
+    return wanted if wanted > base else None
+
+
 def check_run_declaration(tree: Any, *, settings_keys: Iterable[str],
-                          profile: Mapping[str, Any] | None) -> RunDeclarationPlan:
-    """Check the top's run declaration (module docstring, rules 1-3); return the plan.
+                          profile: Mapping[str, Any] | None,
+                          lifecycle_mode: str | None = None) -> RunDeclarationPlan:
+    """Check the top's run declaration (module docstring, rules 1-5); return the plan.
 
     ``tree`` is a bound planner tree (``dispatch.bind.BoundTree``: ``declaration``,
     ``top.name``); ``None`` returns an empty plan. ``settings_keys`` are the keys the
     run's settings hold when the declaration is merged; ``profile`` the assignment
     profile AFTER any per-run override (its ``cooperation`` block is the world's arm).
-    Raises :class:`RunDeclarationError`. Messages for rules 1 and 2 are the sim main's
-    former ones, unchanged.
+    ``lifecycle_mode`` is the run's order-lifecycle mode (``"service"`` / ``"agents"``),
+    ``None`` at compile (no R3). Raises :class:`RunDeclarationError`. Messages for rules
+    1 and 2 are the sim main's former ones, unchanged.
     """
     if tree is None:
         return RunDeclarationPlan()
@@ -278,7 +406,10 @@ def check_run_declaration(tree: Any, *, settings_keys: Iterable[str],
                 f"{'; '.join(problems)}. A solver's run_name_segments may add its own tags, never "
                 "one the framework writes or a reader parses as a structure, a lifecycle or a selection."
             )
-    return RunDeclarationPlan(cooperation=record, settings=declared, run_name_segments=segments)
+    planning = declared_planning(tree)
+    planning_record = None if planning is None else _planning_record(name, planning, lifecycle_mode)
+    return RunDeclarationPlan(cooperation=record, settings=declared, run_name_segments=segments,
+                              planning=planning_record)
 
 
 def append_run_name_segments(run_name: str | None, segments: Iterable[str]) -> str | None:

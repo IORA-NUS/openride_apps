@@ -79,10 +79,19 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
         _log(f"error: {control.SHARING_POLICY_REMOVED}")
         return EXIT_BAD_ARGS
     try:
+        assignment_cadence, max_orders_per_tick = control.validate_assignment_run_inputs(
+            getattr(args, "assignment_cadence", None), getattr(args, "max_orders_per_tick", None)
+        )
+    except control.ControlError as exc:
+        _log(f"error: {exc}")
+        return EXIT_BAD_ARGS
+    try:
         policy_overrides = control.validate_run_policies(
             args.scenario, args.solver, getattr(args, "policy", None),
             getattr(args, "policy_param", None),
             cooperation_structure=getattr(args, "structure", None),
+            assignment_cadence=assignment_cadence,
+            max_orders_per_tick=max_orders_per_tick,
         )
     except control.ControlError as exc:
         _log(f"error: invalid policy override: {exc}")
@@ -103,6 +112,8 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
         run_name=args.run_name,
         headless=headless,
         cooperation_structure=getattr(args, "structure", None),
+        assignment_cadence=assignment_cadence,
+        max_orders_per_tick=max_orders_per_tick,
     )
 
     started_at = _now_iso()

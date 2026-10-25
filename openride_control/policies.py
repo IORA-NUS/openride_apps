@@ -205,6 +205,9 @@ def sim_environ(
     solver: str | None = None,
     overrides: dict[str, Any] | None = None,
     cooperation_structure: str | None = None,
+    order_lifecycle: str | None = None,
+    assignment_cadence: Any = None,
+    max_orders_per_tick: Any = None,
 ) -> dict[str, str]:
     """The environment the spawned sim main will read for this run's flags.
 
@@ -212,11 +215,15 @@ def sim_environ(
     (``paths.openride_apps_env`` copies it), overlaid exactly as
     ``ServiceManager.run_simulation_background`` / ``openride.runner`` inject the
     flags: ``ORSIM_SCENARIO`` when ``scenario`` is set, ``ORSIM_SOLVER`` /
-    ``ORSIM_COOP_STRUCTURE`` when non-blank (stripped), ``ORSIM_POLICY_OVERRIDES`` (JSON,
-    keys sorted) when ``overrides`` is non-empty. A variable no flag sets keeps its
-    inherited value, which is exactly what the sim then reads.
+    ``ORSIM_COOP_STRUCTURE`` / ``ORSIM_ORDER_LIFECYCLE`` / ``ORSIM_ASSIGNMENT_CADENCE`` /
+    ``ORSIM_MAX_ORDERS_PER_TICK`` when non-blank (stripped), ``ORSIM_POLICY_OVERRIDES``
+    (JSON, keys sorted) when ``overrides`` is non-empty. A variable no flag sets keeps
+    its inherited value, which is exactly what the sim then reads.
     """
     from apps.container_logistics.scenario.scenario_overrides import (
+        ASSIGNMENT_CADENCE_ENV,
+        MAX_ORDERS_PER_TICK_ENV,
+        ORDER_LIFECYCLE_ENV,
         POLICY_OVERRIDES_ENV,
         SOLVER_ENV,
         STRUCTURE_ENV,
@@ -229,6 +236,12 @@ def sim_environ(
         env[SOLVER_ENV] = solver.strip()
     if cooperation_structure and cooperation_structure.strip():
         env[STRUCTURE_ENV] = cooperation_structure.strip()
+    if order_lifecycle and order_lifecycle.strip():
+        env[ORDER_LIFECYCLE_ENV] = order_lifecycle.strip()
+    for key, value in ((ASSIGNMENT_CADENCE_ENV, assignment_cadence),
+                       (MAX_ORDERS_PER_TICK_ENV, max_orders_per_tick)):
+        if value is not None and str(value).strip():
+            env[key] = str(value).strip()
     if overrides:
         env[POLICY_OVERRIDES_ENV] = json.dumps(overrides, sort_keys=True)
     return env
@@ -243,13 +256,17 @@ def _env_requests_a_patch(env: dict[str, str]) -> bool:
     """Whether ``env`` asks the sim main to patch the loaded behaviors (any per-run input)."""
     from apps.container_logistics.policies.compat.legacy_env import read_legacy_dispatch_env
     from apps.container_logistics.scenario.scenario_overrides import (
+        ASSIGNMENT_CADENCE_ENV,
+        MAX_ORDERS_PER_TICK_ENV,
         POLICY_OVERRIDES_ENV,
         solver_from_env,
         structure_from_env,
     )
 
     return bool(env.get(POLICY_OVERRIDES_ENV, "").strip() or solver_from_env(env)
-                or structure_from_env(env) or any(read_legacy_dispatch_env(env).values()))
+                or structure_from_env(env) or any(read_legacy_dispatch_env(env).values())
+                or env.get(ASSIGNMENT_CADENCE_ENV, "").strip()
+                or env.get(MAX_ORDERS_PER_TICK_ENV, "").strip())
 
 
 def validate_run_policy_args(
@@ -261,8 +278,17 @@ def validate_run_policy_args(
     cooperation_structure: str | None = None,
     *,
     environ: Any = None,
+    order_lifecycle: str | None = None,
+    assignment_cadence: Any = None,
+    max_orders_per_tick: Any = None,
 ) -> dict[str, Any] | str:
     """Dry-run a run's policy flags against the scenario's assignment profile.
+
+    ``order_lifecycle`` / ``assignment_cadence`` / ``max_orders_per_tick`` are the run's
+    ``--order-lifecycle`` / ``--assignment-cadence`` / ``--max-orders-per-tick`` flags,
+    overlaid on the environment like the others (:func:`sim_environ`): the cadence and
+    read cap are range-checked (R8) before any bundle is read, and the lifecycle mode
+    decides refusal R3 in the run-declaration check.
 
     Order (round-2 §5 C4): build the overrides object (:func:`build_run_policy_overrides`;
     ``solver`` stays separate), then check every NAME it carries and ``solver``
@@ -294,7 +320,9 @@ def validate_run_policy_args(
         overrides = build_run_policy_overrides(policies, params, overrides_json)
         _precheck_names(overrides, solver)
         env = sim_environ(environ, scenario=scenario, solver=solver, overrides=overrides,
-                          cooperation_structure=cooperation_structure)
+                          cooperation_structure=cooperation_structure, order_lifecycle=order_lifecycle,
+                          assignment_cadence=assignment_cadence, max_orders_per_tick=max_orders_per_tick)
+        _precheck_run_inputs(env)
         collection = load_assignment_collection(_env_scenario(env))
         if collection is None:
             if not _env_requests_a_patch(env):
@@ -304,6 +332,17 @@ def validate_run_policy_args(
     except PolicyError as exc:
         return str(exc)
     return overrides
+
+
+def _precheck_run_inputs(env: dict[str, str]) -> None:
+    """R8: the per-run cadence / read cap in ``env`` are in range (the sim main's readers)."""
+    from apps.container_logistics.scenario.scenario_overrides import (
+        assignment_cadence_from_env,
+        max_orders_per_tick_from_env,
+    )
+
+    assignment_cadence_from_env(env)
+    max_orders_per_tick_from_env(env)
 
 
 def _precheck_names(overrides: dict[str, Any], solver: str | None) -> None:
@@ -333,6 +372,7 @@ def _dry_run(collection: dict[str, Any], env: dict[str, str], *,
     from apps.container_logistics.scenario.run_declaration import check_run_declaration
     from apps.container_logistics.scenario.scenario_overrides import (
         apply_cooperation_override,
+        order_lifecycle_from_env,
         policy_overrides_from_env,
         refuse_removed_sharing_env,
         run_dispatch_overrides,
@@ -346,10 +386,13 @@ def _dry_run(collection: dict[str, Any], env: dict[str, str], *,
     refuse_removed_sharing_env(env)
     _, patched_world_keys = apply_cooperation_override(collection, structure_from_env(env))
     trees = assert_assignment_profiles_resolvable(collection, patched_world_keys=patched_world_keys)
+    # R3 is decided on the mode the spawned sim will resolve from this environment.
+    lifecycle_mode = order_lifecycle_from_env(env)
     for agent_id, tree in trees.items():
         behavior = collection.get(agent_id)
         profile = (behavior.get("profile") if isinstance(behavior, dict) else None) or {}
-        check_run_declaration(tree, settings_keys=settings_keys, profile=profile)
+        check_run_declaration(tree, settings_keys=settings_keys, profile=profile,
+                              lifecycle_mode=lifecycle_mode)
     return collection, trees
 
 
@@ -362,6 +405,9 @@ def cmd_validate_run_policies(
     cooperation_structure: str | None = None,
     *,
     environ: Any = None,
+    order_lifecycle: str | None = None,
+    assignment_cadence: Any = None,
+    max_orders_per_tick: Any = None,
 ) -> dict[str, Any]:
     """``validate-run-policies`` payload: ``{ok, action, overrides}`` or ``{ok:false, action, message}``.
 
@@ -375,7 +421,9 @@ def cmd_validate_run_policies(
     """
     action = "validate_run_policies"
     result = validate_run_policy_args(
-        scenario, solver, policies, params, overrides_json, cooperation_structure, environ=environ
+        scenario, solver, policies, params, overrides_json, cooperation_structure, environ=environ,
+        order_lifecycle=order_lifecycle, assignment_cadence=assignment_cadence,
+        max_orders_per_tick=max_orders_per_tick,
     )
     if isinstance(result, str):
         return {"ok": False, "action": action, "message": result}
@@ -402,6 +450,9 @@ def run_preflight(
     params: Sequence[str] = (),
     overrides_json: str | None = None,
     environ: Any = None,
+    order_lifecycle: str | None = None,
+    assignment_cadence: Any = None,
+    max_orders_per_tick: Any = None,
 ) -> dict[str, Any]:
     """``run-preflight`` payload: what the run would bind, before it is spawned.
 
@@ -424,7 +475,9 @@ def run_preflight(
         overrides = build_run_policy_overrides(policies, params, overrides_json)
         _precheck_names(overrides, solver)
         env = sim_environ(environ, scenario=scenario, solver=solver, overrides=overrides,
-                          cooperation_structure=cooperation_structure)
+                          cooperation_structure=cooperation_structure, order_lifecycle=order_lifecycle,
+                          assignment_cadence=assignment_cadence, max_orders_per_tick=max_orders_per_tick)
+        _precheck_run_inputs(env)
         collection = load_assignment_collection(_env_scenario(env))
         if collection is None:
             return {"ok": False, "action": action, "message": _missing_bundle_message(_env_scenario(env))}

@@ -213,6 +213,12 @@ def register(sub) -> None:
                    help="Capture dispatch contexts every N-th dispatch tick (not sim step; at most M files) under "
                         "<datahub>/fixtures/dispatch/<run_id>, for openride policy bench --fixtures")
     p.add_argument("--structure", help="Cooperation structure id override (declared in the scenario's spec.json)")
+    p.add_argument("--assignment-cadence", dest="assignment_cadence", metavar="STEPS",
+                   help="Assignment dispatch cadence in sim steps, 1..360 (default: the scenario's, 28); "
+                        "a new arm, tagged ' · cadence:N'")
+    p.add_argument("--max-orders-per-tick", dest="max_orders_per_tick", metavar="N",
+                   help="Unassigned orders read per dispatch tick, 1..20000 (default: the scenario's, 500); "
+                        "tagged ' · orders:N'")
     # REMOVED (plan item 34): inert at run time. Still parsed so the refusal names the reason.
     p.add_argument("--sharing-policy", dest="sharing_policy", help=argparse.SUPPRESS)
     p.add_argument("--run-name", help="Human-readable run name")

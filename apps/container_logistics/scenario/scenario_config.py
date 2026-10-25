@@ -130,14 +130,19 @@ def normalize_hauliers(raw):
                 )
             return val
 
-        out.append(
-            {
-                "id": hid,
-                "name": name or hid,
-                "fleet_share": _share("fleet_share"),
-                "order_share": _share("order_share"),
-            }
-        )
+        normalized = {
+            "id": hid,
+            "name": name or hid,
+            "fleet_share": _share("fleet_share"),
+            "order_share": _share("order_share"),
+        }
+        # F5: an authored shift window is carried only when present (the datagen
+        # validator, refusal R9), so the editor/save paths never drop it.
+        if entry.get("workingHours") is not None:
+            from apps.container_logistics.datagen.hauliers import normalize_working_hours
+
+            normalized["workingHours"] = normalize_working_hours(hid, entry["workingHours"])
+        out.append(normalized)
 
     if not out:
         return [dict(h) for h in HAULIERS]
