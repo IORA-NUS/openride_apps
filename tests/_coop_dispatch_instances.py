@@ -15,7 +15,7 @@ from typing import Any
 
 def _instance(seed: int, *, n: int, companies: list[str], coop: str, vl: dict[str, int],
               use_trailer_cost: bool | None, released_frac: float, int_ids: bool,
-              edge_p: float, raw_edges: bool) -> dict[str, Any]:
+              edge_p: float, raw_edges: bool, dup_edges: int = 0) -> dict[str, Any]:
     rng = random.Random(seed)
     ids: list[Any] = list(range(1, n + 1)) if int_ids else [f"o{k}" for k in range(n)]
     owner = {o: companies[rng.randrange(len(companies))] for o in ids}
@@ -35,6 +35,8 @@ def _instance(seed: int, *, n: int, companies: list[str], coop: str, vl: dict[st
                 edges.append(e)
                 cost[e] = float(rng.randrange(200, 20000))
                 tcost[e] = float(rng.choice([0, 0, 0, rng.randrange(500, 8000)]))
+    # Duplicated edges: upstream's scans count the shared x variable once per copy.
+    edges += [edges[k] for k in range(min(dup_edges, len(edges)))]
     p: dict[str, Any] = {
         "instance_id": f"inst{seed}",
         "companies": companies,
@@ -74,6 +76,10 @@ def golden_instances() -> list[dict[str, Any]]:
                   use_trailer_cost=False, released_frac=0.0, int_ids=False, edge_p=0.2, raw_edges=False),
         _instance(7, n=8, companies=["A", "B", "C"], coop="self", vl={"A": 3, "B": 3, "C": 3},
                   use_trailer_cost=None, released_frac=0.2, int_ids=False, edge_p=0.55, raw_edges=True),
+        # Duplicate entries in edges_input (the edge index must keep them, as the scans do).
+        _instance(8, n=6, companies=["A", "B"], coop="full", vl={"A": 3, "B": 3},
+                  use_trailer_cost=False, released_frac=0.0, int_ids=False, edge_p=0.7, raw_edges=False,
+                  dup_edges=2),
     ]
 
 

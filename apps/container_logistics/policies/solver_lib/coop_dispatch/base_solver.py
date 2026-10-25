@@ -92,12 +92,22 @@ class GurobiSolverAdapter:
     MODEL_INVALID = 5
     NOT_SOLVED = 6
 
-    def __init__(self, threads: int | None = None) -> None:
+    def __init__(
+        self,
+        threads: int | None = None,
+        time_limit_s: float | None = None,
+        mip_gap: float | None = None,
+    ) -> None:
         import gurobipy as gp
         self._gp = gp
         self._model = gp.Model()
         if threads is not None:
             self._model.Params.Threads = threads
+        # OpenRide (VENDOR.md): explicit limits; None keeps upstream behaviour (no limit).
+        if time_limit_s is not None:
+            self._model.Params.TimeLimit = float(time_limit_s)
+        if mip_gap is not None:
+            self._model.Params.MIPGap = float(mip_gap)
         self._wall_ms: float = 0.0
 
     # ---------- variable creation ----------
@@ -196,10 +206,20 @@ class GurobiSolverAdapter:
             pass
 
 
-def create_solver_with_fallback(preferred_backend: str = "GUROBI") -> Any:
+def create_solver_with_fallback(
+    preferred_backend: str = "GUROBI",
+    time_limit_s: float | None = None,
+    mip_gap: float | None = None,
+) -> Any:
     """Return a solver object compatible with the pywraplp.Solver interface.
 
     Tries gurobipy (Gurobi 13) first; falls back to OR-Tools SCIP → CBC.
+
+    OpenRide (VENDOR.md): ``time_limit_s`` replaces the ``SCIP_TIME_LIMIT_SECONDS``
+    environment default (5400 s) when given, and also bounds the Gurobi adapter (which
+    upstream never bounds). ``mip_gap`` is a relative MIP gap: set on the Gurobi model
+    here; for an OR-Tools solver it is remembered and applied by :func:`solve_model`.
+    Both ``None`` (the default) is exactly the upstream behaviour.
     """
     threads = _gurobi_thread_param()
 
@@ -207,7 +227,7 @@ def create_solver_with_fallback(preferred_backend: str = "GUROBI") -> Any:
     if preferred_backend == "GUROBI":
         try:
             import gurobipy  # noqa: F401
-            adapter = GurobiSolverAdapter(threads=threads)
+            adapter = GurobiSolverAdapter(threads=threads, time_limit_s=time_limit_s, mip_gap=mip_gap)
             logging.info(
                 "Solver initialized with GUROBI backend (gurobipy)"
                 + (f" (Threads={threads})" if threads else "")
@@ -221,6 +241,9 @@ def create_solver_with_fallback(preferred_backend: str = "GUROBI") -> Any:
     # never fires. Enforce hard limits inside the solver itself so it cannot run
     # unbounded. Default: 90 min (under the 2h Celery hard kill) and 8 GB RAM.
     _scip_time_ms = int(os.environ.get("SCIP_TIME_LIMIT_SECONDS", "5400")) * 1000
+    if time_limit_s is not None:
+        # At least 1 ms: OR-Tools reads a 0 limit as "no limit".
+        _scip_time_ms = max(1, int(round(float(time_limit_s) * 1000)))
     _scip_mem_mb = int(os.environ.get("SCIP_MEMORY_LIMIT_MB", "8192"))
 
     backends = ["SCIP", "CBC"] if preferred_backend == "GUROBI" else [preferred_backend, "SCIP", "CBC"]
@@ -234,6 +257,8 @@ def create_solver_with_fallback(preferred_backend: str = "GUROBI") -> Any:
                     solver.SetSolverSpecificParametersAsString(
                         f"limits/memory = {_scip_mem_mb}"
                     )
+                if mip_gap is not None:
+                    solver._openride_mip_gap = float(mip_gap)
                 logging.warning(
                     "Solver falling back to %s (OR-Tools) — time_limit=%ds mem_limit=%dMB",
                     backend, _scip_time_ms // 1000, _scip_mem_mb,
@@ -244,6 +269,20 @@ def create_solver_with_fallback(preferred_backend: str = "GUROBI") -> Any:
 
     logging.error("Failed to initialize any solver backend")
     return None
+
+
+def solve_model(solver: Any) -> int:
+    """``solver.Solve()``, applying a ``mip_gap`` given to :func:`create_solver_with_fallback`.
+
+    OpenRide addition (VENDOR.md). Without a stored gap this is exactly ``solver.Solve()``.
+    The Gurobi adapter already carries its gap on the model, so it is solved plainly.
+    """
+    gap = getattr(solver, "_openride_mip_gap", None)
+    if gap is None or not isinstance(solver, pywraplp.Solver):
+        return solver.Solve()
+    mp = pywraplp.MPSolverParameters()
+    mp.SetDoubleParam(pywraplp.MPSolverParameters.RELATIVE_MIP_GAP, gap)
+    return solver.Solve(mp)
 
 
 class BaseSolver(ABC):

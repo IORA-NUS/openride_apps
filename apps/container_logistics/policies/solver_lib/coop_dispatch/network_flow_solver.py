@@ -7,11 +7,25 @@ from typing import Any, Dict
 
 from ortools.linear_solver import pywraplp
 
-from .base_solver import BaseSolver, create_solver_with_fallback
+from .base_solver import BaseSolver, create_solver_with_fallback, solve_model
+
+_STATUS_NAMES = {0: "OPTIMAL", 1: "FEASIBLE", 2: "INFEASIBLE", 3: "UNBOUNDED",
+                 4: "ABNORMAL", 5: "MODEL_INVALID", 6: "NOT_SOLVED"}
 
 
 class NetworkFlowSolver(BaseSolver):
-    """Classic network-flow solver."""
+    """Classic network-flow solver.
+
+    OpenRide options (VENDOR.md), all default off; with none of them the model, its
+    constraint order and the returned result/stats are exactly upstream's:
+
+    - ``start_nodes`` {sid: {"company": c}} + ``start_edges`` [(sid, order)] +
+      ``start_edge_cost`` {(sid, order): m}: per-truck sources of capacity 1 inside the
+      company's commodity; such a company has no depot start arcs and no vehicle limit.
+    - ``defer_penalty`` P: an order may stay unplanned at cost P (result ``unplanned``).
+    - ``eligible`` {(order, company)}: only these pairs may serve.
+    - ``time_limit_s`` / ``mip_gap`` / ``accept_feasible``.
+    """
 
     def solve(self, params: Dict[str, Any]):
         self.validate_params(params)
@@ -33,9 +47,26 @@ class NetworkFlowSolver(BaseSolver):
         raw_trailer_detour = params.get("raw_trailer_detour", None)
         released_job_mapping = params.get("released_job_mapping", {})
 
+        # ---- OpenRide options (all default off) ----
+        start_nodes = params.get("start_nodes")
+        defer_penalty = params.get("defer_penalty")
+        eligible = params.get("eligible")
+        time_limit_s = params.get("time_limit_s")
+        mip_gap = params.get("mip_gap")
+        accept_feasible = bool(params.get("accept_feasible", False))
+        options_on = (
+            start_nodes is not None or defer_penalty is not None or eligible is not None
+            or time_limit_s is not None or mip_gap is not None or accept_feasible
+        )
+        if eligible is not None:
+            eligible = set(eligible)
+        order_set = set(orders)
+        start_arcs = self._start_arcs(params, start_nodes, order_set, companies)
+        sn_companies = {spec["company"] for spec in (start_nodes or {}).values()}
+
         t0 = time.time()
 
-        solver = create_solver_with_fallback()
+        solver = create_solver_with_fallback(time_limit_s=time_limit_s, mip_gap=mip_gap)
         if not solver:
             return {"status": -1, "message": "Solver initialization failed: no available backend"}
 
@@ -63,70 +94,116 @@ class NetworkFlowSolver(BaseSolver):
             for i in orders
             for c in companies
             if (order_owner[i], c) in cooperation
+            and (eligible is None or (i, c) in eligible)
         }
 
+        # Same keys as upstream's ``i in orders and (order_owner[i], c) in cooperation``
+        # test, plus the ``eligible`` filter (both are exactly ``(i, c) in a``); a set for
+        # membership instead of the orders list. A company with start nodes has no depot
+        # start arcs.
+        depots = (start_depot, end_depot)
         x = {
             (i, j, c): solver.BoolVar(f"x_{i}_{j}_{c}")
             for (i, j) in edges
             for c in companies
             if (
                 (
-                    i in orders and (order_owner[i], c) in cooperation
-                    or i in [start_depot, end_depot]
+                    i in order_set and (i, c) in a
+                    or i in depots
                 )
                 and (
-                    j in orders and (order_owner[j], c) in cooperation
-                    or j in [start_depot, end_depot]
+                    j in order_set and (j, c) in a
+                    or j in depots
                 )
+                and not (i == start_depot and c in sn_companies)
             )
         }
 
+        # Edge index (always on): one pass over ``edges`` IN ORDER, duplicates kept, so
+        # every adjacency list holds exactly the terms, in exactly the order, that
+        # upstream's per-(order, company) scans over all edges collected.
+        out_adj: Dict[Any, list] = {}
+        in_adj: Dict[Any, list] = {}
+        for (i, j) in edges:
+            for c in companies:
+                v = x.get((i, j, c))
+                if v is not None:
+                    out_adj.setdefault((i, c), []).append(v)
+                    in_adj.setdefault((j, c), []).append(v)
+
+        sn_out: Dict[Any, list] = {sid: [] for sid in (start_nodes or {})}
+        for (sid, j, c) in start_arcs:
+            if (j, c) not in a:
+                continue
+            v = solver.BoolVar(f"x_{sid}_{j}_{c}")
+            x[sid, j, c] = v
+            edge_cost[(sid, j)] = start_arcs[sid, j, c]
+            edge_trailer_cost[(sid, j)] = 0
+            sn_out[sid].append(v)
+            in_adj.setdefault((j, c), []).append(v)
+
+        u = {}
+        if defer_penalty is not None:
+            u = {i: solver.BoolVar(f"u_{i}") for i in orders}
+
         for i in orders:
-            solver.Add(solver.Sum(a[i, c] for c in companies if (i, c) in a) == 1)
+            if defer_penalty is None:
+                solver.Add(solver.Sum(a[i, c] for c in companies if (i, c) in a) == 1)
+            else:
+                solver.Add(solver.Sum(a[i, c] for c in companies if (i, c) in a) + u[i] == 1)
 
         for i in orders:
             for c in companies:
                 if (i, c) not in a:
                     continue
-                in_edges = [x[j, i, c] for (j, i2) in edges if i2 == i and (j, i, c) in x]
-                out_edges = [x[i, j, c] for (i2, j) in edges if i2 == i and (i, j, c) in x]
+                in_edges = in_adj.get((i, c), [])
+                out_edges = out_adj.get((i, c), [])
                 solver.Add(solver.Sum(in_edges) == a[i, c])
                 solver.Add(solver.Sum(out_edges) == a[i, c])
 
         for c in companies:
             for n in orders:
-                inflow = solver.Sum(x[i, n, c] for (i, j) in edges if j == n and (i, j, c) in x)
-                outflow = solver.Sum(x[n, j, c] for (i, j) in edges if i == n and (i, j, c) in x)
+                inflow = solver.Sum(v for v in in_adj.get((n, c), []))
+                outflow = solver.Sum(v for v in out_adj.get((n, c), []))
                 solver.Add(inflow == outflow)
 
         for c in companies:
-            out_from_start = solver.Sum(
-                x[i, j, c] for (i, j) in edges if i == start_depot and (i, j, c) in x
-            )
+            if c in sn_companies:
+                continue
+            out_from_start = solver.Sum(v for v in out_adj.get((start_depot, c), []))
             solver.Add(out_from_start <= vehicle_limit[c])
-            into_end = solver.Sum(
-                x[i, j, c] for (i, j) in edges if j == end_depot and (i, j, c) in x
-            )
+            into_end = solver.Sum(v for v in in_adj.get((end_depot, c), []))
             solver.Add(into_end <= vehicle_limit[c])
 
+        for sid, outs in sn_out.items():
+            solver.Add(solver.Sum(outs) <= 1)
+
         if use_trailer_cost:
-            solver.Minimize(
-                solver.Sum((edge_cost[i, j] + edge_trailer_cost[i, j]) * x[i, j, c] for (i, j, c) in x)
+            objective = solver.Sum(
+                (edge_cost[i, j] + edge_trailer_cost[i, j]) * x[i, j, c] for (i, j, c) in x
             )
         else:
-            solver.Minimize(solver.Sum(edge_cost[i, j] * x[i, j, c] for (i, j, c) in x))
+            objective = solver.Sum(edge_cost[i, j] * x[i, j, c] for (i, j, c) in x)
+        if defer_penalty is not None:
+            objective = objective + solver.Sum(float(defer_penalty) * u[i] for i in orders)
+        solver.Minimize(objective)
 
-        num_vars = len(a) + len(x)
+        num_vars = len(a) + len(x) + len(u)
         num_binary_vars = num_vars
         num_constraints = len(orders) + 2 * len(a) + len(companies) * len(orders) + 2 * len(companies)
+        if options_on:
+            num_constraints += len(sn_out) - 2 * len(sn_companies)
 
-        status = solver.Solve()
+        status = solve_model(solver)
         solve_time = time.time() - t0
         wall_time_ms = solver.wall_time()
         iterations = solver.iterations()
         mip_nodes = solver.nodes()
 
-        objective_value = solver.Objective().Value() if status == pywraplp.Solver.OPTIMAL else None
+        usable = status == pywraplp.Solver.OPTIMAL or (
+            accept_feasible and status == pywraplp.Solver.FEASIBLE
+        )
+        objective_value = solver.Objective().Value() if usable else None
         if (objective_value is not None) and use_trailer_cost:
             penalty_deduction = sum(
                 vehicle_dispatch_penalty_meters * x[start_depot, i, c].solution_value()
@@ -136,7 +213,7 @@ class NetworkFlowSolver(BaseSolver):
             )
             objective_value -= penalty_deduction
 
-        if status == pywraplp.Solver.OPTIMAL:
+        if usable:
             active_trailers_by_company = {}
             trailer_detour_by_company = {}
 
@@ -145,6 +222,11 @@ class NetworkFlowSolver(BaseSolver):
                     x[start_depot, i, c].solution_value()
                     for i in orders
                     if (start_depot, i, c) in x and not released_job_mapping.get(i, False)
+                )
+                dispatched += sum(
+                    x[sid, i, c2].solution_value()
+                    for (sid, i, c2) in start_arcs
+                    if c2 == c and (sid, i, c2) in x and not released_job_mapping.get(i, False)
                 )
                 pickup_jobs = sum(
                     a[i, c].solution_value()
@@ -201,6 +283,8 @@ class NetworkFlowSolver(BaseSolver):
                 "trailer_detour_by_company": trailer_detour_by_company,
                 "edge_attribution": edge_attribution,
             }
+            if defer_penalty is not None:
+                result["unplanned"] = [i for i in orders if u[i].solution_value() > 0.5]
         else:
             result = {"status": status, "message": "No optimal solution"}
             total_active_trailers = None
@@ -229,8 +313,43 @@ class NetworkFlowSolver(BaseSolver):
             "raw_active_trailers": raw_active_trailers,
             "raw_trailer_detour": raw_trailer_detour,
         }
+        if options_on:
+            result_stats["status_name"] = _STATUS_NAMES.get(status, str(status))
+            result_stats["num_constraints_model"] = solver.NumConstraints()
+            result_stats["num_start_nodes"] = len(sn_out)
+            result_stats["num_start_arcs"] = sum(len(v) for v in sn_out.values())
+            result_stats["time_limit_s"] = time_limit_s
+            result_stats["mip_gap"] = mip_gap
+            if defer_penalty is not None:
+                result_stats["num_unplanned"] = len(result["unplanned"]) if usable else None
 
         del solver
         gc.collect()
 
         return result, result_stats
+
+    @staticmethod
+    def _start_arcs(params, start_nodes, order_set, companies):
+        """Validated start arcs ``{(sid, order, company): cost}`` in ``start_edges`` order."""
+        if start_nodes is None:
+            if params.get("start_edges"):
+                raise ValueError("start_edges given without start_nodes")
+            return {}
+        company_set = set(companies)
+        for sid, spec in start_nodes.items():
+            if sid in order_set or sid in ("start", "end"):
+                raise ValueError(f"start node id {sid!r} collides with an order id or a depot")
+            if spec.get("company") not in company_set:
+                raise ValueError(f"start node {sid!r}: company {spec.get('company')!r} is not in companies")
+        cost = params.get("start_edge_cost", {})
+        arcs = {}
+        for (sid, j) in params.get("start_edges", []):
+            if sid not in start_nodes:
+                raise ValueError(f"start edge ({sid!r}, {j!r}) names an unknown start node")
+            if j not in order_set:
+                raise ValueError(f"start edge ({sid!r}, {j!r}) names an unknown order")
+            key = (sid, j, start_nodes[sid]["company"])
+            if key in arcs:
+                raise ValueError(f"duplicate start edge ({sid!r}, {j!r})")
+            arcs[key] = float(cost[(sid, j)])
+        return arcs

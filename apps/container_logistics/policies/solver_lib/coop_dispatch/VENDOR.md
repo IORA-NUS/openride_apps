@@ -17,21 +17,70 @@ vendored file. Files marked *verbatim* must still match it byte for byte here.
 | `file` | `sha256 (upstream)` | status |
 |---|---|---|
 | `__init__.py` | `22a98c64249d9b90f1297e61d96ad6490f489d9debaaac8fe210a3e531520831` | verbatim |
-| `base_solver.py` | `1c941b56b30c65ef5cc74d736fd2ea90cf066f72395deef6ea8ea28f3fc3b812` | verbatim |
+| `base_solver.py` | `1c941b56b30c65ef5cc74d736fd2ea90cf066f72395deef6ea8ea28f3fc3b812` | modified |
 | `edge_builder.py` | `d2175e1313ccafb42b1a957a78687cd5e6999525eb93293f721ec6fe0f72ab52` | verbatim |
-| `network_flow_solver.py` | `799ffaf24d6d597663a490c101b8a2020db514272ec3bd6926ecd51f4729e99f` | verbatim |
+| `network_flow_solver.py` | `799ffaf24d6d597663a490c101b8a2020db514272ec3bd6926ecd51f4729e99f` | modified |
 | `fairness_solver.py` | `0742c5bbcfcbd0f685c41e01e1053c8fc2ca9da500b189b1faf0bd6f60b6eb27` | verbatim |
 | `lib/__init__.py` | `ced2e5ad7d2aa163a0c372142d2a09e009d5113afa80263ae914c8ac6e0330df` | verbatim |
 | `lib/api.py` | `92db3b3d6eb437bf12f13b0625ec7db2720b90ecde87c0222d5a45bade56776d` | verbatim |
 | `lib/schema.py` | `05d04557e4c5f0f9372beae00cf8397d84b239c62fd0545b45ad7ff7bbebc1a6` | verbatim |
 
+Unchanged upstream caveat the caller must handle: `use_trailer_cost` defaults to True and
+then charges 30,000 m per depot start arc (plan D12(d)); pass `use_trailer_cost=False`.
+
 Not vendored: upstream `README.md` (the contract doc; read it at the upstream path).
 
-## Local modifications
+## Local modifications (all options default OFF)
 
-None yet (this commit is the pristine copy the golden was captured from).
+`network_flow_solver.py` (`NetworkFlowSolver.solve`), new optional `params` keys:
+
+- `start_nodes: {sid: {"company": c}}` with `start_edges: [(sid, order)]` and
+  `start_edge_cost: {(sid, order): meters}`. Each start node is a source of capacity 1
+  inside its company's commodity (out <= 1). A company that has start nodes gets no depot
+  start arcs and its `vehicle_limit` is not applied.
+- `defer_penalty: float`: an order may stay unplanned (`sum_c a[i,c] + u_i == 1`), at
+  objective cost `P * u_i`. Result gains `unplanned`.
+- `eligible: set[(order, company)]`: only these pairs get `a` / `x` variables
+  (working hours per company or truck class).
+- `time_limit_s`, `mip_gap`: passed to `create_solver_with_fallback`; `accept_feasible`:
+  a FEASIBLE incumbent is extracted like OPTIMAL. With any option given, stats gain
+  `status_name`, `num_constraints_model` (the solver's real count), `num_start_nodes`,
+  `num_start_arcs`, `time_limit_s`, `mip_gap` and (with deferral) `num_unplanned`.
+  A FEASIBLE status means a limit stopped the search: the plan is then wall-clock
+  dependent, and the caller must stamp it non-deterministic (plan D12(c)).
+- Edge index (ALWAYS on): in/out adjacency built once in edge order, replacing the
+  per-(order, company) scans over every edge. Same constraints, same terms, same order,
+  same variables: the exported LP model is byte-identical to upstream's (pinned by
+  `tests/test_coop_dispatch_vendor.py` against `tests/data/coop_dispatch_upstream_golden.json`).
+
+New keys appear in the result / stats only when an option is given, so options-off output
+is identical to upstream's.
+
+`base_solver.py`: `create_solver_with_fallback(preferred_backend, time_limit_s=None,
+mip_gap=None)`; `None` keeps the upstream environment behaviour (`SCIP_TIME_LIMIT_SECONDS`,
+default 5400 s). An explicit time limit is floored at 1 ms (OR-Tools reads 0 as "no
+limit"). The Gurobi adapter applies `TimeLimit` / `MIPGap`. `solve_model(solver)` (called
+by `NetworkFlowSolver` instead of `solver.Solve()`) applies a stored `mip_gap` to pywraplp
+backends through `MPSolverParameters`; without one it is exactly `solver.Solve()`.
+`fairness_solver.py` is verbatim and does NOT get these options.
+
+## New modules (not upstream)
+
+- `time_window_edges.py`: time-window edge builder, linear in jobs x window, with K caps.
+  Beyond the plan's window rule it requires a successor to END after its predecessor
+  (ties by input order), which makes every arc set a DAG; the MIP has no subtour
+  elimination, so this is what keeps it from returning truck-less job cycles.
+- `chains.py`: per-start-node chains from a solved `routes` map.
+- `min_cost_flow.py`: exact single-commodity min-cost-flow backend for cooperation
+  components with complete adjacency (OR-Tools `SimpleMinCostFlow`, integer meter costs).
 
 ## Golden
 
-`tests/data/coop_dispatch_upstream_golden.json` was captured from the PRISTINE upstream
-files (hashes above) by `tests/data/capture_coop_dispatch_upstream_golden.py` before any file was edited, with OR-Tools 9.15.6755 (SCIP backend; gurobipy not installed).
+`tests/data/coop_dispatch_upstream_golden.json` is captured from the PRISTINE upstream
+files by `tests/data/capture_coop_dispatch_upstream_golden.py`, which refuses to run unless
+every upstream file matches the hashes above and imports the solver from the upstream path
+(never from this package). Instances 1-7 were captured before either modified file was
+edited (commit 4e1ed6d); instance 8 (duplicate `edges_input` entries) was added afterwards,
+again from the pristine upstream, and instances 1-7 came out byte-identical. OR-Tools
+9.15.6755, SCIP backend (gurobipy is not installed, so the Gurobi adapter is untested
+against a real Gurobi; a stub test checks it receives `TimeLimit` / `MIPGap`).

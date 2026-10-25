@@ -14,6 +14,7 @@ one subprocess per module.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import sys
@@ -71,6 +72,15 @@ _LEAVES = [
 ]
 
 
+# The vendored cooperative-dispatch solver imports ``ortools`` at module top, as upstream
+# does (plan N2; VENDOR.md). Nothing else under ``policies`` may need it, and nothing
+# imports this package except a solver's child process, so where OR-Tools is absent (the
+# main venv) its modules are skipped here, not failed; under a venv that has OR-Tools they
+# are imported like every other module.
+_NEEDS_ORTOOLS = "apps.container_logistics.policies.solver_lib.coop_dispatch"
+_HAVE_ORTOOLS = importlib.util.find_spec("ortools") is not None
+
+
 def _policy_modules() -> list[str]:
     mods = []
     for path in sorted(_POLICIES_DIR.rglob("*.py")):
@@ -90,6 +100,8 @@ def _run(code: str) -> subprocess.CompletedProcess:
 
 @pytest.mark.parametrize("module", _policy_modules() + _EXTRA)
 def test_each_module_imports_cleanly_as_the_first_import(module):
+    if not _HAVE_ORTOOLS and (module == _NEEDS_ORTOOLS or module.startswith(_NEEDS_ORTOOLS + ".")):
+        pytest.skip("needs ortools (vendored coop_dispatch solver); not installed in this interpreter")
     proc = _run(f"import {module}")
     assert proc.returncode == 0, f"`import {module}` as the first import failed:\n{proc.stderr[-3000:]}"
 
