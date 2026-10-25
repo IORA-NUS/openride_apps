@@ -36,6 +36,7 @@ from typing import Callable, Iterator, Mapping, Sequence
 from .errors import (
     PolicyDependencyError,
     PolicyError,
+    PolicyParamsError,
     PolicyRegistrationError,
     UnknownPolicyError,
 )
@@ -50,6 +51,10 @@ __all__ = [
     "get_policy_spec",
     "spec_for_class",
     "list_policies",
+    "leaf_policies",
+    "refuse_top_only",
+    "top_only_message",
+    "SOLVER_LEAF_ROLE",
     "default_policy_name",
     "discover_builtin_policies",
     "isolated_registry",
@@ -97,6 +102,10 @@ class PolicySpec:
     ``offload`` (:data:`OFFLOAD_MODES`) says whether the framework runs the node's
     ``solve_tick`` through ``tick.execute`` (``self``) or the node offloads its own
     child calls (``children``; the default for a node with a planner ref).
+    ``top_only`` marks a policy that may only be the TOP of a selection (e.g. one that
+    declares planning ticks): it is never a ref target (an ``inner``; refusal R5 in
+    ``components.ref_target``), never a battery ``inner`` arm, never the ``--solver``
+    leaf (:func:`refuse_top_only`) and never listed as a leaf (:func:`leaf_policies`).
     """
 
     slot: str
@@ -114,6 +123,7 @@ class PolicySpec:
     offload: str = "self"
     badge: str | None = None
     badge_tooltip: str | None = None
+    top_only: bool = False
 
     @property
     def is_composite(self) -> bool:
@@ -179,6 +189,7 @@ def policy(
     offload: str | None = None,
     badge: str | None = None,
     badge_tooltip: str | None = None,
+    top_only: bool = False,
 ) -> Callable[[type], type]:
     """Class decorator registering a policy into ``slot`` under ``name``.
 
@@ -190,12 +201,13 @@ def policy(
     non-empty text (or a tooltip without a badge), an ``arm_budgets_ms``
     key naming no str-choice arm, ref defaults that form a cycle through registered
     dispatch policies (including a self-reference), or ``(slot, name)`` already bound
-    to a different class.
+    to a different class, or a ``top_only`` that is not a ``bool``.
     Re-registering the same class with identical metadata is a no-op.
     """
     def decorate(cls: type) -> type:
         spec = _build_spec(cls, slot, name, version, description, requires, order_sensitive,
-                           perf_budget_ms, module_rng, arm_budgets_ms, offload, badge, badge_tooltip)
+                           perf_budget_ms, module_rng, arm_budgets_ms, offload, badge, badge_tooltip,
+                           top_only)
         with _LOCK:
             _store(spec)
         return cls
@@ -205,7 +217,7 @@ def policy(
 
 def _build_spec(cls, slot, name, version, description, requires, order_sensitive,
                 perf_budget_ms, module_rng, arm_budgets_ms, offload=None, badge=None,
-                badge_tooltip=None) -> PolicySpec:
+                badge_tooltip=None, top_only=False) -> PolicySpec:
     where = f"@policy(slot={slot!r}, name={name!r}) on {getattr(cls, '__qualname__', cls)!r}"
     short = f"@policy(slot={slot!r}, name={name!r})"
     _check_slot_registrable(slot, where)
@@ -219,11 +231,14 @@ def _build_spec(cls, slot, name, version, description, requires, order_sensitive
     _check_ref_default_cycles(short, slot, name, infos)
     refs = tuple((i.name, i.meta.kind, i.meta.leaf_only) for i in infos if i.is_ref)
     offload = _checked_offload(short, offload, refs)
+    if type(top_only) is not bool:
+        raise PolicyRegistrationError(f"{short}: top_only must be True or False (got {top_only!r}).")
     return PolicySpec(slot=slot, name=name, version=version, description=description,
                       requires=tuple(requires), cls=cls, params_cls=params_cls,
                       order_sensitive=order_sensitive, perf_budget_ms=perf_budget_ms,
                       module_rng=module_rng, arm_budgets_ms=budgets,
-                      refs=refs, offload=offload, badge=badge, badge_tooltip=badge_tooltip)
+                      refs=refs, offload=offload, badge=badge, badge_tooltip=badge_tooltip,
+                      top_only=top_only)
 
 
 def _check_slot_registrable(slot: str, where: str) -> None:
@@ -498,6 +513,36 @@ def list_policies(slot: str | None = None) -> list[PolicySpec]:
     discover_builtin_policies()
     specs = [s for s in _REGISTRY.values() if slot is None or s.slot == slot]
     return sorted(specs, key=lambda s: (s.slot, s.name))
+
+
+def leaf_policies(slot: str = "planner") -> list[PolicySpec]:
+    """The policies of ``slot`` that may be a per-scope solver: no ref of their own, not ``top_only``.
+
+    Sorted like :func:`list_policies`. What every "a per-scope solver: <names>" listing
+    and every inner enumeration reads (the ``--solver`` refusal's name list included).
+    """
+    return [s for s in list_policies(slot) if not s.is_composite and not s.top_only]
+
+
+def top_only_message(name: str, role: str) -> str:
+    """Refusal R5: ``name`` is ``top_only`` and was asked to be ``role`` (a nested node, the ``--solver`` leaf)."""
+    return (f"planner policy {name} must be the top of the selection (top_only); it cannot be {role}. "
+            f"Select it with --policy planner={name}.")
+
+
+#: ``refuse_top_only``'s default role: the ``--solver`` / ``ORSIM_SOLVER`` leaf.
+SOLVER_LEAF_ROLE = "the --solver leaf (the innermost per-scope solver)"
+
+
+def refuse_top_only(spec: PolicySpec, *, role: str = SOLVER_LEAF_ROLE) -> None:
+    """Raise ``PolicyParamsError`` (refusal R5) when ``spec`` is ``top_only``; a no-op otherwise.
+
+    For the ``--solver`` / ``ORSIM_SOLVER`` path (``scenario_overrides._checked_solver``):
+    ``--solver X`` makes X the innermost leaf, which a ``top_only`` policy can never be,
+    even under a leaf top (where no ref resolution would refuse it).
+    """
+    if spec.top_only:
+        raise PolicyParamsError(top_only_message(spec.name, role))
 
 
 def default_policy_name(slot: str) -> str:

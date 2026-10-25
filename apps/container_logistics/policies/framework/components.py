@@ -47,7 +47,7 @@ from . import params as _params
 from . import registry as _registry
 from .errors import PolicyParamsError, PolicyRegistrationError, UnknownPolicyError
 from .params import PolicyParams, PolicyRef, version_echo, warn_version_drift
-from .registry import check_policy_name, get_policy_spec, list_policies
+from .registry import check_policy_name, get_policy_spec, leaf_policies, list_policies, top_only_message
 
 logger = logging.getLogger(__name__)
 
@@ -206,6 +206,7 @@ class RefTarget:
     cls: type
     params_cls: type[PolicyParams]
     refs: tuple[tuple[str, str, bool], ...] = ()
+    top_only: bool = False
 
     @property
     def is_composite(self) -> bool:
@@ -231,12 +232,17 @@ def ref_target(kind: str, name: str, *, where: str, leaf_only: bool = False) -> 
     """Resolve ``name`` in ``kind``; ``where`` is the dotted path errors name.
 
     Raises ``UnknownPolicyError`` for an unknown name (listing the registered ones and
-    the CLI command), ``PolicyParamsError`` for a composite target where ``leaf_only``.
+    the CLI command), ``PolicyParamsError`` for a composite target where ``leaf_only``,
+    and ``PolicyParamsError`` (refusal R5) for a ``top_only`` planner policy, which may
+    only be the top of a selection.
     """
     target = _dispatch_target(name, where) if kind == "planner" else _component_target(kind, name, where)
+    if target.top_only:
+        # R5: a top_only policy is never a ref target, leaf_only or not (it must be the top).
+        raise PolicyParamsError(top_only_message(target.name, f"a nested node ({where})"))
     if leaf_only and target.is_composite:
         own = ", ".join(repr(n) for n, k, _leaf in target.refs if k == "planner")
-        leaves = ", ".join(n for n in ref_names("planner") if not _dispatch_target(n, where).is_composite)
+        leaves = ", ".join(s.name for s in leaf_policies("planner"))
         field = where.rpartition(".")[2]
         raise PolicyParamsError(
             f"{where}: {target.name!r} decomposes the tick itself (it has an {own} of its own); "
@@ -255,7 +261,7 @@ def _dispatch_target(name: str, where: str) -> RefTarget:
     spec = get_policy_spec("planner", name)
     return RefTarget(kind="planner", name=spec.name, version=spec.version,
                      description=spec.description, cls=spec.cls,
-                     params_cls=spec.params_cls, refs=spec.refs)
+                     params_cls=spec.params_cls, refs=spec.refs, top_only=spec.top_only)
 
 
 def _component_target(kind: str, name: str, where: str) -> RefTarget:

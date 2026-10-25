@@ -26,7 +26,7 @@ from apps.container_logistics.policies.framework import (
     PolicyError,
     ResolvedPolicy,
     get_policy_spec,
-    list_policies,
+    leaf_policies,
 )
 from apps.container_logistics.policies.dispatch.resolved import ResolvedDispatch
 
@@ -131,7 +131,7 @@ def _check_strategy_mirror(strategy: Any, node: ResolvedDispatch) -> None:
     if strategy is None or strategy == node.leaf:
         return
     # Advise --solver only with a name it accepts (a registered per-scope solver).
-    leaves = {spec.name for spec in list_policies("planner") if not spec.is_composite}
+    leaves = {spec.name for spec in leaf_policies("planner")}
     hint = (f"change a run's solver with --solver {strategy} (ORSIM_SOLVER is translated into "
             "exactly that). " if strategy in leaves else "")
     raise PolicyError(

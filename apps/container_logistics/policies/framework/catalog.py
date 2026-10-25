@@ -75,6 +75,9 @@ def _policy_entry(spec: PolicySpec) -> dict[str, Any]:
         "badge": spec.badge,
         "badge_tooltip": spec.badge_tooltip,
         "composite": spec.is_composite,
+        # May only be the top of a selection: never an inner, never the --solver leaf (R5).
+        # The dashboard's solver (--solver) dropdown must leave these out.
+        "top_only": spec.top_only,
         # The dispatch ref --solver descends (None for a leaf): read from the spec, the one source.
         "inner_param": spec.inner_param,
         # Who the framework offloads: the node's own solve_tick ("self") or its child calls.

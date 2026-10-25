@@ -112,7 +112,7 @@ def test_catalog_is_json_serialisable_and_has_schema_per_dispatch_policy():
     assert a == {
         "name": "TestCatalogA", "version": "3", "description": "Dummy A.",
         "requires": [], "missing": [], "available": True,
-        "badge": None, "badge_tooltip": None, "composite": False, "inner_param": None,
+        "badge": None, "badge_tooltip": None, "composite": False, "top_only": False, "inner_param": None,
         "offload": "self",
         "module_rng": None, "order_sensitive": "shuffles on purpose",
         "arm_budgets_ms": {"candidates=sampled": 900},
@@ -169,7 +169,7 @@ def test_known_solvers_is_derived_from_the_registry():
     )
 
     info = known_solvers()
-    assert info == {"solvers": [p.name for p in list_policies("planner") if not p.is_composite],
+    assert info == {"solvers": [p.name for p in list_policies("planner") if not p.is_composite and not p.top_only],
                     "default": "RandomAssignment"}
     assert "Partitioned" not in info["solvers"] and "GreedyNearest" in info["solvers"]
     with isolated_registry():
