@@ -71,6 +71,16 @@ geopy==2.4.1
 haversine==2.8.0
 polyline==2.0.1
 
+# ── Optimisation ─────────────────────────────────────────────────────────────
+# OR-Tools for the NetworkFlowDay planner (policies/dispatch/library/network_flow_day.py:
+# exact min-cost flow per cooperation group, the MIP fallback via pywraplp/SCIP). The
+# solver declares requires=("ortools",), so without it the catalog lists it unavailable
+# and a run selecting it is refused; nothing else imports it.
+# 9.14.6206 is the newest release whose metadata accepts numpy==1.26.3 / pandas==2.1.4
+# (9.15 needs numpy>=2.0.2 and protobuf>=6.33.1); verified with `pip install --dry-run -r requirements.txt` in a
+# clean Python 3.11 venv (addendum M3).
+ortools==9.14.6206
+
 # ── Process / telemetry ──────────────────────────────────────────────────────
 psutil==7.2.2
 python-dateutil==2.8.2
