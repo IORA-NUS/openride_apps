@@ -142,7 +142,7 @@ class PlanInputs(dict):
     synthetic}}, ``class_attrs`` {cid: [size, areas, shift]}, ``cooperation`` [[owner_class,
     carrier_class]], ``components`` [[cid]], ``trucks`` [{id, class, ready_s, loc [lat, lng],
     anchor, anchor_job}], ``jobs`` [{id, owner, owner_class, classes, request_step, r_req,
-    r, e, slack, deadline_s, pickup, dropoff, pickup_facility, dropoff_facility, first_day,
+    r, e, slack, deadline_s, pickup, dropoff, pickup_site, dropoff_site, first_day,
     new, status}], ``excluded`` {job: reason}, ``excluded_trucks`` {truck: reason},
     ``prev_arcs`` [[from, to]], ``params`` (``DayPlanParams.as_dict()``), ``hash``.
     """
@@ -539,7 +539,7 @@ def build_inputs(
             "id": oid, "owner": owner, "owner_class": owner_class[owner], "classes": sorted(elig),
             "request_step": rs, "r_req": r_req, "r": r, "e": e, "slack": slack,
             "deadline_s": deadline, "pickup": pu, "dropoff": do,
-            "pickup_facility": pf, "dropoff_facility": df,
+            "pickup_site": pf, "dropoff_site": df,
             "first_day": _first_day(oid, store_cur, status, day),
             "new": oid not in status,
             "status": (f"failed:{rec.get('reason')}" if st == "failed" else None),
@@ -597,7 +597,7 @@ def store_job_fields(inputs: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     out = {}
     for j in inputs["jobs"]:
         out[j["id"]] = {"haulier": j["owner"], "r": j["r"], "e": j["e"], "pickup": j["pickup"],
-                        "dropoff": j["dropoff"], "pickup_facility": j["pickup_facility"],
-                        "dropoff_facility": j["dropoff_facility"], "first_day": j["first_day"],
+                        "dropoff": j["dropoff"], "pickup_site": j["pickup_site"],
+                        "dropoff_site": j["dropoff_site"], "first_day": j["first_day"],
                         "request_step": j["request_step"]}
     return out

@@ -72,6 +72,11 @@ def test_policy_output_unchanged_or_version_bumped(name):
             f"{name} is v{spec.version} but its golden entry is v{entry['version']}: regenerate with "
             f"{GENERATOR_COMMAND} --policy {name}"
         )
+    missing = spec.missing_requirements()
+    if missing:
+        # The golden was captured with the policy's own requirements; without them
+        # it cannot be reproduced (cf. the battery's ``performance.plan`` SKIP).
+        pytest.skip(f"{name} requires {missing}, not installed in this interpreter")
     recorded = {c["fixture"]: c["heads"] for c in entry["cases"]}
     cases = golden_cases(name)
     assert sorted(recorded) == sorted(c["fixture"] for c in cases), (

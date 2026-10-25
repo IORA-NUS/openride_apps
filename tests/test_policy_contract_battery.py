@@ -31,6 +31,7 @@ from apps.container_logistics.policies.framework.registry import get_policy_spec
 from apps.container_logistics.policies.testing.battery import (
     ARM_CHECKS,
     DISPATCH_CHECKS,
+    PLANNING_ARM_CHECKS,
     battery_check_ids,
     run_battery,
 )
@@ -59,7 +60,10 @@ def test_battery_returns_exactly_the_listed_ids_in_order(name):
     got = list(_results(name))
     want = battery_check_ids("planner", name)
     assert got == want, f"run_battery({name!r}) must return one result per battery_check_ids id, in order"
-    assert want[: len(DISPATCH_CHECKS)] == list(DISPATCH_CHECKS), "the default arm keeps the stable ids"
+    # A planning top adds PLANNING_ARM_CHECKS to its default arm; the dispatch ids
+    # themselves keep their stable order around them.
+    stable = [c for c in want if c not in PLANNING_ARM_CHECKS]
+    assert stable[: len(DISPATCH_CHECKS)] == list(DISPATCH_CHECKS), "the default arm keeps the stable ids"
 
 
 # What a built-in's arms must be. Intent (final review MINOR-7): a NEW ARM OF A BUILT-IN
