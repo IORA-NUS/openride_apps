@@ -4,6 +4,13 @@
 > NOT merged into the main tree, not live yet.** This guide describes the generic solver
 > contract as of the branch's WS8 commit (base `b70c2ec`, plan `plan_contract_final.md`).
 > The main tree still runs the pre-v2 code, and no live run has used this contract.
+>
+> **Planning additions (§14) are on branch `nf/integration` (c943e10), cut from
+> `feat/policy-slots` @ 88ea74b, NOT merged into either and never run live.** They add
+> planning ticks, `Result.prefetch`, `top_only`, the step hold, three run inputs
+> (assignment cadence, max orders per tick, working hours) and refusals R2-R9. Every run
+> that uses none of them is byte-identical to 88ea74b (review of c943e10: all 16 compiled
+> bundles, stamps, run names, and the assignment app's pairs, publishes and REST calls).
 
 A **policy** answers one simulation decision; a **slot** is the decision. There is one slot,
 `planner`: given every free truck and every unassigned order this tick, which truck serves
@@ -44,6 +51,10 @@ The minimal author surface. Everything else in this guide is **advanced**.
 | You return | Meaning |
 |---|---|
 | `Result.from_pairs([(truck_doc, order_doc), ...])` or `Result(pairs=((truck_id, order_id), ...))` | committed pairs, in commit order. Leaving an order out defers it (it stays owned and unassigned). |
+
+A solver that plans ahead (whole days, re-plans, held itineraries) also uses the planning
+surface: `Declaration.planning`, `tick.kind`, `Result.prefetch`, `@policy(top_only=True)`.
+It is advanced and has its own section (§14).
 
 Plus the battery's determinism declarations when they apply: `order_sensitive=` (output
 depends on input order), `module_rng=` (draws the `random` module), and a `perf_budget_ms=`
@@ -199,6 +210,7 @@ twice and compares, and checks `random.getstate()` and a deep copy of the profil
 | `run_name_segments` | TOP only | appended to the run name, idempotent by segment. The built-ins append the active arm id. |
 | `run_stats` | TOP only | a run-stats aggregator CLASS (§3.5); its `meta_key` must be a plain identifier and not a key the framework writes under `run_config.meta` (`run_stats.RESERVED_META_KEYS`: `policies`, `simulation_settings`, ...), refused at bind |
 | `wire_note_keys` | TOP only | the `solver_notes` keys this solver writes into payload fields the framework publishes itself (`PooledMarket`: `pool_id`, `market_round`). Any other note key naming such a field is refused at the tick (message 18), §3.5 |
+| `planning` | TOP only (message 24 names `planning` among the top-only fields) | `None` (an online solver: the default) or `{at_day_start, every_steps, foresight, max_hold_seconds}`: the agent also hands the top PLANNING ticks. Checked at bind (R2), stored normalised and read-only. §14.1 |
 
 A `bind` that raises anything but a `PolicyError` is re-raised as `dispatch.bind.BindError` (a
 `PolicyError`) naming the node, so the run start refuses it like every other bind refusal. A
@@ -439,6 +451,7 @@ builders) are gone; write a composite against `tick.restrict` / `tick.call`.
 | `requires` | no | optional imports; missing -> catalog "unavailable", selection refused |
 | `perf_budget_ms` | no, default 2000 | battery budget for the default arm (§9) |
 | `arm_budgets_ms` | no | budgets for other arms, keyed `"param=value"`; unknown keys are refused at registration (message 17) |
+| `top_only` | no, default `False` | the policy may only be the TOP of a selection: never a ref target / `inner` (R5), never a battery `inner` arm, never the `--solver` leaf (R5), never listed as a leaf (`registry.leaf_policies`). A non-`bool` is refused at registration. Set it on every solver that declares `planning` (§14.4). |
 
 Retired: `information_model` (replaced by `badge` plus stamped provenance) and
 `share_tag_format` (the format is compat's name rule, §7). One class backs exactly one name.
@@ -454,10 +467,16 @@ your memos; the framework never reads it); `tick.depth` (0 at top), `tick.scope`
 top, the caller's key below); `tick.id_index` (`(trucks_by_id, orders_by_id)`, first document
 per id); `tick.execute(fn, *args)`; `tick.params` (for the legacy shim).
 
+Planning members (§14.2; every default builds the ordinary tick): `tick.kind`
+(`"dispatch"` / `"plan"`), `tick.planning` (a `PlanningWindow`, else `None`),
+`tick.engaged`, `tick.lookup`, `tick.run_id`. They live on the decision's shared state,
+so every sub-tick reads the top's.
+
 Deliberately absent: `owner_of` or any company/haulier map, the cooperation
 rule/structure/components/pools, candidate kinds, `candidate_pairs`. Not available yet:
-`tick.travel`, facility ids, order time windows, held plan tails (the `plan` timing was
-removed; only `online` exists).
+`tick.travel`, facility ids, order time windows. The `plan` TIMING (`policies.<slot>.timing`)
+is still removed (only `online` exists). Planning ahead is done instead by a top that
+declares `planning` (§14) and keeps its own plan between ticks.
 
 **The tick and its documents are read-only, and that is CHECKED** (fix loop, review H2).
 Every tick attribute is a read-only property (assigning one, or reaching for an instance
@@ -489,6 +508,62 @@ discards log ERROR agent-side: `journalctl --user -u openride-celery`, **not** `
 - **26** (run start and dashboard dry run; `scenario_overrides.apply_cooperation_override`), two forms:
   - `cooperation structure override '<X>' is not declared by assignment agent '<id>' (declared structures: <ids>). Pick a declared id or fix the typo (it is never replaced by the scenario's own arm).`
   - `cooperation structure override '<X>': assignment agent '<id>' has no cooperation block (declared structures: none), so there is no arm to select. Drop the override, or declare structures in the scenario's spec.json cooperation block and recompile.`
+
+**Planning refusals R2-R9** (§14; numbered in the day-plan build, there is no R1). The
+run-start ones exit 2 through the sim main's `Policy configuration invalid; refusing to start
+the run: <message>`; the dashboard dry run (`validate-run-policies`) and the CLI give the same
+text.
+
+- **R2** (run start, bind; `dispatch/bind.py::normalise_planning`, called by `_check_top`):
+  `planner policy <Name> at planner: bind() declared planning <repr>: <problem>. planning is {at_day_start: bool, every_steps: int >= 1 or null, foresight: 'none' | 'day', max_hold_seconds: int 1..600}.`
+  `<problem>` is one of `it is not a mapping`, `unknown key(s) <keys>`,
+  `at_day_start must be true or false (got <x>)`, `every_steps must be an integer >= 1 or null (got <x>)`,
+  `foresight must be 'none' or 'day' (got <x>)`, `max_hold_seconds must be an integer in 1..600 (got <x>)`,
+  `it never plans (at_day_start is false and every_steps is null)`. Integers are exact `int`
+  (`True` is not 1). A nested node that declares `planning` gets message 24 instead, with
+  `planning` in its list of top-only fields.
+- **R3** (run start and dry run; `scenario/run_declaration.py::_planning_record`):
+  `planner policy <Name> declares planning foresight 'day', which reads orders before the simulation releases them; that needs ORDER_LIFECYCLE=service (orders pre-created with their request step). This run uses 'agents' (ORSIM_ORDER_LIFECYCLE=agents): drop that override or select an online planner.`
+  Decided on the lifecycle mode the run will use (`scenario_overrides.order_lifecycle_from_env`,
+  resolved before the policy section, so nothing is stamped first). Compile passes no mode and
+  never refuses R3.
+- **R4** (same place, checked before R3):
+  `planner policy <Name> declares max_hold_seconds <H>, above the planning hold cap 300 s (a held step stops every agent's clock; runs must stay well inside the 6 h broker visibility timeout). Lower the solver's time limit.`
+  The cap is `run_declaration.PLANNING_HOLD_CAP_SECONDS` = 300. R2 allows up to 600, so a
+  declaration of 301-600 binds and is then refused here.
+- **R5** (a `top_only` policy anywhere but the top), three spellings:
+  - as an `inner` / any ref target (`framework/components.py::ref_target`):
+    `planner policy <Name> must be the top of the selection (top_only); it cannot be a nested node (<dotted path>). Select it with --policy planner=<Name>.`
+  - `--solver` / `ORSIM_SOLVER` on a run (`scenario_overrides._checked_solver`):
+    `planner policy <Name> plans whole days and must be the top of the selection (top_only); it cannot be the inner of a decomposition or the --solver leaf. Select it with --policy planner=<Name>.`
+  - `--solver` in `openride scenario` editing (`openride/scenario_cmd.py::_with_solver`, via
+    `registry.refuse_top_only`):
+    `planner policy <Name> must be the top of the selection (top_only); it cannot be the --solver leaf (the innermost per-scope solver). Select it with --policy planner=<Name>.`
+- **R6** (a message 18 problem; `dispatch/runner.py::run`): `a planning tick commits no pairs (got <n>)`.
+  The whole planning tick is discarded, including its `prefetch` and `tick_notes`.
+- **R7** (message 18 problems; `dispatch/invariants.py::_plain_prefetch`):
+  `prefetch <repr> is not a sequence of order id strings`,
+  `prefetch entry <repr> is not an order id string` (at most 8 reported),
+  `prefetch names <n> ids, more than the cap 4000`. Only the TOP's prefetch is checked; a
+  sub-tick's is copied, its problems not reported.
+- **R8** (CLI, dry run and sim main; `scenario_overrides._bounded_int`):
+  `--assignment-cadence must be an integer step count in 1..360 (got <repr>)` and
+  `--max-orders-per-tick must be an integer order count in 1..20000 (got <repr>)`. The env
+  variables `ORSIM_ASSIGNMENT_CADENCE` / `ORSIM_MAX_ORDERS_PER_TICK` are refused with the same
+  text (it names the flag, not the variable). Spec-field form at compile
+  (`datagen/preprocess.py::_spec_bounded_int`, a `SpecValidationError`):
+  `spec: assignmentCadenceSteps must be an integer step count in 1..360 (got <x>).` /
+  `spec: maxOrdersPerTick must be an integer order count in 1..20000 (got <x>).` (a `bool` or a
+  float is refused too).
+- **R9** (compile and the scenario editor's save; `datagen/hauliers.py::normalize_working_hours`):
+  `Haulier '<id>': workingHours must be {"start": "HH:MM", "end": "HH:MM"} with start != end (got <repr>).`
+  Exactly the two keys; two-digit `HH:MM`, hours 00-23 and minutes 00-59; `end` may also be
+  `"24:00"`; `end < start` is an overnight window.
+
+Also new, for every top: a solver `run_name_segments` entry starting with a framework
+run-input prefix (`oracle:`, `cadence:`, `orders:`; `run_declaration.FRAMEWORK_SEGMENT_PREFIXES`)
+is refused inside the existing segment refusal, with the problem
+`'<segment>' is a framework run-input tag (<prefix>...)`.
 
 Messages raised inside the run-start check (`profile.assert_assignment_profiles_resolvable`:
 23, 24, 25) are prefixed `assignment agent '<id>': `. Also refused at run start: a stamp
@@ -564,7 +639,9 @@ only_allowed_pairs), `robustness.<fixture>` (empty_trucks, empty_orders, single_
 no_geometry, one_haulier, all_infeasible, tied_costs, three_company_chain, missing_haulier,
 scale), `determinism.{reproducible,order_independent,no_module_rng}`,
 `contract.{scope_audit,information_scope,bind_pure,world_reads_at_bind,declaration_within_ceiling}`,
-`performance.scale`, `params.*`. Each row is PASS, FAIL or **SKIP** (a declared exemption: `ok`
+`performance.scale`, `params.*`; for a planning top also
+`contract.{planning_declaration,planning_commits_nothing}` and `performance.plan` (§14.8).
+Each row is PASS, FAIL or **SKIP** (a declared exemption: `ok`
 stays true, exit 0, "N passed, k skipped"). Read the skip count, not only the verdict. Built-in
 counts on the branch: GreedyNearest 50 + 4 SKIP, RandomAssignment 48 + 6, Partitioned 51 + 3,
 PooledMarket 214 + 8 (the leaves' SKIPs include `contract.scope_audit` and
@@ -607,6 +684,9 @@ patches `cooperation.active` in memory (refused on an unknown id or a scenario w
 cooperation block, message 26, or a selection that reads no `cooperation`, message 25).
 `--sharing-policy` and `ORSIM_SHARING_POLICY` are refused (they were inert at run time:
 `planner.sharing` is read only at compile; set it in `spec.json` and recompile).
+`--assignment-cadence N` / `ORSIM_ASSIGNMENT_CADENCE` and `--max-orders-per-tick N` /
+`ORSIM_MAX_ORDERS_PER_TICK` set two assignment run inputs for one run (§14.6, R8). A
+`top_only` solver is selected only with `--policy planner=<Name>` (R5).
 
 **Run name.** Legacy segments are byte-identical (`--solver GreedyNearest` -> ` · GreedyNearest`;
 `ORSIM_PLANNER_TOPOLOGY` -> ` · pooled`). The top's `run_name_segments` follow, idempotent by
@@ -618,7 +698,8 @@ arm (all four built-ins do). **Known limit:** central `--policy planner=GreedyNe
 `source` (`bundle` / `legacy-profile` / `override`), `label`, `leaf`, `params` (nested),
 `share_tag_format`, `accounting_params`, `provenance` (`{<node path>: <Declaration.provenance>}`;
 the built-ins' top carries `badge`, `sample_scope` and `candidate_settings`), `declaration`
-(`{cross_company: [[owner, carrier], ...]}`) and `world_reads`. Runs stamped before this
+(`{cross_company: [[owner, carrier], ...]}`), `world_reads`, and `planning` ONLY when the top
+declared it (§14.7). Runs stamped before this
 contract carry `information_model` and a top-level `candidate_settings` instead of
 `provenance`. Console: `Policies effective: planner=<label> v<version> timing=<t>
 params=<json> accounting_params=<json>` and `Run declaration: cross_company=<n> pairs,
@@ -646,6 +727,8 @@ read (message 13).
   top-level leaf, a `PooledMarket` with another `inner`, or any param change is a **new arm**;
   read the arm from `label` and `provenance` (the top's `badge`), not from the run name.
   Noise is ~4-5% on `empty_ratio`: n>=3.
+- A planning top with day foresight is an ORACLE arm; a different assignment cadence or
+  per-tick read cap is a new arm; working hours change the world for every solver (§14.7).
 - **Adding or editing a solver file** needs `systemctl --user restart openride-celery` (agents
   run in the long-lived workers). Selecting a solver or its params never does.
 
@@ -668,8 +751,11 @@ code, not as a solver.
 
 
 - Single `inner` per node; no nested decompositions; no per-company inner.
-- Only the `online` timing exists; held tails / day-ahead planning are not a framework concept
-  (a tour solver's wrapper turns tours into pairs).
+- Only the `online` timing exists. Day-ahead planning is a TOP that declares `planning` and
+  keeps its own plan (§14); the framework holds no plan tails and never commits on a
+  planning tick. A tour solver's wrapper still turns tours into pairs.
+- Planning (§14.9): plan ticks come only from the assignment agent's own step, the solve is
+  not preempted by the framework, and the hold cap is 300 s.
 - `solver_notes` surface only on shared pairs; `tick_notes` / `run_stats` only from the top.
 - A document modified by code that outlives the tick (a thread the solver started, still
   writing after the commit) is outside the per-tick scan; it is interpreter-level concurrency,
@@ -678,3 +764,311 @@ code, not as a solver.
   through a function bound at import.
 - Central `--policy planner=X` and `--solver X` give the same run-name segment.
 - Violations and crashes are not in `run_config`. Capture refuses rebate-aware ticks.
+
+## 14. Planning solvers (day plans, re-plans, held itineraries)
+
+> Branch `nf/integration` only (see the status note at the top). Not merged, not live.
+
+An online solver decides each dispatch tick from what that tick shows it. A **planning**
+solver also gets PLANNING ticks: at each day start and/or every N steps the assignment agent
+holds the step, hands the top every online truck, every busy truck's open haul and the
+window's orders (optionally the ones not yet released), and the top builds a plan it keeps
+itself. On the dispatch ticks in between it turns that plan into pairs like any other
+solver. The framework adds four things and owns nothing of the plan:
+
+| Addition | Where | §|
+|---|---|---|
+| `Declaration.planning` | `dispatch/bind.py` | 14.1 |
+| planning ticks (`tick.kind`, `tick.planning`, `tick.engaged`, `tick.lookup`, `tick.run_id`) | `dispatch/tick.py`, `assignment/app.py::plan` | 14.2 |
+| `Result.prefetch` | `dispatch/result.py`, `dispatch/invariants.py` | 14.3 |
+| `@policy(top_only=True)` | `framework/registry.py` | 14.4 |
+
+plus the step hold (14.5), three assignment run inputs (14.6) and the stamps (14.7). Every
+one of them is off unless a top declares `planning`, a result prefetches, or the scenario
+authors the input, so a run that uses none of them is unchanged.
+
+### 14.1 The planning declaration
+
+`bind` returns it (TOP only; message 24 for a nested node):
+
+```python
+Declaration(planning={"at_day_start": True, "every_steps": 18,
+                      "foresight": "day", "max_hold_seconds": 30}, ...)
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `at_day_start` | `False` | a planning tick on the first step of every run day |
+| `every_steps` | `None` | a planning tick every N steps (`int >= 1`); `None` = none |
+| `foresight` | `"none"` | `"none"`: the planning tick's orders are those released so far; `"day"`: every order of the run day, released or not (an ORACLE run, §14.7) |
+| `max_hold_seconds` | 30 | how long the step may be held for one planning step (§14.5); `int` 1..600 at bind (R2), at most 300 at run start (R4) |
+
+At least one of `at_day_start` / `every_steps` must plan (R2: `it never plans`). The stored
+declaration has every key (defaults filled in, `dispatch.bind.normalise_planning`) and is
+read-only. Days are on the ELAPSED axis: day `n` is steps `[n * spd, (n + 1) * spd)` with
+`spd = 86400 // STEP_INTERVAL` (360 at 240 s), counted from the run's `REFERENCE_TIME`, never
+the sim wall clock (`assignment/planning.py`).
+
+When planning happens (`assignment/planning.py::PlanningSchedule`):
+
+- A boundary is planned at the FIRST step at or after it that has not been planned yet. An
+  agent still booting at step 0, or pruned on a boundary step, catches up on its next step;
+  the late plan is logged (`LATE PLAN ...`) and the tick's `planning.now_step` is later than
+  `planning.start_step`.
+- A day start and an interval boundary on the same step give ONE planning tick (reason
+  `day_start`).
+- The schedule is marked BEFORE the tick's reads: a planning tick that fails is not retried
+  on the following steps; the next boundary plans again.
+- Nothing is planned at or after the horizon (`SIMULATION_LENGTH_IN_STEPS`), i.e. not during
+  the post-horizon drain.
+- A planning step that is also a cadence step runs the planning tick, then the ordinary
+  dispatch tick, in that order and on the same step. A planning tick that raises is logged
+  and the dispatch tick still runs (the cadence `random()` draw is unchanged).
+
+### 14.2 Planning ticks
+
+A planning tick is an ordinary `Tick` with `kind == "plan"`. It is checked, fingerprinted
+and folded into run stats like every other tick, and **it commits nothing**: a result with
+any pair is discarded whole (R6). What the agent puts in it (`AssignmentApp.plan`):
+
+| Member | On a planning tick | On a dispatch tick |
+|---|---|---|
+| `tick.kind` | `"plan"` | `"dispatch"` |
+| `tick.raw_trucks` | EVERY online truck (`respect_truck_online_state`); no busy filter, no working-hours filter | the free trucks, then the working-hours filter (§14.6) |
+| `tick.raw_orders` | every `created` / `unassigned` order with `meta.request_time_step < planning.end_step`, minus orders with an open haul, in `_id` order, uncapped | the oldest `max_orders_per_tick` unassigned orders, then the prefetched extras (§14.3) |
+| `tick.planning` | a `PlanningWindow` | `None` |
+| `tick.engaged` | `{truck_id: order document}` for every truck with an open (non-terminal) haul; the document also carries `open_haul = {_id, state, stats}` (`stats` holds the leg start stamps `reposition_started_at` / `loaded_started_at`) | empty |
+| `tick.lookup` | the pending prefetch, if any (§14.3) | the pending prefetch, if any |
+| `tick.run_id` | the run id | the run id when the top declares `planning`, else `""` |
+
+`PlanningWindow` (`dispatch/tick.py`, frozen, all `int` except `reason`):
+
+| Field | Meaning |
+|---|---|
+| `reason` | `"day_start"` or `"interval"` (`tick.PLANNING_REASONS`) |
+| `day` | the run day (elapsed axis) |
+| `start_step` | the boundary being planned |
+| `end_step` | end of the order window: `(day + 1) * spd` under `foresight == "day"`, `now_step + 1` under `"none"` |
+| `now_step` | the step actually being decided (`> start_step` for a late plan) |
+| `step_seconds` | sim seconds per step (`STEP_INTERVAL`) |
+
+Notes for authors:
+
+- `tick.permitted(truck, order)` is the same predicate as on a dispatch tick. A plan built
+  from pairs that are not permitted will simply fail when its pairs are returned on a
+  dispatch tick; check them while planning.
+- `tick.engaged` and `tick.lookup` documents are fingerprinted like the tick's own: a
+  solver that modifies one has the whole tick refused (message 18). Copy before you edit.
+- `tick.run_id` is `""` offline (battery, bench, golden capture, fixtures). Key any state
+  you keep across ticks by it, and keep it in memory when it is empty, so two offline
+  decisions in one process never share a plan.
+- The framework keeps NO plan. Where the plan lives (instance memory, an external store) is
+  the solver's business, and so is surviving a celery worker restart (the agent is rebuilt
+  and the next tick is the first one the new instance sees).
+- Capture (`--capture-dispatch`) never records a planning tick and does not count it for
+  `every=N` (format `/3` unchanged).
+- A planning tick for a top that declared no `planning` is refused by the runner
+  (`PolicyError`): only a planning top is ever asked to plan.
+
+### 14.3 `Result.prefetch`
+
+A top may name order ids the framework should READ for its next tick, whatever their state:
+
+```python
+return Result(pairs=(), prefetch=("6542...", "6542..."), tick_notes={...})
+```
+
+- Exact `str` ids, first occurrence kept, at most `PREFETCH_MAX` = 4000
+  (`dispatch/result.py`; 2 per truck at 2000 trucks). A list / tuple becomes a tuple, a set
+  is sorted by `repr`; anything else is kept as given and refused (R7). Only the TOP's
+  prefetch is read; a sub-tick's reaches nobody unless its caller copies it.
+- The app keeps the prefetch only when the tick's result was NOT discarded
+  (`AssignmentApp._store_prefetch`), and consumes it on the very next tick, planning or
+  dispatch. That tick reads the ids by `_id $in` in chunks of 200 (`manager.orders_by_ids`)
+  into `tick.lookup` = `{order_id: document}`, in prefetch order. Each lookup document also
+  carries `truck`, `meta` and `claimed_by` (the truck of the order's open haul, else `None`:
+  an order can still read `unassigned` while its haul already exists).
+- On a dispatch tick, every looked-up order that is `unassigned`, not claimed and not already
+  among the tick's orders is APPENDED to `tick.raw_orders`, after the oldest-N. It is still
+  judged by `permitted` and `check_result` like every other order. Use this to reach an
+  order the oldest-N read would miss. (A planning tick reads its own order window and adds
+  nothing.)
+- A failed read is logged and the tick runs without a lookup, exactly like a tick without a
+  prefetch. A tick with no pending prefetch makes no extra request: the default path's REST
+  calls are unchanged.
+- Since a prefetch is kept exactly when its result was committed, a non-empty `tick.lookup`
+  on the next tick proves the previous result reached the commit. There is one known gap:
+  the prefetch is stored before the accounting and the publish, so an exception there keeps
+  it with nothing published (review V-m1, open).
+
+### 14.4 `top_only`
+
+`@policy(..., top_only=True)` marks a policy that may only be the TOP of a selection
+(`PolicySpec.top_only`). It is never a ref target (R5), never the `--solver` leaf (R5), never a
+battery `inner` arm, and it is left out of every "per-scope solver" listing: `--solver`'s
+known names, the dashboard's solver list (`frontend_scenario_spec.known_solvers`), `openride
+policy list --leaves`, the legacy mirror hints (`registry.leaf_policies`). The catalog entry
+carries `top_only` so a UI can filter it; the dashboard's own filter is not built yet.
+
+Set it on every planning solver. A planning node that is not `top_only` still binds as a top,
+but fails the battery's `contract.planning_declaration` and, as anyone's `inner`, message 24.
+
+### 14.5 The step hold (what a solver author needs to know)
+
+A planning step can take longer than `STEP_TIMEOUT` (30 s on long runs,
+`scenario/runtime_settings.py::LONG_RUN_STEP_TIMEOUT`). The agent and `OpenRideScheduler`
+handle that; the solver only declares `max_hold_seconds`.
+
+- **Agent** (`assignment/agent.py`). On a planning-due step it publishes, BEFORE any read,
+  `{"agent_id", "time_step", "action": "hold", "hold_seconds": max_hold_seconds, "reason":
+  "planning"}` to the scheduler, runs the step on a greenlet off the paho callback (so the
+  MQTT loop keeps flushing), and then publishes orsim's ordinary `completed` / `error`
+  reply. Its heartbeat self-kill is suppressed until that reply. Messages arriving
+  meanwhile are queued, handled strictly in order on the same greenlet, and a backlog of
+  steps collapses to the NEWEST one: each superseded step is answered `completed` with
+  `did_step: false` and `superseded_by: <step>`, without work and without the cadence draw.
+- **Scheduler** (`apps/simulation/openride_scheduler.py`, concern 5). The cap is the run
+  setting `PLANNING.max_hold_seconds`, i.e. the declaration. A hold is accepted only for the
+  current step, from an agent expected and not yet answered, once per agent per step. It is
+  granted `min(hold_seconds, cap)`. While it is live the settle/tolerance early exit is
+  suspended and the barrier waits until `max(start + STEP_TIMEOUT, hold_end + STEP_TIMEOUT)`.
+  The agent's reply releases it. On a run without a `PLANNING` setting every hold is
+  ignored at WARNING and the barrier is the literal pre-existing `wait_for`.
+- **Expiry.** Past `hold + STEP_TIMEOUT` the scheduler logs `PLANNING HOLD EXPIRED: ...` at
+  ERROR and prunes the agent for that step; its late `completed` reinstates it. On the
+  3-agent service scheduler one expiry is an over-tolerance step, and
+  `STEP_TIMEOUT_ABORT_CONSECUTIVE` = 3 in a row aborts the run.
+
+What this means for the solver:
+
+1. **Bound your own wall time.** The framework never preempts `solve_tick`. The whole planning
+   step (the app's reads, your solve, your writes, and the dispatch tick when it is also a
+   cadence step) should end within `max_hold_seconds`. Run heavy work in a child process
+   you can kill. The hold starts at the agent's publish, before the app's REST reads, so the
+   reads count against it (review V-m2: a solver that measures from `solve_tick` entry
+   over-counts its budget by the read time).
+2. **Declare what you need and no more.** Every held step stops every agent's clock. The
+   whole run must stay inside the 6 h Celery/Redis `visibility_timeout`, hence R4's 300 s.
+3. The sim main raises `ORPHAN_TIMEOUT` to `max(180, 2 * max_hold_seconds + 60)` when the run's
+   value is lower (a held step sends the other agents no message;
+   `run_declaration.planning_orphan_timeout`).
+4. Held wall time is reported separately, never subtracted from the step: per step `hold_ms`
+   on the perf stream and in `agent_stat` (`holds`, `holds_live`, `holds_expired`,
+   `hold_seconds_max`, `hold_ms`, `hold_ms_total`), and in the perf summary `hold_ms_total`,
+   `held_steps`, `sum_step_ms_excl_hold`, `avg_step_ms_excl_hold`. All of these exist only on
+   a run that held a step. Compare planning runs on the `_excl_hold` figures.
+
+### 14.6 Assignment run inputs: cadence, orders per tick, working hours
+
+Three generic inputs, usable with any solver. Each is absent unless authored or overridden,
+and absent means unchanged.
+
+| Input | Spec field (`spec.json`) | Per-run override | Default | Effect |
+|---|---|---|---|---|
+| dispatch cadence | `assignmentCadenceSteps` (1..360) | `--assignment-cadence N` / `ORSIM_ASSIGNMENT_CADENCE` | 28 steps (the bundle's `steps_per_action`) | the assignment behavior's `steps_per_action`: a dispatch tick every N steps |
+| orders read per dispatch tick | `maxOrdersPerTick` (1..20000) | `--max-orders-per-tick N` / `ORSIM_MAX_ORDERS_PER_TICK` | 500 (`assignment/manager.py`) | the profile's `max_orders_per_tick`: the oldest-N unassigned orders a dispatch tick reads |
+| working hours | `hauliers[].workingHours = {"start": "HH:MM", "end": "HH:MM"}` | none | absent: always on | the framework drops off-shift trucks from every DISPATCH tick, for every solver |
+
+- Flags exist on `openride run` and on `python -m openride_control.command run-simulation`.
+  The dry run range-checks them before any bundle is read (R8).
+- Both numeric spec fields are `CARRY_IF_ABSENT` with null = unsupplied
+  (`frontend_scenario_spec.SPEC_KEYS` / `SPEC_KEY_NULL_POLICY`): a dashboard save that does
+  not speak them never drops or reverts them. Compile writes them into the assignment
+  behavior / profile and echoes them into the recipe (`GENERATION_SPEC`).
+- **Working hours** compile to `profile.working_hours = {"axis": "elapsed", "hauliers": {hid:
+  [start_s, end_s]}}` (`datagen/hauliers.py::working_hours_record`): seconds into the ELAPSED
+  day, `end_s < start_s` is overnight, `end_s` may be 86400, an absent haulier is always on.
+  A spec without any `workingHours` compiles to the same bytes as before. The filter is
+  `[start, end)` on the dispatch tick's step (`assignment/planning.py::on_shift`). It is
+  applied ONLY to dispatch ticks: a planning tick sees every online truck, and a planner reads
+  `world.get("working_hours")` to plan shifts itself. **Elapsed is not the clock face**: with
+  `REFERENCE_TIME` 08:00 (the default on 127 of 129 runs, CLAUDE.md §6.19), 06:00-20:00
+  elapsed is 14:00-04:00 on the sim clock.
+- **A scenario that authors any of these must be recompiled** before a run sees them.
+  Overrides need no recompile and no celery restart (data at spawn).
+- On a run whose top declares `planning`, the sim main also ships two world keys into every
+  assignment profile (never on other runs): `assignment_cadence_steps` (the cadence the
+  dispatch ticks really run at, after any override; the sim main checks the two agree) and
+  `unassigned_order_max_wait_steps` (the overdue sweep's deadline,
+  `UNASSIGNED_ORDER_MAX_WAIT_STEPS`, 360 by default). Read them with `world.get(...)` in
+  `bind` (§3.2's rule), and plan for the cadence you will actually be dispatched at: a plan
+  that assumes 6-step dispatch on a 28-step run is a different arm from the one stamped.
+
+### 14.7 Stamps and comparability
+
+Written only when they apply; a default run's settings, stamp and run name are unchanged.
+
+| What | Where | When |
+|---|---|---|
+| `planning` = declaration + `oracle` + `axis: "elapsed"` | `run_config.meta.policies.planner.planning` | the top declares planning |
+| `PLANNING` = the same + `axis_origin` (the run's `REFERENCE_TIME`) | `run_config.meta.simulation_settings` | the top declares planning |
+| `ORPHAN_TIMEOUT` raised | `simulation_settings` | the run's value is below `2 * hold + 60` |
+| ` · oracle:day` | run name | `foresight == "day"` |
+| `ASSIGNMENT_CADENCE = {steps, source}` | `simulation_settings` | overridden (`source: "override"`) or authored in the spec (`"bundle"`) |
+| ` · cadence:N` | run name | overridden only |
+| `MAX_ORDERS_PER_TICK = {orders, source}` | `simulation_settings` | overridden or authored |
+| ` · orders:N` | run name | overridden only |
+| `WORKING_HOURS = {axis, hauliers, axis_origin}` | `simulation_settings` | the compiled profile carries hours |
+
+Console: `Planning declared: {...} [ORPHAN_TIMEOUT=N]`, `Planning world: ...`,
+`Assignment cadence: {...}`, `Assignment max orders per tick: {...}`, `Working hours: {...}`.
+
+Comparability, each a boundary of the CLAUDE.md §6.3 / §6.16 class:
+
+- **Oracle foresight.** `foresight: "day"` reads orders before the simulation releases them.
+  Such a run answers "what if the day were known", not "what would a dispatcher do": never
+  compare it with an online arm as if the two had the same information. Read
+  `planning.oracle` or the ` · oracle:day` segment.
+- **Axis.** Planning windows, day boundaries and working hours are all ELAPSED time; any report
+  that quotes clock hours must convert through `axis_origin`.
+- **Cadence and orders per tick.** A different cadence moves the assignment agent's
+  `random() <= response_rate` draws and the decision points; a different read cap changes
+  what a tick can see. Either is a new arm. The default (28 / 500) is unchanged.
+- **Working hours are world physics.** Runs with and without hours, or with different hours,
+  are different worlds for EVERY solver, online ones included. Hours have NO run-name
+  segment: check `simulation_settings.WORKING_HOURS` before comparing two runs.
+- **Hold time.** Planning runs spend wall time in held steps; compare step time with
+  `sum_step_ms_excl_hold`, not raw wall.
+
+### 14.8 Validate a planning solver
+
+The battery runs every decision of a planning arm the way the agent does: a planning tick
+first (`Fixture.plan_context`: the fixture's trucks, every fixture order as foresight, no
+engaged truck), then the dispatch tick on the same fixture with the planning tick's prefetch
+as `tick.lookup`. Every ordinary check judges that dispatch tick. Three more ids run per
+planning arm:
+
+- `contract.planning_declaration`: the policy is registered `top_only`;
+- `contract.planning_commits_nothing`: on every fixture the planning tick neither raised nor
+  was discarded (no R6, no R7);
+- `performance.plan`: best of 3 planning-tick times on `scale`, budget `max_hold_seconds`;
+  SKIP when the policy's `requires` are not installed.
+
+An online arm runs none of them, so its ids are unchanged. The golden capture
+(`tests/golden/capture_policy_golden.py`) also records a planning top plan-then-dispatch.
+
+**Worked example (test-only, not shipped):** `tests/planning_toy.py::ToyDayPlan` is a minimal
+planning top. It declares `{at_day_start: True, every_steps: 18, foresight: "day",
+max_hold_seconds: 30}`; on a planning tick it gives each truck one same-haulier permitted
+order, keeps the itineraries on the instance keyed by `tick.run_id`, commits nothing and
+prefetches every head; on a dispatch tick each truck takes its head when the head is in the
+tick, still `unassigned` in `tick.lookup` and `permitted`. Its siblings in that file are the
+refusal fixtures: `ToyPlanCommits` (R6), `ToyBadPrefetch` (R7), `ToyPlanNotTopOnly` (fails
+`contract.planning_declaration`). The shipped planning solver is documented in
+`docs/27-network-flow-day-plan.md`.
+
+### 14.9 Known limits of the planning surface
+
+- Planning ticks come only from the assignment agent's own step; the scheduler never
+  schedules one, and the framework never preempts a solve (§14.5).
+- Hold cap 300 s (R4). Several solves per day at that size would put a 7-day run near the
+  6 h broker limit.
+- A failed planning tick is not retried until the next boundary.
+- Working hours are one window per haulier per elapsed day, enforced only on dispatch ticks,
+  with no run-name segment.
+- The `engaged` documents use the leg start stamps; the laden leg still takes zero sim time
+  (CLAUDE.md §6.3), so a planner's ready-time estimate cannot come from the stamps alone.
+- The prefetch is stored before the accounting / publish (V-m1); the scheduler's "one hold
+  per agent per step" rule (`_hold_expired_step`) has no test that kills its mutant.
+- The dashboard does not yet filter `top_only` out of its solver dropdown, and the perf export
+  does not yet carry `hold_ms` to VictoriaMetrics.
