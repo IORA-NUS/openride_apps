@@ -235,10 +235,9 @@ def known_solvers():
     """The per-scope solvers ``--solver``/``ORSIM_SOLVER`` accept (registered dispatch
     leaves), sorted -- read from the policy registry at call time (the same registry the
     assignment agent resolves against)."""
-    from apps.container_logistics.policies.framework import list_policies
+    from apps.container_logistics.policies.framework import leaf_policies
 
-    return tuple(spec.name for spec in list_policies("planner")
-                 if not spec.is_composite and not getattr(spec, "top_only", False))
+    return tuple(spec.name for spec in leaf_policies("planner"))
 
 
 def current_policies_for_profile(profile):
@@ -440,7 +439,7 @@ def _checked_solver(solver):
     Raises ``UnknownPolicyError`` for an unknown name and ``PolicyError`` (message 11)
     for a decomposition.
     """
-    from apps.container_logistics.policies.framework import PolicyError, get_policy_spec, list_policies
+    from apps.container_logistics.policies.framework import PolicyError, get_policy_spec, leaf_policies
 
     from apps.container_logistics.policies.framework import UnknownPolicyError
 
@@ -450,7 +449,7 @@ def _checked_solver(solver):
         spec = get_policy_spec("planner", str(solver).strip())
     except UnknownPolicyError as exc:
         raise UnknownPolicyError(f"--solver {str(solver).strip()!r}: {exc}") from exc
-    if getattr(spec, "top_only", False):
+    if spec.top_only:
         # R5: a top_only policy (it plans whole days) is never a per-scope solver.
         raise PolicyError(
             f"planner policy {spec.name} plans whole days and must be the top of the selection "
@@ -458,8 +457,7 @@ def _checked_solver(solver):
             f"with --policy planner={spec.name}."
         )
     if spec.is_composite:
-        leaves = ", ".join(s.name for s in list_policies("planner")
-                           if not s.is_composite and not getattr(s, "top_only", False))
+        leaves = ", ".join(s.name for s in leaf_policies("planner"))
         raise PolicyError(
             f"--solver {spec.name!r} names a decomposition, not a per-scope solver. --solver "
             f"sets the inner solver ({leaves}); select a decomposition with --policy "

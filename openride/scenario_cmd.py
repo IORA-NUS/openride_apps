@@ -240,9 +240,14 @@ def _with_solver(block: dict[str, Any], solver: str, flags: dict[str, Any]) -> d
     decomposition (``--solver`` is the inner solver) or when the flags named a
     different type at that place (``--solver`` is shorthand for it).
     """
-    from apps.container_logistics.policies.framework import default_policy_name, get_policy_spec
+    from apps.container_logistics.policies.framework import (
+        default_policy_name,
+        get_policy_spec,
+        refuse_top_only,
+    )
 
     spec = get_policy_spec("planner", solver)
+    refuse_top_only(spec)  # R5: a top_only planner is never the --solver leaf (a ValueError)
     if spec.is_composite:
         raise ValueError(
             f"--solver {spec.name!r} names a decomposition, not a per-scope solver; select it "

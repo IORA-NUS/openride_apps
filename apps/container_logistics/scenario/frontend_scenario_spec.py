@@ -15,7 +15,7 @@ from typing import Any
 
 from . import scenario_config
 from apps.container_logistics.policies.compat.legacy import LEGACY_LEAF_DEFAULT
-from apps.container_logistics.policies.framework import list_policies
+from apps.container_logistics.policies.framework import leaf_policies
 from .order_demand import (
     LEGACY_EARLY_ORDER_COUNT,
     hourly_weights_from_spec,
@@ -36,8 +36,8 @@ def normalize_solver(raw: Any) -> str:
     from the policy registry at call time, never frozen at import.
     """
     name = str(raw or "").strip()
-    # A strategy is a per-scope (leaf) solver: a decomposition is never one.
-    known = {spec.name for spec in list_policies("planner") if not spec.is_composite}
+    # A strategy is a per-scope (leaf) solver: a decomposition (or a top_only planner) is never one.
+    known = {spec.name for spec in leaf_policies("planner")}
     return name if name in known else LEGACY_LEAF_DEFAULT
 
 
@@ -2263,7 +2263,7 @@ def known_solvers() -> dict[str, Any]:
     source of truth).
     """
     return {
-        "solvers": [spec.name for spec in list_policies("planner") if not spec.is_composite],
+        "solvers": [spec.name for spec in leaf_policies("planner")],
         "default": LEGACY_LEAF_DEFAULT,
     }
 
