@@ -90,7 +90,8 @@ def _ref_targets(name: str, param: str, kind: str) -> list[str]:
     info = next(i for i in declared_params(get_policy_spec("planner", name).params_cls) if i.name == param)
     if kind == "planner":
         names = [s.name for s in list_policies("planner")
-                 if not s.missing_requirements() and not (info.meta.leaf_only and s.is_composite)]
+                 if not s.missing_requirements() and not s.top_only
+                 and not (info.meta.leaf_only and s.is_composite)]
     else:
         names = ref_names(kind)
     return [f"{param}={t}" for t in sorted(names) if t != info.default.type]

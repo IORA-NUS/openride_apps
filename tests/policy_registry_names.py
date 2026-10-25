@@ -25,8 +25,9 @@ def dispatch_names() -> str:
 
 
 def leaf_names() -> str:
-    """Every registered per-scope solver (no ``inner`` of its own), sorted (messages 2 and 11)."""
-    return ", ".join(sorted(spec.name for spec in list_policies("planner") if not spec.is_composite))
+    """Every registered per-scope solver (no ``inner`` of its own, not ``top_only``), sorted (messages 2 and 11)."""
+    return ", ".join(sorted(spec.name for spec in list_policies("planner")
+                            if not spec.is_composite and not spec.top_only))
 
 
 def component_names(kind: str) -> str:
