@@ -30,8 +30,10 @@ from .registry import (
     PolicySpec,
     default_policy_name,
     get_policy_spec,
+    leaf_policies,
     list_policies,
     policy,
+    refuse_top_only,
     spec_for_class,
 )
 from . import components  # noqa: F401  (registers the ref resolvers into params)
@@ -57,6 +59,8 @@ __all__ = [
     "PolicySpec",
     "get_policy_spec",
     "list_policies",
+    "leaf_policies",
+    "refuse_top_only",
     "default_policy_name",
     "spec_for_class",
     "SLOTS",

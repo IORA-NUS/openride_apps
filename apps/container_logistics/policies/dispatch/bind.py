@@ -71,11 +71,16 @@ __all__ = [
     "BoundTree",
     "Declaration",
     "FRAMEWORK_SELECTION_KEYS",
+    "PLANNING_DEFAULT_MAX_HOLD_SECONDS",
+    "PLANNING_FORESIGHT",
+    "PLANNING_KEYS",
+    "PLANNING_MAX_HOLD_LIMIT",
     "RunWorld",
     "SolverInitError",
     "WorldAccessError",
     "bind_profile",
     "bind_tree",
+    "normalise_planning",
     "refuse_unread_patches",
     "value_fingerprint",
     "world_digest",
@@ -345,6 +350,81 @@ def _pair_set(value: Any) -> frozenset:
     return frozenset(out)
 
 
+#: The keys of ``Declaration.planning``, in stamp order.
+PLANNING_KEYS: tuple[str, ...] = ("at_day_start", "every_steps", "foresight", "max_hold_seconds")
+#: ``planning["foresight"]``: ``"none"`` (released orders only) or ``"day"`` (every order of
+#: the planning window, released or not: an ORACLE run).
+PLANNING_FORESIGHT: tuple[str, ...] = ("none", "day")
+#: The largest ``max_hold_seconds`` a declaration may state (refusal R2). The run start's
+#: planning hold cap (refusal R4, the sim main) is lower.
+PLANNING_MAX_HOLD_LIMIT = 600
+#: ``max_hold_seconds`` when a declaration leaves it out.
+PLANNING_DEFAULT_MAX_HOLD_SECONDS = 30
+_PLANNING_DEFAULTS: Mapping[str, Any] = MappingProxyType({
+    "at_day_start": False, "every_steps": None, "foresight": "none",
+    "max_hold_seconds": PLANNING_DEFAULT_MAX_HOLD_SECONDS,
+})
+_PLANNING_SHAPE = ("planning is {at_day_start: bool, every_steps: int >= 1 or null, foresight: 'none' | 'day', "
+                   f"max_hold_seconds: int 1..{PLANNING_MAX_HOLD_LIMIT}}}.")
+
+
+def _frozen_planning(value: Any) -> Any:
+    """``Declaration.planning`` as stored: ``None``, a read-only copy of a mapping, else a malformed marker."""
+    if value is None:
+        return None
+    if isinstance(value, Mapping):
+        try:
+            return MappingProxyType(copy.deepcopy(dict(value)))
+        except Exception:  # noqa: BLE001 - an uncopyable value is still refused by _check_top
+            return MappingProxyType(dict(value))
+    try:
+        return _Malformed(repr(value))
+    except Exception:  # noqa: BLE001
+        return _Malformed(f"<{type(value).__name__}>")
+
+
+def _int_like(value: Any) -> bool:
+    return type(value) is int
+
+
+def _planning_problem(value: Any) -> str | None:
+    """Why ``value`` is not a valid planning declaration, or ``None`` (R2)."""
+    if not isinstance(value, Mapping):
+        return "it is not a mapping"
+    unknown = sorted(repr(k) for k in value if k not in PLANNING_KEYS)
+    if unknown:
+        return f"unknown key(s) {', '.join(unknown)}"
+    at_day_start = value.get("at_day_start", False)
+    if type(at_day_start) is not bool:
+        return f"at_day_start must be true or false (got {at_day_start!r})"
+    every = value.get("every_steps")
+    if every is not None and not (_int_like(every) and every >= 1):
+        return f"every_steps must be an integer >= 1 or null (got {every!r})"
+    foresight = value.get("foresight", "none")
+    if type(foresight) is not str or foresight not in PLANNING_FORESIGHT:
+        return f"foresight must be 'none' or 'day' (got {foresight!r})"
+    hold = value.get("max_hold_seconds", PLANNING_DEFAULT_MAX_HOLD_SECONDS)
+    if not (_int_like(hold) and 1 <= hold <= PLANNING_MAX_HOLD_LIMIT):
+        return f"max_hold_seconds must be an integer in 1..{PLANNING_MAX_HOLD_LIMIT} (got {hold!r})"
+    if not at_day_start and every is None:
+        return "it never plans (at_day_start is false and every_steps is null)"
+    return None
+
+
+def normalise_planning(value: Any, where: str) -> Mapping[str, Any] | None:
+    """A planning declaration checked (refusal R2) and completed: every :data:`PLANNING_KEYS` key, read-only.
+
+    ``None`` stays ``None`` (no planning). Raises ``PolicyError`` naming ``where``.
+    """
+    if value is None:
+        return None
+    problem = _planning_problem(value)
+    if problem is not None:
+        shown = repr(dict(value)) if isinstance(value, Mapping) else repr(value)
+        raise PolicyError(f"{where}: bind() declared planning {shown}: {problem}. {_PLANNING_SHAPE}")
+    return MappingProxyType({key: value.get(key, _PLANNING_DEFAULTS[key]) for key in PLANNING_KEYS})
+
+
 def _pair_order(pair: Any) -> tuple:
     """Sort key: well-formed pairs in their natural order first, anything else by repr."""
     if isinstance(pair, tuple) and all(isinstance(x, str) for x in pair):
@@ -370,6 +450,13 @@ class Declaration:
       ``market_round``). Any other note key naming such a field is refused at the tick
       (message 18; ``invariants.check_wire_notes``, review L3), so a solver can never
       claim, say, market provenance it did not declare at bind.
+    - ``planning`` -- TOP only (message 24); ``None`` (the default: an online solver) or
+      ``{at_day_start, every_steps, foresight, max_hold_seconds}`` (:data:`PLANNING_KEYS`):
+      the agent also runs PLANNING ticks (``Tick.kind == "plan"``, which commit no pairs)
+      at each day start and/or every ``every_steps`` steps, with orders up to the end of
+      the planning window when ``foresight == "day"`` (an ORACLE run, stamped). Checked by
+      :func:`_check_top` (refusal R2) and stored normalised (every key present) and
+      read-only (:func:`normalise_planning`).
     """
 
     cross_company: frozenset[tuple[str, str]] = frozenset()
@@ -379,6 +466,7 @@ class Declaration:
     run_name_segments: tuple[str, ...] = ()
     run_stats: type | None = None
     wire_note_keys: frozenset[str] = frozenset()
+    planning: Mapping[str, Any] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cross_company", _pair_set(self.cross_company))
@@ -386,6 +474,7 @@ class Declaration:
         object.__setattr__(self, "stamp_settings", MappingProxyType(dict(self.stamp_settings or {})))
         object.__setattr__(self, "run_name_segments", tuple(self.run_name_segments or ()))
         object.__setattr__(self, "wire_note_keys", _pair_set(self.wire_note_keys))
+        object.__setattr__(self, "planning", _frozen_planning(self.planning))
 
 
 @dataclass(frozen=True, eq=False)
@@ -556,6 +645,7 @@ def _check_top(declaration: Declaration, ceiling: frozenset, where: str) -> None
     keys = sorted((repr(k) for k in declaration.wire_note_keys if not (isinstance(k, str) and k)), key=str)
     if keys:
         raise PolicyError(f"{where}: bind() declared wire_note_keys {', '.join(keys)}; each must be a non-empty string.")
+    normalise_planning(declaration.planning, where)  # refusal R2
 
 
 def _check_inner(declaration: Declaration, top: Declaration, where: str) -> None:
@@ -565,6 +655,8 @@ def _check_inner(declaration: Declaration, top: Declaration, where: str) -> None
                                        ("run_name_segments", declaration.run_name_segments),
                                        ("run_stats", declaration.run_stats),
                                        ("wire_note_keys", declaration.wire_note_keys)) if value]
+    if declaration.planning is not None:
+        extras.append("planning")
     if wider or extras:
         what = []
         if wider:
@@ -647,6 +739,9 @@ def bind_tree(node: Any, top_instance: Any, profile: Mapping[str, Any] | None) -
         spec = spec_for_class(type(inst)) if n.source != "unregistered" else None
         if i == 0:
             _check_top(declaration, ceiling, where)
+            if declaration.planning is not None:
+                declaration = dataclasses.replace(declaration,
+                                                  planning=normalise_planning(declaration.planning, where))
             declaration = _with_registered_badge(declaration, spec)
             top_declaration = declaration
         else:

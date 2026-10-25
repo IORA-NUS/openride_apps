@@ -313,8 +313,13 @@ class CaptureRecorder:
         return self.settings.wants(tick_index) and self._room_left()
 
     def before_solve(self, tick: Tick) -> None:
-        """Snapshot the module RNG for ``tick`` when this tick will be captured."""
-        if tick.depth != 0:
+        """Snapshot the module RNG for ``tick`` when this tick will be captured.
+
+        Planning ticks (``tick.kind == "plan"``) are never captured and never counted:
+        ``every=N`` counts dispatch ticks, and a whole-window planning tick is not a
+        replayable dispatch decision (format ``/3`` is unchanged).
+        """
+        if tick.depth != 0 or getattr(tick, "kind", "dispatch") == "plan":
             return
         self._pending = None
         tick_index, self.ticks_seen = self.ticks_seen, self.ticks_seen + 1
@@ -326,7 +331,7 @@ class CaptureRecorder:
                              tick.clock.time_step)
 
     def __call__(self, *, tick: Tick, result: Any, problems: list[str]) -> None:
-        if tick.depth != 0:
+        if tick.depth != 0 or getattr(tick, "kind", "dispatch") == "plan":
             return
         pending, self._pending = self._pending, None
         if pending is None or pending[0] != id(tick):

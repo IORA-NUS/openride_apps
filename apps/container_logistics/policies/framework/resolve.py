@@ -59,6 +59,8 @@ __all__ = [
     "check_named_overrides",
     "parse_policy_cli_args",
     "policies_stamp",
+    "planning_stamp",
+    "PLANNING_AXIS",
 ]
 
 #: The keys a ``policies.<slot>`` entry may carry (authored, override and CLI forms).
@@ -615,7 +617,9 @@ def policies_stamp(
       solver's own JSON (e.g. its display ``badge`` and the candidate knobs it read);
     - ``declaration`` -- ``{"cross_company": [[owner, carrier], ...]}``, the top's
       declared pairs, sorted;
-    - ``world_reads`` -- the sorted world keys the bound tree's ``bind`` calls read.
+    - ``world_reads`` -- the sorted world keys the bound tree's ``bind`` calls read;
+    - ``planning`` -- ONLY when the top declared ``Declaration.planning``:
+      :func:`planning_stamp` (the declaration plus ``oracle`` and ``axis``).
 
     ``tree`` is the run's ``dispatch.bind.BoundTree`` (duck-typed: ``nodes`` with
     ``path`` and ``declaration``, ``declaration``, ``world_reads``), so this leaf module
@@ -633,8 +637,28 @@ def policies_stamp(
                 "cross_company": [list(pair) for pair in sorted(tree.declaration.cross_company)],
             }
             entry["world_reads"] = sorted(tree.world_reads)
+            planning = getattr(tree.declaration, "planning", None)
+            if planning is not None:  # only when declared: every online run's stamp is unchanged
+                entry["planning"] = planning_stamp(planning)
         stamp[slot] = entry
     return stamp
+
+
+#: The time axis planning windows and day boundaries are counted on: elapsed sim time since
+#: the run's reference time (``day n`` = steps ``[n * steps_per_day, (n + 1) * steps_per_day)``).
+PLANNING_AXIS = "elapsed"
+
+
+def planning_stamp(planning: Mapping[str, Any]) -> dict[str, Any]:
+    """The stamped form of a (normalised) planning declaration: its keys plus ``oracle`` and ``axis``.
+
+    ``oracle`` is true when ``foresight == "day"``: the planner read orders before the
+    simulation released them, so the run is an oracle arm and every report must say so.
+    """
+    out = {key: planning[key] for key in planning}
+    out["oracle"] = planning.get("foresight") == "day"
+    out["axis"] = PLANNING_AXIS
+    return _json_copy(out)
 
 
 def _json_copy(value: Mapping[str, Any]) -> dict[str, Any]:

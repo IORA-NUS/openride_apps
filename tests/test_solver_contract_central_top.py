@@ -153,7 +153,8 @@ def _assert_published_is_the_pairs(label: str, out: dict[str, Any]) -> None:
 
 def _leaf_names() -> list[str]:
     discover_builtin_policies()
-    return sorted(s.name for s in list_policies("planner") if not s.is_composite)
+    # top_only policies (e.g. a planning top) are not leaves: they are never retargeted as one.
+    return sorted(s.name for s in list_policies("planner") if not s.is_composite and not s.top_only)
 
 
 #: One case per tick state with shares (chain arm) and the small one: T (4 x 4), B (500 x 120).
@@ -244,7 +245,7 @@ def renamed_leaves():
                    requires=spec.requires, order_sensitive=spec.order_sensitive,
                    perf_budget_ms=spec.perf_budget_ms, module_rng=spec.module_rng,
                    arm_budgets_ms=dict(spec.arm_budgets_ms) or None, offload=spec.offload,
-                   badge=spec.badge, badge_tooltip=spec.badge_tooltip)(cls)
+                   badge=spec.badge, badge_tooltip=spec.badge_tooltip, top_only=spec.top_only)(cls)
         yield {old: new for old, (_cls, new) in renames.items()}
 
 
