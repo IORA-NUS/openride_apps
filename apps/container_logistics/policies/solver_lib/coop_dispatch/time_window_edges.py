@@ -75,6 +75,52 @@ class TimeWindowEdges:
         }
 
 
+@dataclass
+class TimeWindowArrays:
+    """The same arc set as :class:`TimeWindowEdges`, compact: numpy index arrays.
+
+    ``src`` / ``dst`` index the ``jobs`` sequence; ``ssrc`` indexes ``starts`` and ``sdst``
+    ``jobs``. Rows are in the dict API's order (sorted by (source, target) input index).
+    ``as_solver_params(jobs, starts)`` gives the ``edges_array`` / ``start_edges_array``
+    form :func:`min_cost_flow.solve_min_cost_flow` takes without building Python tuples.
+    """
+    src: np.ndarray
+    dst: np.ndarray
+    cost: np.ndarray
+    duration: np.ndarray
+    ssrc: np.ndarray
+    sdst: np.ndarray
+    scost: np.ndarray
+    sduration: np.ndarray
+
+    @classmethod
+    def empty(cls) -> "TimeWindowArrays":
+        i, f = np.zeros(0, dtype=np.int64), np.zeros(0, dtype=float)
+        return cls(i, i.copy(), f, f.copy(), i.copy(), i.copy(), f.copy(), f.copy())
+
+    def as_solver_params(self) -> dict[str, Any]:
+        return {
+            "edges_array": {"src": self.src, "dst": self.dst, "cost": self.cost},
+            "start_edges_array": {"src": self.ssrc, "dst": self.sdst, "cost": self.scost},
+        }
+
+    def to_edges(self, jobs: Sequence["Job"], starts: Sequence["Start"]) -> TimeWindowEdges:
+        ids = [j.id for j in jobs]
+        sids = [st.id for st in starts]
+        out = TimeWindowEdges()
+        for a, b, m, d in zip(self.src.tolist(), self.dst.tolist(), self.cost.tolist(), self.duration.tolist()):
+            key = (ids[a], ids[b])
+            out.edges.append(key)
+            out.edge_cost[key] = m
+            out.edge_duration[key] = d
+        for a, b, m, d in zip(self.ssrc.tolist(), self.sdst.tolist(), self.scost.tolist(), self.sduration.tolist()):
+            key = (sids[a], ids[b])
+            out.start_edges.append(key)
+            out.start_edge_cost[key] = m
+            out.start_edge_duration[key] = d
+        return out
+
+
 def haversine_travel(speed_kmh: float = 40.0, detour: float = 1.0) -> TravelFn:
     """Great-circle distance x ``detour``, at a constant ``speed_kmh``."""
     mps = speed_kmh / 3.6
@@ -115,14 +161,41 @@ def build_time_window_edges(
     start_late_slack_s: float | None = None,
     start_wait_limit_s: float | None = None,
 ) -> TimeWindowEdges:
+    """Dict/tuple form of :func:`build_time_window_arrays` (identical arc set and order)."""
+    arrays = build_time_window_arrays(
+        jobs, starts, travel_fn, wait_limit_s=wait_limit_s, late_slack_s=late_slack_s,
+        k_succ=k_succ, k_start=k_start, max_reposition_s=max_reposition_s,
+        start_late_slack_s=start_late_slack_s, start_wait_limit_s=start_wait_limit_s)
+    return arrays.to_edges(jobs, starts)
+
+
+def build_time_window_arrays(
+    jobs: Sequence[Job],
+    starts: Sequence[Start],
+    travel_fn: TravelFn,
+    *,
+    wait_limit_s: float,
+    late_slack_s: float,
+    k_succ: int | None = None,
+    k_start: int | None = None,
+    max_reposition_s: float | None = None,
+    start_late_slack_s: float | None = None,
+    start_wait_limit_s: float | None = None,
+) -> TimeWindowArrays:
     for name, k in (("k_succ", k_succ), ("k_start", k_start)):
         if k is not None and (not isinstance(k, int) or k < 1):
             raise ValueError(f"{name} must be a positive int or None (got {k!r})")
     ids = [j.id for j in jobs]
     if len(set(ids)) != len(ids):
         raise ValueError("job ids must be unique")
+    if starts:
+        sids = [st.id for st in starts]
+        if len(set(sids)) != len(sids):
+            raise ValueError("start ids must be unique")
+        if set(sids) & set(ids):
+            raise ValueError("start ids must not collide with job ids")
     n = len(jobs)
-    out = TimeWindowEdges()
+    out = TimeWindowArrays.empty()
     if n == 0:
         return out
     r = np.array([j.release_s for j in jobs], dtype=float)
@@ -137,38 +210,29 @@ def build_time_window_edges(
     r_sorted = r[by_r]
     lo = np.searchsorted(r_sorted, e - late_slack_s, side="left")
     hi = np.searchsorted(r_sorted, e + wait_limit_s, side="right")
-    src_parts, dst_parts = [], []
-    for i in range(n):
-        if hi[i] <= lo[i]:
-            continue
-        cand = by_r[lo[i]:hi[i]]
-        ok = (e[cand] > e[i]) | ((e[cand] == e[i]) & (cand > i))
-        cand = cand[ok]
-        if cand.size:
-            src_parts.append(np.full(cand.size, i, dtype=np.int64))
-            dst_parts.append(cand.astype(np.int64))
-    if src_parts:
-        src = np.concatenate(src_parts)
-        dst = np.concatenate(dst_parts)
-        m, s = travel_fn(dlat[src], dlng[src], plat[dst], plng[dst])
-        m = np.asarray(m, dtype=float)
-        s = np.asarray(s, dtype=float)
-        keep = _keep_k(src, m, dst, k_succ) | _keep_k(dst, m, src, k_succ)
-        src, dst, m, s = src[keep], dst[keep], m[keep], s[keep]
-        order = np.lexsort((dst, src))
-        for t in order.tolist():
-            key = (ids[src[t]], ids[dst[t]])
-            out.edges.append(key)
-            out.edge_cost[key] = float(m[t])
-            out.edge_duration[key] = float(s[t])
+    cnt = np.maximum(hi - lo, 0)
+    total = int(cnt.sum())
+    if total:
+        src = np.repeat(np.arange(n, dtype=np.int64), cnt)
+        # position within each window: global index minus the window's first offset
+        first = np.repeat(np.cumsum(cnt) - cnt, cnt)
+        pos = np.repeat(lo, cnt) + (np.arange(total, dtype=np.int64) - first)
+        dst = by_r[pos].astype(np.int64)
+        ok = (e[dst] > e[src]) | ((e[dst] == e[src]) & (dst > src))
+        src, dst = src[ok], dst[ok]
+        del first, pos, ok
+        if src.size:
+            m, sdur = travel_fn(dlat[src], dlng[src], plat[dst], plng[dst])
+            m = np.asarray(m, dtype=float)
+            sdur = np.asarray(sdur, dtype=float)
+            if k_succ is not None:
+                keep = _keep_k(src, m, dst, k_succ) | _keep_k(dst, m, src, k_succ)
+                src, dst, m, sdur = src[keep], dst[keep], m[keep], sdur[keep]
+            order = np.lexsort((dst, src))
+            out.src, out.dst, out.cost, out.duration = src[order], dst[order], m[order], sdur[order]
 
     # ---- truck -> job ----
     if starts:
-        sids = [st.id for st in starts]
-        if len(set(sids)) != len(sids):
-            raise ValueError("start ids must be unique")
-        if set(sids) & set(ids):
-            raise ValueError("start ids must not collide with job ids")
         ss_parts, sd_parts, sm_parts, sdur_parts = [], [], [], []
         for si, st in enumerate(starts):
             ok = np.ones(n, dtype=bool)
@@ -196,12 +260,9 @@ def build_time_window_edges(
             sdst = np.concatenate(sd_parts)
             sm = np.concatenate(sm_parts)
             sdur = np.concatenate(sdur_parts)
-            keep = _keep_k(ssrc, sm, sdst, k_start) | _keep_k(sdst, sm, ssrc, k_start)
-            ssrc, sdst, sm, sdur = ssrc[keep], sdst[keep], sm[keep], sdur[keep]
+            if k_start is not None:
+                keep = _keep_k(ssrc, sm, sdst, k_start) | _keep_k(sdst, sm, ssrc, k_start)
+                ssrc, sdst, sm, sdur = ssrc[keep], sdst[keep], sm[keep], sdur[keep]
             order = np.lexsort((sdst, ssrc))
-            for t in order.tolist():
-                key = (sids[ssrc[t]], ids[sdst[t]])
-                out.start_edges.append(key)
-                out.start_edge_cost[key] = float(sm[t])
-                out.start_edge_duration[key] = float(sdur[t])
+            out.ssrc, out.sdst, out.scost, out.sduration = ssrc[order], sdst[order], sm[order], sdur[order]
     return out

@@ -23,6 +23,31 @@ class ArcBudgetExceeded(ValueError):
     pass
 
 
+def arrays_to_lists(params: Dict[str, Any]) -> Dict[str, Any]:
+    """``params`` with ``edges_array`` / ``start_edges_array`` (index arrays, see
+    ``min_cost_flow.solve_min_cost_flow``) turned into the MIP's ``edges_input`` /
+    ``edge_cost_input`` / ``edge_trailer_cost_input`` and ``start_edges`` /
+    ``start_edge_cost`` lists, in array order. Without arrays, ``params`` is returned as is.
+    Kept import-free (this module is loaded standalone where OR-Tools is absent)."""
+    if "edges_array" not in params and "start_edges_array" not in params:
+        return params
+    out = dict(params)
+    orders = list(params["orders"])
+    if "edges_array" in out:
+        ea = out.pop("edges_array")
+        edges = [(orders[a], orders[b]) for a, b in zip(list(ea["src"]), list(ea["dst"]))]
+        out["edges_input"] = edges
+        out["edge_cost_input"] = dict(zip(edges, (float(c) for c in ea["cost"])))
+        out["edge_trailer_cost_input"] = {e: 0 for e in edges}
+    if "start_edges_array" in out:
+        sa = out.pop("start_edges_array")
+        sids = list(params.get("start_nodes") or {})
+        sedges = [(sids[a], orders[b]) for a, b in zip(list(sa["src"]), list(sa["dst"]))]
+        out["start_edges"] = sedges
+        out["start_edge_cost"] = dict(zip(sedges, (float(c) for c in sa["cost"])))
+    return out
+
+
 def memory_cap_preexec(limit_bytes: int = DEFAULT_MEMORY_CAP_BYTES) -> Callable[[], None]:
     if not isinstance(limit_bytes, int) or limit_bytes <= 0:
         raise ValueError(f"limit_bytes must be a positive int (got {limit_bytes!r})")
@@ -37,6 +62,7 @@ def memory_cap_preexec(limit_bytes: int = DEFAULT_MEMORY_CAP_BYTES) -> Callable[
 
 def mip_arc_count(params: Dict[str, Any]) -> int:
     """Number of ``x`` variables ``NetworkFlowSolver`` would create for ``params``."""
+    params = arrays_to_lists(params)
     companies = list(params["companies"])
     owner, coop = params["order_owner"], set(params["cooperation"])
     eligible = params.get("eligible")

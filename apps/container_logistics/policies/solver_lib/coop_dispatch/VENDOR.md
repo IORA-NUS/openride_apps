@@ -34,9 +34,11 @@ Not vendored: upstream `README.md` (the contract doc; read it at the upstream pa
 
 `network_flow_solver.py` (`NetworkFlowSolver.solve`), new optional `params` keys:
 
-- `start_nodes: {sid: {"company": c}}` with `start_edges: [(sid, order)]` and
-  `start_edge_cost: {(sid, order): meters}`. Each start node is a source of capacity 1
-  inside its company's commodity (out <= 1). A company that has start nodes gets no depot
+- `start_nodes: {sid: {"company": c, "capacity": k}}` with `start_edges: [(sid, order)]`
+  and `start_edge_cost: {(sid, order): meters}`. Each start node is a source of capacity
+  k (int >= 1, default 1; out <= k) inside its company's commodity: k identical trucks
+  (same class, exact position and ready time) merged into one node. `capacity` absent and
+  `capacity: 1` build the identical model. A company that has start nodes gets no depot
   start arcs and its `vehicle_limit` is not applied.
 - `defer_penalty: float`: an order may stay unplanned (`sum_c a[i,c] + u_i == 1`), at
   objective cost `P * u_i`. Result gains `unplanned`.
@@ -81,6 +83,19 @@ backends through `MPSolverParameters`; without one it is exactly `solver.Solve()
   the reference is `poor_incumbent`; addendum B2).
 - `limits.py`: `memory_cap_preexec` (child `RLIMIT_AS`, default 4 GiB) and
   `check_mip_arc_budget` (default 500,000 `x` variables; addendum minor 8).
+
+## Compact arc form (follow-up E2)
+
+- `time_window_edges.build_time_window_arrays` returns `TimeWindowArrays` (numpy index
+  arrays, the dict API's exact arcs in its order); `build_time_window_edges` is now its
+  dict view.
+- `min_cost_flow.solve_min_cost_flow` also takes `edges_array` / `start_edges_array`
+  (`{"src", "dst", "cost"}` index arrays into `orders` / `list(start_nodes)`) and builds
+  the network vectorised; `backends.component_params` slices them; `limits.arrays_to_lists`
+  turns them into the MIP's lists (the MIP path, the served bound and the arc budget use it).
+- `chains.extract_chains(..., job_order=)`: `chains_by_start` lists up to `capacity` chains
+  per start node, ordered by the first job's position in `job_order` (else `str(first)`);
+  `by_start` keeps the capacity-1 view.
 
 ## OR-Tools version
 
