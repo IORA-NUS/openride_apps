@@ -31,7 +31,7 @@ from typing import Any, Callable, Iterator, Mapping
 
 from apps.container_logistics.datagen import hauliers as _hauliers
 from apps.container_logistics.policies.dispatch.runner import DispatchRunner
-from apps.container_logistics.policies.dispatch.tick import DispatchClock, Tick, tick_seed
+from apps.container_logistics.policies.dispatch.tick import DispatchClock, PlanningWindow, Tick, tick_seed
 from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
 
 logger = logging.getLogger(__name__)
@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "Fixture",
     "SIM_CLOCK",
+    "STEP_SECONDS",
     "cooperation_structure",
     "seeded_module_random",
     "world_profile",
@@ -59,6 +60,8 @@ __all__ = [
 ]
 
 SIM_CLOCK = "Wed, 01 Jan 2020 08:00:00 GMT"
+#: Sim seconds per step of every fixture (the shipped scenarios' 240 s: 360 steps a day).
+STEP_SECONDS = 240
 _BASE_LON, _BASE_LAT = 103.85, 1.30
 
 
@@ -140,11 +143,56 @@ class Fixture:
         trucks: list[dict[str, Any]] | None = None,
         orders: list[dict[str, Any]] | None = None,
         scope_log: list[dict[str, Any]] | None = None,
+        lookup: Mapping[str, dict[str, Any]] | None = None,
     ) -> Tick:
         """A fresh whole tick for ``runner`` (``trucks``/``orders`` override the order only).
 
         The measurement dials are ``accounting_params`` when set, else the selection's
         own (``compat.measurement.accounting_params_for``, the F1 one-dial rule).
+        ``lookup`` is the tick's ``{order_id: doc}`` (what a planning top's previous
+        ``prefetch`` asked for); ``None`` builds the ordinary tick. ``run_id`` is always
+        ``""`` (offline: a solver keeps its state in memory).
+        """
+        extra: dict[str, Any] = {"lookup": lookup} if lookup else {}
+        return runner.tick(
+            candidates=list(self.trucks if trucks is None else trucks),
+            orders=list(self.orders if orders is None else orders),
+            profile=self.profile(),
+            clock=DispatchClock(sim_clock=SIM_CLOCK, time_step=self.time_step),
+            seed=self.tick_seed,
+            dials=dict(self.accounting_params) or None,
+            scope_log=scope_log,
+            **extra,
+        )
+
+    def planning_window(self, foresight: str = "none", *, step_seconds: int = STEP_SECONDS) -> PlanningWindow:
+        """The day-start :class:`PlanningWindow` of this fixture's step (elapsed axis).
+
+        ``foresight == "day"``: the window runs to the end of the step's run day;
+        ``"none"``: to ``time_step + 1`` (released orders only). A fixture's orders are
+        all released, so both see every fixture order.
+        """
+        steps_per_day = 86400 // step_seconds
+        day = self.time_step // steps_per_day
+        start = day * steps_per_day
+        end = start + steps_per_day if foresight == "day" else self.time_step + 1
+        return PlanningWindow(reason="day_start", day=day, start_step=start, end_step=end,
+                              now_step=self.time_step, step_seconds=step_seconds)
+
+    def plan_context(
+        self,
+        runner: DispatchRunner,
+        *,
+        foresight: str = "none",
+        trucks: list[dict[str, Any]] | None = None,
+        orders: list[dict[str, Any]] | None = None,
+        scope_log: list[dict[str, Any]] | None = None,
+    ) -> Tick:
+        """A fresh PLANNING tick (``kind="plan"``) for ``runner``: this fixture's trucks and orders.
+
+        Every fixture order is the planning tick's foresight; no truck is engaged. Built
+        through ``runner.tick`` like :meth:`context` (the runner refuses a top that
+        declared no planning).
         """
         return runner.tick(
             candidates=list(self.trucks if trucks is None else trucks),
@@ -154,6 +202,8 @@ class Fixture:
             seed=self.tick_seed,
             dials=dict(self.accounting_params) or None,
             scope_log=scope_log,
+            kind="plan",
+            planning=self.planning_window(foresight),
         )
 
 

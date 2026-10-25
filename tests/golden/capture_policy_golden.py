@@ -45,7 +45,7 @@ if str(REPO_ROOT) not in sys.path:  # run as a script: `python tests/golden/capt
 from apps.container_logistics.policies.dispatch.runner import build_runner_for_policy
 from apps.container_logistics.policies.framework.registry import get_policy_spec, list_policies
 from apps.container_logistics.policies.testing import fixtures as fx
-from apps.container_logistics.policies.testing.battery import decide_seeded
+from apps.container_logistics.policies.testing.battery import decide_seeded, plan_then_decide_seeded
 
 GOLDEN_PATH = Path(__file__).resolve().parent / "policy_golden_v2.json.gz"
 GOLDEN_FORMAT = 2
@@ -55,11 +55,22 @@ __all__ = ["GOLDEN_PATH", "GOLDEN_FORMAT", "golden_cases", "load_golden", "load_
 
 
 def golden_cases(name: str) -> list[dict[str, Any]]:
-    """The cases recorded for dispatch policy ``name``: its heads on each whole-tick fixture."""
+    """The cases recorded for dispatch policy ``name``: its heads on each whole-tick fixture.
+
+    A ``top_only`` policy whose top declares planning is decided as the agent drives it:
+    one planning tick first (every fixture order as foresight), then the dispatch tick on
+    the same instance (``battery.plan_then_decide_seeded``; addendum M6). Every other
+    policy: one dispatch tick, unchanged.
+    """
+    planning_top = get_policy_spec("planner", name).top_only
     cases = []
     for make in fx.ROBUSTNESS_FIXTURES:
         fixture = make()
-        _tick, result = decide_seeded(build_runner_for_policy(name), fixture)
+        runner = build_runner_for_policy(name)
+        if planning_top and runner.tree.declaration.planning is not None:
+            _tick, result = plan_then_decide_seeded(runner, fixture)
+        else:
+            _tick, result = decide_seeded(runner, fixture)
         cases.append({"fixture": fixture.id, "heads": [list(p) for p in result.pairs]})
     return cases
 

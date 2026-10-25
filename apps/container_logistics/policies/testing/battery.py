@@ -71,10 +71,24 @@ decomposition alike. The ids for the DEFAULT arm are :data:`DISPATCH_CHECKS`, in
   target; a decomposition where ``leaf_only``) are rejected; the schema uses only
   ``SUPPORTED_SCHEMA_KEYWORDS``.
 
+**Planning tops** (an arm whose bound top declares ``Declaration.planning``): every
+decision is made the way the agent drives it -- a PLANNING tick first
+(``Fixture.plan_context``: the fixture's trucks and every fixture order as foresight,
+through ``DispatchRunner.run``), then the dispatch tick on the SAME instance, with the
+planning tick's ``Result.prefetch`` handed back as ``tick.lookup``. Every check above
+judges that dispatch tick (``performance.scale`` times it alone), and
+:data:`PLANNING_ARM_CHECKS` run after the arm's ``ARM_CHECKS``:
+``contract.planning_declaration`` (the policy is registered ``top_only``: a planning
+node can be nothing but the top), ``contract.planning_commits_nothing`` (on every
+fixture the planning tick raised nothing and was not discarded: R6 no pairs, R7 a
+well-formed prefetch) and ``performance.plan`` (best of 3 planning-tick times on
+``scale`` under the declared ``max_hold_seconds``; SKIP when the policy's ``requires``
+are missing here). An online arm runs none of them, so its ids are unchanged.
+
 **Arms** (:func:`policy_arms`): the defaults; each non-default ``choices`` value of
 each of the policy's OWN ``str`` params; and for each policy-reference param, every
 other AVAILABLE target of its kind (``requires`` installed; a leaf where
-``leaf_only``) at that target's defaults. Arms are not crossed and not recursive (an
+``leaf_only``; never a ``top_only`` policy) at that target's defaults. Arms are not crossed and not recursive (an
 inner's own arms are certified by the inner's battery). Every :data:`ARM_CHECKS` id
 runs per arm, with the arm in the id: ``structure.no_order_twice[candidates=sampled]``,
 ``performance.scale[inner=GreedyNearest]``.
@@ -125,6 +139,7 @@ __all__ = [
     "Skip",
     "DISPATCH_CHECKS",
     "ARM_CHECKS",
+    "PLANNING_ARM_CHECKS",
     "STRUCTURE_CHECKS",
     "arm_budget",
     "arm_label",
@@ -133,6 +148,8 @@ __all__ = [
     "classify_contract_problem",
     "run_battery",
     "decide_seeded",
+    "plan_then_decide_seeded",
+    "arm_planning",
     "seeded_module_random",
 ]
 
@@ -159,6 +176,14 @@ ARM_CHECKS: tuple[str, ...] = (
     "contract.world_reads_at_bind",
     "contract.declaration_within_ceiling",
     "performance.scale",
+)
+
+#: The extra per-arm checks of an arm whose top declares ``Declaration.planning`` (run
+#: after :data:`ARM_CHECKS`; an online arm has none of them, so its ids are unchanged).
+PLANNING_ARM_CHECKS: tuple[str, ...] = (
+    "contract.planning_declaration",
+    "contract.planning_commits_nothing",
+    "performance.plan",
 )
 
 DISPATCH_CHECKS: tuple[str, ...] = (
@@ -266,15 +291,72 @@ def decide_seeded(
         return tick, runner.solve_unchecked(tick)
 
 
+def _run_plan_tick(runner: DispatchRunner, fixture: Any, planning: Mapping[str, Any], *,
+                   trucks: list[dict[str, Any]] | None = None, orders: list[dict[str, Any]] | None = None,
+                   scope_log: list[dict[str, Any]] | None = None) -> tuple[Any, dict[str, dict[str, Any]]]:
+    """One PLANNING tick of ``fixture`` through ``runner.run`` (every fixture order as foresight).
+
+    Returns ``(outcome, lookup)``: the runner's ``TickOutcome`` and the ``{order_id: doc}``
+    the next dispatch tick receives as ``tick.lookup`` for the plan's ``Result.prefetch``
+    (the fixture's own documents, as the live app reads them back by id). Call inside
+    ``fixture.module_random()``.
+    """
+    plan_tick = fixture.plan_context(runner, foresight=planning.get("foresight", "none"), trucks=trucks,
+                                     orders=orders, scope_log=scope_log)
+    outcome = runner.run(plan_tick)
+    return outcome, _lookup_for(outcome, fixture.orders if orders is None else orders)
+
+
+def _lookup_for(outcome: Any, orders: Any) -> dict[str, dict[str, Any]]:
+    """``{order_id: doc}`` of ``orders`` named by ``outcome``'s (checked) ``prefetch``; ``{}`` when there is none."""
+    result = getattr(outcome, "result", None)
+    wanted = set(result.prefetch) if result is not None else set()
+    if not wanted:
+        return {}
+    return {str(o.get("_id")): o for o in orders if str(o.get("_id")) in wanted}
+
+
+def plan_then_decide_seeded(runner: DispatchRunner, fixture: Any) -> tuple[Tick, Any]:
+    """:func:`decide_seeded` for a PLANNING top: one planning tick first, on the same instance.
+
+    The planning tick runs through ``runner.run`` (checked; it commits nothing, R6) with
+    every fixture order as foresight, then the dispatch tick (with the plan's prefetched
+    documents as ``tick.lookup``) is solved raw, exactly like :func:`decide_seeded`. One
+    module-RNG seeding covers both. For the policy golden of ``top_only`` planning
+    policies (addendum M6); raises ``PolicyError`` when the runner's top declares no
+    planning.
+    """
+    planning = runner.tree.declaration.planning
+    if planning is None:
+        raise PolicyError(f"plan_then_decide_seeded: {runner.tree.top.name} declares no planning")
+    with fixture.module_random():
+        _outcome, lookup = _run_plan_tick(runner, fixture, planning)
+        tick = fixture.context(runner, lookup=lookup)
+        return tick, runner.solve_unchecked(tick)
+
+
+def arm_planning(spec: PolicySpec, arm: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The normalised ``Declaration.planning`` of ``spec`` at ``arm`` (bound against an empty world), or ``None``.
+
+    ``None`` too when the arm cannot even be built or bound (a ``PolicyError``): its checks
+    then FAIL on their own (``params.defaults_validate``, ``robustness.*``), with the ids
+    of an online arm.
+    """
+    try:
+        return build_runner_for_policy(spec.name, _arm_params(arm)).tree.declaration.planning
+    except PolicyError:
+        return None
+
+
 # --- arms --------------------------------------------------------------------
 
 def _ref_arm_targets(info: Any) -> list[str]:
-    """Every other available target of ``info``'s kind (a leaf where ``leaf_only``), sorted."""
+    """Every other available target of ``info``'s kind (a leaf where ``leaf_only``; never ``top_only``), sorted."""
     kind, default = info.meta.kind, getattr(info.default, "type", None)
     names = []
     if kind == "planner":
         for spec in list_policies("planner"):
-            if spec.missing_requirements() or (info.meta.leaf_only and spec.is_composite):
+            if spec.missing_requirements() or spec.top_only or (info.meta.leaf_only and spec.is_composite):
                 continue
             names.append(spec.name)
     else:
@@ -363,12 +445,18 @@ def battery_check_ids(slot: str, name: str) -> list[str]:
     """Every id ``run_battery(slot, name)`` returns, in order.
 
     ``DISPATCH_CHECKS`` (the default arm), then ``ARM_CHECKS`` once per non-default
-    arm with ``[<arm>]`` appended. Raises like :func:`run_battery`.
+    arm with ``[<arm>]`` appended. An arm whose top declares planning also runs
+    :data:`PLANNING_ARM_CHECKS`, right after its ``ARM_CHECKS`` (for the default arm:
+    before the ``params.*`` checks). Raises like :func:`run_battery`.
     """
     spec = _dispatch_spec(slot, name)
-    return list(DISPATCH_CHECKS) + [
-        f"{cid}{_arm_suffix(arm)}" for arm in policy_arms(spec)[1:] for cid in ARM_CHECKS
-    ]
+    arms = policy_arms(spec)
+    default_extra = list(PLANNING_ARM_CHECKS) if arm_planning(spec, arms[0]) is not None else []
+    out = list(ARM_CHECKS) + default_extra + [c for c in DISPATCH_CHECKS if c not in ARM_CHECKS]
+    for arm in arms[1:]:
+        ids = list(ARM_CHECKS) + (list(PLANNING_ARM_CHECKS) if arm_planning(spec, arm) is not None else [])
+        out += [f"{cid}{_arm_suffix(arm)}" for cid in ids]
+    return out
 
 
 def classify_contract_problem(message: str, *, raised: bool = False) -> str:
@@ -426,7 +514,14 @@ def _arm_results(spec: PolicySpec, arm: dict[str, Any]) -> list[CheckResult]:
     checks["contract.world_reads_at_bind"] = _bind(_world_reads_at_bind, outcomes)
     checks["contract.declaration_within_ceiling"] = _bind(_declaration_within_ceiling, spec, arm)
     checks["performance.scale"] = _bind(_performance_scale, spec, arm)
-    return [_timed(cid, checks[cid], arm) for cid in ARM_CHECKS]
+    ids = list(ARM_CHECKS)
+    planning = arm_planning(spec, arm)
+    if planning is not None:
+        checks["contract.planning_declaration"] = _bind(_planning_declaration, spec, planning)
+        checks["contract.planning_commits_nothing"] = _bind(_planning_commits_nothing, outcomes)
+        checks["performance.plan"] = _bind(_performance_plan, spec, arm, planning)
+        ids += PLANNING_ARM_CHECKS
+    return [_timed(cid, checks[cid], arm) for cid in ids]
 
 
 def _default_only_results(spec: PolicySpec) -> list[CheckResult]:
@@ -522,6 +617,11 @@ class _Decision:
     badge: str | None = None                    # the top's claimed badge (registration or provenance)
     sub_ticks: tuple[Mapping[str, Any], ...] = ()   # framework-measured: every restrict() and its call
     tick_hauliers: frozenset[str] = frozenset() # hauliers of the whole tick's trucks and orders
+    planned: bool = False                       # a planning tick ran first (the top declares planning)
+    plan_pairs: int = 0                         # pairs the planning tick's raw result proposed
+    plan_problems: tuple[str, ...] = ()         # the planning tick's discard reasons (R6, R7, ...)
+    plan_error: str | None = None               # a non-contract exception of the planning tick
+    plan_ms: float = 0.0                        # the planning tick's solve time
 
     @property
     def fixture_id(self) -> str:
@@ -556,16 +656,26 @@ def _decide_via_runner(
     scope_log: list[dict[str, Any]] = []
     pairs: list[tuple[str, str]] = []
     sub_ticks: list[dict[str, Any]] = []
+    planning = runner.tree.declaration.planning
+    plan: dict[str, Any] = {}
+    lookup: dict[str, dict[str, Any]] = {}
+    plan_reads: frozenset[str] = frozenset()
     with fixture.module_random():
         before = random.getstate()
-        ctx = fixture.context(runner, trucks=trucks, orders=orders, scope_log=scope_log)
+        if planning is not None:
+            # A planning top is decided as the live agent drives it: a planning tick first
+            # (every fixture order as foresight), then the dispatch tick on the SAME instance.
+            plan, lookup, plan_reads = _planning_first(runner, recorder, fixture, planning, trucks, orders)
+        violations_before = runner.stats["violations"]
+        ms_before = runner.stats["total_ms"]
+        ctx = fixture.context(runner, trucks=trucks, orders=orders, scope_log=scope_log, lookup=lookup)
         try:
             with _measured_sub_ticks(sub_ticks):
                 pairs = [(str(t.get("_id")), str(o.get("_id"))) for t, o in runner.run(ctx).pairs]
         except Exception as exc:  # noqa: BLE001 - reported by robustness
             error = f"{type(exc).__name__}: {exc}"
         touched = random.getstate() != before
-    solve_reads = ctx.world.reads
+    solve_reads = ctx.world.reads | plan_reads
     tree = runner.tree  # bound against the fixture's profile by runner.tick
     problems: list[tuple[str, str]] = []
     if error is None:
@@ -573,7 +683,7 @@ def _decide_via_runner(
             problems = [(classify_contract_problem(m, raised=True), m) for m in recorder.raised]
         else:
             problems = [(classify_contract_problem(m), m) for m in check_result(recorder.plan, ctx)]
-        discarded = runner.stats["violations"] > 0
+        discarded = runner.stats["violations"] > violations_before
         if discarded != bool(problems):
             problems.append((_UNCLASSIFIED, f"the runner {'discarded' if discarded else 'committed'} the result "
                                             f"but check_result found {len(problems)} problem(s)"))
@@ -584,7 +694,7 @@ def _decide_via_runner(
         pairs=tuple(pairs),
         problems=tuple(problems),
         error=error,
-        decide_ms=runner.stats["total_ms"],
+        decide_ms=runner.stats["total_ms"] - ms_before,
         module_rng_touched=touched,
         scope_log=tuple(scope_log),
         tick=ctx,
@@ -594,7 +704,57 @@ def _decide_via_runner(
         badge=_claimed_badge(spec, tree),
         sub_ticks=tuple(sub_ticks),
         tick_hauliers=_hauliers_of(ctx.raw_trucks, ctx.raw_orders),
+        planned=planning is not None,
+        plan_pairs=plan.get("pairs", 0),
+        plan_problems=tuple(plan.get("problems", ())),
+        plan_error=plan.get("error"),
+        plan_ms=plan.get("ms", 0.0),
     )
+
+
+def _planning_first(runner: DispatchRunner, recorder: "_PlanRecorder", fixture: Any, planning: Mapping[str, Any],
+                    trucks: Any, orders: Any) -> tuple[dict[str, Any], dict[str, dict[str, Any]], frozenset[str]]:
+    """Run the planning tick of a planning arm; ``(record, lookup, world reads)`` for :class:`_Decision`.
+
+    ``record``: ``pairs`` the raw planning result proposed, ``problems`` the runner
+    discarded it for (R6 ``a planning tick commits no pairs``, a malformed prefetch R7,
+    ...: the raw result is re-checked here), ``error`` a non-contract exception, ``ms``.
+    Its sub-ticks are not recorded (the scope audit judges the dispatch tick).
+    """
+    violations, ms = runner.stats["violations"], runner.stats["total_ms"]
+    record: dict[str, Any] = {"pairs": 0, "problems": [], "error": None, "ms": 0.0}
+    lookup: dict[str, dict[str, Any]] = {}
+    reads: frozenset[str] = frozenset()
+    try:
+        plan_tick = fixture.plan_context(runner, foresight=planning.get("foresight", "none"),
+                                         trucks=trucks, orders=orders)
+        reads_view = plan_tick.world
+        outcome = runner.run(plan_tick)
+        reads = frozenset(reads_view.reads)
+        lookup = _lookup_for(outcome, fixture.orders if orders is None else orders)
+        raw = recorder.plan
+        record["pairs"] = len(raw.pairs) if isinstance(raw, Result) else 0
+        if runner.stats["violations"] > violations:
+            record["problems"] = list(recorder.raised) or _plan_tick_problems(raw, plan_tick)
+    except Exception as exc:  # noqa: BLE001 - reported by contract.planning_commits_nothing
+        record["error"] = f"{type(exc).__name__}: {exc}"
+    record["ms"] = runner.stats["total_ms"] - ms
+    recorder.plan, recorder.raised = None, []
+    return record, lookup, reads
+
+
+def _plan_tick_problems(raw: Any, plan_tick: Any) -> list[str]:
+    """Why the runner discarded a planning tick's ``raw`` result (re-derived; the runner only logs it)."""
+    from apps.container_logistics.policies.dispatch.invariants import check_wire_notes, normalise_result
+
+    plain, problems = normalise_result(raw, strict=True)
+    if isinstance(plain, Result) and plain.pairs:
+        problems = [f"a planning tick commits no pairs (got {len(plain.pairs)})", *problems]
+    elif isinstance(plain, Result):
+        problems = [*problems, *check_wire_notes(plain, ())]
+    else:
+        problems = [*problems, *check_result(plain, plan_tick)]
+    return problems or ["the runner discarded the planning tick's result (see the CONTRACT VIOLATION log)"]
 
 
 def _claimed_badge(spec: PolicySpec, tree: Any) -> str | None:
@@ -945,12 +1105,15 @@ def _probe_module_draws(spec: PolicySpec, arm: Mapping[str, Any], fixture: Any) 
         if getattr(inst, "_rng", object()) is None:
             inst.set_rng(random.Random(fixture.seed))
     record: list[tuple[str, str]] = []
+    planning = runner.tree.declaration.planning
     with fixture.module_random():
         before = random.getstate()
-        ctx = fixture.context(runner)
         with _attributed_module_draws(nodes, record):
             try:
-                runner.run(ctx)
+                lookup = {}
+                if planning is not None:  # the planning tick's draws count too
+                    _outcome, lookup = _run_plan_tick(runner, fixture, planning)
+                runner.run(fixture.context(runner, lookup=lookup))
             except Exception:  # noqa: BLE001 - reported by robustness
                 pass
         touched = random.getstate() != before
@@ -1240,6 +1403,64 @@ def _performance_scale(spec: PolicySpec, arm: dict[str, Any]) -> tuple[bool, str
     return best <= budget, verdict
 
 
+# --- planning ----------------------------------------------------------------
+
+def _planning_declaration(spec: PolicySpec, planning: Mapping[str, Any]) -> tuple[bool, str]:
+    """A top that declares planning is registered ``top_only`` (it can be nothing but the top).
+
+    The declaration itself was checked at bind (refusal R2); here: a planning policy that
+    is not ``top_only`` would be offered as every composite's ``inner`` arm and the
+    ``--solver`` leaf, where message 24 refuses it.
+    """
+    shown = dict(planning)
+    if not spec.top_only:
+        return False, (f"{spec.name} declares planning {shown} but is not registered @policy(top_only=True): "
+                       "a planning node can only be the top (message 24 refuses it anywhere else), so it "
+                       "must not be offered as an inner or as the --solver leaf")
+    oracle = " (an ORACLE arm: foresight 'day')" if planning.get("foresight") == "day" else ""
+    return True, f"planning {shown}{oracle}; registered top_only"
+
+
+def _planning_commits_nothing(outcomes: _Outcomes) -> tuple[bool, str]:
+    """On every fixture the planning tick (run first, every order as foresight) raised nothing and was not discarded."""
+    problems: list[str] = []
+    ms: list[float] = []
+    for d in outcomes.all():
+        if d.plan_error is not None:
+            problems.append(f"{d.fixture_id}: the planning tick raised {d.plan_error}")
+        elif d.plan_problems:
+            problems.append(f"{d.fixture_id}: the planning tick was discarded: {'; '.join(d.plan_problems)}")
+        ms.append(d.plan_ms)
+    if problems:
+        return False, "; ".join(problems[:6])
+    return True, (f"{len(ms)} planning tick(s) committed nothing and were not discarded "
+                  f"(max {max(ms or [0.0]):.1f} ms)")
+
+
+def _performance_plan(spec: PolicySpec, arm: dict[str, Any], planning: Mapping[str, Any]) -> tuple[bool, str]:
+    """Best of 3 planning-tick solve times on ``scale`` under the declared ``max_hold_seconds``.
+
+    SKIP when the policy's ``requires`` are missing here (the backend that would plan is
+    not importable, so the time measured would not be the run's). The dispatch tick after
+    it is held to ``performance.scale``'s budget, as for every arm.
+    """
+    missing = spec.missing_requirements()
+    if missing:
+        return _skip(f"requires {', '.join(missing)}, not importable here: the planning backend cannot be timed")
+    budget_ms = int(planning["max_hold_seconds"]) * 1000
+    fixture = fx.scale()
+    times = []
+    for _ in range(_PERF_REPEATS):
+        d = _decide_via_runner(spec, arm, fixture)
+        if d.plan_error is not None:
+            return False, f"the planning tick raised {d.plan_error}"
+        times.append(d.plan_ms)
+    best = min(times)
+    listed = ", ".join(f"{t:.1f}" for t in times)
+    return best <= budget_ms, (f"best {best:.1f} ms of [{listed}] on {fixture.id}, budget {budget_ms} ms "
+                               "(the declared max_hold_seconds)")
+
+
 # --- params ------------------------------------------------------------------
 
 def _defaults_validate(spec: PolicySpec) -> tuple[bool, str]:
@@ -1309,8 +1530,12 @@ def _composite_targets() -> list[str]:
     return [s.name for s in list_policies("planner") if s.is_composite]
 
 
+def _top_only_targets() -> list[str]:
+    return [s.name for s in list_policies("planner") if s.top_only]
+
+
 def _rejects_bad_ref(spec: PolicySpec) -> tuple[bool, str]:
-    """Every ref param refuses an unregistered target and, where ``leaf_only``, a decomposition."""
+    """Every ref param refuses an unregistered target, a ``top_only`` policy and, where ``leaf_only``, a decomposition."""
     tried, accepted = [], []
     for info in declared_params(spec.params_cls):
         if not info.is_ref:
@@ -1318,6 +1543,8 @@ def _rejects_bad_ref(spec: PolicySpec) -> tuple[bool, str]:
         bad = [{"type": _BAD_REF}]
         if info.meta.kind == "planner" and info.meta.leaf_only:
             bad += [{"type": name} for name in _composite_targets()]
+        if info.meta.kind == "planner":  # R5: a top_only policy is never a ref target
+            bad += [{"type": name} for name in _top_only_targets() if {"type": name} not in bad]
         for value in bad:
             tried.append(f"{info.name}={value['type']}")
             if not _rejected(spec, {info.name: value}):
