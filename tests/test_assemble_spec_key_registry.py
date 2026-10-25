@@ -75,6 +75,10 @@ def _sentinel_for(key: str):
         "facilityRulesWorld": {"site_digest": "blake2b16:0000000000000000",
                                "facility_count": 300,
                                "code_counts": {"CT": 6, "CU": 234, "MT": 60}},
+        # Day-plan run inputs (F4/F4b). CARRY_IF_ABSENT: the editor does not speak them,
+        # so a save must keep an authored cadence / read cap (a different arm otherwise).
+        "assignmentCadenceSteps": 6,
+        "maxOrdersPerTick": 2000,
     }
     if key not in special:
         raise AssertionError(

@@ -138,6 +138,23 @@ class Preprocessor:
     # ---- validation helpers ----------------------------------------------
 
     @staticmethod
+    def _spec_bounded_int(raw: dict, key: str, bounds: tuple, what: str) -> Optional[int]:
+        """``raw[key]`` as an int in ``bounds`` (inclusive); ``None`` when absent/null.
+
+        A bool, a float or an out-of-range value is a ``SpecValidationError`` (the
+        spec-field form of refusal R8).
+        """
+        value = raw.get(key)
+        if value is None:
+            return None
+        lo, hi = bounds
+        if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+            raise SpecValidationError(
+                f"spec: {key} must be an integer {what} in {lo}..{hi} (got {value!r})."
+            )
+        return value
+
+    @staticmethod
     def _resolve_file(value: Any, kind: str, scenario_dir: Optional[str]):
         """Resolve a `{"$file": path}` or a bare path (relative to scenario_dir)."""
         path = None
@@ -780,6 +797,23 @@ class Preprocessor:
         # planner host reads at spawn (and the per-run override patches in memory).
         settings["assignment"]["profile"]["cooperation"] = deepcopy(cooperation)
         settings["assignment"]["profile"]["planner"] = deepcopy(planner_cfg)
+        # --- day-plan run inputs (F4 / F4b / F5): pure data, present ONLY when authored,
+        # so a spec without them compiles to the same bytes as before. ---------------
+        # Working hours per haulier, on the ELAPSED-since-REFERENCE_TIME axis. The
+        # framework drops off-hours trucks from dispatch ticks for every solver: a
+        # comparability boundary (runs with and without hours are different worlds).
+        try:
+            working_hours = H.working_hours_record(hlist)
+        except ValueError as exc:
+            raise SpecValidationError(str(exc))
+        if working_hours is not None:
+            settings["assignment"]["profile"]["working_hours"] = working_hours
+        assignment_cadence = cls._spec_bounded_int(raw, "assignmentCadenceSteps", (1, 360), "step count")
+        if assignment_cadence is not None:
+            settings["assignment"]["steps_per_action"] = assignment_cadence
+        max_orders_per_tick = cls._spec_bounded_int(raw, "maxOrdersPerTick", (1, 20000), "order count")
+        if max_orders_per_tick is not None:
+            settings["assignment"]["profile"]["max_orders_per_tick"] = max_orders_per_tick
 
         # --- orsim settings (from calendar + runtime tuning) ---
         orsim = cls._orsim_settings(domain, days, step_interval, sim_len, reference_time)
@@ -865,6 +899,12 @@ class Preprocessor:
             "facilityRulesWorld": deepcopy(raw.get("facilityRulesWorld")),
             "behaviorRevision": D.BEHAVIOR_REVISION,
         }
+        # Echoed only when authored (the round-trip source; the sim main reads their
+        # presence to stamp ASSIGNMENT_CADENCE / MAX_ORDERS_PER_TICK as source "bundle").
+        if assignment_cadence is not None:
+            recipe["assignmentCadenceSteps"] = assignment_cadence
+        if max_orders_per_tick is not None:
+            recipe["maxOrdersPerTick"] = max_orders_per_tick
 
         spec = GenerationSpec(
             domain=domain,

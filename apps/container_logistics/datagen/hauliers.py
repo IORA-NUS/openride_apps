@@ -33,6 +33,66 @@ def _validate_share_total(hauliers, key):
         )
 
 
+#: The haulier key carrying an optional shift window (F5). Carried ONLY when present, so a
+#: spec without it normalises (and compiles) exactly as before.
+WORKING_HOURS_KEY = "workingHours"
+#: The time axis working hours are measured on: seconds ELAPSED since REFERENCE_TIME,
+#: modulo one day (the axis the demand curve is authored on; plan D5).
+WORKING_HOURS_AXIS = "elapsed"
+_HHMM_RE = re.compile(r"^([0-9]{2}):([0-9]{2})$")
+
+
+def _hhmm_seconds(text, *, allow_24=False):
+    match = _HHMM_RE.match(text) if isinstance(text, str) else None
+    if match is None:
+        return None
+    hours, minutes = int(match.group(1)), int(match.group(2))
+    if minutes > 59:
+        return None
+    if hours == 24 and minutes == 0 and allow_24:
+        return 86400
+    if hours > 23:
+        return None
+    return hours * 3600 + minutes * 60
+
+
+def normalize_working_hours(hid, value):
+    """A haulier's ``workingHours`` as ``{"start": "HH:MM", "end": "HH:MM"}`` (refusal R9).
+
+    ``start != end``; ``end < start`` is an OVERNIGHT window (e.g. 20:00-06:00); ``end``
+    may be ``"24:00"``. Raises ``ValueError``.
+    """
+    ok = isinstance(value, dict) and set(value) == {"start", "end"}
+    start = _hhmm_seconds(value.get("start")) if ok else None
+    end = _hhmm_seconds(value.get("end"), allow_24=True) if ok else None
+    if start is None or end is None or start == end:
+        raise ValueError(
+            f"Haulier '{hid}': workingHours must be {{\"start\": \"HH:MM\", \"end\": \"HH:MM\"}} "
+            f"with start != end (got {value!r})."
+        )
+    return {"start": value["start"], "end": value["end"]}
+
+
+def working_hours_record(hauliers):
+    """The compiled working-hours record, or ``None`` when no haulier declares hours.
+
+    ``{"axis": "elapsed", "hauliers": {hid: [start_s, end_s]}}`` -- seconds into the
+    elapsed day (``end_s < start_s`` is overnight; ``end_s`` may be 86400). A haulier
+    without hours is absent (always on). Baked onto the assignment profile
+    (``profile["working_hours"]``) by the Preprocessor.
+    """
+    out = {}
+    for h in hauliers or ():
+        wh = h.get(WORKING_HOURS_KEY) if isinstance(h, dict) else None
+        if wh is None:
+            continue
+        wh = normalize_working_hours(h.get("id"), wh)
+        out[h["id"]] = [_hhmm_seconds(wh["start"]), _hhmm_seconds(wh["end"], allow_24=True)]
+    if not out:
+        return None
+    return {"axis": WORKING_HOURS_AXIS, "hauliers": out}
+
+
 def normalize_hauliers(raw):
     items = raw if isinstance(raw, (list, tuple)) else None
     if not items:
@@ -67,14 +127,17 @@ def normalize_hauliers(raw):
                 )
             return val
 
-        out.append(
-            {
-                "id": hid,
-                "name": name or hid,
-                "fleet_share": _share("fleet_share"),
-                "order_share": _share("order_share"),
-            }
-        )
+        normalized = {
+            "id": hid,
+            "name": name or hid,
+            "fleet_share": _share("fleet_share"),
+            "order_share": _share("order_share"),
+        }
+        # F5: carried only when present (null = not spoken), so every existing spec
+        # normalises to the same four keys as before.
+        if entry.get(WORKING_HOURS_KEY) is not None:
+            normalized[WORKING_HOURS_KEY] = normalize_working_hours(hid, entry[WORKING_HOURS_KEY])
+        out.append(normalized)
 
     if not out:
         return [dict(h) for h in DEFAULT_HAULIERS]

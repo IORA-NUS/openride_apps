@@ -509,6 +509,14 @@ SPEC_KEYS: dict[str, Carry] = {
     # the bundle regenerating the digest: it would then always match and guard
     # nothing, while looking exactly like a guard.
     "facilityRulesWorld": Carry.CARRY_IF_ABSENT,
+    # --- day-plan run inputs (F4 / F4b) ---------------------------------------
+    # The assignment agent's dispatch cadence (sim steps, 1..360; default 28) and its
+    # per-tick unassigned-order read cap (1..20000; default 500). Compiled into the
+    # assignment behavior only when present, and echoed into the recipe so the sim
+    # main can stamp them as source "bundle". CARRY_IF_ABSENT like `overrides`: a
+    # dashboard save that does not speak them must not drop them.
+    "assignmentCadenceSteps": Carry.CARRY_IF_ABSENT,
+    "maxOrdersPerTick": Carry.CARRY_IF_ABSENT,
 }
 
 #: Accepted spellings per key. A client that speaks any alias has SUPPLIED the key.
@@ -606,6 +614,10 @@ SPEC_KEY_NULL_POLICY: dict[str, NullPolicy] = {
     # There is no "cleared world": a baseline is either recorded or deleted outright.
     # A null here would also orphan the rules it was recorded for.
     "facilityRulesWorld": NullPolicy.UNSUPPLIED,
+    # A form serialiser's null for an untouched field must not silently revert an
+    # authored cadence / read cap to the engine default (a different arm).
+    "assignmentCadenceSteps": NullPolicy.UNSUPPLIED,
+    "maxOrdersPerTick": NullPolicy.UNSUPPLIED,
 }
 
 # Completeness is enforced at IMPORT, so it fires on test collection rather than on
@@ -789,6 +801,8 @@ def assemble_spec(
         # authored and compiled forms drift apart.
         "facilityRules": deepcopy(raw.get("facilityRules")),
         "facilityRulesWorld": deepcopy(raw.get("facilityRulesWorld")),
+        "assignmentCadenceSteps": raw.get("assignmentCadenceSteps"),
+        "maxOrdersPerTick": raw.get("maxOrdersPerTick"),
     }
     # Every declared key must have a value builder — a key added to SPEC_KEYS
     # without one is a loud failure here rather than a silent null in the spec.

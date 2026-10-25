@@ -390,24 +390,50 @@ def validate_run_policies(
     params: Optional[list[str]] = None,
     *,
     cooperation_structure: Optional[str] = None,
+    assignment_cadence: Optional[int] = None,
+    max_orders_per_tick: Optional[int] = None,
 ) -> dict[str, Any]:
     """Dry-run a run's ``--solver``/``--policy``/``--policy-param``/``--structure`` against the scenario.
 
     In-process, like ``runner.py``'s ``ServiceManager`` use: the same check
     ``run-simulation`` runs before it spawns (an undeclared structure, or one the bound
-    planner never reads, is refused here). Returns the ``ORSIM_POLICY_OVERRIDES``
-    object (``{}`` when no policy flag was given); raises ``ControlError`` with the message.
+    planner never reads, is refused here). ``assignment_cadence`` /
+    ``max_orders_per_tick`` are overlaid on the environment the dry run reads, as the
+    runner injects them. Returns the ``ORSIM_POLICY_OVERRIDES`` object (``{}`` when no
+    policy flag was given); raises ``ControlError`` with the message.
     """
     from openride_control.policies import validate_run_policy_args
 
     result = validate_run_policy_args(
-        scenario, solver, policies or [], params or [], cooperation_structure=cooperation_structure
+        scenario, solver, policies or [], params or [], cooperation_structure=cooperation_structure,
+        assignment_cadence=assignment_cadence, max_orders_per_tick=max_orders_per_tick,
     )
     if isinstance(result, str):
         err = ControlError(result)
         err.code = "INVALID"
         raise err
     return result
+
+
+def validate_assignment_run_inputs(cadence: Any, max_orders: Any) -> tuple[Optional[int], Optional[int]]:
+    """``--assignment-cadence`` / ``--max-orders-per-tick`` as ints (``None`` when unset).
+
+    The sim's own parsers (``scenario_overrides.parse_assignment_cadence`` /
+    ``parse_max_orders_per_tick``), so the CLI and the sim refuse with one text (R8);
+    raises ``ControlError`` (code ``INVALID``).
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+    from apps.container_logistics.scenario.scenario_overrides import (
+        parse_assignment_cadence,
+        parse_max_orders_per_tick,
+    )
+
+    try:
+        return parse_assignment_cadence(cadence), parse_max_orders_per_tick(max_orders)
+    except PolicyError as exc:
+        err = ControlError(str(exc))
+        err.code = "INVALID"
+        raise err
 
 
 def validate_capture_dispatch(text: Optional[str]) -> Optional[str]:

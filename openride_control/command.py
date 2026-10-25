@@ -134,6 +134,20 @@ def _run(argv: list[str] | None = None) -> int:
         help="Order lifecycle mode: 'agents' (per-order agents, default) or 'service' "
         "(one order-lifecycle service agent).",
     )
+    run_p.add_argument(
+        "--assignment-cadence",
+        default=None,
+        metavar="STEPS",
+        help="Per-run assignment dispatch cadence in sim steps, 1..360 (ORSIM_ASSIGNMENT_CADENCE); "
+        "stamped as ASSIGNMENT_CADENCE and tagged ' · cadence:N' on the run name. A new arm.",
+    )
+    run_p.add_argument(
+        "--max-orders-per-tick",
+        default=None,
+        metavar="N",
+        help="Per-run cap on unassigned orders read per dispatch tick, 1..20000 "
+        "(ORSIM_MAX_ORDERS_PER_TICK); stamped as MAX_ORDERS_PER_TICK, tagged ' · orders:N'.",
+    )
 
     list_sc_p = sub.add_parser("list-scenarios", help="List scenario metadata on disk")
     list_sc_p.add_argument("--domain", default=None)
@@ -310,6 +324,9 @@ def _run(argv: list[str] | None = None) -> int:
         policy_overrides = validate_run_policy_args(
             args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides,
             args.cooperation_structure,
+            order_lifecycle=args.order_lifecycle,
+            assignment_cadence=args.assignment_cadence,
+            max_orders_per_tick=args.max_orders_per_tick,
         )
         if isinstance(policy_overrides, str):
             _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
@@ -329,6 +346,8 @@ def _run(argv: list[str] | None = None) -> int:
             capture_dispatch=args.capture_dispatch,
             cooperation_structure=args.cooperation_structure,
             order_lifecycle=args.order_lifecycle,
+            assignment_cadence=args.assignment_cadence,
+            max_orders_per_tick=args.max_orders_per_tick,
         )
         _emit(_result_payload(result, command_id=command_id, action="run_simulation"))
         return 0 if result.ok else 1

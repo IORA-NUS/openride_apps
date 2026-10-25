@@ -36,6 +36,153 @@ REMOVED_SHARING_ENV = "ORSIM_SHARING_POLICY"
 POLICY_OVERRIDES_ENV = "ORSIM_POLICY_OVERRIDES"
 SOLVER_ENV = "ORSIM_SOLVER"
 STRUCTURE_ENV = "ORSIM_COOP_STRUCTURE"
+ORDER_LIFECYCLE_ENV = "ORSIM_ORDER_LIFECYCLE"
+#: Per-run assignment run inputs (F4 / F4b): ``--assignment-cadence`` / ``--max-orders-per-tick``.
+ASSIGNMENT_CADENCE_ENV = "ORSIM_ASSIGNMENT_CADENCE"
+MAX_ORDERS_PER_TICK_ENV = "ORSIM_MAX_ORDERS_PER_TICK"
+
+#: Valid ranges (refusal R8). The cadence is in sim steps (360 = one 240 s-step day).
+ASSIGNMENT_CADENCE_RANGE = (1, 360)
+MAX_ORDERS_PER_TICK_RANGE = (1, 20000)
+
+#: The order-lifecycle modes (``service``: one lifecycle agent, orders are data -- the
+#: default since 2026-07-29; ``agents``: the legacy per-order-agent topology).
+ORDER_LIFECYCLE_MODES = ("service", "agents")
+DEFAULT_ORDER_LIFECYCLE = "service"
+
+
+def order_lifecycle_from_env(environ):
+    """The order-lifecycle mode ``environ`` selects (``ORSIM_ORDER_LIFECYCLE``).
+
+    Unset/blank -> ``service``; an unknown value fails soft to ``service`` with a
+    warning (the sim main's long-standing behaviour). Shared by the sim main and the
+    control-plane dry run, so refusal R3 is decided on the same mode in both.
+    """
+    value = (environ or {}).get(ORDER_LIFECYCLE_ENV, "").strip().lower()
+    if not value:
+        return DEFAULT_ORDER_LIFECYCLE
+    if value in ORDER_LIFECYCLE_MODES:
+        return value
+    logging.warning("Unknown %s=%r; falling back to %r.", ORDER_LIFECYCLE_ENV, value, DEFAULT_ORDER_LIFECYCLE)
+    return DEFAULT_ORDER_LIFECYCLE
+
+
+def _bounded_int(value, *, flag, what, bounds):
+    """``value`` as an int in ``bounds`` (inclusive); ``None`` for ``None``/blank. Raises ``PolicyError`` (R8)."""
+    from apps.container_logistics.policies.framework import PolicyError
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    lo, hi = bounds
+    number = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        number = value
+    elif isinstance(value, str) and value.strip().lstrip("+").isdigit():
+        number = int(value.strip())
+    if number is None or not lo <= number <= hi:
+        raise PolicyError(f"{flag} must be an integer {what} in {lo}..{hi} (got {value!r})")
+    return number
+
+
+def parse_assignment_cadence(value, *, flag="--assignment-cadence"):
+    """``--assignment-cadence`` / ``ORSIM_ASSIGNMENT_CADENCE``: steps between dispatch ticks, or ``None``."""
+    return _bounded_int(value, flag=flag, what="step count", bounds=ASSIGNMENT_CADENCE_RANGE)
+
+
+def parse_max_orders_per_tick(value, *, flag="--max-orders-per-tick"):
+    """``--max-orders-per-tick`` / ``ORSIM_MAX_ORDERS_PER_TICK``: orders read per dispatch tick, or ``None``."""
+    return _bounded_int(value, flag=flag, what="order count", bounds=MAX_ORDERS_PER_TICK_RANGE)
+
+
+def assignment_cadence_from_env(environ):
+    """``ORSIM_ASSIGNMENT_CADENCE`` from ``environ`` (R8 on a bad value), ``None`` when unset."""
+    return parse_assignment_cadence((environ or {}).get(ASSIGNMENT_CADENCE_ENV))
+
+
+def max_orders_per_tick_from_env(environ):
+    """``ORSIM_MAX_ORDERS_PER_TICK`` from ``environ`` (R8 on a bad value), ``None`` when unset."""
+    return parse_max_orders_per_tick((environ or {}).get(MAX_ORDERS_PER_TICK_ENV))
+
+
+def apply_assignment_run_overrides(assignment_collection, *, cadence=None, max_orders=None):
+    """Patch every assignment behavior with the per-run cadence / max-orders inputs (in place).
+
+    ``cadence`` -> ``behavior["steps_per_action"]`` (the agent's dispatch gate);
+    ``max_orders`` -> ``profile["max_orders_per_tick"]`` (the manager's per-tick read cap).
+    ``None`` leaves the behavior untouched. Returns ``(cadence_steps, max_orders)`` as the
+    FIRST behavior carries them afterwards (``None`` where it has no value).
+    """
+    first = None
+    for behavior in (assignment_collection or {}).values():
+        if not isinstance(behavior, dict):
+            continue
+        if cadence is not None:
+            behavior["steps_per_action"] = int(cadence)
+        if max_orders is not None:
+            behavior.setdefault("profile", {})["max_orders_per_tick"] = int(max_orders)
+        if first is None:
+            first = behavior
+    if first is None:
+        return None, None
+    return first.get("steps_per_action"), (first.get("profile") or {}).get("max_orders_per_tick")
+
+
+#: The recipe (``GENERATION_SPEC``) keys that carry a spec-authored cadence / read cap.
+SPEC_ASSIGNMENT_CADENCE_KEY = "assignmentCadenceSteps"
+SPEC_MAX_ORDERS_PER_TICK_KEY = "maxOrdersPerTick"
+
+
+def assignment_run_input_records(effective, recipe, *, cadence=None, max_orders=None):
+    """The ``ASSIGNMENT_CADENCE`` / ``MAX_ORDERS_PER_TICK`` stamps and run-name segments of a run.
+
+    ``effective`` is ``(cadence_steps, max_orders)`` as the first assignment behavior
+    carries them AFTER :func:`apply_assignment_run_overrides`; ``recipe`` the bundle's
+    ``GENERATION_SPEC``; ``cadence`` / ``max_orders`` the per-run overrides (``None``:
+    not overridden). A record is produced only when the value was OVERRIDDEN
+    (``source: "override"``) or the spec authored it (``source: "bundle"``) -- never
+    from the value alone, so an old bundle whose engine default differs gains no key
+    (critique minor 5). Segments (``cadence:N`` / ``orders:N``) only on override.
+    Returns ``(cadence_record | None, max_orders_record | None, [segment, ...])``.
+    """
+    recipe = recipe if isinstance(recipe, dict) else {}
+    eff_cadence, eff_orders = effective
+    segments = []
+
+    def record(override, key, value, field, tag):
+        if override is not None:
+            segments.append(f"{tag}:{int(override)}")
+            return {field: int(override), "source": "override"}
+        if recipe.get(key) is not None and value is not None:
+            return {field: int(value), "source": "bundle"}
+        return None
+
+    cadence_record = record(cadence, SPEC_ASSIGNMENT_CADENCE_KEY, eff_cadence, "steps", "cadence")
+    orders_record = record(max_orders, SPEC_MAX_ORDERS_PER_TICK_KEY, eff_orders, "orders", "orders")
+    return cadence_record, orders_record, segments
+
+
+#: The assignment-profile key the sim main ships ``UNASSIGNED_ORDER_MAX_WAIT_STEPS`` under,
+#: ONLY on a run whose top declares planning (critique M11): the overdue sweep cancels an
+#: order still unassigned this many steps after its request step, and a day plan must
+#: not schedule a job past that deadline. World data (``world.get(...)``) for the
+#: planner; absent on every other run, so default profiles and bundles are unchanged.
+PLANNING_MAX_WAIT_PROFILE_KEY = "unassigned_order_max_wait_steps"
+
+
+def ship_planning_world(assignment_collection, max_wait_steps):
+    """Write :data:`PLANNING_MAX_WAIT_PROFILE_KEY` onto every assignment profile (in place).
+
+    Called by the sim main only when the bound top declares planning; ``None`` writes
+    nothing. Returns the number of profiles written.
+    """
+    if max_wait_steps is None:
+        return 0
+    n = 0
+    for behavior in (assignment_collection or {}).values():
+        if isinstance(behavior, dict):
+            behavior.setdefault("profile", {})[PLANNING_MAX_WAIT_PROFILE_KEY] = int(max_wait_steps)
+            n += 1
+    return n
 
 
 def refuse_removed_sharing_env(environ):
@@ -90,7 +237,8 @@ def known_solvers():
     assignment agent resolves against)."""
     from apps.container_logistics.policies.framework import list_policies
 
-    return tuple(spec.name for spec in list_policies("planner") if not spec.is_composite)
+    return tuple(spec.name for spec in list_policies("planner")
+                 if not spec.is_composite and not getattr(spec, "top_only", False))
 
 
 def current_policies_for_profile(profile):
@@ -302,8 +450,16 @@ def _checked_solver(solver):
         spec = get_policy_spec("planner", str(solver).strip())
     except UnknownPolicyError as exc:
         raise UnknownPolicyError(f"--solver {str(solver).strip()!r}: {exc}") from exc
+    if getattr(spec, "top_only", False):
+        # R5: a top_only policy (it plans whole days) is never a per-scope solver.
+        raise PolicyError(
+            f"planner policy {spec.name} plans whole days and must be the top of the selection "
+            "(top_only); it cannot be the inner of a decomposition or the --solver leaf. Select it "
+            f"with --policy planner={spec.name}."
+        )
     if spec.is_composite:
-        leaves = ", ".join(s.name for s in list_policies("planner") if not s.is_composite)
+        leaves = ", ".join(s.name for s in list_policies("planner")
+                           if not s.is_composite and not getattr(s, "top_only", False))
         raise PolicyError(
             f"--solver {spec.name!r} names a decomposition, not a per-scope solver. --solver "
             f"sets the inner solver ({leaves}); select a decomposition with --policy "

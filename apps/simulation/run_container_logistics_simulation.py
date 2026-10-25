@@ -12,6 +12,7 @@ its policy section to it, so a bind-time error never surfaces as a traceback and
 exit 1.
 """
 
+import json
 import logging
 import os
 import sys
@@ -21,12 +22,18 @@ from apps.container_logistics.scenario.scenario_config import default_scenario_n
 from apps.container_logistics.scenario.scenario_manager import ScenarioManager
 from apps.container_logistics.scenario.scenario_overrides import (
     REMOVED_SHARING_ENV as _REMOVED_SHARING_ENV,  # noqa: F401 - kept importable from here
+    apply_assignment_run_overrides,
     apply_cooperation_override,
+    assignment_cadence_from_env,
+    assignment_run_input_records,
     current_policies_for_profile,
     dispatch_override_label,  # noqa: F401 - re-exported (the run-name label format lives there)
+    max_orders_per_tick_from_env,
+    order_lifecycle_from_env,
     policy_overrides_from_env,
     refuse_removed_sharing_env,
     run_dispatch_overrides,
+    ship_planning_world,
     solver_from_env,
     structure_from_env,
 )
@@ -56,6 +63,9 @@ from apps.container_logistics.scenario.run_declaration import (
     FRAMEWORK_RUN_SETTINGS as _FRAMEWORK_RUN_SETTINGS,
     append_run_name_segments,
     check_run_declaration,
+    declared_planning,
+    planning_orphan_timeout,
+    planning_run_name_segment,
 )
 
 
@@ -251,7 +261,8 @@ def _first_assignment_profile(scenario_manager):
     return (behavior.get("profile") if isinstance(behavior, dict) else None) or {}
 
 
-def _apply_run_declaration(scenario_manager, tree, run_name: str | None, profile=None) -> str | None:
+def _apply_run_declaration(scenario_manager, tree, run_name: str | None, profile=None,
+                           lifecycle_mode: str | None = None) -> str | None:
     """Write the framework's ``COOPERATION``, merge the top's ``stamp_settings`` and run-name segments.
 
     The CHECK is ``scenario.run_declaration.check_run_declaration`` (pure; the
@@ -271,6 +282,11 @@ def _apply_run_declaration(scenario_manager, tree, run_name: str | None, profile
     agents at spawn (the STREAM_GEO pattern); and ``run_name_segments`` are appended
     after the legacy segments, idempotent by SEGMENT
     (``run_declaration.append_run_name_segments``).
+
+    A top that declares planning ticks (refusals R3/R4 in the check; ``lifecycle_mode``
+    is the run's resolved order-lifecycle mode, ``None`` skips R3) additionally gets
+    :func:`_apply_planning_record`: run setting ``PLANNING``, a raised
+    ``ORPHAN_TIMEOUT`` and the ``oracle:day`` segment.
     """
     from apps.container_logistics.analytics.manager import COOPERATION_SETTING
 
@@ -281,6 +297,7 @@ def _apply_run_declaration(scenario_manager, tree, run_name: str | None, profile
             tree,
             settings_keys=scenario_manager.orsim_settings,
             profile=_first_assignment_profile(scenario_manager) if profile is None else profile,
+            lifecycle_mode=lifecycle_mode,
         )
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
@@ -288,12 +305,98 @@ def _apply_run_declaration(scenario_manager, tree, run_name: str | None, profile
         _set_run_setting(scenario_manager, COOPERATION_SETTING, plan.cooperation)
     scenario_manager.orsim_settings.update(plan.settings)
     run_name = append_run_name_segments(run_name, plan.run_name_segments)
+    run_name = _apply_planning_record(scenario_manager, plan.planning, run_name)
     declaration = tree.declaration
     print(
         f"Run declaration: cross_company={len(declaration.cross_company)} pairs, "
         f"world_reads={','.join(sorted(tree.world_reads)) or '-'}"
     )
     return run_name
+
+
+def _apply_planning_record(scenario_manager, planning, run_name: str | None) -> str | None:
+    """Write a planning run's settings; return the run name with its ``oracle:day`` segment.
+
+    ``planning`` is ``RunDeclarationPlan.planning`` (``None``: the top declares no planning
+    and NOTHING is written -- every default run is unchanged). Otherwise: run setting
+    ``PLANNING`` (the declaration plus ``oracle`` and ``axis``), ``ORPHAN_TIMEOUT`` raised
+    to ``max(180, 2 * max_hold_seconds + 60)`` when the run's value is lower (a held step
+    sends no scheduler message, plan D1c), and `` · oracle:day`` when the planner reads
+    the day's orders ahead of their release.
+    """
+    if planning is None:
+        return run_name
+    _set_run_setting(scenario_manager, "PLANNING", dict(planning))
+    raised = planning_orphan_timeout(planning, scenario_manager.orsim_settings.get("ORPHAN_TIMEOUT"))
+    if raised is not None:
+        _set_run_setting(scenario_manager, "ORPHAN_TIMEOUT", raised)
+    segment = planning_run_name_segment(planning)
+    if segment:
+        run_name = append_run_name_segments(run_name, (segment,))
+    print(
+        f"Planning declared: {json.dumps(dict(planning), sort_keys=True)}"
+        + (f" ORPHAN_TIMEOUT={raised}" if raised is not None else "")
+    )
+    return run_name
+
+
+def _ship_planning_world(scenario_manager) -> None:
+    """Ship ``UNASSIGNED_ORDER_MAX_WAIT_STEPS`` into the assignment profiles of a PLANNING run.
+
+    Binds the first (post-override) assignment profile once to read the top's
+    ``Declaration.planning``; only when it is declared does every assignment profile get
+    ``scenario_overrides.PLANNING_MAX_WAIT_PROFILE_KEY`` (world data: the overdue sweep's
+    deadline, critique M11). Runs BEFORE the run-start check and the stamp, so the
+    stamped tree is bound on exactly the profile the agents receive. A default run is
+    never patched. A bind error is a ``PolicyError`` for the caller's section.
+    """
+    import copy
+
+    from apps.container_logistics.policies.dispatch.bind import bind_profile
+
+    profile = _first_assignment_profile(scenario_manager)
+    if not profile:
+        return
+    if declared_planning(bind_profile(copy.deepcopy(profile))) is None:
+        return
+    max_wait = scenario_manager.orsim_settings.get("UNASSIGNED_ORDER_MAX_WAIT_STEPS")
+    n = ship_planning_world(scenario_manager.get_agent_collection("assignment"), max_wait)
+    print(f"Planning world: unassigned_order_max_wait_steps={max_wait} on {n} assignment profile(s)")
+
+
+def _apply_assignment_run_inputs_or_exit(scenario_manager, run_name: str | None) -> str | None:
+    """``ORSIM_ASSIGNMENT_CADENCE`` / ``ORSIM_MAX_ORDERS_PER_TICK`` onto the assignment behaviors.
+
+    Refusal R8 (exit 2) for an out-of-range value. Patches each behavior's
+    ``steps_per_action`` / ``profile.max_orders_per_tick`` in memory, stamps
+    ``ASSIGNMENT_CADENCE = {steps, source}`` / ``MAX_ORDERS_PER_TICK = {orders, source}``
+    only when overridden or authored in the spec (``source: "bundle"``), and appends
+    `` · cadence:N`` / `` · orders:N`` only on override. A different cadence moves the
+    assignment agent's RNG draws: a new arm by design. Also stamps ``WORKING_HOURS``
+    (the compiled per-haulier record) when the profile carries one.
+    """
+    try:
+        cadence = assignment_cadence_from_env(os.environ)
+        max_orders = max_orders_per_tick_from_env(os.environ)
+    except PolicyError as exc:
+        _refuse_invalid_policy_config(exc)
+    collection = scenario_manager.get_agent_collection("assignment")
+    effective = apply_assignment_run_overrides(collection, cadence=cadence, max_orders=max_orders)
+    cadence_record, orders_record, segments = assignment_run_input_records(
+        effective, scenario_manager.orsim_settings.get("GENERATION_SPEC"),
+        cadence=cadence, max_orders=max_orders,
+    )
+    if cadence_record is not None:
+        _set_run_setting(scenario_manager, "ASSIGNMENT_CADENCE", cadence_record)
+        print(f"Assignment cadence: {cadence_record}")
+    if orders_record is not None:
+        _set_run_setting(scenario_manager, "MAX_ORDERS_PER_TICK", orders_record)
+        print(f"Assignment max orders per tick: {orders_record}")
+    working_hours = _first_assignment_profile(scenario_manager).get("working_hours")
+    if working_hours:
+        _set_run_setting(scenario_manager, "WORKING_HOURS", working_hours)
+        print(f"Working hours: {json.dumps(working_hours, sort_keys=True)}")
+    return append_run_name_segments(run_name, segments)
 
 
 def _resolve_order_lifecycle_mode() -> str:
@@ -303,16 +406,10 @@ def _resolve_order_lifecycle_mode() -> str:
     Mirrors ORSIM_SOLVER / ORSIM_HEADLESS: a plain env var on the sim subprocess, carried to
     the celery-hosted agents as *data* (orsim_settings + truck behavior profiles), so
     switching modes never needs a celery restart. Unknown values fail soft to the default.
+    The reader is ``scenario_overrides.order_lifecycle_from_env``, shared with the
+    control-plane dry run (refusal R3 is decided on the same mode).
     """
-    value = os.environ.get("ORSIM_ORDER_LIFECYCLE", "").strip().lower()
-    if not value:
-        return "service"
-    if value in ("agents", "service"):
-        return value
-    logging.warning(
-        "Unknown ORSIM_ORDER_LIFECYCLE=%r; falling back to 'service'.", value
-    )
-    return "service"
+    return order_lifecycle_from_env(os.environ)
 
 
 def apply_order_lifecycle_service_mode(scenario_manager, run_name: str | None) -> str | None:
@@ -443,6 +540,12 @@ def main():
         scenario_manager.orsim_settings
     )
 
+    # The order-lifecycle mode is resolved BEFORE the policy section (critique M8): the
+    # run-declaration check refuses a day-foresight planner under 'agents' (R3), and that
+    # refusal must come before anything is stamped. The mode is APPLIED further down,
+    # where it always was.
+    lifecycle_mode = _resolve_order_lifecycle_mode()
+
     # The policy section. Every refusal in it is a ``PolicyError``: the helpers exit 2
     # themselves, and the ``except`` below maps any ``PolicyError`` that still escapes
     # (a bind-time error raised outside them, final review L1) to the same exit 2 with
@@ -502,6 +605,10 @@ def main():
         _assert_policies_resolvable_or_exit(
             scenario_manager.get_agent_collection("assignment"), patched_world_keys
         )
+        # A planning top's world data (the overdue-sweep deadline), shipped only when the
+        # bound top declares planning; after the run-start check (its messages stay first)
+        # and before the stamp, so the stamped tree is bound on the profile the agents receive.
+        _ship_planning_world(scenario_manager)
         bound_tree = _stamp_effective_policies(scenario_manager, policies_overridden)
 
         # The framework's COOPERATION record (the active arm of the world's cooperation
@@ -513,8 +620,12 @@ def main():
         # and the run name is what tells two arms of one scenario apart in the picker
         # (`lib/runNameMeta.ts::parseRunNameTags`).
         run_name = _apply_run_declaration(
-            scenario_manager, bound_tree, run_name, _first_assignment_profile(scenario_manager)
+            scenario_manager, bound_tree, run_name, _first_assignment_profile(scenario_manager),
+            lifecycle_mode=lifecycle_mode,
         )
+        # Per-run assignment inputs (--assignment-cadence / --max-orders-per-tick) and the
+        # compiled WORKING_HOURS record: stamped and segmented only when they apply.
+        run_name = _apply_assignment_run_inputs_or_exit(scenario_manager, run_name)
     except PolicyError as exc:
         _refuse_invalid_policy_config(exc)
 
@@ -570,7 +681,7 @@ def main():
     # below are data-at-spawn (orsim_settings + behavior profiles), matching the HEADLESS /
     # solver-override pattern — so mode switching needs no celery restart. In ``agents`` mode
     # (the default) not one statement in this block runs and everything behaves as before.
-    lifecycle_mode = _resolve_order_lifecycle_mode()
+    # ``lifecycle_mode`` was resolved before the policy section (R3, critique M8).
     if lifecycle_mode == "service":
         run_name = apply_order_lifecycle_service_mode(scenario_manager, run_name)
     else:

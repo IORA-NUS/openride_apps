@@ -462,8 +462,13 @@ class ServiceManager:
         order_lifecycle: str | None = None,
         policy_overrides: dict | None = None,
         capture_dispatch: str | None = None,
+        assignment_cadence: str | int | None = None,
+        max_orders_per_tick: str | int | None = None,
     ) -> ActionResult:
         """Start backend deps + simulation detached; logs to simulation_log.txt.
+
+        ``assignment_cadence`` / ``max_orders_per_tick`` (already range-checked, R8) ship as
+        ``ORSIM_ASSIGNMENT_CADENCE`` / ``ORSIM_MAX_ORDERS_PER_TICK``.
 
         ``policy_overrides`` (``{slot: {type?, timing?, params?}}``, already validated by
         ``openride_control.policies``) ships as ``ORSIM_POLICY_OVERRIDES`` JSON.
@@ -506,6 +511,10 @@ class ServiceManager:
                     extra_env["ORSIM_POLICY_OVERRIDES"] = json.dumps(policy_overrides, sort_keys=True)
                 if capture_dispatch and capture_dispatch.strip():
                     extra_env["ORSIM_CAPTURE_DISPATCH"] = capture_dispatch.strip()
+                if assignment_cadence is not None and str(assignment_cadence).strip():
+                    extra_env["ORSIM_ASSIGNMENT_CADENCE"] = str(assignment_cadence).strip()
+                if max_orders_per_tick is not None and str(max_orders_per_tick).strip():
+                    extra_env["ORSIM_MAX_ORDERS_PER_TICK"] = str(max_orders_per_tick).strip()
                 proc = spawn_simulation_process(extra_env=extra_env or None, background=True)
                 self.processes[SIMULATION_PROCESS_KEY] = proc
                 time.sleep(2)

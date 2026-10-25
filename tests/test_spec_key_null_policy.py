@@ -95,6 +95,8 @@ _SENTINELS = {
     "facilityRules": [{"match": {"code": "CT"}, "set": {"gate_count": 6}}],
     "facilityRulesWorld": {"site_digest": "blake2b16:1111111111111111",
                            "facility_count": 30, "code_counts": {"CT": 6}},
+    "assignmentCadenceSteps": 12,
+    "maxOrdersPerTick": 900,
 }
 
 

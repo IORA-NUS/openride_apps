@@ -85,8 +85,14 @@ class SimulationRunner:
         cooperation_structure: Optional[str] = None,
         policy_overrides: Optional[dict] = None,
         capture_dispatch: Optional[str] = None,
+        assignment_cadence: Optional[int] = None,
+        max_orders_per_tick: Optional[int] = None,
     ) -> None:
         self.scenario = scenario
+        # Already range-checked (control.validate_assignment_run_inputs, R8); ship as
+        # ORSIM_ASSIGNMENT_CADENCE / ORSIM_MAX_ORDERS_PER_TICK.
+        self.assignment_cadence = assignment_cadence
+        self.max_orders_per_tick = max_orders_per_tick
         self.solver = solver
         # Already validated (openride_control.policies); ships as ORSIM_POLICY_OVERRIDES.
         self.policy_overrides = policy_overrides or None
@@ -136,6 +142,10 @@ class SimulationRunner:
             env["ORSIM_CAPTURE_DISPATCH"] = self.capture_dispatch
         if self.cooperation_structure:
             env["ORSIM_COOP_STRUCTURE"] = self.cooperation_structure
+        if self.assignment_cadence is not None:
+            env["ORSIM_ASSIGNMENT_CADENCE"] = str(int(self.assignment_cadence))
+        if self.max_orders_per_tick is not None:
+            env["ORSIM_MAX_ORDERS_PER_TICK"] = str(int(self.max_orders_per_tick))
         if self.headless:
             env["ORSIM_HEADLESS"] = "1"
         return env
