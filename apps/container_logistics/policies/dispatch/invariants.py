@@ -56,7 +56,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Iterable, Mapping
 
-from .result import Result
+from .result import PREFETCH_MAX, Result
 
 if TYPE_CHECKING:
     from .tick import Tick
@@ -231,7 +231,10 @@ def normalise_result(result: Any, *, strict: bool = False) -> tuple[Any, list[st
     - ``pairs`` are exact ``(str, str)`` tuples, a malformed pair replaced by its ``repr``;
     - ``solver_notes`` keys are plain ``(str, str)`` tuples and values plain ``dict`` objects
       with ``str`` keys (a malformed key or note replaced by its ``repr``);
-    - ``tick_notes`` a plain ``dict`` with ``str`` keys.
+    - ``tick_notes`` a plain ``dict`` with ``str`` keys;
+    - ``prefetch`` a tuple of exact ``str`` order ids, first occurrence kept
+      (:func:`_plain_prefetch`; a malformed entry or more than ``PREFETCH_MAX`` ids is an
+      R7 problem when ``strict``).
 
     ``strict`` (the runner, for the whole tick): every note value must be plain JSON; a
     solver note value that is not is replaced by a marker :func:`check_wire_notes` reports,
@@ -265,7 +268,39 @@ def normalise_result(result: Any, *, strict: bool = False) -> tuple[Any, list[st
     elif failures:
         problems.extend(f"tick_notes[{k!r}] is not plain JSON ({reason})" for k, reason in failures)
         tick_notes = {}
-    return Result(pairs=pairs, solver_notes=notes, tick_notes=tick_notes), problems
+    prefetch, prefetch_problems = _plain_prefetch(getattr(result, "prefetch", ()))
+    if strict:
+        problems.extend(prefetch_problems)
+    return Result(pairs=pairs, solver_notes=notes, tick_notes=tick_notes, prefetch=prefetch), problems
+
+
+def _plain_prefetch(value: Any) -> tuple[tuple[str, ...], list[str]]:
+    """``value`` as a tuple of exact ``str`` order ids (first occurrence kept), plus R7 problems.
+
+    Only exact ``str`` entries are kept (a ``str`` subclass could read as one id now and
+    another at the fetch); a malformed entry, a value that is not a tuple, or more than
+    ``PREFETCH_MAX`` distinct ids is a problem (message 18 at the top; a sub-tick's
+    prefetch is only copied, its problems are not reported). The kept ids are returned
+    either way, so a non-strict caller still sees the clean subset.
+    """
+    if value is None:
+        return (), []
+    if type(value) is not tuple:
+        return (), [f"prefetch {_shown(value)!r} is not a sequence of order id strings"]
+    if not value:
+        return (), []
+    problems: list[str] = []
+    kept: dict[str, None] = {}
+    for entry in value:
+        if type(entry) is str and entry:
+            kept.setdefault(entry, None)
+        else:
+            problems.append(f"prefetch entry {_shown(entry)!r} is not an order id string")
+            if len(problems) >= 8:
+                break
+    if len(kept) > PREFETCH_MAX:
+        problems.append(f"prefetch names {len(kept)} ids, more than the cap {PREFETCH_MAX}")
+    return tuple(kept), problems
 
 
 def check_result(result: Any, tick: "Tick", *, permitted: Any = None, index: Any = None,
