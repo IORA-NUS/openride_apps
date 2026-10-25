@@ -26,7 +26,13 @@ after another), the path is:
   or a chain tail. A greedy fallback that still serves below the guard threshold of the
   served reference refuses the solve (``poor_incumbent``) so the caller keeps its plan.
 
-Arcs come from :func:`coop_dispatch.time_window_edges.build_time_window_edges`, with the
+Identical trucks (same class, EXACT position, same ready time) are one start node of
+``capacity`` = their count (coop_dispatch E2; N0: exact, and rounding the key broke
+reachability), so the arc count no longer scales with every parked truck. Its chains go
+back to member trucks deterministically: a chain whose first job a member headed in the
+previous version stays with that member, the rest go out in truck-id order.
+
+Arcs come from :func:`coop_dispatch.time_window_edges.build_time_window_arrays`, with the
 per-job late slack the builder cannot take as a scalar applied exactly (see
 :func:`_component_arcs`). Previous-version arcs get the ``stability_bonus_m`` discount
 (N0: 1,975 -> 73 jobs moved for +0.2 km); costs stay integer metres, so the flow stays
@@ -50,20 +56,27 @@ EXIT_OK, EXIT_CRASH, EXIT_OOM = 0, 1, 3
 BACKENDS = ("auto", "mincostflow", "mip", "greedy")
 
 
-def _twe():
-    """``time_window_edges`` without OR-Tools when need be: the package ``__init__`` of
-    ``coop_dispatch`` imports the MIP (ortools) eagerly, the module itself only numpy."""
+def _standalone(name: str):
+    """``coop_dispatch.<name>`` without OR-Tools when need be: the package ``__init__``
+    imports the MIP (ortools) eagerly, while ``time_window_edges`` (numpy) and ``limits``
+    (stdlib) do not need it; on ImportError the module is loaded from its file."""
     try:
-        from ..coop_dispatch import time_window_edges as twe
-        return twe
+        return importlib.import_module(f"{__package__.rsplit('.', 1)[0]}.coop_dispatch.{name}")
     except ImportError:
+        key = f"_day_plan_coop_{name}"
+        if key in sys.modules:
+            return sys.modules[key]
         path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                            "coop_dispatch", "time_window_edges.py")
-        spec = importlib.util.spec_from_file_location("_day_plan_time_window_edges", path)
+                            "coop_dispatch", f"{name}.py")
+        spec = importlib.util.spec_from_file_location(key, path)
         mod = importlib.util.module_from_spec(spec)
-        sys.modules[spec.name] = mod
+        sys.modules[key] = mod
         spec.loader.exec_module(mod)
         return mod
+
+
+def _twe():
+    return _standalone("time_window_edges")
 
 
 # ----------------------------------------------------------------------------- arcs
@@ -73,33 +86,51 @@ _NO_SUCC = 1e15  # an end no release reaches: the job gets no successors in that
 _START_CHUNK = 200
 
 
+def _merge_trucks(trucks: list[dict]) -> tuple[list[dict], dict]:
+    """E2: identical trucks (same class, EXACT loc and ready time) -> one start of capacity c.
+    Returns (starts, members): starts carry id = smallest member id, members[sid] = sorted ids."""
+    groups: dict = {}
+    for t in sorted(trucks, key=lambda x: x["id"]):
+        groups.setdefault((t["class"], tuple(t["loc"]), float(t["ready_s"])), []).append(t)
+    starts, members = [], {}
+    for (cls, loc, ready), ts in groups.items():
+        sid = ts[0]["id"]
+        starts.append({"id": sid, "class": cls, "ready_s": ready, "loc": list(loc), "capacity": len(ts)})
+        members[sid] = [t["id"] for t in ts]
+    starts.sort(key=lambda x: x["id"])
+    return starts, members
+
+
 def _component_arcs(inputs: Mapping[str, Any], jobs: list[dict], trucks: list[dict], *,
                     k_succ, k_start) -> dict[str, Any]:
-    """Job->job and truck->job arcs of one component, with their true costs (m).
+    """Job->job and start->job arcs of one component as index arrays, with true costs (m).
+
+    ``src`` / ``dst`` index ``jobs``; ``ssrc`` indexes ``trucks`` (the merged starts of
+    :func:`_merge_trucks`, or unit trucks on the greedy path); ``sdst`` indexes ``jobs``.
 
     Rule (plan D3, per-job late slack ``s_i`` from the time model, design §6a):
     i -> j iff ``e_i - s_i <= r_j <= e_i + W``, ``(e_j, j) > (e_i, i)`` (the builder's DAG
-    order) and some class may serve both; truck t -> j iff j is eligible for t's class,
+    order) and some class may serve both; start t -> j iff j is eligible for t's class,
     ``r_j >= ready_t - s_j`` and (when set) travel <= ``max_reposition_s``.
 
     The builder takes ONE late slack, so it is called once per distinct slack value: the
     jobs of that value keep their end and get successors under exactly their slack, every
-    other job gets an end no release reaches (so it has no successors in that call, and,
-    as a target, the true DAG order is re-applied here). The union over the calls is the
-    exact arc set, with no widened window; each call's dicts are freed before the next.
-    Start arcs come from calls in which every job has that unreachable end (no job arcs
-    at all), :data:`_START_CHUNK` trucks at a time. K caps (``_keep_k``, the builder's own
-    rule) apply to the final set only, so a cap never spends its K on a rejected arc.
+    other job gets an end no release reaches (no successors in that call; as a target the
+    true DAG order is re-applied here). The union over the calls is the exact arc set.
+    Start arcs come from calls in which every job has that unreachable end,
+    :data:`_START_CHUNK` starts at a time. K caps (``_keep_k``, the builder's own rule)
+    apply to the final set only. Built with ``build_time_window_arrays`` (no per-arc
+    Python objects, coop_dispatch E2).
     """
     twe = _twe()
     p = inputs["params"]
     W = float(p["wait_limit_min"]) * 60.0
     travel = twe.haversine_travel(speed_kmh=float(p["speed_kmh"]), detour=float(p["detour"]))
     n = len(jobs)
-    out = {"edges": [], "edge_cost": {}, "start_edges": [], "start_cost": {}}
+    z_i, z_f = np.zeros(0, dtype=np.int64), np.zeros(0, dtype=float)
+    out = {"src": z_i, "dst": z_i, "cost": z_f, "ssrc": z_i, "sdst": z_i, "scost": z_f}
     if n == 0:
         return out
-    ids = [j["id"] for j in jobs]
     r = np.array([j["r"] for j in jobs], dtype=float)
     e = np.array([j["e"] for j in jobs], dtype=float)
     s = np.array([j["slack"] for j in jobs], dtype=float)
@@ -114,35 +145,26 @@ def _component_arcs(inputs: Mapping[str, Any], jobs: list[dict], trucks: list[di
         return [twe.Job(id=k, release_s=j["r"], end_s=float(ends[k]), pickup=pts[k][0], dropoff=pts[k][1])
                 for k, j in enumerate(jobs)]
 
-    # ---- job -> job, one builder call per slack value ----
     S, D, C = [], [], []
     for sv in np.unique(s).tolist():
         grp = s == sv
         ends = np.where(grp, e, _NO_SUCC)
-        built = twe.build_time_window_edges(job_list(ends), [], travel, wait_limit_s=W, late_slack_s=sv)
-        m = len(built.edges)
-        if m:
-            src = np.fromiter((a for a, _ in built.edges), dtype=np.int64, count=m)
-            dst = np.fromiter((b for _, b in built.edges), dtype=np.int64, count=m)
-            cost = np.fromiter((built.edge_cost[x] for x in built.edges), dtype=float, count=m)
-            S.append(src); D.append(dst); C.append(cost)
+        built = twe.build_time_window_arrays(job_list(ends), [], travel, wait_limit_s=W, late_slack_s=sv)
+        if built.src.size:
+            S.append(built.src); D.append(built.dst); C.append(built.cost)
         del built
     if S:
         src, dst, cost = np.concatenate(S), np.concatenate(D), np.concatenate(C)
         del S, D, C
-        keep = (e[dst] > e[src]) | ((e[dst] == e[src]) & (dst > src))   # the true DAG order
-        keep &= (mask[src] & mask[dst]) != 0                             # a class serves both
+        keep = (e[dst] > e[src]) | ((e[dst] == e[src]) & (dst > src))
+        keep &= (mask[src] & mask[dst]) != 0
         src, dst, cost = src[keep], dst[keep], cost[keep]
         if k_succ is not None and src.size:
             m = twe._keep_k(src, cost, dst, k_succ) | twe._keep_k(dst, cost, src, k_succ)
             src, dst, cost = src[m], dst[m], cost[m]
         order = np.lexsort((dst, src))
-        src, dst, cost = src[order].tolist(), dst[order].tolist(), cost[order].tolist()
-        edges = [(ids[a], ids[b]) for a, b in zip(src, dst)]
-        out["edges"] = edges
-        out["edge_cost"] = dict(zip(edges, cost))
+        out.update(src=src[order], dst=dst[order], cost=cost[order])
 
-    # ---- truck -> job ----
     if trucks:
         no_succ = job_list(np.full(n, _NO_SUCC))
         ready = np.array([t["ready_s"] for t in trucks], dtype=float)
@@ -151,14 +173,11 @@ def _component_arcs(inputs: Mapping[str, Any], jobs: list[dict], trucks: list[di
         for lo in range(0, len(trucks), _START_CHUNK):
             chunk = [twe.Start(id=("t", k), ready_s=trucks[k]["ready_s"], location=tuple(trucks[k]["loc"]))
                      for k in range(lo, min(lo + _START_CHUNK, len(trucks)))]
-            built = twe.build_time_window_edges(no_succ, chunk, travel, wait_limit_s=0.0, late_slack_s=0.0,
-                                                max_reposition_s=p.get("max_reposition_s"),
-                                                start_late_slack_s=float(s.max()))
-            m = len(built.start_edges)
-            if m:
-                ss = np.fromiter((a[1] for a, _ in built.start_edges), dtype=np.int64, count=m)
-                sd = np.fromiter((b for _, b in built.start_edges), dtype=np.int64, count=m)
-                sc = np.fromiter((built.start_edge_cost[x] for x in built.start_edges), dtype=float, count=m)
+            built = twe.build_time_window_arrays(no_succ, chunk, travel, wait_limit_s=0.0, late_slack_s=0.0,
+                                                 max_reposition_s=p.get("max_reposition_s"),
+                                                 start_late_slack_s=float(s.max()))
+            if built.ssrc.size:
+                ss, sd, sc = built.ssrc + lo, built.sdst, built.scost
                 keep = (r[sd] >= ready[ss] - s[sd]) & (((mask[sd] >> tcls[ss]) & 1) == 1)
                 SS.append(ss[keep]); SD.append(sd[keep]); SC.append(sc[keep])
             del built
@@ -168,10 +187,7 @@ def _component_arcs(inputs: Mapping[str, Any], jobs: list[dict], trucks: list[di
                 m = twe._keep_k(ss, sc, sd, k_start) | twe._keep_k(sd, sc, ss, k_start)
                 ss, sd, sc = ss[m], sd[m], sc[m]
             order = np.lexsort((sd, ss))
-            ss, sd, sc = ss[order].tolist(), sd[order].tolist(), sc[order].tolist()
-            sedges = [(trucks[a]["id"], ids[b]) for a, b in zip(ss, sd)]
-            out["start_edges"] = sedges
-            out["start_cost"] = dict(zip(sedges, sc))
+            out.update(ssrc=ss[order], sdst=sd[order], scost=sc[order])
     return out
 
 
@@ -201,8 +217,24 @@ def _component_params(inputs, comp, jobs, trucks, arcs) -> dict[str, Any]:
     vehicleless = [c for c in comp if c not in vehicled]
     bonus = float(p.get("stability_bonus_m") or 0.0)
     prev = {tuple(a) for a in inputs.get("prev_arcs", ())} if bonus else set()
-    edge_cost = {k: (v - bonus if k in prev else v) for k, v in arcs["edge_cost"].items()}
-    start_cost = {k: (v - bonus if k in prev else v) for k, v in arcs["start_cost"].items()}
+    jid = [j["id"] for j in jobs]
+    ecost = arcs["cost"].copy()
+    scost = arcs["scost"].copy()
+    if prev:
+        jpos = {x: k for k, x in enumerate(jid)}
+        n = max(len(jid), 1)
+        pe = np.array([jpos[a] * n + jpos[b] for a, b in prev if a in jpos and b in jpos], dtype=np.int64)
+        if pe.size:
+            ecost[np.isin(arcs["src"] * n + arcs["dst"], pe)] -= bonus
+        # a merged start gets the bonus if ANY member truck had the arc
+        mem = inputs.get("_members", {})
+        tpos = {}
+        for k, t in enumerate(trucks):
+            for tid in mem.get(t["id"], [t["id"]]):
+                tpos[tid] = k
+        ps = np.array([tpos[a] * n + jpos[b] for a, b in prev if a in tpos and b in jpos], dtype=np.int64)
+        if ps.size:
+            scost[np.isin(arcs["ssrc"] * n + arcs["sdst"], ps)] -= bonus
     eligible = set()
     for j in jobs:
         ec = set(j["classes"]) & cset
@@ -220,14 +252,11 @@ def _component_params(inputs, comp, jobs, trucks, arcs) -> dict[str, Any]:
         "order_owner": {j["id"]: j["owner_class"] for j in jobs},
         "cooperation": {(a, b) for a, b in inputs["cooperation"] if a in cset and b in cset},
         "vehicle_limit": {c: 0 for c in comp},
-        "edges_input": list(arcs["edges"]),
-        "edge_cost_input": edge_cost,
-        "edge_trailer_cost_input": {k: 0 for k in arcs["edges"]},
+        "edges_array": {"src": arcs["src"], "dst": arcs["dst"], "cost": ecost},
         "raw_cost": 0,
         "use_trailer_cost": False,
-        "start_nodes": {t["id"]: {"company": t["class"]} for t in trucks},
-        "start_edges": list(arcs["start_edges"]),
-        "start_edge_cost": start_cost,
+        "start_nodes": {t["id"]: {"company": t["class"], "capacity": t.get("capacity", 1)} for t in trucks},
+        "start_edges_array": {"src": arcs["ssrc"], "dst": arcs["sdst"], "cost": scost},
         "defer_penalty": float(p["defer_penalty_km"]) * 1000.0,
         "eligible": eligible,
         "class_attrs": _class_attrs(inputs, comp, trucks),
@@ -284,15 +313,32 @@ def _greedy(params: Mapping[str, Any], jobs: list[dict]) -> dict[str, list]:
 # ---------------------------------------------------------------------------- solve
 
 
-def _true_km(chains: Mapping[Any, list], arcs) -> tuple[dict, float]:
+def _true_km(chains: Mapping[Any, list], arcs, jobs=None, trucks=None, members=None) -> tuple[dict, float]:
+    jpos = {j["id"]: k for k, j in enumerate(jobs)}
+    n = max(len(jobs), 1)
+    ekey = arcs["src"] * n + arcs["dst"]
+    eo = np.argsort(ekey); ek = ekey[eo]
+    skey = arcs["ssrc"] * n + arcs["sdst"]
+    so = np.argsort(skey); sk = skey[so]
+    spos = {}
+    for k, t in enumerate(trucks):
+        for tid in (members or {}).get(t["id"], [t["id"]]):
+            spos[tid] = k
+
+    def look(keys, order, sorted_keys, cost, key):
+        i = int(np.searchsorted(sorted_keys, key))
+        if i >= sorted_keys.size or sorted_keys[i] != key:
+            raise RuntimeError("a planned chain uses an arc that is not in the arc set")
+        return float(cost[order[i]])
+
     first, total = {}, 0.0
-    for sid, chain in chains.items():
+    for tid, chain in chains.items():
         if not chain:
             continue
-        first[sid] = arcs["start_cost"][(sid, chain[0])]
-        total += first[sid]
+        first[tid] = look(skey, so, sk, arcs["scost"], spos[tid] * n + jpos[chain[0]])
+        total += first[tid]
         for a, b in zip(chain, chain[1:]):
-            total += arcs["edge_cost"][(a, b)]
+            total += look(ekey, eo, ek, arcs["cost"], jpos[a] * n + jpos[b])
     return first, total
 
 
@@ -340,13 +386,15 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
         t0 = time.time()
         caps = ((p.get("k_succ"), p.get("k_start")) if path != "mip"
                 else (p.get("mip_k_succ"), p.get("mip_k_start")))
-        arcs = _component_arcs(inputs, jobs, trucks, k_succ=caps[0], k_start=caps[1])
-        params = _component_params(inputs, comp, jobs, trucks, arcs)
+        starts, members = _merge_trucks(trucks)
+        arcs = _component_arcs(inputs, jobs, starts, k_succ=caps[0], k_start=caps[1])
+        params = _component_params(dict(inputs, _members=members), comp, jobs, starts, arcs)
+        row["starts"] = len(starts)
         b_ms = (time.time() - t0) * 1000.0
         build_ms += b_ms
-        n_arcs += len(arcs["edges"])
-        n_start += len(arcs["start_edges"])
-        row.update(arcs=len(arcs["edges"]), start_arcs=len(arcs["start_edges"]), build_ms=round(b_ms, 1))
+        n_arcs += int(arcs["src"].size)
+        n_start += int(arcs["ssrc"].size)
+        row.update(arcs=int(arcs["src"].size), start_arcs=int(arcs["ssrc"].size), build_ms=round(b_ms, 1))
         t1 = time.time()
         chains = None
         fallback = None
@@ -374,18 +422,40 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
                 elif crow.get("guard", {}).get("ok") is False:
                     fallback = "poor_incumbent"
                 else:
-                    ch = extract_chains(result, params["start_nodes"])
+                    order = [j["id"] for j in sorted(jobs, key=lambda x: (x["r"], x["id"]))]
+                    ch = extract_chains(result, params["start_nodes"], job_order=order)
                     if ch.orphaned or ch.depot:
                         raise RuntimeError(f"component {comp}: chains not rooted at trucks "
                                            f"(orphaned {ch.orphaned[:5]}, depot {list(ch.depot)[:5]})")
-                    chains = ch.by_start
+                    prev_head = {}
+                    for x, y in inputs.get("prev_arcs", ()):
+                        prev_head.setdefault(y, set()).add(x)
+                    chains = {}
+                    for sid, lst in ch.chains_by_start.items():
+                        free = list(members[sid])
+                        rest = []
+                        for chain in lst:  # a chain keeps the member that headed it last version
+                            mine = [t for t in free if t in prev_head.get(chain[0], ())]
+                            if mine:
+                                chains[mine[0]] = chain
+                                free.remove(mine[0])
+                            else:
+                                rest.append(chain)
+                        for tid, chain in zip(free, rest + [[]] * (len(free) - len(rest))):
+                            chains[tid] = chain
                     if path == "mip" and result.get("status") != bk.OPTIMAL:
                         deterministic = False
         if chains is None:
             if fallback is not None:
                 row["fallback"] = fallback
                 path = "greedy"
-            chains = _greedy(params, jobs) if jobs else {t["id"]: [] for t in trucks}
+            # greedy works on UNIT trucks and lists (one chain per truck): rebuild the arcs
+            # once without merging and use them both for greedy and for the km below
+            starts, members = trucks, {t["id"]: [t["id"]] for t in trucks}
+            arcs = _component_arcs(inputs, jobs, trucks, k_succ=caps[0], k_start=caps[1])
+            uparams = _standalone("limits").arrays_to_lists(
+                _component_params(inputs, comp, jobs, trucks, arcs))
+            chains = _greedy(uparams, jobs) if jobs else {t["id"]: [] for t in trucks}
             if fallback is not None and backend != "greedy":
                 served = sum(len(c) for c in chains.values())
                 ref = bk.served_reference(params)
@@ -402,7 +472,7 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
         solve_ms += s_ms
         row.update(backend=path, reason=why, solve_ms=round(s_ms, 1),
                    planned=sum(len(c) for c in chains.values()))
-        first, km = _true_km(chains, arcs)
+        first, km = _true_km(chains, arcs, jobs, starts, members)
         empty_m += km
         first_leg_m.update(first)
         row["empty_m"] = round(km, 1)
