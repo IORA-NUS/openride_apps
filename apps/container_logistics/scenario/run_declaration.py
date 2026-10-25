@@ -82,6 +82,10 @@ __all__ = [
     "planning_orphan_timeout",
     "PLANNING_HOLD_CAP_SECONDS",
     "PLANNING_AXIS",
+    "PLANNING_CADENCE_PROFILE_KEY",
+    "ship_planning_cadence",
+    "planning_cadence_mismatches",
+    "axis_explicit_record",
     "FRAMEWORK_SEGMENT_PREFIXES",
     "append_run_name_segments",
     "cooperation_record",
@@ -185,6 +189,77 @@ PLANNING_HOLD_CAP_SECONDS = 300
 #: The time axis day boundaries and working hours are measured on: seconds ELAPSED since
 #: ``REFERENCE_TIME`` (the axis the demand curve is authored on; plan D5).
 PLANNING_AXIS = "elapsed"
+
+#: The assignment-profile key the sim main ships the run's EFFECTIVE dispatch cadence
+#: under -- the ``steps_per_action`` the assignment agent actually gates its dispatch
+#: ticks on, after any ``--assignment-cadence`` / ``ORSIM_ASSIGNMENT_CADENCE`` override
+#: (review M1: a plan built for a 6-step cadence on a run that dispatches every 28 steps
+#: is a different arm than stamped). Like ``unassigned_order_max_wait_steps``: world data
+#: (``world.get(...)``), written ONLY when the bound top declares planning, absent on
+#: every other run, so default profiles and bundles are unchanged.
+PLANNING_CADENCE_PROFILE_KEY = "assignment_cadence_steps"
+
+#: What the assignment agent gates on when a behavior carries no ``steps_per_action``
+#: (``AssignmentAgent.step``: ``behavior.get("steps_per_action", 1)``).
+_AGENT_DEFAULT_STEPS_PER_ACTION = 1
+
+
+def _applied_cadence(behavior: Mapping[str, Any], cadence_override: Any = None) -> int:
+    if cadence_override is not None:
+        return int(cadence_override)
+    return int(behavior.get("steps_per_action", _AGENT_DEFAULT_STEPS_PER_ACTION))
+
+
+def ship_planning_cadence(assignment_collection: Any, cadence_override: Any = None) -> int:
+    """Write :data:`PLANNING_CADENCE_PROFILE_KEY` onto every assignment profile (in place).
+
+    The value is the cadence each behavior WILL run at: ``cadence_override`` (the per-run
+    override, which ``apply_assignment_run_overrides`` writes onto every behavior) or the
+    behavior's own ``steps_per_action``. Called by the sim main only when the bound top
+    declares planning. Returns the number of profiles written.
+    """
+    n = 0
+    for behavior in (assignment_collection or {}).values():
+        if isinstance(behavior, dict):
+            behavior.setdefault("profile", {})[PLANNING_CADENCE_PROFILE_KEY] = _applied_cadence(
+                behavior, cadence_override)
+            n += 1
+    return n
+
+
+def planning_cadence_mismatches(assignment_collection: Any) -> list[tuple[str, Any, int]]:
+    """``(agent_id, shipped, applied)`` for every profile whose shipped cadence is not the applied one.
+
+    Only profiles that CARRY the key are checked (a default run carries none). Run after the
+    per-run overrides are applied: the shipped value must be what the agent gates on.
+    """
+    out = []
+    for agent_id, behavior in (assignment_collection or {}).items():
+        if not isinstance(behavior, dict):
+            continue
+        profile = behavior.get("profile") or {}
+        if PLANNING_CADENCE_PROFILE_KEY not in profile:
+            continue
+        shipped, applied = profile[PLANNING_CADENCE_PROFILE_KEY], _applied_cadence(behavior)
+        if shipped != applied:
+            out.append((str(agent_id), shipped, applied))
+    return out
+
+
+def axis_explicit_record(record: Mapping[str, Any], reference_time: Any = None) -> dict[str, Any]:
+    """A ``PLANNING`` / ``WORKING_HOURS`` stamp with its time axis spelled out (review minor 9).
+
+    ``axis`` is ``"elapsed"`` (seconds since ``REFERENCE_TIME``, NOT the sim wall clock:
+    06:00-20:00 elapsed is 14:00-04:00 on the clock face when ``REFERENCE_TIME`` is
+    08:00); ``axis_origin`` names that reference time when the run has one. A copy: the
+    profile record the agents read is not touched.
+    """
+    out = {str(k): v for k, v in record.items()}
+    out.setdefault("axis", PLANNING_AXIS)
+    if reference_time is not None and str(reference_time).strip():
+        out.setdefault("axis_origin", str(reference_time))
+    return out
+
 
 #: ``ORPHAN_TIMEOUT`` (s) the agents use when the run sets none (``openride_agent.py``).
 DEFAULT_ORPHAN_TIMEOUT = 180

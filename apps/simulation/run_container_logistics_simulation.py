@@ -63,9 +63,13 @@ from apps.container_logistics.scenario.run_declaration import (
     FRAMEWORK_RUN_SETTINGS as _FRAMEWORK_RUN_SETTINGS,
     append_run_name_segments,
     check_run_declaration,
+    axis_explicit_record,
     declared_planning,
+    PLANNING_CADENCE_PROFILE_KEY,
+    planning_cadence_mismatches,
     planning_orphan_timeout,
     planning_run_name_segment,
+    ship_planning_cadence,
 )
 
 
@@ -326,7 +330,8 @@ def _apply_planning_record(scenario_manager, planning, run_name: str | None) -> 
     """
     if planning is None:
         return run_name
-    _set_run_setting(scenario_manager, "PLANNING", dict(planning))
+    _set_run_setting(scenario_manager, "PLANNING", axis_explicit_record(
+        planning, scenario_manager.orsim_settings.get("REFERENCE_TIME")))
     raised = planning_orphan_timeout(planning, scenario_manager.orsim_settings.get("ORPHAN_TIMEOUT"))
     if raised is not None:
         _set_run_setting(scenario_manager, "ORPHAN_TIMEOUT", raised)
@@ -360,8 +365,32 @@ def _ship_planning_world(scenario_manager) -> None:
     if declared_planning(bind_profile(copy.deepcopy(profile))) is None:
         return
     max_wait = scenario_manager.orsim_settings.get("UNASSIGNED_ORDER_MAX_WAIT_STEPS")
-    n = ship_planning_world(scenario_manager.get_agent_collection("assignment"), max_wait)
+    collection = scenario_manager.get_agent_collection("assignment")
+    n = ship_planning_world(collection, max_wait)
     print(f"Planning world: unassigned_order_max_wait_steps={max_wait} on {n} assignment profile(s)")
+    # Review M1: the cadence the dispatch ticks will REALLY run at, i.e. after the
+    # --assignment-cadence override that _apply_assignment_run_inputs_or_exit applies
+    # later (it must be on the profile before the stamp binds it); that function's
+    # cross-check (_check_planning_cadence) pins the two together. R8 on a bad value.
+    cadence = assignment_cadence_from_env(os.environ)
+    n = ship_planning_cadence(collection, cadence)
+    shipped = sorted({(b.get("profile") or {}).get(PLANNING_CADENCE_PROFILE_KEY)
+                      for b in collection.values() if isinstance(b, dict)})
+    print(f"Planning world: {PLANNING_CADENCE_PROFILE_KEY}={','.join(map(str, shipped))} "
+          f"on {n} assignment profile(s)" + (" (override)" if cadence is not None else ""))
+
+
+def _check_planning_cadence(scenario_manager) -> None:
+    """The shipped planning cadence must equal the applied ``steps_per_action`` (PolicyError if not).
+
+    A no-op on every run that shipped none (no planning declared).
+    """
+    bad = planning_cadence_mismatches(scenario_manager.get_agent_collection("assignment"))
+    if bad:
+        raise PolicyError(
+            f"internal: the planning cadence shipped to the assignment profile(s) is not the cadence "
+            f"applied to their behavior(s) (agent, shipped, applied): {bad}"
+        )
 
 
 def _apply_assignment_run_inputs_or_exit(scenario_manager, run_name: str | None) -> str | None:
@@ -392,8 +421,10 @@ def _apply_assignment_run_inputs_or_exit(scenario_manager, run_name: str | None)
     if orders_record is not None:
         _set_run_setting(scenario_manager, "MAX_ORDERS_PER_TICK", orders_record)
         print(f"Assignment max orders per tick: {orders_record}")
+    _check_planning_cadence(scenario_manager)
     working_hours = _first_assignment_profile(scenario_manager).get("working_hours")
     if working_hours:
+        working_hours = axis_explicit_record(working_hours, scenario_manager.orsim_settings.get("REFERENCE_TIME"))
         _set_run_setting(scenario_manager, "WORKING_HOURS", working_hours)
         print(f"Working hours: {json.dumps(working_hours, sort_keys=True)}")
     return append_run_name_segments(run_name, segments)
