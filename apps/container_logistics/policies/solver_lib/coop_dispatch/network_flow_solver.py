@@ -13,15 +13,28 @@ _STATUS_NAMES = {0: "OPTIMAL", 1: "FEASIBLE", 2: "INFEASIBLE", 3: "UNBOUNDED",
                  4: "ABNORMAL", 5: "MODEL_INVALID", 6: "NOT_SOLVED"}
 
 
+def start_capacity(spec, sid=None) -> int:
+    """A start node's ``capacity`` (default 1): how many chains it may head (OpenRide).
+
+    A start node of capacity c stands for c interchangeable trucks (same class, same
+    position, same ready time); its out-flow is <= c.
+    """
+    cap = spec.get("capacity", 1)
+    if isinstance(cap, bool) or not isinstance(cap, int) or cap < 1:
+        raise ValueError(f"start node {sid!r}: capacity must be an int >= 1 (got {cap!r})")
+    return cap
+
+
 class NetworkFlowSolver(BaseSolver):
     """Classic network-flow solver.
 
     OpenRide options (VENDOR.md), all default off; with none of them the model, its
     constraint order and the returned result/stats are exactly upstream's:
 
-    - ``start_nodes`` {sid: {"company": c}} + ``start_edges`` [(sid, order)] +
-      ``start_edge_cost`` {(sid, order): m}: per-truck sources of capacity 1 inside the
-      company's commodity; such a company has no depot start arcs and no vehicle limit.
+    - ``start_nodes`` {sid: {"company": c, "capacity": k (default 1)}} + ``start_edges``
+      [(sid, order)] + ``start_edge_cost`` {(sid, order): m}: truck sources of capacity k
+      inside the company's commodity; such a company has no depot start arcs and no
+      vehicle limit.
     - ``defer_penalty`` P: an order may stay unplanned at cost P (result ``unplanned``).
     - ``eligible`` {(order, company)}: only these pairs may serve.
     - ``time_limit_s`` / ``mip_gap`` / ``accept_feasible``.
@@ -176,7 +189,7 @@ class NetworkFlowSolver(BaseSolver):
             solver.Add(into_end <= vehicle_limit[c])
 
         for sid, outs in sn_out.items():
-            solver.Add(solver.Sum(outs) <= 1)
+            solver.Add(solver.Sum(outs) <= start_capacity(start_nodes[sid], sid))
 
         if use_trailer_cost:
             objective = solver.Sum(
@@ -341,6 +354,7 @@ class NetworkFlowSolver(BaseSolver):
                 raise ValueError(f"start node id {sid!r} collides with an order id or a depot")
             if spec.get("company") not in company_set:
                 raise ValueError(f"start node {sid!r}: company {spec.get('company')!r} is not in companies")
+            start_capacity(spec, sid)
         cost = params.get("start_edge_cost", {})
         arcs = {}
         for (sid, j) in params.get("start_edges", []):

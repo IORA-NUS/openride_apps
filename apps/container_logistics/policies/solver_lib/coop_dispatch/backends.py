@@ -20,6 +20,9 @@ from __future__ import annotations
 import time
 from typing import Any, Dict
 
+import numpy as np
+
+from .limits import arrays_to_lists
 from .min_cost_flow import cooperation_components, mcf_applicable, solve_min_cost_flow
 from .network_flow_solver import NetworkFlowSolver
 
@@ -32,27 +35,57 @@ def component_params(params: Dict[str, Any], component) -> Dict[str, Any]:
     comp = list(component)
     cs = set(comp)
     owner = params["order_owner"]
-    orders = [o for o in params["orders"] if owner[o] in cs]
+    all_orders = list(params["orders"])
+    if all(owner[o] in cs for o in all_orders) and set(params["companies"]) <= cs:
+        whole = True   # the component is the whole instance: no slicing (array params stay arrays)
+    else:
+        whole = False
+    orders = [o for o in all_orders if owner[o] in cs]
     oset = set(orders)
-    edges = [e for e in params["edges_input"] if e[0] in oset and e[1] in oset]
-    eset = set(edges)
     out = dict(params)
     out.update(
         companies=[c for c in params["companies"] if c in cs],
         orders=orders,
         cooperation={(a, b) for (a, b) in params["cooperation"] if a in cs and b in cs},
         vehicle_limit={c: v for c, v in params["vehicle_limit"].items() if c in cs},
-        edges_input=edges,
-        edge_cost_input={e: v for e, v in params["edge_cost_input"].items() if e in eset},
-        edge_trailer_cost_input={e: v for e, v in params.get("edge_trailer_cost_input", {}).items() if e in eset},
         instance_id=f"{params.get('instance_id')}:{'+'.join(map(str, comp))}",
     )
+    if "edges_array" in params or "start_edges_array" in params:
+        if not whole:
+            keep_o = np.array([owner[o] in cs for o in all_orders], dtype=bool)
+            new_idx = np.cumsum(keep_o) - 1
+            if "edges_array" in params:
+                ea = params["edges_array"]
+                src, dst = np.asarray(ea["src"]), np.asarray(ea["dst"])
+                m = keep_o[src] & keep_o[dst]
+                out["edges_array"] = {"src": new_idx[src[m]], "dst": new_idx[dst[m]],
+                                      "cost": np.asarray(ea["cost"])[m]}
+            sids = list(params.get("start_nodes") or {})
+            keep_s = np.array([params["start_nodes"][s]["company"] in cs for s in sids], dtype=bool)
+            if "start_edges_array" in params:
+                sa = params["start_edges_array"]
+                src, dst = np.asarray(sa["src"]), np.asarray(sa["dst"])
+                m = keep_s[src] & keep_o[dst] if src.size else np.zeros(0, dtype=bool)
+                snew = np.cumsum(keep_s) - 1
+                out["start_edges_array"] = {"src": snew[src[m]], "dst": new_idx[dst[m]],
+                                            "cost": np.asarray(sa["cost"])[m]}
+    else:
+        edges = [e for e in params["edges_input"] if e[0] in oset and e[1] in oset]
+        eset = set(edges)
+        out.update(
+            edges_input=edges,
+            edge_cost_input={e: v for e, v in params["edge_cost_input"].items() if e in eset},
+            edge_trailer_cost_input={e: v for e, v in params.get("edge_trailer_cost_input", {}).items()
+                                     if e in eset},
+        )
     if params.get("start_nodes") is not None:
         sn = {s: spec for s, spec in params["start_nodes"].items() if spec["company"] in cs}
-        se = [e for e in params.get("start_edges", []) if e[0] in sn and e[1] in oset]
-        ses = set(se)
-        out.update(start_nodes=sn, start_edges=se,
-                   start_edge_cost={e: v for e, v in params.get("start_edge_cost", {}).items() if e in ses})
+        out["start_nodes"] = sn
+        if "start_edges_array" not in params:
+            se = [e for e in params.get("start_edges", []) if e[0] in sn and e[1] in oset]
+            ses = set(se)
+            out.update(start_edges=se,
+                       start_edge_cost={e: v for e, v in params.get("start_edge_cost", {}).items() if e in ses})
     if params.get("eligible") is not None:
         out["eligible"] = {(o, c) for (o, c) in params["eligible"] if o in oset and c in cs}
     if params.get("class_attrs") is not None:
@@ -81,6 +114,7 @@ def served_reference(params: Dict[str, Any]) -> int:
 
 
 def _relaxed_served(params: Dict[str, Any], penalty) -> int:
+    params = arrays_to_lists(params)
     owner, coop = params["order_owner"], set(params["cooperation"])
     eligible = params.get("eligible")
     eligible = None if eligible is None else set(eligible)
@@ -102,7 +136,8 @@ def _relaxed_served(params: Dict[str, Any], penalty) -> int:
              if i in oset and j in oset and servers[i] & servers[j]]
     sn = params.get("start_nodes") or {}
     sn_cos = {s["company"] for s in sn.values()}
-    start_nodes = {s: {"company": pooled[comp_of[spec["company"]]]} for s, spec in sn.items()}
+    start_nodes = {s: {"company": pooled[comp_of[spec["company"]]], "capacity": spec.get("capacity", 1)}
+                   for s, spec in sn.items()}
     start_edges = [(s, j) for (s, j) in params.get("start_edges", [])
                    if s in sn and j in oset and sn[s]["company"] in servers[j]]
     # Depot vehicles get their own pooled class beside the start nodes' (a class with start
@@ -188,7 +223,7 @@ def solve_by_component(params: Dict[str, Any], backend: str = "auto", *,
             except ValueError as exc:  # e.g. non-uniform eligible: not exact, so MIP
                 use_mcf, why = False, str(exc)
         if not use_mcf:
-            result, cstats = NetworkFlowSolver().solve(sub)
+            result, cstats = NetworkFlowSolver().solve(arrays_to_lists(sub))
         row = {"companies": comp, "backend": "mincostflow" if use_mcf else "mip",
                "reason": why,
                "status": result.get("status"), "objective": result.get("objective"),
