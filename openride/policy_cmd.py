@@ -57,9 +57,14 @@ def _badge(p: dict[str, Any]) -> str:
     return badge
 
 
+def _is_leaf(p: dict[str, Any]) -> bool:
+    """A catalog entry that may be a per-scope solver: not a decomposition, not ``top_only``."""
+    return not p.get("composite") and not p.get("top_only")
+
+
 def _slot_rows(tbl: Table, slot: str, entry: dict[str, Any], *, leaves_only: bool) -> None:
     for p in entry.get("policies") or []:
-        if leaves_only and p.get("composite"):
+        if leaves_only and not _is_leaf(p):
             continue
         name = p.get("name", "?")
         default = "✓" if name == entry.get("default") else ""
@@ -93,7 +98,7 @@ def render_policy_list(name: str | None = None, *, as_json: bool = False, leaves
     components = control.known_policy_components() if (name is None or name not in catalog) else {}
     slots, kinds = _pick(catalog, components, name)
     if leaves_only:
-        slots = {k: {**v, "policies": [p for p in v.get("policies") or [] if not p.get("composite")]}
+        slots = {k: {**v, "policies": [p for p in v.get("policies") or [] if _is_leaf(p)]}
                  for k, v in slots.items()}
     if as_json:
         _dump({**slots, **({"components": kinds} if kinds else {})})
@@ -143,7 +148,7 @@ def _ref_targets(kind: str, catalog: dict[str, Any], components: dict[str, Any],
     """The names a ref param of ``kind`` accepts (dispatch: the leaves when ``leaf_only``)."""
     entry = catalog.get(kind) if kind in catalog else components.get(kind) or {}
     return [p.get("name", "?") for p in entry.get("policies") or []
-            if not (leaf_only and p.get("composite"))]
+            if not (leaf_only and not _is_leaf(p))]
 
 
 def _type_cell(prop: dict[str, Any]) -> str:
@@ -186,7 +191,10 @@ def _cmd_show(args) -> int:
     if info.get("entry_kind") == "slot":
         badge = f"badge: [bold]{escape(str(info['badge']))}[/]  · " if info.get("badge") else ""
         lines.append(badge + (f"composite (decomposes the tick; per-scope solver in '{info.get('inner_param')}')"
-                              if info.get("composite") else "leaf (a per-scope solver; --solver accepts it)"))
+                              if info.get("composite") else
+                              f"top only (select it with --policy planner={info['name']}; never an inner "
+                              "or the --solver leaf)" if info.get("top_only") else
+                              "leaf (a per-scope solver; --solver accepts it)"))
         if info.get("badge_tooltip"):
             lines.append(f"[dim]{escape(str(info['badge_tooltip']))}[/]")
     if info.get("requires"):
