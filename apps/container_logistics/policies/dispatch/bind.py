@@ -355,9 +355,11 @@ PLANNING_KEYS: tuple[str, ...] = ("at_day_start", "every_steps", "foresight", "m
 #: ``planning["foresight"]``: ``"none"`` (released orders only) or ``"day"`` (every order of
 #: the planning window, released or not: an ORACLE run).
 PLANNING_FORESIGHT: tuple[str, ...] = ("none", "day")
-#: The largest ``max_hold_seconds`` a declaration may state (refusal R2). The run start's
-#: planning hold cap (refusal R4, the sim main) is lower.
-PLANNING_MAX_HOLD_LIMIT = 600
+#: The largest ``max_hold_seconds`` a declaration may state (refusal R2). It IS the run
+#: start's planning hold cap (refusal R4, ``scenario.run_declaration.PLANNING_HOLD_CAP_SECONDS``
+#: is this constant): one limit, so a declaration that binds is never refused at run start
+#: for its hold (it used to be 600 here vs 300 there).
+PLANNING_MAX_HOLD_LIMIT = 300
 #: ``max_hold_seconds`` when a declaration leaves it out.
 PLANNING_DEFAULT_MAX_HOLD_SECONDS = 30
 _PLANNING_DEFAULTS: Mapping[str, Any] = MappingProxyType({

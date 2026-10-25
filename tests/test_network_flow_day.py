@@ -70,10 +70,10 @@ class Sim:
         if out.result is not None:
             record_tick(self.stats, DayPlanStats, out.result.tick_notes, tick.clock, lambda *_a, **_k: None)
 
-    def plan(self, trucks, orders, step, *, engaged=None, lookup=None, reason="day_start"):
+    def plan(self, trucks, orders, step, *, engaged=None, lookup=None, reason="day_start", hold_started_s=None):
         day = step // SPD
         window = PlanningWindow(reason=reason, day=day, start_step=day * SPD, end_step=(day + 1) * SPD,
-                                now_step=step, step_seconds=240)
+                                now_step=step, step_seconds=240, hold_started_s=hold_started_s)
         tick = self.runner.tick(candidates=list(trucks), orders=list(orders), profile=self.prof,
                                 clock=DispatchClock(sim_clock=fx.SIM_CLOCK, time_step=step), seed=1,
                                 kind="plan", planning=window, engaged=engaged, lookup=lookup, run_id=self.run_id)
@@ -436,8 +436,8 @@ def test_bind_declares_planning_pairs_run_stats_and_reads_its_world_keys():
     structure = fx.cooperation_structure([("acme", "cargo")], ["acme", "cargo"])
     prof = dict(profile(structure), working_hours={"axis": "elapsed", "hauliers": {"acme": [21600, 72000]}},
                 unassigned_order_max_wait_steps=360)
-    runner = build_runner_for_policy("NetworkFlowDay", {"nf_replan_every_steps": 12, "nf_max_hold_s": 40},
-                                     profile=prof)
+    runner = build_runner_for_policy("NetworkFlowDay", {"nf_replan_every_steps": 12, "nf_max_hold_s": 40,
+                                                        "nf_backend": "mip"}, profile=prof)
     decl = runner.tree.declaration
     assert dict(decl.planning) == {"at_day_start": True, "every_steps": 12, "foresight": "day",
                                    "max_hold_seconds": 40}
@@ -445,7 +445,7 @@ def test_bind_declares_planning_pairs_run_stats_and_reads_its_world_keys():
     assert decl.run_stats is DayPlanStats and decl.run_name_segments == ("coop",)
     assert {"cooperation", "working_hours", "unassigned_order_max_wait_steps"} <= set(runner.tree.world_reads)
     prov = runner.tree.top.declaration.provenance
-    assert prov["badge"] == "central" and prov["backend"] == "auto" and prov["time_model"].startswith("blake2b")
+    assert prov["badge"] == "central" and prov["backend"] == "mip" and prov["time_model"].startswith("blake2b")
 
 
 def test_params_validate_backend_and_hold_and_offer_no_choice_arms():
@@ -705,3 +705,121 @@ def test_propagation_params_reach_the_instance():
     dp = nfd.NetworkFlowDay._day_params(spec.params_cls.from_mapping(
         {"nf_propagate_chains": True, "nf_propagate_max_push_min": 30.0}, where="t"))
     assert dp.propagate_chains is True and dp.propagate_max_push_min == 30.0
+
+
+def test_the_solve_deadline_counts_from_the_hold_publish(monkeypatch):
+    """Review V-m2: the agent published the hold before the app's reads; the deadline is
+    ``hold start + nf_max_hold_s - margin``, not ``tick start + ...`` (offline: tick start)."""
+    import time as _time
+
+    seen = []
+    real = nfd.NetworkFlowDay._solve
+
+    def spy(self, inputs, backend, params, *, deadline, accept_poor=False):
+        seen.append(deadline)
+        return real(self, inputs, backend, params, deadline=deadline, accept_poor=accept_poor)
+
+    monkeypatch.setattr(nfd.NetworkFlowDay, "_solve", spy)
+    trucks, orders = _day()
+    t0 = _time.monotonic()
+    Sim().plan(trucks, orders, 0)
+    assert t0 + 30 - nfd._HOLD_MARGIN_S <= seen[0] <= _time.monotonic() + 30 - nfd._HOLD_MARGIN_S
+    held = _time.monotonic() - 12.0  # the reads took 12 s
+    Sim().plan(trucks, orders, 0, hold_started_s=held)
+    assert seen[1] == pytest.approx(held + 30 - nfd._HOLD_MARGIN_S)
+    # a hold stamp from the future (a different clock) is not trusted
+    Sim().plan(trucks, orders, 0, hold_started_s=_time.monotonic() + 1000.0)
+    assert seen[2] < _time.monotonic() + 30
+
+
+@pytest.mark.parametrize("bad", ["1", True, float("nan"), float("inf")])
+def test_planning_window_refuses_a_bad_hold_stamp(bad):
+    with pytest.raises(ValueError, match="hold_started_s"):
+        PlanningWindow(reason="day_start", day=0, start_step=0, end_step=1, now_step=0, step_seconds=240,
+                       hold_started_s=bad)
+
+
+# --------------------------------------------------------------- V-M1: exactness refusal
+
+def _hours_prof(structure, hours):
+    return dict(profile(structure), working_hours={"axis": "elapsed", "hauliers": hours})
+
+
+@pytest.mark.parametrize("backend", ["auto", "mincostflow"])
+def test_bind_refuses_a_cooperative_group_with_differing_hours(backend):
+    from apps.container_logistics.policies.framework.errors import PolicyError
+
+    discover_builtin_policies()
+    structure = fx.cooperation_structure([("acme", "cargo")], ["acme", "cargo", "delta"])
+    prof = _hours_prof(structure, {"acme": [21600, 72000], "cargo": [28800, 79200], "delta": [0, 3600]})
+    with pytest.raises(PolicyError) as err:
+        build_runner_for_policy("NetworkFlowDay", {"nf_backend": backend}, profile=prof)
+    text = str(err.value)
+    assert "acme=[21600, 72000], cargo=[28800, 79200]" in text and "delta" not in text
+    assert "same workingHours" in text and "nf_backend=mip" in text and "nf_backend=greedy" in text
+    # a haulier without hours is "always on": it differs from one with hours
+    with pytest.raises(PolicyError, match="cargo=always"):
+        build_runner_for_policy("NetworkFlowDay", {"nf_backend": backend},
+                                profile=_hours_prof(structure, {"acme": [21600, 72000]}))
+
+
+@pytest.mark.parametrize("params,hours,structured", [
+    ({"nf_backend": "mip"}, {"acme": [21600, 72000]}, True),        # explicit backends are the remedy
+    ({"nf_backend": "greedy"}, {"acme": [21600, 72000]}, True),
+    ({}, {"acme": [21600, 72000], "cargo": [21600, 72000]}, True),  # equal hours: exact flow applies
+    ({}, {"acme": [21600, 72000]}, False),                          # no cooperation: each haulier alone
+])
+def test_bind_accepts_what_the_exact_flow_can_take_or_an_explicit_backend(params, hours, structured):
+    discover_builtin_policies()
+    structure = fx.cooperation_structure([("acme", "cargo")], ["acme", "cargo"]) if structured else None
+    build_runner_for_policy("NetworkFlowDay", params, profile=_hours_prof(structure, hours))
+
+
+def test_an_inexact_plan_under_auto_is_counted_flagged_and_warned_once(monkeypatch, caplog):
+    import logging
+
+    real = plan_runner.solve
+
+    def inexact(inputs, **kw):
+        out = real(inputs, **dict(kw, backend="greedy"))
+        out["stats"]["components"] = [dict(r, backend="mip", reason="classes differ in eligibility attributes")
+                                      for r in out["stats"]["components"]]
+        return out
+
+    monkeypatch.setattr(plan_runner, "solve", inexact)
+    monkeypatch.setattr(nfd, "_ortools_importable", lambda: True)
+    trucks, orders = _day()
+    sim = Sim({"nf_backend": "auto"})
+    with caplog.at_level(logging.WARNING):
+        note = sim.plan(trucks, orders, 0).result.tick_notes["plan"]
+        sim.plan(trucks[:-1], orders, 18, reason="interval")
+    n = note["inexact_components"]["classes differ in eligibility attributes"]
+    assert n >= 1 and set(note["inexact_components"]) == {"classes differ in eligibility attributes"}
+    assert caplog.text.count("WITHOUT the exact min-cost flow") == 1
+    snap = sim.stats["day_plan"].snapshot()
+    assert snap["quality"]["degraded"] and "inexact" in snap["quality"]["reasons"]
+    assert snap["incidents"]["inexact_components"]["classes differ in eligibility attributes"] > n
+
+
+def test_greedy_backend_plans_are_not_flagged_inexact():
+    trucks, orders = _day()
+    sim = Sim()  # nf_backend=greedy: chosen, not a degradation
+    note = sim.plan(trucks, orders, 0).result.tick_notes["plan"]
+    assert "inexact_components" not in note
+    assert sim.stats["day_plan"].snapshot()["quality"] == {"degraded": False, "reasons": []}
+
+
+def test_a_run_slower_than_the_design_cadence_warns_once_at_bind(monkeypatch, caplog):
+    """Review V-m4: a default launch (cadence 28) runs, stamps 28, and says --assignment-cadence 6."""
+    import logging
+
+    discover_builtin_policies()
+    monkeypatch.setattr(nfd, "_WARNED_CADENCE", set())
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            r = build_runner_for_policy("NetworkFlowDay", GREEDY, profile=dict(profile(), assignment_cadence_steps=28))
+        build_runner_for_policy("NetworkFlowDay", GREEDY, profile=dict(profile(), assignment_cadence_steps=6))
+        build_runner_for_policy("NetworkFlowDay", GREEDY, profile=profile())  # offline: no world cadence
+    assert r.tree.top.declaration.provenance["cadence_steps"] == 28
+    assert caplog.text.count("--assignment-cadence 6") == 1
+    assert "dispatches every 28 steps" in caplog.text

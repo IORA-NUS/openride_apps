@@ -479,3 +479,70 @@ def test_orders_by_ids_chunks_of_200_deduplicated():
     assert chunks[0][0] == ids[0] and [r[1]["page"] for r in m.requests] == [1, 1, 1, 2]
     assert all(json.loads(r[1]["sort"]) == [["_id", 1]] for r in m.requests)
     assert m.orders_by_ids([]) == [] and len(m.requests) == 4
+
+
+# --- V-m1: a dispatch tick's prefetch is kept only once it was committed AND published ----------
+
+def _dispatch_prefetching(monkeypatch):
+    """The toy's dispatch tick, returning its heads as the prefetch (like a day-plan top)."""
+    import tests.planning_toy as toy
+    from apps.container_logistics.policies.dispatch.result import Result
+
+    real = toy._ToyBase.solve_tick
+
+    def solve_tick(self, tick, params):
+        res = real(self, tick, params)
+        if tick.kind == "plan":
+            return res
+        heads = tuple(c[0] for _t, c in sorted(self.itineraries.get(tick.run_id, {}).items()))
+        return Result(pairs=res.pairs, prefetch=heads)
+
+    monkeypatch.setattr(toy._ToyBase, "solve_tick", solve_tick)
+
+
+def _planned_app(monkeypatch):
+    _dispatch_prefetching(monkeypatch)
+    mgr = _Manager([_truck("t1")], [_order("o_a")], open_orders=[_order("o_a", meta={"request_time_step": 0})],
+                   by_id={"o_a": _order("o_a")})
+    app = _app(mgr, _profile())
+    app.plan(SIM_CLOCK, 0)
+    assert app._prefetch == ("o_a",)
+    return app
+
+
+def test_dispatch_prefetch_is_kept_only_after_publish(toys, monkeypatch):
+    app = _planned_app(monkeypatch)
+    pairs = app.assign(SIM_CLOCK, 6)
+    assert [(t["_id"], o["_id"]) for t, o in pairs] == [("t1", "o_a")]
+    assert app._prefetch == ()          # not yet: nothing published
+    app.publish(pairs)
+    assert app._prefetch == ("o_a",)    # every pair went out
+    assert app._staged_prefetch == ()
+
+
+def test_a_failed_pair_publish_drops_the_dispatch_prefetch(toys, monkeypatch):
+    app = _planned_app(monkeypatch)
+    pairs = app.assign(SIM_CLOCK, 6)
+
+    def boom(topic, message):
+        raise RuntimeError("broker down")
+
+    app.messenger.publish = boom
+    app.publish(pairs)
+    assert app._prefetch == ()
+
+
+def test_an_accounting_exception_drops_the_dispatch_prefetch(toys, monkeypatch):
+    from apps.container_logistics.assignment import accounting
+
+    app = _planned_app(monkeypatch)
+
+    def boom(*a, **k):
+        raise RuntimeError("accounting bug")
+
+    monkeypatch.setattr(accounting, "account_shares", boom)
+    with pytest.raises(RuntimeError):
+        app.assign(SIM_CLOCK, 6)
+    app.publish([])
+    assert app._prefetch == ()
+

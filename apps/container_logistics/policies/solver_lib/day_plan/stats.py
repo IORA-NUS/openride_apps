@@ -20,7 +20,8 @@ they are pushed. A ``dispatch.run_stats.RunStatsAggregator`` with ``meta_key =
                             "prev_start_arcs_feasible", "prev_arcs_kept"},   # re-plans only
               "fallback": "greedy", "fallback_reason": str,   # a no-plan day's greedy plan
               "fallback_failed": str, "component_fallbacks": {reason: n},
-              "accepted_poor": true},
+              "accepted_poor": true,
+              "inexact_components": {reason: n}},  # groups the exact flow could not take (V-M1)
      "late_steps": n,                              # the plan tick ran n steps after its boundary
      "no_plan": 1,                                 # a dispatch tick with no plan at all
      "uncommitted": n,                             # last tick's pairs the framework did not commit
@@ -51,7 +52,15 @@ process cannot, so ``restarts`` is stamped.
 note is counted in ``incidents`` (``store_failed``, ``backend_fallback`` {backend: n},
 ``late_plans`` / ``late_steps_max``, ``no_plan_ticks``, ``plan_fallbacks`` {reason: n},
 ``fallback_failed``, ``component_fallbacks`` {reason: n}, ``accepted_poor``,
-``uncommitted_pairs``).
+``inexact_components`` {reason: n}, ``uncommitted_pairs``).
+
+**Quality (V-M1).** ``quality = {"degraded": bool, "reasons": [...]}`` at the top of the
+snapshot: ``degraded`` whenever any plan of the run was not the solver's own answer --
+a greedy fallback plan, a failed fallback, a component fallback, a plan kept under the
+guard (``accepted_poor``), a component the exact flow could not take, or an OR-Tools
+backend fallback -- so an arm that silently ran greedy is visible where runs are
+compared, not only in ``incidents``. :meth:`DayPlanStats.run_end_warnings` repeats it as
+the run-end WARNING the framework logs (``run_stats.flush``).
 
 **Push cadence.** Forced (``fold`` returns ``True``) on a new day, a failed re-plan, a
 fallback plan (or a failed fallback) and a rebuild; otherwise every :data:`PUSH_EVERY` folded ticks.
@@ -201,7 +210,8 @@ class DayPlanStats:
     def _blank_incidents() -> dict[str, Any]:
         return {"store_failed": 0, "backend_fallback": {}, "late_plans": 0, "late_steps_max": 0,
                 "no_plan_ticks": 0, "plan_fallbacks": {}, "fallback_failed": 0,
-                "component_fallbacks": {}, "accepted_poor": 0, "uncommitted_pairs": 0}
+                "component_fallbacks": {}, "accepted_poor": 0, "inexact_components": {},
+                "uncommitted_pairs": 0}
 
     def _count(self, key: str, sub: Any = None, n: int = 1) -> None:
         if sub is None:
@@ -234,6 +244,8 @@ class DayPlanStats:
             self._count("component_fallbacks", k, int(v))
         if plan.get("accepted_poor"):
             self._count("accepted_poor")
+        for k, v in (plan.get("inexact_components") or {}).items():
+            self._count("inexact_components", k, int(v))
         return forced
 
     def fold(self, tick_notes: Mapping[str, Any], clock: Any) -> bool:
@@ -376,6 +388,25 @@ class DayPlanStats:
         c["plan_jobs_failed"] = dict(sorted(c["plan_jobs_failed"].items()))
         return c
 
+    #: incident key -> the ``quality.reasons`` entry it raises (V-M1).
+    _DEGRADING = (("plan_fallbacks", "fallback_plan"), ("fallback_failed", "fallback_failed"),
+                  ("component_fallbacks", "component_fallback"), ("accepted_poor", "accepted_poor"),
+                  ("inexact_components", "inexact"), ("backend_fallback", "backend_fallback"))
+
+    def _quality(self) -> dict[str, Any]:
+        reasons = [name for key, name in self._DEGRADING if self._incidents.get(key)]
+        return {"degraded": bool(reasons), "reasons": reasons}
+
+    def run_end_warnings(self) -> list[str]:
+        """The run-end WARNING lines (``run_stats.flush``): one when any plan was degraded."""
+        q = self._quality()
+        if not q["degraded"]:
+            return []
+        inc = self._incidents
+        detail = ", ".join(f"{key}={inc[key]}" for key, _ in self._DEGRADING if inc.get(key))
+        return [f"day plan DEGRADED this run ({', '.join(q['reasons'])}): {detail}. Plans were not the "
+                "solver's own exact answer; compare this arm with care (run_config.meta.day_plan.quality)."]
+
     def snapshot(self) -> dict[str, Any]:
         by_day: dict[int, list] = {}
         for row in self._jobs.values():
@@ -417,7 +448,7 @@ class DayPlanStats:
                 failed[k] = failed.get(k, 0) + v
         totals["replans_failed"] = dict(sorted(failed.items()))
         return {
-            "schema": SCHEMA, "ticks": self._ticks, "plan_ticks": self._plan_ticks,
+            "schema": SCHEMA, "quality": self._quality(), "ticks": self._ticks, "plan_ticks": self._plan_ticks,
             "restarts": self._restarts, "deterministic": self._deterministic,
             "backends": dict(sorted(self._backends.items())),
             "solve_ms": {"n": len(self._solve_ms), "p50": _pct(self._solve_ms, 0.5),

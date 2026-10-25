@@ -287,3 +287,26 @@ def test_replan_reports_previous_arc_survival():
     assert pa["prev_job_arcs"] == pa["prev_job_arcs_feasible"] > 0
     assert pa["prev_start_arcs"] == pa["prev_start_arcs_feasible"] > 0
     assert pa["prev_arcs_kept"] == pa["prev_job_arcs"] + pa["prev_start_arcs"]
+
+
+def test_overnight_evening_start_is_the_end_of_the_morning_chain():
+    """Review V-m3: the evening start ``T@w1`` is where T's morning chain ENDS (its last
+    dropoff, ready at that job's end), not T's current anchor; windows solve in order."""
+    trucks, orders = synthetic_day(33, n_orders=120, n_trucks=10, hauliers=("acme",))
+    hours = {"axis": "elapsed", "hauliers": {"acme": [18 * 3600, 6 * 3600]}}
+    inp = _build(trucks, orders, hours=hours, arm=None)
+    jobs = {j["id"]: j for j in inp["jobs"]}
+    morning = child.solve_inputs(dict(inp, trucks=[t for t in inp["trucks"] if not t.get("of")]))
+    tid, chain = next((t, c) for t, c in sorted(morning["itineraries"].items()) if c)
+    [start] = [s for s in child._window_starts(inp, 1, morning["itineraries"], jobs) if s["of"] == tid]
+    last = jobs[chain[-1]]
+    assert start["loc"] == [float(x) for x in last["dropoff"]]
+    assert start["ready_s"] == max(18 * 3600.0, float(last["e"])) and start["anchor_job"] == last["id"]
+    idle = [s for s in child._window_starts(inp, 1, {}, jobs)]
+    assert all(s == t for s, t in zip(idle, [t for t in inp["trucks"] if t.get("of")]))  # no chain: unchanged
+    out = child.solve_inputs(inp)
+    assert out["ok"] and {r["window"] for r in out["stats"]["components"]} == {0, 1}
+    assert runner.validate_output(inp, out) == []
+    # a single-window instance is one solve, as before (no window tag)
+    flat = child.solve_inputs(_build(trucks, orders, arm=None))
+    assert all("window" not in r for r in flat["stats"]["components"])

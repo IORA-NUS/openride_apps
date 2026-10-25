@@ -67,12 +67,21 @@ cadence (world ``assignment_cadence_steps``); ``nf_cadence_steps`` only override
 offline and is refused at bind when it disagrees with the run's. Stamped in provenance
 (``cadence_steps`` / ``cadence_source``).
 
-**Solve budget (M2).** One deadline per planning tick (``nf_max_hold_s`` from the tick's
-start, minus the margin): the child splits what is left across its MIP components and
+**Solve budget (M2).** One deadline per planning tick (``nf_max_hold_s`` from the hold's
+start -- ``PlanningWindow.hold_started_s``, the agent's hold publish (V-m2); offline the
+tick's start --, minus the margin): the child splits what is left across its MIP components and
 goes greedy past it. A day with NO plan (none yet, or only an earlier day's) never stays
 without one: the guard's refusal is waived and a failed solve falls back to a greedy plan
 (noted ``fallback: greedy``); a dispatch tick without any plan is noted ``no_plan`` and
 logged at ERROR once per day.
+
+**Exactness (V-M1).** Under ``nf_backend`` auto / mincostflow a cooperative group whose
+hauliers keep different working hours can never get the exact flow; ``bind`` refuses it
+(:func:`refuse_inexact_groups`, naming the group and the remedies). What bind cannot see
+(truck classes of one group differing in size / restricted areas) is detected per plan
+(``inexact_components``, a WARNING once per run). Every fallback or inexact plan sets
+``run_config.meta.day_plan.quality.degraded`` and is logged at WARNING when the run ends
+(the run-stats aggregator's ``run_end_warnings``).
 
 **Failure policy.** Every degradation (store failure, backend fallback, late plan, no
 plan, fallback plan, uncommitted pairs) is counted in ``run_config.meta.day_plan``
@@ -215,6 +224,117 @@ def effective_cadence(params: Any, world: Mapping[str, Any]) -> tuple[int, str]:
     return DEFAULT_CADENCE_STEPS, "default"
 
 
+#: Backends that take the exact min-cost flow where it applies and the MIP elsewhere
+#: (review V-M1: refused at bind when a cooperative group could never get the exact flow).
+_EXACT_FIRST_BACKENDS = frozenset({"auto", "mincostflow"})
+#: The child's component ``reason`` of a component the exact flow could not take (rows of
+#: ``stats.components``); every other reason is the flow itself or an explicit backend.
+_INEXACT_REASONS = frozenset({"classes differ in eligibility attributes", "adjacency not complete"})
+#: The once-per-run WARNING when a plan of an exact-first backend was NOT exact.
+_INEXACT_WARNING = ("NetworkFlowDay: day %d plan solved %d cooperation group(s) WITHOUT the exact min-cost "
+                    "flow (%s) under nf_backend=%r; the plan is a MIP/greedy plan, not exact. Counted in "
+                    "run_config.meta.day_plan incidents.inexact_components and quality.degraded.")
+
+
+def _hours_of(working_hours: Any) -> dict[str, Any]:
+    """``{haulier: [start_s, end_s]}`` of a compiled working-hours record (``{}``: none)."""
+    if not isinstance(working_hours, Mapping):
+        return {}
+    hs = working_hours.get("hauliers")
+    return {str(h): list(v) if isinstance(v, (list, tuple)) else v for h, v in (hs or {}).items()} \
+        if isinstance(hs, Mapping) else {}
+
+
+def hours_split_groups(arm: Any, working_hours: Any) -> list[dict[str, Any]]:
+    """Cooperative groups (connected by the arm's cross-company pairs) whose hauliers do NOT
+    all share one working-hours window: ``[{haulier: hours or None (always on)}, ...]``.
+
+    Such a group's truck classes differ in eligibility, so the exact single-commodity flow
+    can never solve it (``mcf_applicable``); review V-M1. In haulier-id order."""
+    pairs = cooperation.directed_pairs(arm)
+    if not pairs:
+        return []
+    parent: dict[str, str] = {}
+
+    def find(x: str) -> str:
+        parent.setdefault(x, x)
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for a, b in sorted(pairs):
+        ra, rb = find(str(a)), find(str(b))
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+    groups: dict[str, list[str]] = {}
+    for h in sorted(parent):
+        groups.setdefault(find(h), []).append(h)
+    hours = _hours_of(working_hours)
+    out = []
+    for members in groups.values():
+        rec = {h: hours.get(h) for h in members}
+        if len({repr(v) for v in rec.values()}) > 1:
+            out.append(rec)
+    return out
+
+
+def refuse_inexact_groups(params: Any, arm: Any, working_hours: Any) -> None:
+    """Review V-M1: under ``nf_backend`` auto / mincostflow a cooperative group whose
+    hauliers keep different working hours would SILENTLY run as a MIP that the hold rarely
+    lets finish, i.e. a greedy fallback plan, every re-plan -- an arm then differs from
+    its uniform-hours sibling by solver quality, not by cooperation. Refused at bind
+    (``PolicyError``); class attributes other than hours (truck size, restricted areas) are
+    not in the world at bind and are detected per plan instead (``inexact_components``)."""
+    if params.nf_backend not in _EXACT_FIRST_BACKENDS:
+        return
+    bad = hours_split_groups(arm, working_hours)
+    if not bad:
+        return
+    desc = "; ".join(", ".join(f"{h}={v if v is not None else 'always'}" for h, v in sorted(g.items()))
+                     for g in bad)
+    raise PolicyError(
+        f"NetworkFlowDay: nf_backend={params.nf_backend!r} cannot solve the cooperative group(s) [{desc}] "
+        "exactly: their hauliers keep different working hours, so the exact min-cost flow does not apply "
+        f"and the MIP would have to finish inside the {params.nf_max_hold_s} s planning hold "
+        "(it usually does not, and the plan silently becomes greedy). Remedies: give every haulier of a "
+        "cooperating group the same workingHours; or select nf_backend=mip with a larger nf_max_hold_s / "
+        "nf_time_limit_s (e.g. --policy-param planner.nf_backend=mip --policy-param planner.nf_max_hold_s=120 "
+        "--policy-param planner.nf_time_limit_s=100); or select nf_backend=greedy explicitly.")
+
+
+def inexact_components(stats: Mapping[str, Any]) -> dict[str, int]:
+    """``{reason: n}`` of a solve's components the exact flow could not take (V-M1)."""
+    out: dict[str, int] = {}
+    for row in (stats or {}).get("components") or ():
+        why = row.get("reason") if isinstance(row, Mapping) else None
+        if why in _INEXACT_REASONS:
+            out[why] = out.get(why, 0) + 1
+    return dict(sorted(out.items()))
+
+
+#: Run cadences already warned about in this process (V-m4: bind runs several times at run
+#: start; one WARNING per process and cadence is enough).
+_WARNED_CADENCE: set[int] = set()
+
+
+def warn_slow_cadence(cadence: int, source: str) -> bool:
+    """Review V-m4: a WARNING (never a refusal) when the run dispatches slower than the
+    cadence the day plan's latency model was designed for (:data:`DEFAULT_CADENCE_STEPS`).
+    The framework has no notion of a planner's preferred cadence, so the solver says it at
+    bind, which runs at run start (sim main's dry run) with the run's own cadence in the
+    world. ``True`` when it warned."""
+    if source != "world" or cadence <= DEFAULT_CADENCE_STEPS or cadence in _WARNED_CADENCE:
+        return False
+    _WARNED_CADENCE.add(cadence)
+    logger.warning(
+        "NetworkFlowDay: this run dispatches every %d steps, but the day plan is designed for a dispatch "
+        "every %d steps (a free truck waits up to one cadence for its next job: %d steps here). The run is "
+        "valid and stamps cadence_steps=%d; for the intended protocol launch with --assignment-cadence %d.",
+        cadence, DEFAULT_CADENCE_STEPS, cadence, cadence, DEFAULT_CADENCE_STEPS)
+    return True
+
+
 def _clock_seconds(text: Any) -> float | None:
     """Epoch seconds of an RFC-1123 sim clock string, else ``None``."""
     if not isinstance(text, str) or not text.strip():
@@ -285,6 +405,7 @@ class _RunState:
         self.tentative: dict[str, tuple[str, bool]] = {}
         self.suspect: dict[str, int] = {}        # minor 3: job -> consecutive "taken?" ticks
         self.warned_fallback = False             # the greedy backend fallback, once per run
+        self.warned_inexact = False              # V-M1: an inexact plan under auto, once per run
         self.no_plan_day: int | None = None      # the run day an ERROR "no plan" was logged for
 
 
@@ -381,7 +502,7 @@ class NetworkFlowDay(DispatchPolicy):
         """
         cooperation.validate_arm(world)
         arm = cooperation.resolve_arm(world)
-        world.get("working_hours")
+        refuse_inexact_groups(params, arm, world.get("working_hours"))  # V-M1
         world.get("unassigned_order_max_wait_steps")
         cadence, cadence_source = effective_cadence(params, world)  # reads assignment_cadence_steps (M1)
         provenance = {
@@ -394,6 +515,7 @@ class NetworkFlowDay(DispatchPolicy):
         }
         if not top:  # top_only: never reached through the framework (R5); kept honest anyway
             return Declaration(provenance=provenance)
+        warn_slow_cadence(cadence, cadence_source)  # V-m4: a WARNING only
         planning = {
             "at_day_start": True,
             "every_steps": params.nf_replan_every_steps,
@@ -697,7 +819,11 @@ class NetworkFlowDay(DispatchPolicy):
         # solve must still leave one, so the guard's refusal is waived and a failure
         # falls back to a greedy plan -- the fleet never idles for want of a plan.
         no_plan = st.store.current_id is None or (st.store.current_day or 0) < w.day
-        hold_end = t_start + float(params.nf_max_hold_s)
+        # V-m2: the scheduler's hold began when the agent PUBLISHED it (before the app's
+        # reads), so the deadline counts from there; offline (no hold) from this tick's start.
+        held = getattr(w, "hold_started_s", None)
+        anchor = float(held) if held is not None and float(held) <= t_start else t_start
+        hold_end = anchor + float(params.nf_max_hold_s)
         fallback: str | None = None
         try:
             out = self._solve(inputs, backend, params, deadline=hold_end - _HOLD_MARGIN_S, accept_poor=no_plan)
@@ -743,6 +869,13 @@ class NetworkFlowDay(DispatchPolicy):
         if fallback is not None:
             plan["plan"]["fallback"] = "greedy"
             plan["plan"]["fallback_reason"] = fallback
+        inexact = inexact_components(out.get("stats") or {}) if backend in _EXACT_FIRST_BACKENDS else {}
+        if inexact:  # V-M1: what bind could not see (truck size / areas differing in a group)
+            plan["plan"]["inexact_components"] = inexact
+            if not st.warned_inexact:
+                st.warned_inexact = True
+                logger.warning(_INEXACT_WARNING, w.day, sum(inexact.values()),
+                               ", ".join(f"{k}: {v}" for k, v in inexact.items()), backend)
         if backend != params.nf_backend:
             notes["backend_fallback"] = backend
         return self._plan_result(st, notes, events, plan, w.day)

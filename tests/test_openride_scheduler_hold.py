@@ -175,6 +175,33 @@ def test_renewed_hold_never_extends_past_cap_from_the_first():
     assert sched._holds_total == 1
 
 
+def test_one_hold_budget_per_agent_per_step(caplog):
+    """Review V-m5: once an agent's hold EXPIRED on a step, a new hold from it on that same
+    step is ignored (the barrier is not re-extended); the next step grants a fresh budget."""
+    sched = _make(_settings(step_timeout=0.01, cap=5))
+    sched._begin_step_barrier()
+    sched._handle_reply(_hold(sched, "a2", 0.01))
+    assert "a2" in sched._holds
+    sched._expire_holds(time.monotonic() + 10.0)
+    assert sched._holds == {} and sched._holds_expired_total == 1
+    assert "a2" in sched._expected_this_step and "a2" not in sched._responded_this_step
+    with caplog.at_level(logging.WARNING):
+        sched._handle_reply(_hold(sched, "a2", 1))
+    assert sched._holds == {}
+    assert sched._holds_total == 1
+    assert "one hold budget per agent per step" in caplog.text
+    # another agent of the same step still gets its own budget
+    sched._handle_reply(_hold(sched, "a1", 1))
+    assert set(sched._holds) == {"a1"}
+    # a new step: a2's budget is back
+    sched.time = 1
+    for rec in sched.agent_collection.values():
+        rec["step_response"][1] = {"reaction": "waiting", "did_step": False, "run_time": 0}
+    sched._begin_step_barrier()
+    sched._handle_reply(_hold(sched, "a2", 1))
+    assert set(sched._holds) == {"a2"} and sched._holds_total == 3
+
+
 # ── holds that must be ignored ───────────────────────────────────────────────
 
 @pytest.mark.parametrize("cap", [None, 0])

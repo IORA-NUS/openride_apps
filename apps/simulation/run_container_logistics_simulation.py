@@ -70,6 +70,7 @@ from apps.container_logistics.scenario.run_declaration import (
     planning_orphan_timeout,
     planning_run_name_segment,
     ship_planning_cadence,
+    working_hours_run_name_segment,
 )
 
 
@@ -400,7 +401,8 @@ def _apply_assignment_run_inputs_or_exit(scenario_manager, run_name: str | None)
     ``steps_per_action`` / ``profile.max_orders_per_tick`` in memory, stamps
     ``ASSIGNMENT_CADENCE = {steps, source}`` / ``MAX_ORDERS_PER_TICK = {orders, source}``
     only when overridden or authored in the spec (``source: "bundle"``), and appends
-    `` · cadence:N`` / `` · orders:N`` only on override. A different cadence moves the
+    `` · cadence:N`` / `` · orders:N`` only on override, and `` · hours:<form>@<digest>``
+    whenever the profile compiled working hours (``run_declaration.working_hours_run_name_segment``). A different cadence moves the
     assignment agent's RNG draws: a new arm by design. Also stamps ``WORKING_HOURS``
     (the compiled per-haulier record) when the profile carries one.
     """
@@ -424,9 +426,12 @@ def _apply_assignment_run_inputs_or_exit(scenario_manager, run_name: str | None)
     _check_planning_cadence(scenario_manager)
     working_hours = _first_assignment_profile(scenario_manager).get("working_hours")
     if working_hours:
+        segment = working_hours_run_name_segment(working_hours)
         working_hours = axis_explicit_record(working_hours, scenario_manager.orsim_settings.get("REFERENCE_TIME"))
         _set_run_setting(scenario_manager, "WORKING_HOURS", working_hours)
         print(f"Working hours: {json.dumps(working_hours, sort_keys=True)}")
+        if segment:  # a comparability boundary: named, like cadence:/orders: (only with hours)
+            segments = [*segments, segment]
     return append_run_name_segments(run_name, segments)
 
 

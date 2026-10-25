@@ -406,6 +406,99 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
                  accept_poor: bool = False) -> dict[str, Any]:
     """Solve every cooperation component (module docstring); returns the child's answer.
 
+    An instance without later-window starts (``T@wk``, ``of`` set: the evening half of an
+    overnight shift) is ONE solve (:func:`_solve_once`, unchanged). With them the windows
+    are solved in order (review V-m3): window 0 with the trucks' own starts, then each
+    later window with its ``T@wk`` starts moved to where truck ``T``'s chain so far ENDS
+    (the last job's dropoff, ready at ``max(window start, its predicted end)``) over the
+    jobs still unplanned, so the later chain's first empty leg (and ``first_leg_km``) is
+    measured from the right place. The arc rule's wait limit already keeps a job that
+    fits only a later window off an earlier window's chains, so the split loses no
+    pairing the joint model could make across the off-shift gap. Each window gets an even
+    share of what is left of the deadline; component rows carry ``window``.
+    """
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {BACKENDS} (got {backend!r})")
+    later = sorted({int(t.get("window", 0)) for t in inputs["trucks"] if t.get("of")})
+    if not later:
+        return _solve_once(inputs, backend=backend, time_limit_s=time_limit_s,
+                           deadline_epoch=deadline_epoch, accept_poor=accept_poor)
+    return _solve_by_window(inputs, [0] + later, backend=backend, time_limit_s=time_limit_s,
+                            deadline_epoch=deadline_epoch, accept_poor=accept_poor)
+
+
+def _window_starts(inputs: Mapping[str, Any], k: int, chains: Mapping[str, list],
+                   jobs_by_id: Mapping[str, Mapping[str, Any]]) -> list[dict]:
+    """The starts of window ``k``: the trucks' own (``k == 0``), else every ``T@wk`` moved to
+    the end of ``T``'s chain so far (unchanged when ``T`` has none yet)."""
+    if k == 0:
+        return [t for t in inputs["trucks"] if not t.get("of")]
+    out = []
+    for t in inputs["trucks"]:
+        if not t.get("of") or int(t.get("window", 0)) != k:
+            continue
+        t = dict(t)
+        chain = chains.get(t["of"]) or ()
+        if chain:
+            last = jobs_by_id[chain[-1]]
+            t.update(loc=[float(last["dropoff"][0]), float(last["dropoff"][1])],
+                     ready_s=max(float(t["ready_s"]), float(last["e"])), anchor="chain", anchor_job=last["id"])
+        out.append(t)
+    return out
+
+
+def _solve_by_window(inputs: Mapping[str, Any], windows: list[int], *, backend: str,
+                     time_limit_s: float | None, deadline_epoch: float | None,
+                     accept_poor: bool) -> dict[str, Any]:
+    """:func:`solve_inputs` for an instance with later-window starts (V-m3)."""
+    t_all = time.time()
+    jobs_by_id = {j["id"]: j for j in inputs["jobs"]}
+    remaining = list(inputs["jobs"])
+    chains: dict[str, list] = {}
+    first_leg_m: dict[str, float] = {}
+    rows: list = []
+    sums = {"build_ms": 0.0, "solve_ms": 0.0, "arcs": 0, "start_arcs": 0, "empty_m": 0.0}
+    deterministic = True
+    survival: dict[str, int] | None = None
+    for i, k in enumerate(windows):
+        starts = _window_starts(inputs, k, chains, jobs_by_id)
+        deadline = None
+        if deadline_epoch is not None:
+            deadline = time.time() + (float(deadline_epoch) - time.time()) / (len(windows) - i)
+        out = _solve_once(dict(inputs, trucks=starts, jobs=remaining), backend=backend,
+                          time_limit_s=time_limit_s, deadline_epoch=deadline, accept_poor=accept_poor)
+        st = out.get("stats") or {}
+        for r in st.get("components") or ():
+            rows.append(dict(r, window=k))
+        for key in sums:
+            sums[key] += st.get(key, 0) or 0
+        deterministic = deterministic and bool(st.get("deterministic", True))
+        if st.get("prev_arcs"):
+            survival = survival or {}
+            for key, v in st["prev_arcs"].items():
+                survival[key] = survival.get(key, 0) + int(v)
+        if not out.get("ok"):
+            return {"ok": False, "reason": out.get("reason"),
+                    "stats": _stats(rows, sums["build_ms"], sums["solve_ms"], sums["arcs"], sums["start_arcs"],
+                                    deterministic, sums["empty_m"], first_leg_m, t_all, survival)}
+        for tid, chain in out["itineraries"].items():  # keyed by the REAL truck (_merge_windows)
+            chains.setdefault(tid, []).extend(chain)
+        for tid, m in (st.get("first_leg_m") or {}).items():
+            first_leg_m.setdefault(tid, float(m))
+        planned = {j for c in out["itineraries"].values() for j in c}
+        remaining = [j for j in remaining if j["id"] not in planned]
+    planned = {j for c in chains.values() for j in c}
+    unplanned = sorted(j["id"] for j in inputs["jobs"] if j["id"] not in planned)
+    return {"ok": True, "itineraries": dict(sorted((t, c) for t, c in chains.items() if c)), "unplanned": unplanned,
+            "stats": _stats(rows, sums["build_ms"], sums["solve_ms"], sums["arcs"], sums["start_arcs"],
+                            deterministic, sums["empty_m"], first_leg_m, t_all, survival)}
+
+
+def _solve_once(inputs: Mapping[str, Any], *, backend: str = "auto",
+                time_limit_s: float | None = None, deadline_epoch: float | None = None,
+                accept_poor: bool = False) -> dict[str, Any]:
+    """One solve of every cooperation component (no window split; see :func:`solve_inputs`).
+
     ``time_limit_s`` caps each MIP component; ``deadline_epoch`` (``time.time()`` value) is
     ONE deadline for the whole solve (M2): each MIP component gets at most an even share of
     what is left once a greedy reserve for the remaining components is kept, a component

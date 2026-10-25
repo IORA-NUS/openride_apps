@@ -217,7 +217,27 @@ def test_moved_split_survival_fallbacks_and_incidents_are_folded(day0):
     assert snap["totals"]["plan_jobs_moved_by"] == {"position": 1, "to_unplanned": 1, "truck": 3}
     assert snap["incidents"] == {
         "accepted_poor": 1, "backend_fallback": {"greedy": 1}, "component_fallbacks": {"deadline": 2},
-        "fallback_failed": 0, "late_plans": 1, "late_steps_max": 2, "no_plan_ticks": 1,
+        "fallback_failed": 0, "inexact_components": {}, "late_plans": 1, "late_steps_max": 2, "no_plan_ticks": 1,
         "plan_fallbacks": {"timeout": 1}, "store_failed": 1, "uncommitted_pairs": 3}
+    assert snap["quality"] == {"degraded": True, "reasons": ["fallback_plan", "component_fallback",
+                                                             "accepted_poor", "backend_fallback"]}
     json.dumps(snap)
     assert DayPlanStats.empty_snapshot()["incidents"]["no_plan_ticks"] == 0
+    assert DayPlanStats.empty_snapshot()["quality"] == {"degraded": False, "reasons": []}
+
+
+def test_quality_flags_an_inexact_plan_and_warns_at_run_end(day0):
+    """Review V-M1: an exact-first plan the flow could not take is degraded, beyond incidents."""
+    _, _, inp = day0
+    clean = DayPlanStats()
+    clean.fold(plan_note(inp, outcome="solved", version="d0v1", solve=_fake_solve(inp, {T(0): [O(0)]})), Clock(0))
+    assert clean.snapshot()["quality"]["degraded"] is False and clean.run_end_warnings() == []
+    note = plan_note(inp, outcome="solved", version="d0v1", solve=_fake_solve(inp, {T(0): [O(0)]}))
+    note["plan"]["inexact_components"] = {"classes differ in eligibility attributes": 2}
+    agg = DayPlanStats()
+    agg.fold(note, Clock(0))
+    snap = agg.snapshot()
+    assert snap["quality"] == {"degraded": True, "reasons": ["inexact"]}
+    assert snap["incidents"]["inexact_components"] == {"classes differ in eligibility attributes": 2}
+    [line] = agg.run_end_warnings()
+    assert "DEGRADED" in line and "inexact_components" in line

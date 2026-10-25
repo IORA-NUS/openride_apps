@@ -240,3 +240,47 @@ def test_the_market_never_bids_with_the_accounting_dials(monkeypatch, strategy):
     defaults = assign_constraints.assignment_cost(t, o, {})
     assert defaults != assign_constraints.assignment_cost(t, o, dials), "the probe is not dial-sensitive"
     assert captured["cost"](t, o) == defaults
+
+
+# ------------------------------------------------- the optional run-end warnings (V-M1)
+
+class _WarnAgg:
+    meta_key = "warn_stats"
+
+    def __init__(self, lines=("plans degraded",), boom=False):
+        self.lines, self.boom = list(lines), boom
+
+    def fold(self, notes, clock):
+        return False
+
+    def push_due(self, *, force=False):
+        return force
+
+    def mark_pushed(self):
+        pass
+
+    def snapshot(self):
+        return {"n": 1}
+
+    def run_end_warnings(self):
+        if self.boom:
+            raise RuntimeError("hook bug")
+        return self.lines
+
+
+def test_flush_logs_an_aggregators_run_end_warnings(caplog):
+    pushed = []
+    store = {"warn_stats": _WarnAgg()}
+    with caplog.at_level(logging.WARNING):
+        run_stats.flush(store, lambda k, v: pushed.append((k, v)) or True)
+    assert pushed == [("warn_stats", {"n": 1})]
+    assert "RUN STATS WARNING (run_config.meta.warn_stats): plans degraded" in caplog.text
+
+
+def test_a_raising_run_end_hook_never_breaks_the_flush(caplog):
+    pushed = []
+    store = {"warn_stats": _WarnAgg(boom=True), "quiet": _WarnAgg(lines=())}
+    with caplog.at_level(logging.WARNING):
+        run_stats.flush(store, lambda k, v: pushed.append(k) or True)
+    assert pushed == ["warn_stats", "quiet"]
+    assert "run_end_warnings raised" in caplog.text and "RUN STATS WARNING" not in caplog.text

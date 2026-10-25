@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pytest
 
+from apps.container_logistics.scenario import run_declaration as RD
+
 from apps.container_logistics.datagen import hauliers as H
 from apps.container_logistics.datagen.preprocess import SpecValidationError
 from apps.container_logistics.scenario import scenario_config as SC
@@ -167,6 +169,19 @@ def _main_inputs(monkeypatch, profile, env=None):
 def test_working_hours_stamp_only_when_present(monkeypatch):
     record = {"axis": "elapsed", "hauliers": {"acme": [21600, 72000]}}
     settings, name, _ = _main_inputs(monkeypatch, {"working_hours": record})
-    assert settings == {"WORKING_HOURS": record} and name == "base"
+    seg = RD.working_hours_run_name_segment(record)
+    assert settings == {"WORKING_HOURS": record} and name == f"base · {seg}"
+    assert seg.startswith("hours:06-20@") and len(seg) == len("hours:06-20@") + 6
     settings, name, _ = _main_inputs(monkeypatch, {})
     assert settings == {} and name == "base"
+
+
+def test_the_hours_segment_names_the_hour_set():
+    seg = RD.working_hours_run_name_segment
+    a = {"axis": "elapsed", "hauliers": {"acme": [21600, 72000], "cargo": [21600, 72000]}}
+    assert seg(a).startswith("hours:06-20@")
+    assert seg(a) == seg({"axis": "elapsed", "hauliers": {"cargo": [21600, 72000], "acme": [21600, 72000]}})
+    assert seg(a) != seg({"axis": "elapsed", "hauliers": {"acme": [21600, 72000]}})  # who is listed matters
+    assert seg({"hauliers": {"acme": [21600, 72000], "cargo": [28800, 79200]}}).startswith("hours:mixed@")
+    assert seg({"hauliers": {"acme": [79200, 23400]}}).startswith("hours:22-0630@")
+    assert seg({"hauliers": {}}) is None and seg(None) is None

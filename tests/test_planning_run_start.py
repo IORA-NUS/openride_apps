@@ -14,7 +14,7 @@ What is pinned:
   into the assignment profiles as ``unassigned_order_max_wait_steps`` (critique M11);
   a run without a planning declaration gets none of it.
 - A solver's own run-name segment may not use a framework run-input prefix
-  (``oracle:``, ``cadence:``, ``orders:``).
+  (``oracle:``, ``cadence:``, ``orders:``, ``hours:``).
 - **R5** -- a ``top_only`` policy is refused as ``--solver`` and is not listed as a
   per-scope solver.
 
@@ -207,7 +207,7 @@ def test_orphan_timeout_raise(hold, current, want):
     assert RD.planning_orphan_timeout(None, current) is None
 
 
-@pytest.mark.parametrize("segment", ["oracle:day", "cadence:6", "orders:2000", "oracle:anything"])
+@pytest.mark.parametrize("segment", ["oracle:day", "cadence:6", "orders:2000", "oracle:anything", "hours:06-20@abcdef"])
 def test_framework_run_input_prefixes_are_refused_as_solver_segments(segment):
     with pytest.raises(RD.RunDeclarationError, match="framework run-input tag"):
         RD.check_run_declaration(_tree(segments=(segment,)), settings_keys=(), profile={})
@@ -450,3 +450,13 @@ def test_the_planning_and_working_hours_stamps_name_the_elapsed_axis(monkeypatch
         assert sm.orsim_settings[key]["axis_origin"] == "2020-01-01 08:00:00", key
     assert coll["a"]["profile"]["working_hours"] == hours  # the agents' record is untouched
     assert RD.axis_explicit_record({"hauliers": {}}) == {"hauliers": {}, "axis": "elapsed"}
+
+
+def test_the_bind_limit_is_the_run_start_cap():
+    """One constant: a declaration R2 accepts is never refused by R4 for its hold."""
+    from apps.container_logistics.policies.dispatch import bind as B
+
+    assert RD.PLANNING_HOLD_CAP_SECONDS == B.PLANNING_MAX_HOLD_LIMIT == 300
+    B.normalise_planning({**DAY, "max_hold_seconds": 300}, "t")
+    with pytest.raises(PolicyError, match=r"1\.\.300 \(got 301\)"):
+        B.normalise_planning({**DAY, "max_hold_seconds": 301}, "t")

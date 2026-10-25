@@ -11,8 +11,11 @@ belong to the aggregator (the solver side); the framework only drives it.
 
 Per tick (:func:`record_tick`): ``forced = agg.fold(tick_notes, clock)``; if ``forced``
 and ``agg.push_due(force=True)``: mark + write; then if ``agg.push_due()``: mark +
-write. At agent close (:func:`flush`): a forced write of every aggregator. A tick whose
-result was discarded (message 18) is never folded.
+write. At agent close (:func:`flush`): a forced write of every aggregator, then the
+aggregator's OPTIONAL ``run_end_warnings() -> list[str]`` (when it defines one), each line
+logged at WARNING by the framework (``RUN STATS WARNING (run_config.meta.<key>): ...``) so a
+degraded run says so in the run's log, not only in its record. A tick whose result was
+discarded (message 18) is never folded.
 
 Containment (review L7): the aggregator is solver code running inside the assignment
 tick, AFTER the pairs were committed. Anything it raises (construction, ``fold``,
@@ -108,6 +111,9 @@ class RunStatsAggregator(Protocol):
     @classmethod
     def empty_snapshot(cls) -> dict[str, Any]:
         """The snapshot before any tick was folded."""
+
+    # Optional: ``run_end_warnings(self) -> list[str]`` -- WARNING lines the framework logs
+    # once, at the final flush (agent close). Absent: nothing is logged.
 
 
 def _meta_key_problem(key: Any) -> str | None:
@@ -229,6 +235,17 @@ def flush(store: MutableMapping[str, Any], push: Push) -> None:
             _push_if_due(agg, key, push, force=True)
         except Exception as exc:  # noqa: BLE001 - contained (L7)
             _retire(store, key, exc, push, "final push")
+            continue
+        warnings = getattr(agg, "run_end_warnings", None)
+        if not callable(warnings):
+            continue
+        try:
+            lines = list(warnings() or ())
+        except Exception:  # noqa: BLE001 - a warning hook never breaks the close
+            logger.error("run-stats aggregator for run_config.meta.%s: run_end_warnings raised", key, exc_info=True)
+            continue
+        for line in lines:
+            logger.warning("RUN STATS WARNING (run_config.meta.%s): %s", key, line)
 
 
 def patch_run_config_meta(app: Any, key: str, value: Any) -> bool:

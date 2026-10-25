@@ -77,6 +77,7 @@ from __future__ import annotations
 import hashlib
 import itertools
 import logging
+import math
 import pickle
 import random
 from dataclasses import dataclass
@@ -156,6 +157,14 @@ class PlanningWindow:
     ``now_step + 1`` under ``"none"``); ``now_step`` the step being decided;
     ``step_seconds`` the sim seconds per step. A separate value, not new fields of
     :class:`DispatchClock` (aggregators receive the clock, and capture records it).
+
+    ``hold_started_s`` (review V-m2) is the agent's ``time.monotonic()`` at the moment it
+    published this step's planning hold (system-wide on Linux, so comparable inside the
+    agent process), or ``None`` when no hold went out (offline: battery, fixtures, bench;
+    or the inline fallback). It is a WALL-TIME budget anchor only -- the scheduler's hold
+    runs from that instant, so a top that budgets its solve against the declared
+    ``max_hold_seconds`` should count from here, not from when its ``solve_tick`` began
+    (the app's reads come in between). Never a decision input.
     """
 
     reason: str
@@ -164,6 +173,7 @@ class PlanningWindow:
     end_step: int
     now_step: int
     step_seconds: int
+    hold_started_s: float | None = None
 
     def __post_init__(self) -> None:
         if self.reason not in PLANNING_REASONS:
@@ -172,6 +182,9 @@ class PlanningWindow:
             value = getattr(self, name)
             if type(value) is not int:
                 raise ValueError(f"PlanningWindow.{name} must be an int (got {value!r})")
+        h = self.hold_started_s
+        if h is not None and (type(h) not in (int, float) or not math.isfinite(h)):
+            raise ValueError(f"PlanningWindow.hold_started_s must be a finite number or None (got {h!r})")
         if self.step_seconds < 1 or self.end_step < self.start_step:
             raise ValueError(f"PlanningWindow: step_seconds >= 1 and end_step >= start_step required (got {self!r})")
 

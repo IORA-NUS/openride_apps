@@ -104,9 +104,10 @@ class _App:
         assert not self.busy, "two steps ran concurrently on one app"
         self.busy = True
 
-    def plan(self, sim_clock, step, due):
+    def plan(self, sim_clock, step, due, **kw):
         self._enter()
         self.calls.append(("plan", step, [m for _t, m in self.client.sent]))
+        self.plan_kwargs = getattr(self, "plan_kwargs", []) + [kw]
         self.sched.mark(due, self.decl, step_seconds=240)
         if self.plan_seconds:
             eventlet.sleep(self.plan_seconds)
@@ -509,3 +510,14 @@ def test_a_failure_the_inline_fallback_cannot_survive_is_orsims_error_reply(monk
     [reply] = _replies(agent)
     assert reply["action"] == "error" and "bad clock" in reply["details"]
     assert agent._planning_active is False and agent.message_processing_active is False
+
+
+def test_the_plan_is_handed_the_hold_publish_instant(monkeypatch):
+    """Review V-m2: the planning tick's budget anchor is the hold publish, not the plan start."""
+    agent, app = _agent(monkeypatch)
+    before = time.monotonic()
+    _deliver(agent, _step(0))
+    _spin(agent, lambda: not agent._planning_active)
+    [kw] = app.plan_kwargs
+    assert before <= kw["hold_started_s"] <= time.monotonic()
+    assert agent._planning_hold_started_s is None  # consumed: never reused by a later plan

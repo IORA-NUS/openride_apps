@@ -437,7 +437,14 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         outcome = runner.run(tick)
         self._tick_contract_events = (
             runner.stats.get("violations", 0) + runner.stats.get("crashes", 0) - events_before)
-        self._store_prefetch(outcome)
+        # Review V-m1: a kept prefetch is the top's proof that its result was COMMITTED (its
+        # next tick reads a non-empty lookup as "my pairs went out"). So it is staged only
+        # once the accounting and the run stats below succeeded, and kept only when
+        # ``publish`` then sent every pair (``_staged_prefetch``); any exception on the way
+        # leaves the next tick without one (the top falls back to per-pair evidence).
+        # ``_prefetch`` was already consumed by this tick's read. Empty on every default run.
+        self._prefetch = ()
+        self._staged_prefetch = ()
         mtt = prof.get("max_travel_time_pickup")
 
         def own_allowed(t, o):
@@ -460,6 +467,7 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             if store is None:
                 store = self._run_stats = {}
             run_stats.record_tick(store, stats_cls, outcome.tick_notes, tick.clock, self._patch_run_config_meta)
+        self._staged_prefetch = self._result_prefetch(outcome)
         if self._share_tags:
             logging.info("Planner %s: %d cross-company assignment(s) this tick.",
                          runner.resolved.label, len(self._share_tags))
@@ -594,12 +602,17 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             kwargs["run_id"] = str(getattr(self, "run_id", "") or "")
         return kwargs
 
+    @staticmethod
+    def _result_prefetch(outcome) -> tuple:
+        """The top's ``Result.prefetch`` of ``outcome`` (empty when the result was discarded)."""
+        result = getattr(outcome, "result", None)
+        return tuple(getattr(result, "prefetch", ()) or ()) if result is not None else ()
+
     def _store_prefetch(self, outcome) -> None:
         """Keep the top's ``Result.prefetch`` for the next tick (empty when the result was discarded)."""
-        result = getattr(outcome, "result", None)
-        self._prefetch = tuple(getattr(result, "prefetch", ()) or ()) if result is not None else ()
+        self._prefetch = self._result_prefetch(outcome)
 
-    def plan(self, sim_clock: str, time_step: int, due=None):
+    def plan(self, sim_clock: str, time_step: int, due=None, *, hold_started_s: float | None = None):
         """Run one PLANNING tick (``kind="plan"``) for the bound top; commits and publishes nothing.
 
         - trucks: every online truck (no busy and no working-hours filter: plan D6);
@@ -615,6 +628,8 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         ``time_step + 1``; ``start_step`` is the boundary being planned (a late plan has
         ``now_step > start_step``). Returns the ``TickOutcome``; the top's ``prefetch`` is
         kept for the next tick and its notes fold into the declared run stats.
+        ``hold_started_s``: the agent's ``time.monotonic()`` when it published the hold
+        (``PlanningWindow.hold_started_s``, review V-m2), else ``None``.
         """
         from apps.container_logistics.policies.dispatch.tick import DispatchClock, PlanningWindow  # local: cycle rule
 
@@ -631,7 +646,7 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         spd = assign_planning.steps_per_day(step_seconds)
         end = (due.day + 1) * spd if spec.get("foresight") == "day" else step + 1
         window = PlanningWindow(reason=due.reason, day=due.day, start_step=due.boundary, end_step=end,
-                                now_step=step, step_seconds=step_seconds)
+                                now_step=step, step_seconds=step_seconds, hold_started_s=hold_started_s)
         # Marked BEFORE the reads: a failing plan is not retried on every following step
         # (each retry would hold the barrier again); the next boundary plans again.
         self._planning_schedule().mark(due, spec, step_seconds=step_seconds)
@@ -688,7 +703,7 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             run_id=str(getattr(self, "run_id", "") or ""),
         )
         outcome = runner.run(tick)
-        self._store_prefetch(outcome)
+        self._prefetch = ()  # V-m1: kept only once the run stats below succeeded
         stats_cls = runner.tree.top.declaration.run_stats
         if stats_cls is not None and outcome.result is not None:
             from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
@@ -697,6 +712,7 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             if store is None:
                 store = self._run_stats = {}
             run_stats.record_tick(store, stats_cls, outcome.tick_notes, tick.clock, self._patch_run_config_meta)
+        self._store_prefetch(outcome)
         logging.info("AssignmentApp: planning tick %s day %d step %d: %d truck(s), %d engaged, %d order(s), "
                      "%d prefetch id(s)", due.reason, due.day, step, len(trucks), len(engaged), len(orders),
                      len(getattr(self, "_prefetch", ()) or ()))
@@ -704,6 +720,11 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
 
     def publish(self, assignment: List[Tuple[Dict[str, Any], Dict[str, Any]]]) -> None:
         share_tags = getattr(self, "_share_tags", {}) or {}
+        # V-m1: the dispatch tick's staged prefetch becomes the next tick's only once every
+        # pair below went out (taken first, so a raise anywhere here drops it).
+        staged = getattr(self, "_staged_prefetch", ())
+        self._staged_prefetch = ()
+        sent_all = True
         for truck, order in assignment:
             tid = truck.get("_id")
             if not tid:
@@ -721,4 +742,7 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             try:
                 self.messenger.client.publish(topic, json.dumps(payload.to_wire_dict(), default=str))
             except Exception:
+                sent_all = False
                 logging.exception("Failed to publish assignment to %s", topic)
+        if staged and sent_all:
+            self._prefetch = staged

@@ -66,6 +66,7 @@ from apps.container_logistics.policies.compat.cooperation_record import (
     COOPERATION_SETTING,
     cooperation_record,
 )
+from apps.container_logistics.policies.dispatch.bind import PLANNING_MAX_HOLD_LIMIT
 from apps.container_logistics.policies.framework import PolicyError
 
 __all__ = [
@@ -79,6 +80,7 @@ __all__ = [
     "check_run_declaration",
     "declared_planning",
     "planning_run_name_segment",
+    "working_hours_run_name_segment",
     "planning_orphan_timeout",
     "PLANNING_HOLD_CAP_SECONDS",
     "PLANNING_AXIS",
@@ -174,17 +176,20 @@ _LIFECYCLE_PREFIX = "lifecycle:"
 
 #: Run-name segment prefixes the FRAMEWORK writes for the day-plan run inputs
 #: (``oracle:day`` for a planning declaration with day foresight, ``cadence:N`` for
-#: ``--assignment-cadence``, ``orders:N`` for ``--max-orders-per-tick``). A solver
-#: segment with one of them would label the run with an input it did not get.
-FRAMEWORK_SEGMENT_PREFIXES = ("oracle:", "cadence:", "orders:")
+#: ``--assignment-cadence``, ``orders:N`` for ``--max-orders-per-tick``, ``hours:...`` for
+#: a run whose assignment profile compiled working hours). A solver segment with one of
+#: them would label the run with an input it did not get.
+FRAMEWORK_SEGMENT_PREFIXES = ("oracle:", "cadence:", "orders:", "hours:")
 
 #: The largest ``max_hold_seconds`` a planning declaration may ask for (refusal R4).
 #: A held step stops every agent's clock, and a run's whole wall time must stay well
 #: inside the Celery/Redis broker's 6 h ``visibility_timeout`` (past it every agent task
 #: is redelivered as a duplicate agent): the cap would be ``min(600, (6 h - expected
 #: wall) / solves)``; with ~140-170 planning solves per 7-day run that is a few minutes,
-#: kept as this constant (plan N1-N3 D2, F1 item 10).
-PLANNING_HOLD_CAP_SECONDS = 300
+#: kept as this constant (plan N1-N3 D2, F1 item 10). It is the bind contract's own R2
+#: limit (``dispatch.bind.PLANNING_MAX_HOLD_LIMIT``): one constant, so R4 is the backstop of
+#: a declaration that did not come through ``bind``.
+PLANNING_HOLD_CAP_SECONDS = PLANNING_MAX_HOLD_LIMIT
 
 #: The time axis day boundaries and working hours are measured on: seconds ELAPSED since
 #: ``REFERENCE_TIME`` (the axis the demand curve is authored on; plan D5).
@@ -406,6 +411,40 @@ def _planning_record(name: str, planning: Mapping[str, Any], lifecycle_mode: str
     record["oracle"] = foresight == "day"
     record["axis"] = PLANNING_AXIS
     return record
+
+
+def _hhmm(seconds: Any) -> str:
+    s = int(round(float(seconds))) % 86400 if float(seconds) != 86400 else 86400
+    h, m = divmod(s // 60, 60)
+    return f"{h:02d}" if m == 0 else f"{h:02d}{m:02d}"
+
+
+def working_hours_run_name_segment(record: Any) -> str | None:
+    """``"hours:<form>@<digest>"`` for a compiled working-hours record, else ``None``.
+
+    Working hours are a COMPARABILITY boundary (the framework drops off-shift trucks from
+    every tick), so a run that has them says so in its name, like ``cadence:`` / ``orders:``.
+    ``<form>`` is ``HH-HH`` (``HHMM`` when not on the hour) when every listed haulier keeps
+    the same window, else ``mixed``; ``<digest>`` is 6 hex of blake2b over the canonical
+    per-haulier map, so two different hour sets never share a name (which hauliers are
+    listed matters: an absent haulier is always on). ``None`` without hauliers.
+    """
+    import hashlib
+    import json
+
+    hauliers = record.get("hauliers") if isinstance(record, Mapping) else None
+    if not isinstance(hauliers, Mapping) or not hauliers:
+        return None
+    canon = {str(h): [float(x) for x in v] for h, v in sorted(hauliers.items(), key=lambda kv: str(kv[0]))}
+    windows = {tuple(v) for v in canon.values()}
+    if len(windows) == 1:
+        start, end = next(iter(windows))
+        form = f"{_hhmm(start)}-{_hhmm(end)}"
+    else:
+        form = "mixed"
+    digest = hashlib.blake2b(json.dumps(canon, sort_keys=True, separators=(",", ":")).encode(),
+                             digest_size=3).hexdigest()
+    return f"hours:{form}@{digest}"
 
 
 def planning_run_name_segment(planning: Mapping[str, Any] | None) -> str | None:

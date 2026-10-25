@@ -204,6 +204,9 @@ class AssignmentAgent(TransportSelectingAgent, ORSimAgent):
                 "reason": "planning",
             }
             self._planning_active = True
+            # V-m2: the scheduler's hold runs from (about) this instant; the planning tick
+            # budgets its solve from here, not from after the app's reads.
+            self._planning_hold_started_s = time.monotonic()
             try:
                 self.messenger.client.publish(self._scheduler_topic(), json.dumps(hold))
             except Exception:
@@ -332,8 +335,13 @@ class AssignmentAgent(TransportSelectingAgent, ORSimAgent):
         due = self._planning_due_for(self.current_time_step)
         if due is None:
             return False
+        held = getattr(self, "_planning_hold_started_s", None)
+        self._planning_hold_started_s = None
         try:
-            app.plan(self.get_current_time_str(), self.current_time_step, due)
+            if held is None:
+                app.plan(self.get_current_time_str(), self.current_time_step, due)
+            else:
+                app.plan(self.get_current_time_str(), self.current_time_step, due, hold_started_s=held)
         except Exception:
             # A failed plan must not skip this step's dispatch (nor its cadence draw, the
             # module-RNG pin): log it; the next boundary plans again.

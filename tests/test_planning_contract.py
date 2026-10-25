@@ -44,7 +44,7 @@ from apps.container_logistics.policies.testing import fixtures as fx
 from tests.planning_toy import PLANNING, register_toys
 
 _R2_TAIL = ("planning is {at_day_start: bool, every_steps: int >= 1 or null, foresight: 'none' | 'day', "
-            "max_hold_seconds: int 1..600}.")
+            "max_hold_seconds: int 1..300}.")
 
 
 @pytest.fixture
@@ -107,8 +107,8 @@ def test_declaration_planning_defaults_to_none_and_copies_the_mapping():
     ({"every_steps": True}, "every_steps must be an integer >= 1 or null (got True)"),
     ({"every_steps": 1.5}, "every_steps must be an integer >= 1 or null (got 1.5)"),
     ({"at_day_start": True, "foresight": "week"}, "foresight must be 'none' or 'day' (got 'week')"),
-    ({"at_day_start": True, "max_hold_seconds": 601}, "max_hold_seconds must be an integer in 1..600 (got 601)"),
-    ({"at_day_start": True, "max_hold_seconds": 0}, "max_hold_seconds must be an integer in 1..600 (got 0)"),
+    ({"at_day_start": True, "max_hold_seconds": 301}, "max_hold_seconds must be an integer in 1..300 (got 301)"),
+    ({"at_day_start": True, "max_hold_seconds": 0}, "max_hold_seconds must be an integer in 1..300 (got 0)"),
     ({}, "it never plans (at_day_start is false and every_steps is null)"),
     ({"at_day_start": False, "every_steps": None}, "it never plans (at_day_start is false and every_steps is null)"),
 ])
