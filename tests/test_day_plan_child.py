@@ -19,6 +19,7 @@ pytest.importorskip("ortools")
 from apps.container_logistics.policies.solver_lib.day_plan import child, runner  # noqa: E402
 from apps.container_logistics.policies.solver_lib.day_plan import store as plan_store  # noqa: E402
 from apps.container_logistics.policies.solver_lib.day_plan.instance import (  # noqa: E402
+    DayPlanParams,
     build_inputs,
     store_job_fields,
 )
@@ -90,15 +91,18 @@ def test_mcf_and_mip_agree_on_a_200_job_day(day200):
 def test_reported_km_are_the_true_arc_costs(day200):
     _, _, inp = day200
     out = child.solve_inputs(inp, backend="auto")
-    arcs_by_comp = {}
+    cost = {}
     for comp in inp["components"]:
         jobs = sorted((j for j in inp["jobs"] if j["owner_class"] in comp), key=lambda x: x["id"])
         trucks = sorted((t for t in inp["trucks"] if t["class"] in comp), key=lambda x: x["id"])
-        arcs_by_comp[tuple(comp)] = child._component_arcs(inp, jobs, trucks, k_succ=None, k_start=None)
+        a = child._component_arcs(inp, jobs, trucks, k_succ=None, k_start=None)  # unit trucks
+        ids = [x["id"] for x in jobs]
+        cost.update({(ids[x], ids[y]): c for x, y, c in zip(a["src"].tolist(), a["dst"].tolist(), a["cost"].tolist())})
+        cost.update({(trucks[x]["id"], ids[y]): c
+                     for x, y, c in zip(a["ssrc"].tolist(), a["sdst"].tolist(), a["scost"].tolist())})
     total = 0.0
     for tid, chain in out["itineraries"].items():
-        a = next(v for v in arcs_by_comp.values() if (tid, chain[0]) in v["start_cost"])
-        total += a["start_cost"][(tid, chain[0])] + sum(a["edge_cost"][x] for x in zip(chain, chain[1:]))
+        total += cost[(tid, chain[0])] + sum(cost[x] for x in zip(chain, chain[1:]))
     assert out["stats"]["empty_m"] == pytest.approx(total, abs=1.0)
     assert sum(out["stats"]["first_leg_m"].values()) <= total + 1e-6
 
@@ -138,13 +142,15 @@ def test_a_fallback_below_the_quality_guard_refuses_the_solve(day200, monkeypatc
     assert row["fallback_guard"]["ok"] is False
 
 
-def test_stability_bonus_keeps_an_equal_cost_previous_plan_in_place():
-    """Two identical trucks make two optimal plans (swap their days). The previous version
-    holds the one the solver would NOT pick on its own: without the bonus the re-plan
-    swaps them back (churn, N0: 1,975 moved jobs); with it, nothing moves."""
+def test_merged_identical_trucks_keep_their_previous_chains():
+    """Identical trucks are one start node of capacity c (coop_dispatch E2). Even when the
+    previous version gave a member the chain the solver would hand another member, the
+    split back to trucks follows the previous head, so an unchanged re-plan moves nothing
+    with or without the stability bonus."""
     trucks, orders = synthetic_day(23, n_orders=150, n_trucks=30, jitter=False)
     first = _build(trucks, orders, params={"stability_bonus_m": 0.0})
     out = runner.solve(first, backend="auto")
+    assert any(r["starts"] < r["trucks"] for r in out["stats"]["components"]), "trucks were merged"
     by_key = {}
     for t in first["trucks"]:
         if t["id"] in out["itineraries"]:
@@ -152,18 +158,44 @@ def test_stability_bonus_keeps_an_equal_cost_previous_plan_in_place():
     a, b = next(v for v in by_key.values() if len(v) >= 2)[:2]
     prev = dict(out["itineraries"])
     prev[a], prev[b] = out["itineraries"][b], out["itineraries"][a]
-    moved = {}
     for bonus in (0.0, 50.0):
         st = plan_store.MemoryPlanStore("stab", kv=plan_store.MemoryKV())
         st.write_version(0, prev, store_job_fields(first))
         again = _build(trucks, orders, state=st.state(), params={"stability_bonus_m": bonus})
-        assert again["prev_arcs"], "the previous version's arcs reach the child"
         re = runner.solve(again, backend="auto")
-        moved[bonus] = st.write_version(0, re["itineraries"], store_job_fields(again))["jobs_moved"]
-        # the bonus changes which optimum is picked, never its true cost
+        assert st.write_version(0, re["itineraries"], store_job_fields(again))["jobs_moved"] == 0, bonus
         assert re["stats"]["empty_m"] == pytest.approx(out["stats"]["empty_m"], abs=1.0)
-    assert moved[0.0] >= len(prev[a]) + len(prev[b]) > 0
-    assert moved[50.0] == 0
+
+
+def _two_truck_tie(prev_arcs, bonus):
+    """Two trucks of one class at the SAME spot but different ready times (so NOT merged),
+    two jobs picked up right there at the same time: swapping them costs exactly the same."""
+    cls = "acme|20ft|"
+    loc = [1.3, 103.8]
+    jobs = [dict(id=f"j{k}", owner="acme", owner_class=cls, classes=[cls], r=10_000.0, e=20_000.0,
+                 slack=0.0, pickup=loc, dropoff=[1.3 + 0.01 * (k + 1), 103.8]) for k in range(2)]
+    trucks = [dict(id="t0", ready_s=0.0, loc=loc, anchor="position", anchor_job=None, **{"class": cls}),
+              dict(id="t1", ready_s=500.0, loc=loc, anchor="position", anchor_job=None, **{"class": cls})]
+    params = DayPlanParams(stability_bonus_m=bonus, wait_limit_min=1.0).as_dict()
+    inp = dict(day=0, params=params, classes={cls: {"haulier": "acme"}}, class_attrs={cls: ["20ft", [], None]},
+               cooperation=[[cls, cls]], components=[[cls]], trucks=trucks, jobs=jobs, prev_arcs=prev_arcs)
+    return inp, runner.solve(inp, backend="auto")
+
+
+def test_stability_bonus_keeps_an_equal_cost_previous_plan_on_distinct_trucks():
+    """Where merging cannot help (different ready times), the bonus is what keeps the
+    previous one of two equal-cost plans (N0: 1,975 -> 73 moved)."""
+    _, base = _two_truck_tie([], 0.0)
+    assert base["stats"]["components"][0]["starts"] == 2  # not merged
+    canon = base["itineraries"]
+    assert sorted(len(c) for c in canon.values()) == [1, 1]
+    swapped = {"t0": canon["t1"], "t1": canon["t0"]}
+    prev_arcs = sorted([[t, c[0]] for t, c in swapped.items()])
+    _, no_bonus = _two_truck_tie(prev_arcs, 0.0)
+    _, bonus = _two_truck_tie(prev_arcs, 50.0)
+    assert no_bonus["itineraries"] == canon != swapped     # without it the tie flips back
+    assert bonus["itineraries"] == swapped                 # with it the previous plan stays
+    assert bonus["stats"]["empty_m"] == pytest.approx(no_bonus["stats"]["empty_m"])
 
 
 def test_greedy_backend_runs_without_importing_the_solvers(day200):
