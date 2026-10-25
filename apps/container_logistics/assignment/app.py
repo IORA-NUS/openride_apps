@@ -14,7 +14,7 @@ _STALE_WORKER_HINT = (
 from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from apps.container_logistics.rebate import RebateBook
-from apps.container_logistics.statemachine import ContainerLogisticsActions
+from apps.container_logistics.statemachine import ContainerLogisticsActions, OrderStateMachine
 from apps.container_logistics.policies.compat.run_stats import LegacyAppAccessors
 from apps.container_logistics.policies.compat.wire import wire_fields
 from apps.container_logistics.policies.framework import UnknownPolicyError
@@ -22,6 +22,7 @@ from orsim.lifecycle import ORSimApp
 
 from . import accounting
 from . import constraints as assign_constraints
+from . import planning as assign_planning
 from .manager import AssignmentManager
 
 # Optional: run each (CPU-bound) per-group solve in a real worker thread so it yields
@@ -197,6 +198,9 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         if runner.policy is not self._solver and runner.tree.leaf.instance is not self._solver:
             self._solver = runner.policy  # the stale top was rebuilt (bind_instance)
         self._dispatch_runner_cache = (_key(runner), runner)
+        # The top's planning declaration, cached HERE (critique minor 2): the agent asks
+        # for it on every step, and a step must not rebuild (or fail to rebuild) a runner.
+        self._planning_decl = runner.tree.declaration.planning
         return runner
 
     def _order_publish_payload(self, order: Dict[str, Any]) -> Dict[str, Any]:
@@ -355,8 +359,20 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             reject_if_active_haul_trip=reject_busy,
             online_state_name=self.manager.online_state_name(),
         )
+        if prof.get("working_hours"):
+            # F5: only a profile that compiled working hours filters, and only DISPATCH
+            # ticks (a planning tick sees every online truck; plan D6).
+            candidates = self._on_shift_trucks(prof["working_hours"], candidates, time_step)
 
-        assignment = self._dispatch_tick(prof, candidates, orders, sim_clock, time_step, solve_in_thread)
+        lookup = None
+        if getattr(self, "_prefetch", None):
+            # F3: the top asked for these orders on its previous tick. NO request is made
+            # on any tick without a pending prefetch (every non-planning run).
+            lookup, extra = self._prefetch_lookup(projection_order, claimed_order_ids, orders)
+            orders = orders + extra
+
+        assignment = self._dispatch_tick(prof, candidates, orders, sim_clock, time_step, solve_in_thread,
+                                         lookup=lookup)
 
         # Haulier scoping is enforced (no fallback). If there were assignable trucks AND
         # unassigned orders but nothing matched, the data is almost certainly missing or
@@ -386,6 +402,8 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
         sim_clock: str,
         time_step: int,
         solve_in_thread: bool,
+        *,
+        lookup: Dict[str, Dict[str, Any]] | None = None,
     ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
         """Decide the whole tick with the selected policy; account the shares; record provenance.
 
@@ -412,12 +430,14 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             seed=self._tick_seed(str(getattr(self, "run_id", "")), int(time_step or 0)),
             execute=_eventlet_tpool.execute if use_tpool else _direct_call,
             dials=self._solver_params,
+            **self._planning_tick_kwargs(runner, lookup),
         )
         events_before = runner.stats.get("violations", 0) + runner.stats.get("crashes", 0)
         self._tick_contract_events = 0
         outcome = runner.run(tick)
         self._tick_contract_events = (
             runner.stats.get("violations", 0) + runner.stats.get("crashes", 0) - events_before)
+        self._store_prefetch(outcome)
         mtt = prof.get("max_travel_time_pickup")
 
         def own_allowed(t, o):
@@ -444,6 +464,243 @@ class AssignmentApp(LegacyAppAccessors, ORSimApp):
             logging.info("Planner %s: %d cross-company assignment(s) this tick.",
                          runner.resolved.label, len(self._share_tags))
         return outcome.pairs
+
+    # --- planning (NetworkFlowDay F1), prefetch (F3), working hours (F5) ---------------
+    #
+    # Every method below is reached ONLY when the bound top declared ``planning``, a
+    # previous tick returned a non-empty ``Result.prefetch``, or the profile compiled
+    # ``working_hours``. No shipped scenario does any of the three, so the default tick
+    # makes exactly the requests it always made (pinned by tests/test_assignment_planning_app.py).
+
+    #: Fields of an order document a lookup / prefetched order carries beyond the tick's own projection.
+    _LOOKUP_EXTRA_FIELDS = ("truck", "meta")
+    #: The key a planning tick's ``engaged`` order document carries its open haul under.
+    ENGAGED_HAUL_KEY = "open_haul"
+    #: The key a ``lookup`` document carries the truck of its open haul under (``None``: none).
+    CLAIMED_BY_KEY = "claimed_by"
+
+    def planning_spec(self):
+        """The bound top's ``Declaration.planning`` (cached when the runner was built), or ``None``."""
+        return getattr(self, "_planning_decl", None)
+
+    def _step_seconds_value(self) -> int:
+        """Sim seconds per step: set by the agent (``STEP_INTERVAL``); 240 if never handed over."""
+        value = getattr(self, "_step_seconds", None)
+        if not value:
+            helper = getattr(self, "agent_helper", None)
+            value = ((getattr(helper, "orsim_settings", None) or {}).get("STEP_INTERVAL")
+                     if helper is not None else None)
+        if not value:
+            if not getattr(self, "_warned_step_seconds", False):
+                logging.warning("AssignmentApp: STEP_INTERVAL was never handed over; assuming 240 s per step")
+                self._warned_step_seconds = True
+            value = 240
+        return int(value)
+
+    def _planning_schedule(self) -> "assign_planning.PlanningSchedule":
+        sched = getattr(self, "_plan_schedule", None)
+        if sched is None:
+            sched = self._plan_schedule = assign_planning.PlanningSchedule()
+        return sched
+
+    def planning_due(self, time_step: Any, *, step_seconds: Any = None, horizon_steps: Any = None):
+        """The ``planning.Due`` of ``time_step``, or ``None``: never when the top declared no planning."""
+        spec = self.planning_spec()
+        if not spec:
+            return None
+        if horizon_steps is None:
+            horizon_steps = getattr(self, "_sim_horizon_steps", None)
+        return self._planning_schedule().due(
+            spec, time_step, step_seconds=step_seconds or self._step_seconds_value(),
+            horizon_steps=horizon_steps)
+
+    def _on_shift_trucks(self, record: Dict[str, Any], trucks: List[Dict[str, Any]], time_step: Any):
+        """F5: the trucks whose haulier is inside its working hours at ``time_step`` (elapsed axis)."""
+        second = assign_planning.seconds_of_day(int(time_step or 0), self._step_seconds_value())
+        return [t for t in trucks
+                if assign_planning.on_shift(record, assign_constraints.haulier_of(t), second)]
+
+    def _lookup_projection(self, projection_order: Dict[str, Any]) -> Dict[str, Any]:
+        proj = dict(projection_order)
+        for key in self._LOOKUP_EXTRA_FIELDS:
+            proj[key] = 1
+        return proj
+
+    def _claimed_by(self, rows: List[Dict[str, Any]]) -> Dict[str, str]:
+        """``{order_id: truck_id}`` of the open hauls in ``rows``."""
+        out: Dict[str, str] = {}
+        for row in rows:
+            oid, tid = row.get("order"), row.get("truck")
+            if oid and tid:
+                out[str(oid)] = str(tid)
+        return out
+
+    def _prefetch_lookup(
+        self,
+        projection_order: Dict[str, Any],
+        claimed_order_ids,
+        orders: List[Dict[str, Any]],
+        *,
+        haul_rows: List[Dict[str, Any]] | None = None,
+    ) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+        """The pending prefetch read: ``(lookup, extra orders)`` (and the prefetch is consumed).
+
+        ``lookup`` is ``{order_id: doc}`` for every requested order found (any state), each
+        doc carrying ``claimed_by`` (the truck of its open haul, else ``None``: critique M4,
+        a doc can still read ``unassigned`` while its haul exists). ``extra`` are the
+        looked-up orders the tick may also match: ``unassigned``, not claimed, not already in
+        ``orders``, in prefetch order AFTER the oldest-N. Every pair is still judged by
+        ``permitted`` and the result check. A failed read logs and yields nothing (the tick
+        then runs on the oldest-N alone, exactly like a tick without a prefetch).
+        """
+        ids = list(getattr(self, "_prefetch", ()) or ())
+        self._prefetch = ()
+        if not ids:
+            return {}, []
+        try:
+            docs = self.manager.orders_by_ids(ids, projection=self._lookup_projection(projection_order))
+            if haul_rows is None:
+                haul_rows = self.manager.open_haul_rows()
+        except Exception:
+            logging.exception("AssignmentApp: the prefetch read of %d order(s) failed; "
+                              "this tick runs without its lookup", len(ids))
+            return {}, []
+        claimed_by = self._claimed_by(haul_rows)
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for doc in docs:
+            oid = str(doc.get("_id"))
+            if oid in by_id:
+                continue
+            item = dict(doc)
+            item[self.CLAIMED_BY_KEY] = claimed_by.get(oid)
+            by_id[oid] = item
+        lookup = {oid: by_id[oid] for oid in dict.fromkeys(str(i) for i in ids) if oid in by_id}
+        present = {str(o.get("_id")) for o in orders}
+        claimed = {str(x) for x in (claimed_order_ids or ())}
+        extra: List[Dict[str, Any]] = []
+        for oid, doc in lookup.items():
+            if (doc.get("state") == OrderStateMachine.unassigned.name and oid not in present
+                    and oid not in claimed and doc.get(self.CLAIMED_BY_KEY) is None):
+                extra.append(doc)
+                present.add(oid)
+        return lookup, extra
+
+    def _planning_tick_kwargs(self, runner, lookup) -> Dict[str, Any]:
+        """The planning members of an ordinary DISPATCH tick: none unless a lookup / a planning top."""
+        kwargs: Dict[str, Any] = {}
+        if lookup:
+            kwargs["lookup"] = lookup
+        if runner.tree.declaration.planning is not None:
+            kwargs["run_id"] = str(getattr(self, "run_id", "") or "")
+        return kwargs
+
+    def _store_prefetch(self, outcome) -> None:
+        """Keep the top's ``Result.prefetch`` for the next tick (empty when the result was discarded)."""
+        result = getattr(outcome, "result", None)
+        self._prefetch = tuple(getattr(result, "prefetch", ()) or ()) if result is not None else ()
+
+    def plan(self, sim_clock: str, time_step: int, due=None):
+        """Run one PLANNING tick (``kind="plan"``) for the bound top; commits and publishes nothing.
+
+        - trucks: every online truck (no busy and no working-hours filter: plan D6);
+        - ``engaged``: ``{truck_id: order doc}`` of the open hauls (one paged
+          ``/truck/trip`` read with state + leg start stamps, then the orders by id); each
+          doc carries the haul under ``open_haul`` (``_id``, ``state``, ``stats``);
+        - orders: every ``created`` / ``unassigned`` order with
+          ``meta.request_time_step < window.end_step`` (stable ``_id`` order), minus the
+          orders of open hauls;
+        - ``lookup``: the pending prefetch (as on a dispatch tick).
+
+        The window: ``foresight == "day"`` runs to the end of the run day, ``"none"`` to
+        ``time_step + 1``; ``start_step`` is the boundary being planned (a late plan has
+        ``now_step > start_step``). Returns the ``TickOutcome``; the top's ``prefetch`` is
+        kept for the next tick and its notes fold into the declared run stats.
+        """
+        from apps.container_logistics.policies.dispatch.tick import DispatchClock, PlanningWindow  # local: cycle rule
+
+        prof = self._assignment_profile()
+        runner = self._dispatch_runner(prof)
+        spec = runner.tree.declaration.planning
+        step = int(time_step or 0)
+        step_seconds = self._step_seconds_value()
+        if due is None:
+            due = self.planning_due(step, step_seconds=step_seconds)
+        if due is None:  # a caller asked anyway: plan the step as an on-time interval
+            spd = assign_planning.steps_per_day(step_seconds)
+            due = assign_planning.Due("interval", step, step // spd, step, 0)
+        spd = assign_planning.steps_per_day(step_seconds)
+        end = (due.day + 1) * spd if spec.get("foresight") == "day" else step + 1
+        window = PlanningWindow(reason=due.reason, day=due.day, start_step=due.boundary, end_step=end,
+                                now_step=step, step_seconds=step_seconds)
+        # Marked BEFORE the reads: a failing plan is not retried on every following step
+        # (each retry would hold the barrier again); the next boundary plans again.
+        self._planning_schedule().mark(due, spec, step_seconds=step_seconds)
+        if due.late_steps > 0:
+            logging.warning("AssignmentApp: LATE PLAN %s for day %d boundary step %d planned at step %d "
+                            "(%d step(s) late)", due.reason, due.day, due.boundary, step, due.late_steps)
+
+        respect_online = bool(prof.get("respect_truck_online_state", True))
+        solve_in_thread = bool(prof.get("solve_in_thread", False))
+        projection_truck = {"state": 1, "profile": 1, "persona": 1, "_id": 1, "meta": 1}
+        projection_order = {
+            "state": 1, "profile": 1, "pickup_loc": 1, "dropoff_loc": 1, "pickup_service_time": 1,
+            "dropoff_service_time": 1, "order_size": 1, "_id": 1, "meta": 1,
+        }
+        trucks = self.manager.list_trucks(projection=projection_truck, online_only=respect_online)
+        haul_rows = self.manager.open_haul_rows()
+        claimed_by = self._claimed_by(haul_rows)
+        engaged_ids = [str(r["order"]) for r in haul_rows if r.get("order") and r.get("truck")]
+        engaged_docs = {
+            str(d.get("_id")): d
+            for d in (self.manager.orders_by_ids(engaged_ids, projection=self._lookup_projection(projection_order))
+                      if engaged_ids else [])
+        }
+        engaged: Dict[str, Dict[str, Any]] = {}
+        for row in haul_rows:
+            oid, tid = row.get("order"), row.get("truck")
+            doc = engaged_docs.get(str(oid)) if oid else None
+            if doc is None or not tid:
+                continue
+            item = dict(doc)
+            item[self.ENGAGED_HAUL_KEY] = {"_id": row.get("_id"), "state": row.get("state"),
+                                           "stats": dict(row.get("stats") or {})}
+            engaged[str(tid)] = item
+        orders = [o for o in self.manager.list_open_orders_until(window.end_step, projection=projection_order)
+                  if str(o.get("_id")) not in claimed_by]
+        lookup = None
+        if getattr(self, "_prefetch", None):
+            lookup, _extra = self._prefetch_lookup(projection_order, set(claimed_by), orders,
+                                                   haul_rows=haul_rows)
+        use_tpool = solve_in_thread and _eventlet_tpool is not None
+        tick = runner.tick(
+            candidates=trucks,
+            orders=orders,
+            profile=prof,
+            clock=DispatchClock(sim_clock=sim_clock, time_step=step,
+                                horizon_steps=getattr(self, "_sim_horizon_steps", None)),
+            seed=self._tick_seed(str(getattr(self, "run_id", "")), step),
+            execute=_eventlet_tpool.execute if use_tpool else _direct_call,
+            dials=self._solver_params,
+            kind="plan",
+            planning=window,
+            engaged=engaged,
+            lookup=lookup or None,
+            run_id=str(getattr(self, "run_id", "") or ""),
+        )
+        outcome = runner.run(tick)
+        self._store_prefetch(outcome)
+        stats_cls = runner.tree.top.declaration.run_stats
+        if stats_cls is not None and outcome.result is not None:
+            from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
+
+            store = getattr(self, "_run_stats", None)
+            if store is None:
+                store = self._run_stats = {}
+            run_stats.record_tick(store, stats_cls, outcome.tick_notes, tick.clock, self._patch_run_config_meta)
+        logging.info("AssignmentApp: planning tick %s day %d step %d: %d truck(s), %d engaged, %d order(s), "
+                     "%d prefetch id(s)", due.reason, due.day, step, len(trucks), len(engaged), len(orders),
+                     len(getattr(self, "_prefetch", ()) or ()))
+        return outcome
 
     def publish(self, assignment: List[Tuple[Dict[str, Any], Dict[str, Any]]]) -> None:
         share_tags = getattr(self, "_share_tags", {}) or {}

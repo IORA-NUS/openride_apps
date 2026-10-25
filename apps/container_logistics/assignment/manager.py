@@ -15,6 +15,15 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_PAGE_SIZE = 500
 _DEFAULT_MAX_ORDERS_PER_TICK = 500
+#: Page length of the planning reads (the server's ``PAGINATION_LIMIT`` is 1000).
+_PLANNING_PAGE_SIZE = 1000
+#: Ids per ``_id $in`` request of :meth:`AssignmentManager.orders_by_ids`.
+_ORDERS_BY_IDS_CHUNK = 200
+#: Order states a planning tick reads as still open (not yet matched).
+_OPEN_ORDER_STATES = (OrderStateMachine.created.name, OrderStateMachine.unassigned.name)
+#: The haul-trip leg start stamps a planning tick reads (``truck/trip_manager.py``).
+_HAUL_LEG_STAMPS = ("stats.reposition_started_at", "stats.loaded_started_at")
+_ID_SORT = [["_id", 1]]
 
 
 class AssignmentManager(ResourceClientMixin, ORSimManager):
@@ -156,10 +165,20 @@ class AssignmentManager(ResourceClientMixin, ORSimManager):
         projection: Optional[Dict[str, Any]] = None,
         *,
         max_results: Optional[int] = None,
+        page_size: Optional[int] = None,
+        sort: Optional[List[Any]] = None,
     ) -> List[Dict[str, Any]]:
+        """Every document matching ``where_clause``, page by page (at most ``max_results``).
+
+        ``page_size`` (default: ``max_results`` or the profile's ``assignment_page_size``)
+        sets the page length independently of the cap, so an UNCAPPED read can still use
+        long pages (critique M10). ``sort`` (an Eve sort list, e.g. ``[["_id", 1]]``) makes
+        the skip-pages stable while documents change mid-read; omitted, the request is
+        exactly what it always was (no ``sort`` parameter).
+        """
         items: List[Dict[str, Any]] = []
         page = 1
-        page_size = max_results or self._page_size
+        page_size = page_size or max_results or self._page_size
         while True:
             params: Dict[str, Any] = {
                 "where": json.dumps(where_clause),
@@ -168,6 +187,8 @@ class AssignmentManager(ResourceClientMixin, ORSimManager):
             }
             if projection is not None:
                 params["projection"] = json.dumps(projection)
+            if sort is not None:
+                params["sort"] = json.dumps(sort)
             result = self._get(base_url, params)
             batch = result.get("_items") or []
             if not batch:
@@ -289,6 +310,89 @@ class AssignmentManager(ResourceClientMixin, ORSimManager):
             oid = row.get("order")
             if oid:
                 out.add(str(oid))
+        return out
+
+    # --- planning reads (NetworkFlowDay F1/F3; only a planning top or a prefetch reaches them) ---
+
+    def list_open_orders_until(
+        self,
+        end_step: int,
+        projection: Optional[Dict[str, Any]] = None,
+        *,
+        page_size: int = _PLANNING_PAGE_SIZE,
+    ) -> List[Dict[str, Any]]:
+        """Every ``created`` / ``unassigned`` order with ``meta.request_time_step < end_step``.
+
+        The planning tick's foresight read: uncapped, long pages, stable ``_id`` order
+        (index ``(run_id, state, meta.request_time_step)``, ``order_lifecycle/batch_writer.py``).
+        """
+        return self._paged_where(
+            self._order_url(),
+            {
+                "$and": [
+                    {"run_id": self.run_id},
+                    {"state": {"$in": list(_OPEN_ORDER_STATES)}},
+                    {"meta.request_time_step": {"$lt": int(end_step)}},
+                ]
+            },
+            projection=projection,
+            page_size=page_size,
+            sort=_ID_SORT,
+        )
+
+    def open_haul_rows(self, *, page_size: int = _PLANNING_PAGE_SIZE) -> List[Dict[str, Any]]:
+        """Every non-terminal haul trip: ``_id``, ``truck``, ``order``, ``state``, the leg start stamps.
+
+        One paged ``/truck/trip`` read in stable ``_id`` order (raises on an HTTP error:
+        a planning tick must not plan on a partial picture of who is busy).
+        """
+        projection: Dict[str, Any] = {"_id": 1, "truck": 1, "order": 1, "state": 1}
+        projection.update({stamp: 1 for stamp in _HAUL_LEG_STAMPS})
+        return self._paged_where(
+            self._haul_trip_url(),
+            {
+                "$and": [
+                    {"run_id": self.run_id},
+                    {"state": {"$nin": list(self._final_haul_states)}},
+                ]
+            },
+            projection=projection,
+            page_size=page_size,
+            sort=_ID_SORT,
+        )
+
+    def orders_by_ids(
+        self,
+        ids: List[str],
+        projection: Optional[Dict[str, Any]] = None,
+        *,
+        chunk: int = _ORDERS_BY_IDS_CHUNK,
+    ) -> List[Dict[str, Any]]:
+        """The order documents with these ids (any state), in chunks of ``chunk`` ids per request.
+
+        ``_id $in`` over Eve REST (verified against the running API on 2026-10-25: Eve
+        converts the 24-hex strings to ObjectIds). Ids are de-duplicated in first-seen
+        order; a missing id is simply absent from the result. Order of the result is
+        ``_id`` order within each chunk.
+        """
+        unique: List[str] = []
+        seen: Set[str] = set()
+        for raw in ids or ():
+            oid = str(raw)
+            if oid not in seen:
+                seen.add(oid)
+                unique.append(oid)
+        out: List[Dict[str, Any]] = []
+        step = max(1, int(chunk))
+        for start in range(0, len(unique), step):
+            part = unique[start:start + step]
+            out.extend(self._paged_where(
+                self._order_url(),
+                {"$and": [{"run_id": self.run_id}, {"_id": {"$in": part}}]},
+                projection=projection,
+                max_results=len(part),
+                sort=_ID_SORT,
+            ))
         return out
 
     @staticmethod
