@@ -52,6 +52,28 @@ library — optimize *around* it). Three concerns are carried here:
    Promote it to fatal only after a live 500/1000-truck run shows it never fires on a
    healthy run. ``'soft'`` only logs either signal.
 
+5. **Bounded planning hold** (opt-in, ``orsim_settings['PLANNING']['max_hold_seconds']``).
+   An agent that is about to spend longer than ``STEP_TIMEOUT`` on one step (a
+   day-plan solve) announces it on the ordinary reply topic::
+
+       {"agent_id": ..., "time_step": T, "action": "hold",
+        "hold_seconds": H, "reason": "planning"}
+
+   The hold is accepted only for the CURRENT step, from an agent that is expected
+   and has not yet answered it, and is capped at ``max_hold_seconds``. While it is
+   live the settle/tolerance early-exit is suspended and the barrier deadline is
+   ``max(start + STEP_TIMEOUT, max(accepted_at + min(H, cap)) + STEP_TIMEOUT)`` --
+   the agent gets ``STEP_TIMEOUT`` of grace AFTER its hold, because a planning
+   step may still have to dispatch before it answers. Any later reply from the
+   agent for that step (``completed``/``error``/``shutdown``) releases the hold.
+   On expiry an ERROR ``PLANNING HOLD EXPIRED: ...`` is logged, the hold dropped,
+   and the agent takes the ordinary prune/stash path (its late ``completed``
+   reinstates it). With the cap 0 or absent -- every run that does not declare
+   planning -- a hold is logged at WARNING and ignored, and ``step()`` runs the
+   literal pre-existing ``asyncio.wait_for`` path. Held wall time is reported as
+   ``last_step_hold_ms`` (and ``hold_ms`` in ``agent_stat``) so the perf summary
+   can subtract it instead of reading a planning run as a regression.
+
 Because stock orsim exposes no finer hooks, ``on_receive_message``, ``step``,
 ``confirm_responses``, ``_update_agent_stat`` and ``step_timeout_handler`` are
 overridden wholesale. This duplicates orsim internals — keep the orsim version
@@ -59,8 +81,10 @@ pinned and rely on the scheduler tests to catch contract drift.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
+import math
 import threading
 import time
 
@@ -218,6 +242,208 @@ class OpenRideScheduler(ORSimScheduler):
     #: agent id -> details of an ``init_error`` reply not yet raised.
     _init_errors = None
 
+    # Planning-hold state (concern 5). ``None`` at class level for the same
+    # ``__new__`` reason; created by ``_hold_state()`` only on a scheduler whose
+    # cap is > 0, so ``_holds is None`` means "planning holds are off here" and
+    # every default-path structure (agent_stat shape included) is untouched.
+    #: agent id -> live hold record for the current step.
+    _holds = None
+    _hold_lock = None
+    _HOLD_INIT_LOCK = threading.Lock()
+    #: Wall ms the last finished step spent with at least one hold live. Read by
+    #: SimulationRuntime for the perf stream; stays 0.0 on every default run.
+    last_step_hold_ms = 0.0
+    #: Outer-loop polling cadence of the held barrier (expiry + deadline re-check).
+    _HOLD_POLL_SECONDS = 0.1
+
+    def _planning_hold_cap(self) -> float:
+        """``PLANNING.max_hold_seconds`` as a positive float, else 0.0 (holds off)."""
+        planning = (getattr(self, 'orsim_settings', None) or {}).get('PLANNING') or {}
+        if not isinstance(planning, dict):
+            return 0.0
+        cap = planning.get('max_hold_seconds', 0)
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+            return 0.0
+        cap = float(cap)
+        if not math.isfinite(cap) or cap <= 0:
+            return 0.0
+        return cap
+
+    def _hold_state(self) -> None:
+        """Create the hold ledger on first use (thread-safe; both threads may call it)."""
+        if self._holds is not None:
+            return
+        with self._HOLD_INIT_LOCK:
+            if self._holds is not None:
+                return
+            self._hold_lock = threading.Lock()
+            self._hold_window_start = None   # monotonic; set while >= 1 hold is live
+            self._hold_ms_step = 0.0
+            self._holds_total = 0
+            self._holds_expired_total = 0
+            self._hold_seconds_max = 0.0
+            self._hold_ms_total = 0.0
+            self._hold_expired_step = set()  # agents whose hold expired this step
+            self._holds = {}
+
+    def _handle_hold(self, payload: dict) -> None:
+        """Paho thread: accept or ignore one ``hold`` announcement (never tallied)."""
+        agent_id = payload.get('agent_id')
+        step = payload.get('time_step')
+        cap = self._planning_hold_cap()
+        if cap <= 0:
+            logging.warning(
+                "%s: ignoring planning hold from %s for step %s (hold_seconds=%r, reason=%r): "
+                "PLANNING.max_hold_seconds is 0/absent on this run, so the barrier keeps its "
+                "ordinary STEP_TIMEOUT.", getattr(self, 'scheduler_id', '?'), agent_id, step,
+                payload.get('hold_seconds'), payload.get('reason'))
+            return
+        requested = payload.get('hold_seconds')
+        if (isinstance(requested, bool) or not isinstance(requested, (int, float))
+                or not math.isfinite(float(requested)) or requested <= 0):
+            logging.warning("%s: ignoring planning hold from %s for step %s: hold_seconds %r is "
+                            "not a positive number.", self.scheduler_id, agent_id, step, requested)
+            return
+        if isinstance(step, bool) or not isinstance(step, int) or step != self.time:
+            logging.warning("%s: ignoring planning hold from %s for step %r: the current step is %s.",
+                            self.scheduler_id, agent_id, step, self.time)
+            return
+        if agent_id not in self._expected_this_step or agent_id in self._responded_this_step:
+            logging.warning("%s: ignoring planning hold from %s for step %s: the agent is not "
+                            "awaited on this step (not expected, or already answered).",
+                            self.scheduler_id, agent_id, step)
+            return
+        self._hold_state()
+        if agent_id in self._hold_expired_step:
+            logging.warning("%s: ignoring planning hold from %s for step %s: its hold on this step "
+                            "already expired (one hold budget per agent per step).",
+                            self.scheduler_id, agent_id, step)
+            return
+        granted = min(float(requested), cap)
+        step_timeout = float(self.orsim_settings['STEP_TIMEOUT'])
+        now = time.monotonic()
+        with self._hold_lock:
+            rec = self._holds.get(agent_id)
+            if rec is None or rec['step'] != step:
+                rec = {'step': step, 'accepted_at': now, 'hold_deadline': 0.0,
+                       'granted': 0.0, 'reason': payload.get('reason')}
+                self._holds_total += 1
+                if not self._holds:
+                    self._hold_window_start = now
+                self._holds[agent_id] = rec
+            # A renewed hold may extend, never past cap seconds from the FIRST one.
+            rec['hold_deadline'] = max(rec['hold_deadline'],
+                                       min(now + granted, rec['accepted_at'] + cap))
+            rec['granted'] = rec['hold_deadline'] - rec['accepted_at']
+            rec['expires_at'] = rec['hold_deadline'] + step_timeout
+            self._hold_seconds_max = max(self._hold_seconds_max, rec['granted'])
+        logging.info("%s: planning hold accepted from %s for step %s: %.1f s (requested %s s, cap %s s, "
+                     "reason=%r); +%s s STEP_TIMEOUT grace after it.", self.scheduler_id, agent_id, step,
+                     rec['granted'], requested, cap, payload.get('reason'), step_timeout)
+
+    def _release_hold_locked(self, agent_id, now) -> dict:
+        rec = self._holds.pop(agent_id, None)
+        if rec is not None and not self._holds and self._hold_window_start is not None:
+            self._hold_ms_step += (now - self._hold_window_start) * 1000.0
+            self._hold_window_start = None
+        return rec
+
+    def _release_hold(self, agent_id) -> None:
+        """Paho thread: the holder answered its step; its hold is over."""
+        if not self._holds or agent_id not in self._holds:
+            return
+        with self._hold_lock:
+            self._release_hold_locked(agent_id, time.monotonic())
+
+    def _expire_holds(self, now: float) -> None:
+        """Event loop: drop every hold whose grace (hold + STEP_TIMEOUT) has run out."""
+        if not self._holds:
+            return
+        cap = self._planning_hold_cap()
+        with self._hold_lock:
+            expired = [(aid, rec) for aid, rec in self._holds.items() if now >= rec['expires_at']]
+            for aid, _ in expired:
+                self._release_hold_locked(aid, now)
+                self._hold_expired_step.add(aid)
+            self._holds_expired_total += len(expired)
+        for aid, rec in expired:
+            logging.error(
+                "PLANNING HOLD EXPIRED: %s held step %s for %.1f s (cap %s s); continuing without it "
+                "(granted %.1f s + STEP_TIMEOUT %s s grace, reason=%r). It is pruned as unresponsive "
+                "for this step; a late 'completed' reinstates it.",
+                aid, rec['step'], now - rec['accepted_at'], cap, rec['granted'],
+                self.orsim_settings['STEP_TIMEOUT'], rec['reason'])
+
+    def _latest_hold_expiry(self) -> float:
+        if not self._holds:
+            return 0.0
+        with self._hold_lock:
+            return max((rec['expires_at'] for rec in self._holds.values()), default=0.0)
+
+    def _current_hold_ms(self) -> float:
+        ms = self._hold_ms_step
+        start = self._hold_window_start
+        if start is not None:
+            ms += (time.monotonic() - start) * 1000.0
+        return ms
+
+    def _reset_step_holds(self) -> None:
+        """Step start: no hold survives into a new step."""
+        if self._holds is None:
+            return
+        with self._hold_lock:
+            self._holds.clear()
+            self._hold_expired_step.clear()
+            self._hold_window_start = None
+            self._hold_ms_step = 0.0
+
+    def _finish_step_holds(self) -> None:
+        """Barrier end: close the held window, publish it, drop leftovers."""
+        if self._holds is None:
+            self.last_step_hold_ms = 0.0
+            return
+        with self._hold_lock:
+            now = time.monotonic()
+            for aid in list(self._holds):
+                self._release_hold_locked(aid, now)
+            ms = round(self._hold_ms_step, 2)
+            self._hold_ms_total += ms
+        self.last_step_hold_ms = ms
+        stat = self.agent_stat.get(self.time)
+        if isinstance(stat, dict) and 'hold_ms' in stat:
+            # The barrier's final tally ran while the window was still open.
+            stat['hold_ms'] = ms
+            stat['hold_ms_total'] = round(self._hold_ms_total, 2)
+            stat['holds_live'] = 0
+            stat['holds_expired'] = self._holds_expired_total
+
+    async def _confirm_responses_held(self) -> None:
+        """``confirm_responses`` under a deadline that honours live planning holds.
+
+        Raises ``asyncio.TimeoutError`` exactly where ``wait_for`` would have, except
+        that the deadline is ``max(start + STEP_TIMEOUT, latest hold + STEP_TIMEOUT)``.
+        """
+        step_timeout = float(self.orsim_settings['STEP_TIMEOUT'])
+        start = time.monotonic()
+        task = asyncio.ensure_future(self.confirm_responses())
+        try:
+            while True:
+                now = time.monotonic()
+                self._expire_holds(now)
+                deadline = max(start + step_timeout, self._latest_hold_expiry())
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise asyncio.TimeoutError()
+                done, _ = await asyncio.wait({task}, timeout=min(remaining, self._HOLD_POLL_SECONDS))
+                if task in done:
+                    task.result()
+                    return
+        finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+
     def _init_failure_state(self):
         if self._stepped_agents is None:
             self._stepped_agents = set()
@@ -335,11 +561,15 @@ class OpenRideScheduler(ORSimScheduler):
         call_soon_threadsafe(event.set) when the barrier resolves, so the event
         loop is woken once per step instead of once per reply.
         """
+        action = payload.get('action')
+        if action == 'hold':
+            # Concern 5: an announcement, not an answer -- never tallied.
+            self._handle_hold(payload)
+            return
         agent_id = payload.get('agent_id')
         response_time_step = payload.get('time_step')
         if response_time_step == -1:
             response_time_step = self.time
-        action = payload.get('action')
         self._note_participation(agent_id, action, payload)
 
         entry = self.agent_collection.get(agent_id)
@@ -405,6 +635,8 @@ class OpenRideScheduler(ORSimScheduler):
                 and agent_id not in self._responded_this_step
             ):
                 self._responded_this_step.add(agent_id)
+                if self._holds:
+                    self._release_hold(agent_id)
                 if payload.get('did_step'):
                     self._did_step_count += 1
                 self._reaction_counts[action] = self._reaction_counts.get(action, 0) + 1
@@ -459,6 +691,7 @@ class OpenRideScheduler(ORSimScheduler):
         self._error_replied = set()
         self._expected_this_step = expected
         self._outstanding = len(expected)
+        self._reset_step_holds()
 
     def _check_boot_deadline(self, agent_id, item) -> None:
         """Complain ONCE about an agent that has been ``pending_boot`` too long.
@@ -514,6 +747,17 @@ class OpenRideScheduler(ORSimScheduler):
             # stuck in pending_boot is excluded from every barrier for ever.
             'boot_timed_out': self._boot_timed_out,
         }
+        if self._holds is not None:
+            # Only on a scheduler that accepted a planning hold: default runs keep
+            # the exact agent_stat shape.
+            self.agent_stat[self.time].update({
+                'holds': self._holds_total,
+                'holds_live': len(self._holds),
+                'holds_expired': self._holds_expired_total,
+                'hold_seconds_max': round(self._hold_seconds_max, 3),
+                'hold_ms': round(self._current_hold_ms(), 2),
+                'hold_ms_total': round(self._hold_ms_total, 2),
+            })
         return waiting
 
     async def confirm_responses(self):
@@ -540,6 +784,9 @@ class OpenRideScheduler(ORSimScheduler):
         def _done():
             if self._outstanding <= 0:
                 return True
+            if self._holds:
+                # A live planning hold suspends the settle/tolerance early-exit.
+                return False
             if total > 0 and (self._outstanding / total) <= tolerance and (time.time() - confirm_start) >= settle_seconds:
                 logging.info(
                     f"confirm_responses: {self._outstanding}/{total} agents still waiting after "
@@ -633,17 +880,32 @@ class OpenRideScheduler(ORSimScheduler):
 
         self.agent_messenger.client.publish(f'{self.run_id}/{self.scheduler_id}/ORSimAgent', json.dumps(message))
 
-        try:
-            await asyncio.wait_for(self.confirm_responses(), timeout=self.orsim_settings['STEP_TIMEOUT'])
-            # A clean step clears the consecutive-timeout streak used by the abort guard.
-            self._consecutive_step_timeouts = 0
-            logging.info(f'{self.agent_stat[self.time] = }')
+        if self._planning_hold_cap() <= 0:
+            # Default path (no planning holds on this run): the literal barrier wait.
+            try:
+                await asyncio.wait_for(self.confirm_responses(), timeout=self.orsim_settings['STEP_TIMEOUT'])
+                # A clean step clears the consecutive-timeout streak used by the abort guard.
+                self._consecutive_step_timeouts = 0
+                logging.info(f'{self.agent_stat[self.time] = }')
 
-        except asyncio.TimeoutError as e:
-            logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.orsim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.')
-            # Decides whether to prune-and-continue or abort. Unresponsive agents are
-            # removed by the shutdown sweep below whenever this does not re-raise.
-            self.step_timeout_handler(e)
+            except asyncio.TimeoutError as e:
+                logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.orsim_settings["STEP_TIMEOUT"] = } while waiting for confirm_responses.')
+                # Decides whether to prune-and-continue or abort. Unresponsive agents are
+                # removed by the shutdown sweep below whenever this does not re-raise.
+                self.step_timeout_handler(e)
+        else:
+            # Concern 5: same barrier, deadline extended by live planning holds.
+            self._hold_state()
+            try:
+                await self._confirm_responses_held()
+                self._consecutive_step_timeouts = 0
+                logging.info(f'{self.agent_stat[self.time] = }')
+
+            except asyncio.TimeoutError as e:
+                logging.exception(f'Scheduler {self.scheduler_id} timeout beyond {self.orsim_settings["STEP_TIMEOUT"] = } (and any planning hold) while waiting for confirm_responses.')
+                self.step_timeout_handler(e)
+            finally:
+                self._finish_step_holds()
 
         # Reap agents that asked to shut down or went silent this step. Booting
         # agents keep pending_boot until their first reply and sleeping agents

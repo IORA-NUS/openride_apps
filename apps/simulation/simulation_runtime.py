@@ -84,6 +84,11 @@ def _backoff_delay_s(attempt: int, base: float, cap: float) -> float:
 
 
 class SimulationRuntime(ORSimRuntime):
+    # Class-level defaults too: several tests build the runtime with __new__.
+    _last_step_hold_ms = 0.0
+    _hold_ms_total = 0.0
+    _held_steps = 0
+
     def __init__(
         self,
         run_id,
@@ -154,6 +159,11 @@ class SimulationRuntime(ORSimRuntime):
         self._step_detail_sent_steps: set = set()
         self._step_wall_times_ms: list = []
         self._last_step_scheduler_ms: dict = {}
+        # Planning-hold wall time (OpenRideScheduler concern 5). Stays 0 and
+        # every perf payload keeps its exact shape unless a scheduler held a step.
+        self._last_step_hold_ms: float = 0.0
+        self._hold_ms_total: float = 0.0
+        self._held_steps: int = 0
         self.min_step_wall_time_ms = max(
             0, int(self.orsim_settings.get("MIN_STEP_WALL_TIME_MS", 0))
         )
@@ -688,6 +698,16 @@ class SimulationRuntime(ORSimRuntime):
             return True
         return step_index % self.perf_detail_interval == 0
 
+    def _with_hold_ms(self, payload: dict) -> dict:
+        """Add the step's planning-hold wall ms as its OWN field, only when non-zero.
+
+        ``step_wall_ms`` (``openride_perf_step_wall_ms``) is never reduced: a held
+        step really took that long. Readers subtract ``hold_ms`` themselves.
+        """
+        if self._last_step_hold_ms > 0:
+            payload["hold_ms"] = round(self._last_step_hold_ms, 2)
+        return payload
+
     def _publish_step_tick(self, step_index: int, step_wall_ms: float) -> None:
         if not self._should_publish_step_tick(step_index):
             return
@@ -697,13 +717,13 @@ class SimulationRuntime(ORSimRuntime):
             publish_perf(
                 self.run_id,
                 "step_tick",
-                {
+                self._with_hold_ms({
                     "step_wall_ms": round(step_wall_ms, 2),
                     "rollup": self._perf_rollup.to_dict(),
                     "progress_pct": round(
                         100.0 * step_index / max(1, self.steps - 1), 2
                     ),
-                },
+                }),
                 sim_step=step_index,
             )
             maybe_flush_perf_producer(step_index, interval=self.perf_flush_every)
@@ -820,6 +840,16 @@ class SimulationRuntime(ORSimRuntime):
                     self._perf_rollup.sum_step_ms / max(self._perf_rollup.step_count, 1),
                     2,
                 )
+                if self._hold_ms_total > 0:
+                    # Planning holds: the step-wall figures above include them;
+                    # these are the same figures with the held time taken out.
+                    sum_excl = self._perf_rollup.sum_step_ms - self._hold_ms_total
+                    summary["hold_ms_total"] = round(self._hold_ms_total, 2)
+                    summary["held_steps"] = self._held_steps
+                    summary["sum_step_ms_excl_hold"] = round(sum_excl, 2)
+                    summary["avg_step_ms_excl_hold"] = round(
+                        sum_excl / max(self._perf_rollup.step_count, 1), 2
+                    )
             publish_perf(
                 self.run_id,
                 "summary",
@@ -846,6 +876,7 @@ class SimulationRuntime(ORSimRuntime):
             step, self.schedulers, self.agent_source
         )
         self._last_step_scheduler_ms = {}
+        self._last_step_hold_ms = 0.0
 
         async def _step_one(key: str, scheduler) -> None:
             if hasattr(scheduler, "agent_stat") and hasattr(scheduler, "time"):
@@ -858,6 +889,10 @@ class SimulationRuntime(ORSimRuntime):
             self._last_step_scheduler_ms[key] = round(
                 (time.perf_counter() - sched_start) * 1000, 2
             )
+            # Schedulers overlap (gather), so the step's held time is the max.
+            hold_ms = getattr(scheduler, "last_step_hold_ms", 0.0)
+            if isinstance(hold_ms, (int, float)) and hold_ms > self._last_step_hold_ms:
+                self._last_step_hold_ms = hold_ms
 
         # The service agents (assignment/analytics) act on Mongo state that the
         # domain agents write asynchronously over HTTP, so there is no strict
@@ -908,6 +943,9 @@ class SimulationRuntime(ORSimRuntime):
                 await self._run_schedulers_for_step(step)
 
                 step_wall_ms = (time.perf_counter() - step_start) * 1000
+                if self._last_step_hold_ms > 0:
+                    self._hold_ms_total += self._last_step_hold_ms
+                    self._held_steps += 1
                 self._step_wall_times_ms.append(round(step_wall_ms, 2))
                 self._notify_progress(step)
 
