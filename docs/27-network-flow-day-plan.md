@@ -172,37 +172,61 @@ plan:{run}:versions             HASH    d3 -> 14
 - Statuses: `planned`, `dispatched`, `done`, `failed` (+ reason), `unplanned`, `undone`.
   Across a day change only `dispatched` jobs carry over; yesterday's still-open jobs roll
   into the new day's instance if they are still open orders.
+- **The statuses are dispatch state, not a KPI.** The wrapper reads them to walk an itinerary
+  (`failed:taken` skips, the retry, the `dispatched` / `done` locks) and the instance reads
+  them to exclude done / failed jobs. They are not reported: how many orders were done,
+  undone or failed is a sim KPI (§6). The job fields `first_day` and `new` (`PlanInputs.jobs`)
+  are plan INPUTS only: they are hashed into the instance, so the re-plan skip and plan
+  stability depend on them, and nothing reports them.
 - Failures never fail a tick. `PlanStoreUnavailable` keeps the change in memory and resyncs
   the whole state on the next write; a refused write keeps the previous version. Both are
   noted `store_failed`. After an agent restart the first tick with a run id reloads the
   record (`load_current`) and folds a `rebuild` note into the run stats.
 - Single writer per run; another writer is detected (`PlanStoreConflict`), not arbitrated.
 
-## 6. KPIs: `run_config.meta.day_plan` (`solver_lib/day_plan/stats.py::DayPlanStats`)
+## 6. Planner stats: `run_config.meta.day_plan` (`solver_lib/day_plan/stats.py::DayPlanStats`)
 
-The top's run-stats aggregator (`meta_key = "day_plan"`). Pushed on a new day, a failed
-re-plan, a fallback plan, a rebuild, else every 10 folded ticks, and at agent close.
+The top's run-stats aggregator (`meta_key = "day_plan"`, **`schema` 2**). It reports the
+PLANNER only: what it planned, how often it re-planned, how much each re-plan moved, and every
+degradation. Pushed on a new day, a failed re-plan, a fallback plan, a rebuild, else every 10
+folded ticks, and at agent close.
 
-- Top level: `schema` (1), `ticks`, `plan_ticks`, `restarts`, `deterministic`, `backends`
-  `{backend: components}`, `solve_ms {n, p50, max}`, `build_ms {p50, max}`,
-  `wall_ms {p50, max, sum}`.
-- `totals` and `days.d{n}` (and `days.d{n}.by_haulier.{h}`): `plan_jobs`, `plan_jobs_done`,
-  `plan_jobs_dispatched`, `plan_jobs_failed {reason: n}` (`taken`, `cancelled`, `infeasible`,
-  `refused`), `plan_jobs_undone`, `plan_jobs_moved`, `plan_jobs_moved_by {truck, position,
-  to_unplanned}`, `versions`, `replans_skipped`, `replans_failed {reason: n}`. Per day also
-  `plan_first_leg_km {haulier: km}` (from the day's v1), `prev_arcs` (arc survival on
-  re-plans), `fallback_plans`, `planned_last`, `unplanned_last`, `open_at_day_end`.
-- **Attribution (M11):** a job belongs to the day of the version that FIRST planned it; its
-  status is the latest one.
+- Top level: `schema` (2), `quality {degraded, reasons}`, `ticks`, `plan_ticks`, `restarts`,
+  `deterministic`, `backends` `{backend: components}`, `solve_ms {n, p50, max}`,
+  `build_ms {p50, max}`, `wall_ms {p50, max, sum}`.
+- `totals`: `plan_jobs_moved`, `plan_jobs_moved_by {truck, position, to_unplanned}`,
+  `versions`, `replans_skipped`, `replans_failed {reason: n}`.
+- `days.d{n}` (elapsed axis; a day appears once a plan or rebuild note for it is folded):
+  the same keys, plus `plan_first_leg_km {haulier: km}` (from the day's v1), `prev_arcs`
+  (arc survival on re-plans), `fallback_plans`, `planned_last`, `unplanned_last`.
 - **`incidents`** (the CLAUDE.md §6.21 class: a degraded run must not read `ok`):
   `store_failed`, `backend_fallback {backend: n}`, `late_plans`, `late_steps_max`,
   `no_plan_ticks`, `plan_fallbacks {reason: n}`, `fallback_failed`,
-  `component_fallbacks {reason: n}`, `accepted_poor`, `uncommitted_pairs`. **Check
-  `incidents` before quoting any NetworkFlowDay run.** A dispatch tick with no plan also logs
-  an ERROR once per day (celery journal).
+  `component_fallbacks {reason: n}`, `accepted_poor`, `inexact_components {reason: n}`,
+  `uncommitted_pairs`. **Check `incidents` and `quality` before quoting any NetworkFlowDay
+  run.** A dispatch tick with no plan also logs an ERROR once per day (celery journal).
+- After an agent restart the `rebuild` note restores only the per-day `versions` and
+  `jobs_moved` from the store's KPI hash; `restarts` is stamped.
 
-The plan KPIs are the plan's own bookkeeping. The research metric is still the sim's
-(`empty_ratio`, `dual_cycle_rate`, served orders). **Do not gate on `plan_jobs_moved`** (§7).
+**Order outcomes are sim KPIs, not planner stats.** How many orders were released, done the
+same day, done later, undone at day end or failed (by reason) is computed by the sim's
+analytics agent for EVERY run, whatever the solver, so that arms are comparable: the
+`num_orders_released_total` / `num_orders_failed_total` / `num_orders_done_same_day_total` /
+`num_orders_undone_at_day_end_total` / `same_day_completion_rate` scalars, the authoritative
+run-end recount in `run_config.meta.order_outcomes`, and the per-haulier `orders_*` fields of
+the `final=True` `kpi_breakdown` haulier rows. **Compare a NetworkFlowDay arm with any other arm
+on those, never on `meta.day_plan`.**
+
+Removed in schema 2 (schema 1 runs, before 2026-10-26, still carry them; nothing reads them):
+the job counters `plan_jobs`, `plan_jobs_done`, `plan_jobs_dispatched`, `plan_jobs_failed`,
+`plan_jobs_undone` (in `totals`, per day and per `days.d{n}.by_haulier`), the per-day
+`open_at_day_end`, the "first planned in" attribution (M11) behind them, and the tick-note
+vocabulary that fed them (`events`, `plan.new_jobs`, `rebuild.jobs`). `fold` ignores an
+`events` key.
+
+The research metric is the sim's (`empty_ratio`, `dual_cycle_rate`, the order outcomes above).
+**Do not gate on `plan_jobs_moved`** (§8: re-plan churn is a property of the distance-only
+objective, not of plan quality).
 
 ## 7. N0 and build measurements (offline, not the sim KPI)
 
@@ -231,7 +255,9 @@ the 4 GiB cap. With 06-20 hours: two-pairs 4.6 s / 357 MB, full 15.7 s / 2 GB (W
   latency + predicted duration) and lateness absorbed by late slack is never charged. The
   flow plans optimistic chains, and at the next re-plan most old arcs are infeasible. FX2 e2e
   (full arm, 06-20 hours): 300-500 jobs moved per re-plan; total default 1,907 done / 3,682
-  moved. Moves only touch still-`planned` tail jobs, never a truck's current work.
+  moved (the "done" figures in this section were read from the schema-1 plan counter, removed
+  in schema 2; re-measure them on the sim's order outcomes, §6). Moves only touch
+  still-`planned` tail jobs, never a truck's current work.
 - **Chain propagation is opt-in.** `nf_propagate_chains=True` gave 1,783 done / 2,193 moved
   (-6.5 % done for ~-45 % moves); caps of 10 / 30 / 90 min gave 1,898 / 1,839 / 1,789 done.
   A lateness cost would be a model change and a new arm; to be compared at n >= 3 after the
@@ -295,7 +321,8 @@ Prerequisites, all OUTSIDE this branch's scope and each needing the user's go-ah
 7. Check: `simulation_settings.PLANNING` (oracle true, axis elapsed, axis_origin),
    `ASSIGNMENT_CADENCE {steps: 6, source: override}`, `WORKING_HOURS`, raised `ORPHAN_TIMEOUT`
    (120 at a 30 s hold is below 180, so none); provenance `cadence_steps: 6`; `meta.day_plan`
-   `incidents` all zero and `backends` only `mincostflow`; the perf summary's
+   `schema` 2, `incidents` all zero, `quality.degraded` false and `backends` only `mincostflow`;
+   `meta.order_outcomes` present with `final: true` and `invariants_ok: true`; the perf summary's
    `held_steps` / `sum_step_ms_excl_hold`; `PLANNING HOLD EXPIRED` and `Auto Shutdown Agent`
    counts in `journalctl --user -u openride-celery` (0); geometry 100 % `osrm` (CLAUDE.md
    §6.21); `df -h /` (§6.23).
