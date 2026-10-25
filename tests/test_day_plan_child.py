@@ -202,3 +202,88 @@ def test_greedy_backend_runs_without_importing_the_solvers(day200):
     _, _, inp = day200
     out = child.solve_inputs(json.loads(json.dumps(inp)), backend="greedy")
     assert out["ok"] and set(out["stats"]["backends"]) == {"greedy"}
+
+
+# ----------------------------------------------------------------- FX2: M2 deadline, windows
+
+
+def _staggered(seed=31, n_orders=150, n_trucks=24):
+    """Three hauliers, own-only cooperation, hours staggered per haulier: three MIP components."""
+    trucks, orders = synthetic_day(seed, n_orders=n_orders, n_trucks=n_trucks)
+    hours = {"axis": "elapsed", "hauliers": {"acme": [6 * 3600, 22 * 3600], "cargo": [7 * 3600, 23 * 3600],
+                                             "delta": [5 * 3600, 21 * 3600]}}
+    return _build(trucks, orders, hours=hours, arm={"acme": ["cargo"], "cargo": ["acme"]})
+
+
+def test_one_deadline_is_shared_across_mip_components():
+    """M2: the per-component limit no longer adds up past the child's kill. With a deadline
+    the MIP components share what is left, the rest goes greedy, and the answer comes in time."""
+    import time
+
+    inp = _staggered()
+    t = time.time()
+    out = child.solve_inputs(inp, backend="mip", time_limit_s=60.0, deadline_epoch=t + 6.0, accept_poor=True)
+    assert out["ok"] and time.time() - t < 6.0
+    rows = [r for r in out["stats"]["components"] if r["orders"]]
+    assert len(rows) >= 2
+    budgets = [r["mip_time_limit_s"] for r in rows if "mip_time_limit_s" in r]
+    assert sum(budgets) <= 6.0 and all(b < 60 for b in budgets)
+    # a deadline no MIP fits into: every component greedy, stamped
+    tight = child.solve_inputs(inp, backend="mip", time_limit_s=60.0, deadline_epoch=time.time() + 1.5,
+                               accept_poor=True)
+    assert tight["ok"] and {r.get("fallback") for r in tight["stats"]["components"] if r["orders"]} == {"deadline"}
+    assert tight["stats"]["fallbacks"]["deadline"] >= 2 and tight["stats"]["status"] == "degraded"
+
+
+def test_the_runner_hands_the_child_its_deadline():
+    inp = _staggered()
+    out = runner.solve(inp, backend="mip", time_limit_s=60.0, timeout_s=8.0, accept_poor=True)
+    assert out["stats"]["wall_ms"] < 8000
+    assert all(r.get("mip_time_limit_s", 0) <= 8 for r in out["stats"]["components"])
+
+
+def test_accept_poor_keeps_a_greedy_plan_under_the_guard(day200, monkeypatch):
+    _, _, inp = day200
+    inp = copy.deepcopy(inp)
+    inp["params"]["mip_arc_budget"] = 10
+    real = child._greedy
+    monkeypatch.setattr(child, "_greedy", lambda params, jobs: {
+        s: c[:1] for s, c in real(params, jobs).items()})  # one job per truck: under the guard
+    assert child.solve_inputs(inp, backend="mip")["ok"] is False
+    kept = child.solve_inputs(inp, backend="mip", accept_poor=True)
+    assert kept["ok"] and kept["stats"]["accepted_poor"] is True and kept["itineraries"]
+    assert any(r.get("accepted_poor") for r in kept["stats"]["components"])
+
+
+def test_overnight_second_window_chains_join_the_trucks_itinerary():
+    trucks, orders = synthetic_day(33, n_orders=120, n_trucks=10, hauliers=("acme",))
+    hours = {"axis": "elapsed", "hauliers": {"acme": [18 * 3600, 6 * 3600]}}
+    inp = _build(trucks, orders, hours=hours, arm=None)
+    virtual = [t for t in inp["trucks"] if t.get("of")]
+    assert virtual and all(t["id"] == f"{t['of']}@w1" for t in virtual)
+    out = runner.solve(inp, backend="auto")
+    assert runner.validate_output(inp, out) == []
+    assert set(out["itineraries"]) <= {t["id"] for t in inp["trucks"] if not t.get("of")}
+    jobs = {j["id"]: j for j in inp["jobs"]}
+    both = [c for c in out["itineraries"].values()
+            if any(jobs[j]["r"] < 6 * 3600 for j in c) and any(jobs[j]["r"] >= 18 * 3600 for j in c)]
+    assert both, "a truck works both windows of one plan"
+    for c in both:  # its morning chain comes first
+        rs = [jobs[j]["r"] for j in c]
+        k = next(i for i, r in enumerate(rs) if r >= 18 * 3600)
+        assert all(r < 18 * 3600 for r in rs[:k]) and all(r >= 18 * 3600 for r in rs[k:])
+    assert set(out["stats"]["first_leg_m"]) <= set(out["itineraries"])
+
+
+def test_replan_reports_previous_arc_survival():
+    trucks, orders = synthetic_day(23, n_orders=150, n_trucks=30, jitter=False)
+    first = _build(trucks, orders)
+    out = runner.solve(first, backend="auto")
+    assert "prev_arcs" not in out["stats"]
+    st = plan_store.MemoryPlanStore("surv", kv=plan_store.MemoryKV())
+    st.write_version(0, out["itineraries"], store_job_fields(first))
+    again = runner.solve(_build(trucks, orders, state=st.state()), backend="auto")
+    pa = again["stats"]["prev_arcs"]
+    assert pa["prev_job_arcs"] == pa["prev_job_arcs_feasible"] > 0
+    assert pa["prev_start_arcs"] == pa["prev_start_arcs_feasible"] > 0
+    assert pa["prev_arcs_kept"] == pa["prev_job_arcs"] + pa["prev_start_arcs"]

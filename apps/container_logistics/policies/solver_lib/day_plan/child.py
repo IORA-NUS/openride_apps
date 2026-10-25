@@ -4,7 +4,7 @@ Run as ``python -m apps.container_logistics.policies.solver_lib.day_plan.child``
 :func:`runner.solve`, never in-process (SCIP holds the GIL and N0 measured a MIP child at
 11.6 GB RSS; plan §4 ``runner.py``). stdin is one JSON object
 ``{"inputs": <PlanInputs>, "backend": "auto"|"mincostflow"|"mip"|"greedy",
-"time_limit_s": float|null}``; stdout is one JSON object, either
+"time_limit_s": float|null, "deadline_epoch": float|null, "accept_poor": bool}``; stdout is one JSON object, either
 ``{"ok": true, "itineraries": {truck: [job, ...]}, "unplanned": [job, ...], "stats": {...}}``
 or ``{"ok": false, "reason": str, "stats": {...}}`` (a refusal the parent turns into
 ``SolveRejected``). Anything else on stdout is a bug: library logging goes to stderr.
@@ -209,6 +209,54 @@ def _class_attrs(inputs, comp, trucks) -> dict[str, str]:
     return attrs
 
 
+def _owner(inputs, tid: str) -> str:
+    """The real truck of a start id (``T@wk`` -> ``T``; a real truck -> itself)."""
+    return inputs.get("_of", {}).get(tid, tid)
+
+
+def _start_owners(inputs, trucks) -> dict[str, list[int]]:
+    """``{real truck id: [index of every start in trucks that is (or holds) it]}``."""
+    mem = inputs.get("_members", {})
+    out: dict[str, list[int]] = {}
+    for k, t in enumerate(trucks):
+        for tid in mem.get(t["id"], [t["id"]]):
+            out.setdefault(_owner(inputs, tid), []).append(k)
+    return out
+
+
+def _prev_arc_survival(inputs, jobs, trucks, arcs) -> dict[str, int]:
+    """M3 diagnostic: of the previous version's arcs inside this component, how many are
+    still FEASIBLE arcs of the new instance (``prev_*_feasible``)."""
+    jpos = {j["id"]: k for k, j in enumerate(jobs)}
+    n = max(len(jobs), 1)
+    tpos = _start_owners(inputs, trucks)
+    ekeys = set((arcs["src"] * n + arcs["dst"]).tolist())
+    skeys = set((arcs["ssrc"] * n + arcs["sdst"]).tolist())
+    out = {"prev_job_arcs": 0, "prev_job_arcs_feasible": 0, "prev_start_arcs": 0, "prev_start_arcs_feasible": 0}
+    for a, b in inputs.get("prev_arcs", ()):
+        if b not in jpos:
+            continue
+        if a in jpos:
+            out["prev_job_arcs"] += 1
+            out["prev_job_arcs_feasible"] += int(jpos[a] * n + jpos[b] in ekeys)
+        elif a in tpos:
+            out["prev_start_arcs"] += 1
+            out["prev_start_arcs_feasible"] += int(any(k * n + jpos[b] in skeys for k in tpos[a]))
+    return out
+
+
+def _prev_arcs_kept(inputs, chains: Mapping[str, list]) -> int:
+    """Previous-version arcs the new plan uses (truck -> head with the SAME real truck, job -> job)."""
+    prev = {tuple(a) for a in inputs.get("prev_arcs", ())}
+    kept = 0
+    for sid, chain in chains.items():
+        if not chain:
+            continue
+        kept += int((_owner(inputs, sid), chain[0]) in prev)
+        kept += sum(1 for a, b in zip(chain, chain[1:]) if (a, b) in prev)
+    return kept
+
+
 def _component_params(inputs, comp, jobs, trucks, arcs) -> dict[str, Any]:
     """``NetworkFlowSolver`` / min-cost-flow params of one component (classes are companies)."""
     p = inputs["params"]
@@ -226,13 +274,11 @@ def _component_params(inputs, comp, jobs, trucks, arcs) -> dict[str, Any]:
         pe = np.array([jpos[a] * n + jpos[b] for a, b in prev if a in jpos and b in jpos], dtype=np.int64)
         if pe.size:
             ecost[np.isin(arcs["src"] * n + arcs["dst"], pe)] -= bonus
-        # a merged start gets the bonus if ANY member truck had the arc
-        mem = inputs.get("_members", {})
-        tpos = {}
-        for k, t in enumerate(trucks):
-            for tid in mem.get(t["id"], [t["id"]]):
-                tpos[tid] = k
-        ps = np.array([tpos[a] * n + jpos[b] for a, b in prev if a in tpos and b in jpos], dtype=np.int64)
+        # a merged start gets the bonus if ANY member truck had the arc; a later-window
+        # start ``T@wk`` counts as truck ``T`` (the store and prev_arcs know only T)
+        tpos = _start_owners(inputs, trucks)
+        ps = np.array([k * n + jpos[b] for a, b in prev if a in tpos and b in jpos for k in tpos[a]],
+                      dtype=np.int64)
         if ps.size:
             scost[np.isin(arcs["ssrc"] * n + arcs["sdst"], ps)] -= bonus
     eligible = set()
@@ -342,12 +388,40 @@ def _true_km(chains: Mapping[Any, list], arcs, jobs=None, trucks=None, members=N
     return first, total
 
 
+#: Seconds the child keeps for writing its answer and exiting after the solve deadline.
+EXIT_MARGIN_S = 1.0
+#: Greedy reserve per remaining job (s): measured ~0.65 ms/job incl. its arc rebuild
+#: (real day 1, 2,239 jobs, 1.4 s); doubled, plus a fixed second.
+GREEDY_S_PER_JOB = 0.0013
+GREEDY_FIXED_S = 1.0
+#: pywraplp model build per MIP arc variable (N0: 185 k vars ~3 s), not covered by the
+#: solver's own time limit.
+MIP_BUILD_S_PER_ARC = 2e-5
+#: Below this a MIP component is not attempted (greedy, ``fallback: deadline``).
+MIN_MIP_S = 1.0
+
+
 def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
-                 time_limit_s: float | None = None) -> dict[str, Any]:
+                 time_limit_s: float | None = None, deadline_epoch: float | None = None,
+                 accept_poor: bool = False) -> dict[str, Any]:
+    """Solve every cooperation component (module docstring); returns the child's answer.
+
+    ``time_limit_s`` caps each MIP component; ``deadline_epoch`` (``time.time()`` value) is
+    ONE deadline for the whole solve (M2): each MIP component gets at most an even share of
+    what is left once a greedy reserve for the remaining components is kept, a component
+    whose share is under :data:`MIN_MIP_S` goes greedy (``fallback: deadline``), so the
+    answer is written before the deadline. ``accept_poor``: a greedy fallback under the
+    guard threshold is KEPT (``accepted_poor``) instead of refusing the solve (the caller
+    has no plan to keep).
+    """
     if backend not in BACKENDS:
         raise ValueError(f"backend must be one of {BACKENDS} (got {backend!r})")
     p = inputs["params"]
     t_all = time.time()
+    deadline = None if deadline_epoch is None else float(deadline_epoch) - EXIT_MARGIN_S
+    of_map = {t["id"]: t["of"] for t in inputs["trucks"] if t.get("of")}
+    if of_map:
+        inputs = dict(inputs, _of=of_map)
     jobs_by_class: dict[str, list] = {}
     for j in inputs["jobs"]:
         jobs_by_class.setdefault(j["owner_class"], []).append(j)
@@ -362,19 +436,18 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
         comps = cooperation_components(list(inputs["classes"]), [tuple(x) for x in inputs["cooperation"]])
     else:
         comps = [list(c) for c in inputs["components"]]
+    comps = [sorted(c) for c in comps]
 
-    itineraries: dict[str, list] = {}
-    rows = []
-    build_ms = solve_ms = 0.0
-    n_arcs = n_start = 0
-    deterministic = True
-    empty_m = 0.0
-    first_leg_m: dict[str, float] = {}
+    def comp_jobs(comp):
+        return sorted((j for c in comp for j in jobs_by_class.get(c, ())), key=lambda x: x["id"])
+
+    def comp_trucks(comp):
+        return sorted((t for c in comp for t in trucks_by_class.get(c, ())), key=lambda x: x["id"])
+
+    # the path of every component, decided up front (the deadline split needs the MIP count)
+    plan = []
     for comp in comps:
-        comp = sorted(comp)
-        jobs = sorted((j for c in comp for j in jobs_by_class.get(c, ())), key=lambda x: x["id"])
-        trucks = sorted((t for c in comp for t in trucks_by_class.get(c, ())), key=lambda x: x["id"])
-        row: dict[str, Any] = {"classes": comp, "orders": len(jobs), "trucks": len(trucks)}
+        jobs, trucks = comp_jobs(comp), comp_trucks(comp)
         if backend == "greedy":
             path, why = "greedy", "backend greedy"
         else:
@@ -383,6 +456,19 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
             path = "mincostflow" if ok and backend != "mip" else "mip"
             if backend == "mip":
                 why = "backend mip"
+        plan.append((comp, jobs, trucks, path, why))
+
+    itineraries: dict[str, list] = {}
+    rows = []
+    build_ms = solve_ms = 0.0
+    n_arcs = n_start = 0
+    deterministic = True
+    empty_m = 0.0
+    first_leg_m: dict[str, float] = {}
+    survival = {"prev_job_arcs": 0, "prev_job_arcs_feasible": 0, "prev_start_arcs": 0,
+                "prev_start_arcs_feasible": 0, "prev_arcs_kept": 0}
+    for idx, (comp, jobs, trucks, path, why) in enumerate(plan):
+        row: dict[str, Any] = {"classes": comp, "orders": len(jobs), "trucks": len(trucks)}
         t0 = time.time()
         caps = ((p.get("k_succ"), p.get("k_start")) if path != "mip"
                 else (p.get("mip_k_succ"), p.get("mip_k_start")))
@@ -395,17 +481,34 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
         n_arcs += int(arcs["src"].size)
         n_start += int(arcs["ssrc"].size)
         row.update(arcs=int(arcs["src"].size), start_arcs=int(arcs["ssrc"].size), build_ms=round(b_ms, 1))
+        if inputs.get("prev_arcs"):
+            surv = _prev_arc_survival(dict(inputs, _members=members), jobs, starts, arcs)
+            row.update(surv)
+            for k, v in surv.items():
+                survival[k] += v
         t1 = time.time()
         chains = None
         fallback = None
         if path in ("mincostflow", "mip") and jobs:
             if path == "mip":
-                params["time_limit_s"] = (float(time_limit_s) if time_limit_s is not None
-                                          else float(p["mip_time_limit_s"]))
+                limit = (float(time_limit_s) if time_limit_s is not None else float(p["mip_time_limit_s"]))
                 try:
                     row["mip_arcs"] = check_mip_arc_budget(params, int(p["mip_arc_budget"]))
                 except ArcBudgetExceeded as exc:
                     fallback, row["mip_error"] = "arc_budget", str(exc)
+                if fallback is None and deadline is not None:
+                    rest = plan[idx + 1:]
+                    reserve = GREEDY_FIXED_S + GREEDY_S_PER_JOB * (len(jobs) + sum(len(r[1]) for r in rest))
+                    n_mip = 1 + sum(1 for r in rest if r[3] == "mip" and r[1])
+                    share = (deadline - time.time() - reserve) / n_mip
+                    share -= MIP_BUILD_S_PER_ARC * row["mip_arcs"]
+                    row["mip_budget_s"] = round(share, 2)
+                    if share < MIN_MIP_S:
+                        fallback = "deadline"
+                    else:
+                        limit = min(limit, share)
+                params["time_limit_s"] = limit
+                row["mip_time_limit_s"] = round(limit, 2)
             if fallback is None:
                 result, cstats = bk.solve_by_component(
                     params, "auto" if path == "mincostflow" else "mip",
@@ -433,15 +536,15 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
                     chains = {}
                     for sid, lst in ch.chains_by_start.items():
                         free = list(members[sid])
-                        rest = []
+                        rest_chains = []
                         for chain in lst:  # a chain keeps the member that headed it last version
-                            mine = [t for t in free if t in prev_head.get(chain[0], ())]
+                            mine = [t for t in free if _owner(inputs, t) in prev_head.get(chain[0], ())]
                             if mine:
                                 chains[mine[0]] = chain
                                 free.remove(mine[0])
                             else:
-                                rest.append(chain)
-                        for tid, chain in zip(free, rest + [[]] * (len(free) - len(rest))):
+                                rest_chains.append(chain)
+                        for tid, chain in zip(free, rest_chains + [[]] * (len(free) - len(rest_chains))):
                             chains[tid] = chain
                     if path == "mip" and result.get("status") != bk.OPTIMAL:
                         deterministic = False
@@ -462,12 +565,15 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
                 g = bk.quality_guard(served, ref, float(p["guard_threshold"]))
                 row["fallback_guard"] = g
                 if not g["ok"]:
-                    s_ms = (time.time() - t1) * 1000.0
-                    row.update(backend=path, reason=why, solve_ms=round(s_ms, 1))
-                    rows.append(row)
-                    return {"ok": False, "reason": bk.POOR_INCUMBENT,
-                            "stats": _stats(rows, build_ms, solve_ms + s_ms, n_arcs, n_start,
-                                            deterministic, 0.0, {}, t_all)}
+                    if accept_poor:
+                        row["accepted_poor"] = True
+                    else:
+                        s_ms = (time.time() - t1) * 1000.0
+                        row.update(backend=path, reason=why, solve_ms=round(s_ms, 1))
+                        rows.append(row)
+                        return {"ok": False, "reason": bk.POOR_INCUMBENT,
+                                "stats": _stats(rows, build_ms, solve_ms + s_ms, n_arcs, n_start,
+                                                deterministic, 0.0, {}, t_all, survival)}
         s_ms = (time.time() - t1) * 1000.0
         solve_ms += s_ms
         row.update(backend=path, reason=why, solve_ms=round(s_ms, 1),
@@ -476,23 +582,51 @@ def solve_inputs(inputs: Mapping[str, Any], *, backend: str = "auto",
         empty_m += km
         first_leg_m.update(first)
         row["empty_m"] = round(km, 1)
+        if inputs.get("prev_arcs"):
+            row["prev_arcs_kept"] = _prev_arcs_kept(inputs, chains)
+            survival["prev_arcs_kept"] += row["prev_arcs_kept"]
         rows.append(row)
         for sid, chain in chains.items():
             if chain:
                 itineraries[sid] = list(chain)
 
+    itineraries, first_leg_m = _merge_windows(inputs, itineraries, first_leg_m)
     planned = {j for c in itineraries.values() for j in c}
     unplanned = sorted(j["id"] for j in inputs["jobs"] if j["id"] not in planned)
     return {"ok": True, "itineraries": dict(sorted(itineraries.items())), "unplanned": unplanned,
             "stats": _stats(rows, build_ms, solve_ms, n_arcs, n_start, deterministic, empty_m,
-                            first_leg_m, t_all)}
+                            first_leg_m, t_all, survival if inputs.get("prev_arcs") else None)}
 
 
-def _stats(rows, build_ms, solve_ms, n_arcs, n_start, deterministic, empty_m, first_leg_m, t_all):
+def _merge_windows(inputs, itineraries: Mapping[str, list], first_leg_m: Mapping[str, float]
+                   ) -> tuple[dict[str, list], dict[str, float]]:
+    """A later-window start's chain (``T@wk``) goes after truck ``T``'s own, in window order;
+    the truck's first leg is the first leg of its first non-empty chain."""
+    of = inputs.get("_of") or {}
+    if not of:
+        return dict(itineraries), dict(first_leg_m)
+    win = {t["id"]: int(t.get("window", 0)) for t in inputs["trucks"]}
+    parts: dict[str, list] = {}
+    for sid in sorted(itineraries, key=lambda x: (of.get(x, x), win.get(x, 0))):
+        parts.setdefault(of.get(sid, sid), []).append(sid)
+    out, first = {}, {}
+    for tid, sids in parts.items():
+        out[tid] = [j for sid in sids for j in itineraries[sid]]
+        lead = next((sid for sid in sids if sid in first_leg_m), None)
+        if lead is not None:
+            first[tid] = first_leg_m[lead]
+    return out, first
+
+
+def _stats(rows, build_ms, solve_ms, n_arcs, n_start, deterministic, empty_m, first_leg_m, t_all,
+           survival=None):
     backends: dict[str, int] = {}
+    fallbacks: dict[str, int] = {}
     for r in rows:
         backends[r.get("backend", "?")] = backends.get(r.get("backend", "?"), 0) + 1
-    return {
+        if r.get("fallback"):
+            fallbacks[r["fallback"]] = fallbacks.get(r["fallback"], 0) + 1
+    out = {
         "components": rows, "backends": dict(sorted(backends.items())),
         "status": ("degraded" if any(r.get("fallback") for r in rows) else "ok"),
         "build_ms": round(build_ms, 1), "solve_ms": round(solve_ms, 1),
@@ -502,6 +636,13 @@ def _stats(rows, build_ms, solve_ms, n_arcs, n_start, deterministic, empty_m, fi
         "first_leg_m": {k: round(v, 1) for k, v in sorted(first_leg_m.items())},
         "maxrss_kb": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
     }
+    if fallbacks:
+        out["fallbacks"] = dict(sorted(fallbacks.items()))
+    if any(r.get("accepted_poor") for r in rows):
+        out["accepted_poor"] = True
+    if survival is not None:
+        out["prev_arcs"] = dict(survival)
+    return out
 
 
 def main() -> int:
@@ -510,7 +651,8 @@ def main() -> int:
     try:
         req = json.load(sys.stdin)
         out = solve_inputs(req["inputs"], backend=req.get("backend", "auto"),
-                           time_limit_s=req.get("time_limit_s"))
+                           time_limit_s=req.get("time_limit_s"), deadline_epoch=req.get("deadline_epoch"),
+                           accept_poor=bool(req.get("accept_poor", False)))
     except MemoryError:
         traceback.print_exc(file=sys.stderr)
         return EXIT_OOM

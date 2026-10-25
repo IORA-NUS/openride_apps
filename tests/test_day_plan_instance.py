@@ -118,8 +118,13 @@ def test_working_hours_filter_jobs_per_class_and_set_truck_ready():
     mid = order(1, "acme", 150, "port_000", "customer_000")      # 10:00
     late = order(2, "acme", 295, "port_000", "customer_000")     # 19:40: ends after 20:00
     inp = build([truck(0, "acme")], [early, mid, late], hours=HOURS)
-    assert [j["id"] for j in inp["jobs"]] == [oid("order", 1)]
-    assert inp["excluded"][oid("order", 0)] == inp["excluded"][oid("order", 2)] == "no_eligible_class"
+    # M4: the early order is plannable at the 00:00 plan -- it waits for the shift start
+    assert [j["id"] for j in inp["jobs"]] == sorted([oid("order", 0), oid("order", 1)])
+    assert job(inp, 0)["r"] == 6 * 3600 and job(inp, 0)["r_req"] == 60 * STEP_S
+    assert job(inp, 0)["e"] == TM.job_end_seconds(6 * 3600, "port_000", "customer_000", _km("port_000", "customer_000"),
+                                                  cadence_steps=6, step_seconds=STEP_S)
+    assert job(inp, 1)["r"] == 150 * STEP_S
+    assert inp["excluded"] == {oid("order", 2): "no_eligible_class"}
     t = inp["trucks"][0]
     assert t["ready_s"] == 6 * 3600 and inp["classes"][CLS]["shift"] == [6 * 3600, 20 * 3600]
     # a planning tick at 00:00 still carries the truck (D6); after 20:00 it is off shift
@@ -301,3 +306,95 @@ def test_store_job_fields_avoid_reserved_names():
     for v in f.values():
         assert not set(v) & {"truck", "seq", "status", "reason"}
     _ = point  # fixture helper kept importable
+
+
+# ------------------------------------------------------ M3 chain propagation, M4 windows
+
+
+PROP = {"propagate_chains": True}
+
+
+def _chain_state(n=4, gap=12):
+    """A previous version: truck 0 serves orders 0..n-1, one every ``gap`` steps from step 100."""
+    t0 = oid("truck", 0)
+    # port -> customer: 2.6 h predicted, 140 min slack; a 48 min gap chains (arc rule holds)
+    orders = [order(k, "acme", 100 + gap * k, "port_000", "customer_000") for k in range(n)]
+    first = build([truck(0, "acme")], orders)
+    st = _store_with({t0: [oid("order", k) for k in range(n)]}, store_job_fields(first), [])
+    return t0, orders, first, st
+
+
+def test_unchanged_world_propagates_nothing():
+    t0, orders, first, st = _chain_state()
+    again = build([truck(0, "acme")], orders, state=st.state(), params=PROP)
+    assert [(j["r"], j["e"]) for j in again["jobs"]] == [(j["r"], j["e"]) for j in first["jobs"]]
+    off = build([truck(0, "acme")], orders, state=st.state(), params={"propagate_chains": False})
+    assert [(j["r"], j["e"]) for j in off["jobs"]] == [(j["r"], j["e"]) for j in first["jobs"]]
+
+
+def test_a_late_truck_pushes_its_old_chain_just_enough_to_stay_feasible():
+    """M3: the truck is engaged on a job ending well after its old head's release; the head
+    starts no earlier than ``ready - s_head`` and every successor no earlier than
+    ``e_pred - s_pred`` -- exactly the arc rule -- so the old chain is still a chain."""
+    t0, orders, first, st = _chain_state()
+    eng = order(9, "acme", 99, "port_000", "depot_000", state="assigned")
+    late = build([truck(0, "acme")], orders, state=st.state(), engaged={t0: eng}, now_s=100 * STEP_S,
+                 dispatched_at_s={oid("order", 9): 99 * STEP_S}, params=PROP)
+    off = build([truck(0, "acme")], orders, state=st.state(), engaged={t0: eng}, now_s=100 * STEP_S,
+                dispatched_at_s={oid("order", 9): 99 * STEP_S}, params={"propagate_chains": False})
+    ready = late["trucks"][0]["ready_s"]
+    jobs = [job(late, k) for k in range(4)]
+    assert ready - jobs[0]["slack"] > job(off, 0)["r"], "the fixture's truck must be late for its head"
+    assert jobs[0]["r"] == pytest.approx(ready - jobs[0]["slack"])
+    W = late["params"]["wait_limit_min"] * 60
+    for a, b in zip(jobs, jobs[1:]):
+        assert a["e"] - a["slack"] <= b["r"] <= a["e"] + W and b["e"] > a["e"]
+    for k in range(4):  # never earlier than without propagation
+        assert job(late, k)["r"] >= job(off, k)["r"] and job(late, k)["e"] >= job(off, k)["e"]
+    assert any(job(late, k)["r"] > job(off, k)["r"] for k in range(1, 4)), "lateness reaches the tail"
+    # without propagation the late head no longer has the start arc (the reviewer's M3 mechanism)
+    assert job(off, 0)["r"] < off["trucks"][0]["ready_s"] - job(off, 0)["slack"]
+    # the store fields carry the propagated times (the next re-plan's anchors use them)
+    assert store_job_fields(late)[oid("order", 1)]["r"] == job(late, 1)["r"]
+
+
+def test_overnight_hours_give_two_windows_and_a_second_start():
+    hours = {"axis": "elapsed", "hauliers": {"acme": [20 * 3600, 6 * 3600]}}
+    o_morning = order(0, "acme", 30, "port_000", "customer_000")   # 02:00: the 20:00(-1)-06:00 window
+    o_evening = order(1, "acme", 330, "port_000", "customer_000")  # 22:00: the 20:00-06:00(+1) window
+    o_midday = order(2, "acme", 150, "port_000", "customer_000")   # 10:00: waits for 20:00
+    inp = build([truck(0, "acme")], [o_morning, o_evening, o_midday], hours=hours, now_s=0.0)
+    assert inp["classes"][CLS]["windows"] == [[-4 * 3600, 6 * 3600], [20 * 3600, 30 * 3600]]
+    t0 = oid("truck", 0)
+    assert [(t["id"], t.get("of"), t["ready_s"]) for t in inp["trucks"]] == [
+        (t0, None, 0.0), (f"{t0}@w1", t0, 20 * 3600.0)]
+    assert job(inp, 0)["r"] == 30 * STEP_S
+    assert job(inp, 2)["r"] == 20 * 3600 and job(inp, 1)["r"] == 330 * STEP_S
+    assert inp["class_attrs"][CLS][2] == inp["classes"][CLS]["windows"]
+    # after the morning window ends only the evening start remains, under the truck's own id
+    later = build([truck(0, "acme")], [o_evening], hours=hours, now_s=7 * 3600)
+    assert [(t["id"], t["ready_s"]) for t in later["trucks"]] == [(t0, 20 * 3600.0)]
+
+
+def test_a_class_window_decides_eligibility_per_class():
+    """M4 with differing hours: each class may start the job at max(r, its shift start)."""
+    hours = {"axis": "elapsed", "hauliers": {"acme": [6 * 3600, 12 * 3600], "cargo": [10 * 3600, 22 * 3600]}}
+    o = order(0, "acme", 30, "port_000", "customer_000")   # released 02:00 (a 2.6 h job)
+    inp = build([truck(0, "acme"), truck(1, "cargo")], [o], hours=hours, arm={"cargo": ["acme"]})
+    cargo = class_id("cargo", "20ft", ["MBS", "West Coast"])
+    assert job(inp, 0)["classes"] == sorted([CLS, cargo]) and job(inp, 0)["r"] == 6 * 3600  # the earliest class
+    late = order(1, "acme", 165, "port_000", "customer_000")  # 11:00: ends after acme's 12:00
+    j = job(build([truck(0, "acme"), truck(1, "cargo")], [late], hours=hours, arm={"cargo": ["acme"]}), 1)
+    assert j["classes"] == [cargo] and j["r"] == 165 * STEP_S
+
+
+def test_propagation_is_off_by_default_and_a_push_cap_ends_the_walk():
+    t0, orders, first, st = _chain_state()
+    eng = order(9, "acme", 99, "port_000", "depot_000", state="assigned")
+    kw = dict(state=st.state(), engaged={t0: eng}, now_s=100 * STEP_S, dispatched_at_s={oid("order", 9): 99 * STEP_S})
+    default = build([truck(0, "acme")], orders, **kw)
+    off = build([truck(0, "acme")], orders, params={"propagate_chains": False}, **kw)
+    on = build([truck(0, "acme")], orders, params=PROP, **kw)
+    assert [j["r"] for j in default["jobs"]] == [j["r"] for j in off["jobs"]] != [j["r"] for j in on["jobs"]]
+    capped = build([truck(0, "acme")], orders, params=dict(PROP, propagate_max_push_min=1.0), **kw)
+    assert [j["r"] for j in capped["jobs"]] == [j["r"] for j in off["jobs"]], "the head alone is pushed > 1 min"

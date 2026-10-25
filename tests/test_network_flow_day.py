@@ -98,7 +98,14 @@ class Sim:
         return st
 
     def status(self, job):
-        return (self.store.status_of(job) or {}).get("status"), (self.store.status_of(job) or {}).get("reason")
+        """The wrapper's view (a pair of the last tick reads ``dispatched`` before it is committed)."""
+        rec = self.inst._status(self.inst._state(self.run_id), job) or {}
+        return rec.get("status"), rec.get("reason")
+
+    def stored(self, job):
+        """What the plan RECORD holds (minor 2: a pair is written only once committed)."""
+        rec = self.store.status_of(job) or {}
+        return rec.get("status"), rec.get("reason")
 
 
 def ids(pairs):
@@ -147,7 +154,8 @@ HEAD_ROWS = [
     ("completed_ours", L(O0, state="completed", truck_id=t0), False, ("done", None), True),
     ("unassigned_claimed_other", L(O0, state="unassigned", claimed=t9), False, ("failed", "taken"), True),
     ("unassigned_claimed_ours", L(O0, state="unassigned", claimed=t0), False, ("dispatched", None), True),
-    ("unassigned_free_left_out_is_claimed", L(O0, state="unassigned"), False, ("failed", "taken"), True),
+    # one racy observation is not "taken" (minor 3): the truck waits, a later tick decides
+    ("unassigned_free_left_out_waits_once", L(O0, state="unassigned"), False, ("planned", None), False),
     ("unknown_state_waits", L(O0, state="weird"), False, ("planned", None), False),
 ]
 
@@ -165,8 +173,13 @@ def test_head_rule_table(row):
     if next_paired:
         assert sim.status(o1) == ("dispatched", None)
     events = out.result.tick_notes.get("events", [])
-    if want[0] != "planned":
+    paired_o0 = (t0, o0) in ids(out.pairs)
+    if want[0] != "planned" and not paired_o0:
         assert [o0, want[0], want[1], "acme"] in events
+    if paired_o0:  # minor 2: a pair is not in the record (nor an event) until the framework committed it
+        assert sim.stored(o0) == ("planned", None) and not any(e[0] == o0 for e in events)
+    if next_paired:
+        assert sim.stored(o1) == ("planned", None)
 
 
 def test_head_not_permitted_is_infeasible_and_the_next_job_is_paired():
@@ -296,8 +309,15 @@ def test_plan_then_dispatch_through_the_runner_with_a_memory_store():
     assert d.pairs, "every released head is paired"
     for tid, jid in ids(d.pairs):
         assert heads[tid] == jid and sim.status(jid) == ("dispatched", None)
+    assert sim.stats["day_plan"].snapshot()["totals"]["plan_jobs_dispatched"] == 0  # not committed yet
+    busy = {tid for tid, _ in ids(d.pairs)}
+    later = {str(o["_id"]): o for o in released(orders, step + 6) if str(o["_id"]) in set(d.result.prefetch)}
+    nxt = sim.dispatch([t for t in trucks if str(t["_id"]) not in busy], [], step + 6, lookup=later)
+    for tid, jid in ids(d.pairs):
+        assert sim.stored(jid) == ("dispatched", None)
     snap = sim.stats["day_plan"].snapshot()
     assert snap["totals"]["plan_jobs_dispatched"] == len(d.pairs) and snap["totals"]["versions"] == 1
+    assert nxt.result is not None
 
 
 def test_locked_head_survives_a_replan_and_unchanged_instances_are_skipped():
@@ -352,8 +372,12 @@ def test_agent_restart_reloads_the_plan_and_dispatches_identically():
     p = sim.plan(trucks, orders, 0)
     view = released(orders, 200)
     lookup = {str(o["_id"]): o for o in view if str(o["_id"]) in set(p.result.prefetch)}
-    sim.dispatch(trucks, [o for o in view if o["state"] == "unassigned"], 200, lookup=lookup)
-    kv_before = copy.deepcopy(sim.kv)
+    d = sim.dispatch(trucks, [o for o in view if o["state"] == "unassigned"], 200, lookup=lookup)
+    busy = {tid for tid, _ in ids(d.pairs)}
+    view = released(orders, 206)
+    sim.dispatch([t for t in trucks if str(t["_id"]) not in busy], [], 206,
+                 lookup={str(o["_id"]): o for o in view if str(o["_id"]) in set(d.result.prefetch)})
+    kv_before = copy.deepcopy(sim.kv)  # the pairs of step 200 are committed (and recorded) by now
     view = released(orders, 340)
     lookup = {str(o["_id"]): o for o in view}
     open_ = [o for o in view if o["state"] == "unassigned"]
@@ -457,3 +481,227 @@ def test_min_cost_flow_plan_is_exact_and_deterministic():
     g = Sim()
     g.plan(trucks, orders, 0)
     assert na["planned"] >= g.store.kpi(0)["planned"]
+
+
+# ------------------------------------------------------------- FX2: commit, taken, cadence
+
+
+def test_a_dispatched_job_hauled_by_another_truck_is_taken():
+    """The _settle branch (review minor 1): our dispatched job, now hauled by ANOTHER truck."""
+    sim = Sim()
+    sim.install({t0: [o0, o1]}, [O0, O1])
+    assert ids(sim.dispatch([T0], [O0, O1], 6).pairs) == [(t0, o0)]
+    for state in ("assigned", "in_transit", "completed"):
+        s = Sim()
+        s.install({t0: [o0, o1]}, [O0, O1])
+        s.dispatch([T0], [O0, O1], 6)
+        out = s.dispatch([], [], 12, lookup={o0: L(O0, state=state, truck_id=t9)})
+        assert s.stored(o0) == ("failed", "taken"), state
+        assert [o0, "failed", "taken", "acme"] in out.result.tick_notes["events"]
+    # claimed (open haul) by another truck while the doc still reads unassigned: taken too
+    s = Sim()
+    s.install({t0: [o0, o1]}, [O0, O1])
+    s.dispatch([T0], [O0, O1], 6)
+    s.dispatch([], [], 12, lookup={o0: L(O0, state="unassigned", claimed=t9)})
+    assert s.stored(o0) == ("failed", "taken")
+    # ... and by OUR truck: still dispatched, never taken
+    s = Sim()
+    s.install({t0: [o0, o1]}, [O0, O1])
+    s.dispatch([T0], [O0, O1], 6)
+    s.dispatch([], [], 12, lookup={o0: L(O0, state="assigned", truck_id=t0)})
+    assert s.stored(o0) == ("dispatched", None)
+
+
+def test_pairs_are_recorded_only_once_the_framework_committed_them():
+    """Minor 2: a pair is tentative until the next tick shows its result was committed (the
+    framework kept the result's prefetch: a lookup arrives); a discarded result (no lookup,
+    the truck still free, the order in the tick) goes back to planned with no retry spent."""
+    sim = Sim()
+    sim.install({t0: [o0, o1]}, [O0, O1])
+    first = sim.dispatch([T0], [O0, O1], 6)
+    assert ids(first.pairs) == [(t0, o0)] and sim.stored(o0) == ("planned", None)
+    assert first.result.prefetch[0] == o0  # a pending pair is always looked up first
+    # the framework discarded that tick: no lookup on the next one
+    again = sim.dispatch([T0], [O0, O1], 12)
+    assert ids(again.pairs) == [(t0, o0)], "re-paired, not failed:refused"
+    assert again.result.tick_notes["uncommitted"] == 1 and sim.stored(o0) == ("planned", None)
+    assert sim.inst._run.retries.get(o0, 0) == 0
+    # this time it was committed (the lookup came) and the truck took it
+    sim.dispatch([], [], 18, lookup={o0: L(O0, state="assigned", truck_id=t0)})
+    assert sim.stored(o0) == ("dispatched", None)
+    snap = sim.stats["day_plan"].snapshot()
+    assert snap["totals"]["plan_jobs_dispatched"] == 1 and snap["incidents"]["uncommitted_pairs"] == 1
+
+
+def test_a_discarded_pair_is_reverted_on_a_planning_tick_too():
+    trucks, orders = _day()
+    sim = Sim()
+    p = sim.plan(trucks, orders, 0)
+    view = released(orders, 200)
+    lookup = {str(o["_id"]): o for o in view if str(o["_id"]) in set(p.result.prefetch)}
+    d = sim.dispatch(trucks, [o for o in view if o["state"] == "unassigned"], 200, lookup=lookup)
+    assert d.pairs
+    r = sim.plan(trucks, [o for o in released(orders, 204)], 204, reason="interval")  # no lookup: discarded
+    assert r.result.tick_notes["uncommitted"] == len(d.pairs)
+    assert all(sim.stored(j)[0] in ("planned", "unplanned") for _, j in ids(d.pairs))
+
+
+def test_a_planning_tick_adopts_an_engaged_job_the_record_still_has_planned():
+    sim = Sim()
+    sim.install({t0: [o0, o1]}, [O0, O1])
+    sim.plan([T0], [O1], 3, engaged={t0: L(O0, state="assigned", truck_id=t0)}, reason="interval")
+    assert sim.stored(o0) == ("dispatched", None)
+
+
+def test_taken_needs_two_consecutive_observations():
+    """Minor 3: 'unassigned, unclaimed, yet left out of the tick' is a disagreement between two
+    haul reads; one tick of it waits, two in a row are failed:taken."""
+    sim = Sim()
+    sim.install({t0: [o0, o1]}, [O0, O1])
+    racy = {o0: L(O0, state="unassigned")}
+    assert sim.dispatch([T0], [O1], 6, lookup=racy).pairs == [] and sim.stored(o0) == ("planned", None)
+    out = sim.dispatch([T0], [O1], 12, lookup=racy)
+    assert sim.stored(o0) == ("failed", "taken") and ids(out.pairs) == [(t0, o1)]
+    # one racy tick, then the order is back in the tick: paired, never taken
+    s = Sim()
+    s.install({t0: [o0, o1]}, [O0, O1])
+    s.dispatch([T0], [O1], 6, lookup=racy)
+    assert ids(s.dispatch([T0], [O0, O1], 12, lookup=racy).pairs) == [(t0, o0)]
+    assert s.inst._run.suspect == {}
+
+
+def test_bind_uses_the_runs_cadence_and_refuses_a_disagreeing_override():
+    from apps.container_logistics.policies.framework.errors import PolicyError
+
+    discover_builtin_policies()
+    prof = dict(profile(), assignment_cadence_steps=28)
+    r = build_runner_for_policy("NetworkFlowDay", GREEDY, profile=prof)
+    prov = r.tree.top.declaration.provenance
+    assert (prov["cadence_steps"], prov["cadence_source"]) == (28, "world")
+    assert nfd.CADENCE_WORLD_KEY in r.tree.world_reads
+    assert build_runner_for_policy("NetworkFlowDay", dict(GREEDY, nf_cadence_steps=28),
+                                   profile=prof).tree.top.declaration.provenance["cadence_steps"] == 28
+    with pytest.raises(PolicyError, match="disagrees with the run's dispatch cadence"):
+        build_runner_for_policy("NetworkFlowDay", dict(GREEDY, nf_cadence_steps=6), profile=prof)
+    off = build_runner_for_policy("NetworkFlowDay", GREEDY, profile=profile()).tree.top.declaration.provenance
+    assert (off["cadence_steps"], off["cadence_source"]) == (6, "default")
+    par = build_runner_for_policy("NetworkFlowDay", dict(GREEDY, nf_cadence_steps=9),
+                                  profile=profile()).tree.top.declaration.provenance
+    assert (par["cadence_steps"], par["cadence_source"]) == (9, "param")
+
+
+def test_the_plan_models_the_runs_cadence(monkeypatch):
+    seen = []
+    real = nfd.plan_instance.build_inputs
+
+    def spy(*a, **kw):
+        seen.append(kw["cadence_steps"])
+        return real(*a, **kw)
+
+    monkeypatch.setattr(nfd.plan_instance, "build_inputs", spy)
+    trucks, orders = _day()
+    Sim(prof=dict(profile(), assignment_cadence_steps=28)).plan(trucks, orders, 0)
+    Sim().plan(trucks, orders, 0)
+    assert seen == [28, 6]
+
+
+def test_engaged_leg_stamp_dates_the_haul_when_the_pair_time_is_lost(monkeypatch):
+    """Minor 5: after a restart the wrapper no longer knows when it paired an engaged job;
+    the haul's ``stats.reposition_started_at`` dates it (from the tick's own clock)."""
+    seen = []
+    real = nfd.plan_instance.build_inputs
+
+    def spy(*a, **kw):
+        seen.append(dict(kw["dispatched_at_s"]))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(nfd.plan_instance, "build_inputs", spy)
+    eng = L(O0, state="assigned", truck_id=t0)
+    eng["open_haul"] = {"_id": "h1", "state": "repositioning",
+                        "stats": {"reposition_started_at": "Wed, 01 Jan 2020 07:00:00 GMT"}}
+    sim = Sim()
+    sim.install({t0: [o0, o1]}, [O0, O1])
+    sim.plan([T0], [O1], 30, engaged={t0: eng}, reason="interval")  # the clock reads 08:00
+    assert seen[-1] == {o0: 30 * 240 - 3600.0}
+    assert nfd._engaged_dispatch_s({"open_haul": {"stats": {}}}, 0.0, fx.SIM_CLOCK) is None
+    assert nfd._engaged_dispatch_s(eng, 0.0, "not a clock") is None
+
+
+def test_no_plan_for_the_day_falls_back_to_greedy(monkeypatch):
+    """M2: a failed solve with no plan to keep leaves a greedy plan (stamped), never none."""
+    calls = []
+    fail = [True]
+    real = plan_runner.solve
+
+    def flaky(inputs, **kw):
+        calls.append((kw.get("backend"), kw.get("accept_poor")))
+        if fail[0]:
+            fail[0] = False
+            raise plan_runner.SolveTimeout("killed")
+        return real(inputs, **kw)
+
+    monkeypatch.setattr(plan_runner, "solve", flaky)
+    trucks, orders = _day()
+    sim = Sim({"nf_backend": "mip"} if HAS_ORTOOLS else None)
+    note = sim.plan(trucks, orders, 0).result.tick_notes["plan"]
+    assert calls[0][1] is True, "no plan to keep: the guard's refusal is waived"
+    assert calls[1][0] == "greedy"
+    assert note["outcome"] == "solved" and note["fallback"] == "greedy" and note["fallback_reason"] == "timeout"
+    assert sim.store.current_id == "d0v1"
+    snap = sim.stats["day_plan"].snapshot()
+    assert snap["incidents"]["plan_fallbacks"] == {"timeout": 1} and snap["days"]["d0"]["fallback_plans"] == 1
+    # a fallback plan is re-solved on the next planning tick (not skipped as unchanged)
+    calls.clear()
+    again = sim.plan(trucks, orders, 0, reason="interval").result.tick_notes["plan"]
+    assert again["outcome"] == "solved" and calls and calls[0][1] is False
+
+
+def test_no_plan_and_a_failing_fallback_is_failed_and_counted(monkeypatch):
+    def dead(inputs, **kw):
+        raise plan_runner.SolveCrashed("boom", returncode=1)
+
+    monkeypatch.setattr(plan_runner, "solve", dead)
+    trucks, orders = _day()
+    sim = Sim()
+    note = sim.plan(trucks, orders, 0).result.tick_notes["plan"]
+    assert note["outcome"] == "failed" and note["fallback_failed"] == "crashed"
+    d = sim.dispatch(trucks, released(orders, 100), 100)
+    assert d.pairs == [] and d.result.tick_notes["no_plan"] == 1
+    inc = sim.stats["day_plan"].snapshot()["incidents"]
+    assert inc["fallback_failed"] == 1 and inc["no_plan_ticks"] == 1
+
+
+def test_degradations_reach_the_run_stats():
+    """Minor 8: store failures, the backend fallback and late plans are counted, not only logged."""
+    trucks, orders = _day()
+    sim = Sim()
+    sim.inst.store_factory = lambda rid: RedisPlanStore(rid, client=_DeadRedis())
+    day = 0
+    window = PlanningWindow(reason="interval", day=day, start_step=18, end_step=SPD, now_step=21, step_seconds=240)
+    tick = sim.runner.tick(candidates=trucks, orders=orders, profile=sim.prof,
+                           clock=DispatchClock(sim_clock=fx.SIM_CLOCK, time_step=21), seed=1,
+                           kind="plan", planning=window, run_id=RUN)
+    out = sim.runner.run(tick)
+    sim._record(out, tick)
+    assert out.result.tick_notes["late_steps"] == 3
+    inc = sim.stats["day_plan"].snapshot()["incidents"]
+    assert inc["store_failed"] >= 1 and inc["late_plans"] == 1 and inc["late_steps_max"] == 3
+    if not HAS_ORTOOLS:
+        a = Sim({"nf_backend": "auto"})
+        a.plan(trucks, orders, 0)
+        assert a.stats["day_plan"].snapshot()["incidents"]["backend_fallback"] == {"greedy": 1}
+
+
+def test_cadence_world_key_is_the_one_the_sim_ships():
+    from apps.container_logistics.scenario.run_declaration import PLANNING_CADENCE_PROFILE_KEY
+
+    assert nfd.CADENCE_WORLD_KEY == PLANNING_CADENCE_PROFILE_KEY
+
+
+def test_propagation_params_reach_the_instance():
+    spec = get_policy_spec("planner", "NetworkFlowDay")
+    dp = nfd.NetworkFlowDay._day_params(spec.params_cls.from_mapping({}, where="t"))
+    assert dp.propagate_chains is False and dp.propagate_max_push_min is None
+    dp = nfd.NetworkFlowDay._day_params(spec.params_cls.from_mapping(
+        {"nf_propagate_chains": True, "nf_propagate_max_push_min": 30.0}, where="t"))
+    assert dp.propagate_chains is True and dp.propagate_max_push_min == 30.0

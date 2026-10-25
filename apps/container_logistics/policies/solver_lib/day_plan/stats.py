@@ -14,7 +14,17 @@ they are pushed. A ``dispatch.run_stats.RunStatsAggregator`` with ``meta_key =
               "new_jobs": {job: haulier},          # first planned in this version
               "first_leg_km": {haulier: km},       # this version's truck -> first job km
               "solve_ms": float, "build_ms": float, "wall_ms": float,
-              "deterministic": bool, "backends": {backend: n_components}},
+              "deterministic": bool, "backends": {backend: n_components},
+              "moved": {"truck": n, "position": n, "to_unplanned": n},   # jobs_moved split
+              "prev_arcs": {"prev_job_arcs", "prev_job_arcs_feasible", "prev_start_arcs",
+                            "prev_start_arcs_feasible", "prev_arcs_kept"},   # re-plans only
+              "fallback": "greedy", "fallback_reason": str,   # a no-plan day's greedy plan
+              "fallback_failed": str, "component_fallbacks": {reason: n},
+              "accepted_poor": true},
+     "late_steps": n,                              # the plan tick ran n steps after its boundary
+     "no_plan": 1,                                 # a dispatch tick with no plan at all
+     "uncommitted": n,                             # last tick's pairs the framework did not commit
+     "store_failed": str, "backend_fallback": str, # plan store / backend degradations
      "events": [[job, status, reason|null, haulier|null], ...],
      "rebuild": {"jobs": {job: [haulier, first_day, status, reason]},
                  "kpi": {"d3": {"versions": k, "jobs_moved": m}}}}
@@ -37,8 +47,14 @@ fields (else the day of the job's status version); per-day ``versions`` / ``jobs
 come back from the store's KPI hash; solve times and skip / failure counters of the lost
 process cannot, so ``restarts`` is stamped.
 
-**Push cadence.** Forced (``fold`` returns ``True``) on a new day, a failed re-plan and a
-rebuild; otherwise every :data:`PUSH_EVERY` folded ticks.
+**Incidents** (§6.21 class: a run must not read ``ok`` while degraded): every degradation
+note is counted in ``incidents`` (``store_failed``, ``backend_fallback`` {backend: n},
+``late_plans`` / ``late_steps_max``, ``no_plan_ticks``, ``plan_fallbacks`` {reason: n},
+``fallback_failed``, ``component_fallbacks`` {reason: n}, ``accepted_poor``,
+``uncommitted_pairs``).
+
+**Push cadence.** Forced (``fold`` returns ``True``) on a new day, a failed re-plan, a
+fallback plan (or a failed fallback) and a rebuild; otherwise every :data:`PUSH_EVERY` folded ticks.
 """
 
 from __future__ import annotations
@@ -83,6 +99,7 @@ def plan_note(inputs: Mapping[str, Any] | None, *, outcome: str, version: str | 
         ws = write_summary or {}
         plan.update(
             jobs_moved=int(ws.get("jobs_moved", 0)),
+            moved={k: int(ws.get(f"moved_{k}", 0)) for k in ("truck", "position", "to_unplanned")},
             planned=int(ws.get("planned", sum(len(c) for c in solve.get("itineraries", {}).values()))),
             unplanned=int(ws.get("unplanned", len(solve.get("unplanned", ())))),
             new_jobs={j: jobs[j]["owner"] for j in sorted(jobs) if jobs[j].get("new")},
@@ -90,6 +107,12 @@ def plan_note(inputs: Mapping[str, Any] | None, *, outcome: str, version: str | 
             solve_ms=float(st.get("solve_ms", 0.0)), build_ms=float(st.get("build_ms", 0.0)),
             wall_ms=float(st.get("wall_ms", 0.0)), deterministic=bool(st.get("deterministic", True)),
             backends=dict(st.get("backends") or {}))
+        if st.get("fallbacks"):
+            plan["component_fallbacks"] = dict(st["fallbacks"])
+        if st.get("accepted_poor"):
+            plan["accepted_poor"] = True
+        if st.get("prev_arcs"):
+            plan["prev_arcs"] = {k: int(v) for k, v in sorted(st["prev_arcs"].items())}
     return {"day": d, "plan": plan}
 
 
@@ -167,17 +190,57 @@ class DayPlanStats:
         self._last_day: int | None = None
         self._since_push = 0
         self._folded = False
+        self._incidents: dict[str, Any] = self._blank_incidents()
 
     # -- protocol -------------------------------------------------------------------
     @classmethod
     def empty_snapshot(cls) -> dict[str, Any]:
         return cls().snapshot()
 
+    @staticmethod
+    def _blank_incidents() -> dict[str, Any]:
+        return {"store_failed": 0, "backend_fallback": {}, "late_plans": 0, "late_steps_max": 0,
+                "no_plan_ticks": 0, "plan_fallbacks": {}, "fallback_failed": 0,
+                "component_fallbacks": {}, "accepted_poor": 0, "uncommitted_pairs": 0}
+
+    def _count(self, key: str, sub: Any = None, n: int = 1) -> None:
+        if sub is None:
+            self._incidents[key] += int(n)
+        else:
+            d = self._incidents[key]
+            d[str(sub)] = d.get(str(sub), 0) + int(n)
+
+    def _fold_incidents(self, notes: Mapping[str, Any]) -> bool:
+        forced = False
+        if notes.get("store_failed"):  # counted, not forced: a dead Redis notes it on EVERY tick
+            self._count("store_failed")
+        if notes.get("backend_fallback"):
+            self._count("backend_fallback", notes["backend_fallback"])
+        if notes.get("late_steps"):
+            self._count("late_plans")
+            self._incidents["late_steps_max"] = max(self._incidents["late_steps_max"], int(notes["late_steps"]))
+        if notes.get("no_plan"):
+            self._count("no_plan_ticks")
+        if notes.get("uncommitted"):
+            self._count("uncommitted_pairs", n=int(notes["uncommitted"]))
+        plan = notes.get("plan") or {}
+        if plan.get("fallback"):
+            self._count("plan_fallbacks", plan.get("fallback_reason") or "unknown")
+            forced = True
+        if plan.get("fallback_failed"):
+            self._count("fallback_failed")
+            forced = True
+        for k, v in (plan.get("component_fallbacks") or {}).items():
+            self._count("component_fallbacks", k, int(v))
+        if plan.get("accepted_poor"):
+            self._count("accepted_poor")
+        return forced
+
     def fold(self, tick_notes: Mapping[str, Any], clock: Any) -> bool:
         self._ticks += 1
         self._since_push += 1
         self._folded = True
-        forced = False
+        forced = self._fold_incidents(tick_notes)
         day = tick_notes.get("day")
         if "rebuild" in tick_notes:
             self._rebuild(tick_notes["rebuild"])
@@ -205,7 +268,8 @@ class DayPlanStats:
     @staticmethod
     def _blank_day() -> dict[str, Any]:
         return {"versions": 0, "replans_skipped": 0, "replans_failed": {}, "jobs_moved": 0,
-                "planned": None, "unplanned": None, "first_leg_km": None, "open_at_day_end": None}
+                "moved": {"truck": 0, "position": 0, "to_unplanned": 0},
+                "prev_arcs": {}, "fallbacks": 0, "planned": None, "unplanned": None, "first_leg_km": None, "open_at_day_end": None}
 
     def _day(self, d: int) -> dict[str, Any]:
         rec = self._days.get(d)
@@ -237,6 +301,12 @@ class DayPlanStats:
         elif outcome == "solved":
             rec["versions"] += 1
             rec["jobs_moved"] += int(plan.get("jobs_moved", 0))
+            for k, v in (plan.get("moved") or {}).items():
+                rec["moved"][k] = rec["moved"].get(k, 0) + int(v)
+            for k, v in (plan.get("prev_arcs") or {}).items():
+                rec["prev_arcs"][k] = rec["prev_arcs"].get(k, 0) + int(v)
+            if plan.get("fallback"):
+                rec["fallbacks"] += 1
             rec["planned"] = int(plan.get("planned", 0))
             rec["unplanned"] = int(plan.get("unplanned", 0))
             if rec["first_leg_km"] is None:  # the day plan (v1); re-plans start mid-day
@@ -320,6 +390,9 @@ class DayPlanStats:
             days_out[f"d{d}"] = {
                 **self._counts(rows),
                 "plan_jobs_moved": rec["jobs_moved"],
+                "plan_jobs_moved_by": dict(sorted(rec["moved"].items())),
+                "prev_arcs": dict(sorted(rec["prev_arcs"].items())),
+                "fallback_plans": rec["fallbacks"],
                 "plan_first_leg_km": (None if rec["first_leg_km"] is None else
                                       {h: round(v, 3) for h, v in rec["first_leg_km"].items()}),
                 "versions": rec["versions"],
@@ -331,6 +404,11 @@ class DayPlanStats:
             }
         totals = self._counts(self._jobs.values())
         totals["plan_jobs_moved"] = sum(r["jobs_moved"] for r in self._days.values())
+        by: dict[str, int] = {"truck": 0, "position": 0, "to_unplanned": 0}
+        for r in self._days.values():
+            for k, v in r["moved"].items():
+                by[k] = by.get(k, 0) + v
+        totals["plan_jobs_moved_by"] = dict(sorted(by.items()))
         totals["versions"] = sum(r["versions"] for r in self._days.values())
         totals["replans_skipped"] = sum(r["replans_skipped"] for r in self._days.values())
         failed: dict[str, int] = {}
@@ -350,4 +428,6 @@ class DayPlanStats:
                         "max": (round(max(self._wall_ms), 1) if self._wall_ms else None),
                         "sum": round(sum(self._wall_ms), 1)},
             "totals": totals, "days": days_out,
+            "incidents": {k: (dict(sorted(v.items())) if isinstance(v, dict) else v)
+                          for k, v in sorted(self._incidents.items())},
         }

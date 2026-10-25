@@ -18,14 +18,27 @@ Rules (plan §4, design §6a, critique M11 / D3 / D5 / D6 / D8 / D9 / D12f):
   every job has an owner class (the library's ``order_owner`` must be a company).
 - **time axis** -- seconds since REFERENCE_TIME (the ELAPSED axis, D5). Working hours are
   ``{"axis": "elapsed", "hauliers": {hid: [start_s, end_s]}}`` (seconds of the elapsed
-  day, overnight allowed); a haulier absent from it is always on. A class's shift is the
-  earliest window of its hours that ends after ``now_s`` and starts before
-  ``window_end_s``; a class with none is off for this plan (its trucks are left out).
-- **truck start** -- ``ready = max(now, shift start, predicted end of the job it is locked
-  into)``; position = that job's dropoff, else the truck's position
+  day, overnight allowed); a haulier absent from it is always on. A class's ``windows``
+  are every window of its hours that ends after ``now_s`` and starts before
+  ``window_end_s`` (``shift`` = the first); a class with none is off for this plan (its
+  trucks are left out). An overnight shift gives two windows in one plan (minor 6).
+- **truck start** -- ``ready = max(now, first usable window start, predicted end of the job
+  it is locked into)``; position = that job's dropoff, else the truck's position
   (``constraints.truck_anchor_loc``). The locked job is the ENGAGED order (open haul) or
   else the last ``dispatched`` job of its itinerary in the store (dispatched, not yet
-  picked up). Every online truck is offered (D6), not only free ones.
+  picked up). Every online truck is offered (D6), not only free ones. Each LATER window
+  is a second start ``{truck}@w{k}`` (``of`` = the truck, ready at the window start, at
+  the same anchor); the child appends its chain to the truck's.
+- **chain propagation** (M3, ``propagate_chains``, OFF by default: it cuts re-plan moves
+  ~45 % but costs ~6.5 % of the jobs done, see :class:`DayPlanParams`) -- on a same-day
+  re-plan, each truck's
+  still-``planned`` jobs of the previous version are walked from the truck's ready time:
+  a job's release becomes ``max(r, bound)`` (fitted to the shift), the bound being what the
+  arc rule needs -- ``ready - s_head`` for the head, ``e_i - s_i`` after job ``i`` -- and
+  its end never moves earlier. A late head's EXCESS lateness flows down the chain, the old
+  chain stays a feasible set of arcs, and an unchanged world changes nothing. A job pushed
+  more than ``propagate_max_push_min`` past its own start ends the walk (the rest of that
+  chain is re-planned freely).
 - **jobs** -- orders whose document state is ``created`` / ``unassigned``, not locked in
   the store (``dispatched`` / ``done``), not failed terminally (``cancelled`` /
   ``taken``), with ``request_step * step_seconds < window_end_s``. Release
@@ -36,8 +49,10 @@ Rules (plan §4, design §6a, critique M11 / D3 / D5 / D6 / D8 / D9 / D12f):
 - **eligibility** of (job, class): the class's haulier owns the job or the cooperation arm
   lets it serve the owner (``owner in arm[carrier]``, exactly ``share_eligible``),
   physically allowed (``size_compatible`` and not ``restricted_area_blocks`` against a
-  truck of the class), inside the class's shift (``r >= shift start``,
-  ``e <= shift end``). A job is dropped altogether when its overdue-sweep deadline
+  truck of the class), and fitting one of the class's windows: started at
+  ``max(r, window start)`` (M4: an order released before the shift waits for it) it ends
+  by the window end. The job's ``r`` is the earliest such start over its eligible
+  classes, ``e`` the end from it. A job is dropped altogether when its overdue-sweep deadline
   (``(request_step + max_wait_steps) * step_seconds``, the order lifecycle's
   ``UNASSIGNED_ORDER_MAX_WAIT_STEPS``) is before its planned dispatch plus one cadence
   (M11), or when no class may serve it. Dropped jobs are listed in ``excluded`` with a
@@ -113,6 +128,13 @@ class DayPlanParams:
     detour: float = 1.3                          # haversine x detour = planning km
     speed_kmh: float = 35.0                      # only for max_reposition_s
     replan_idle_trucks: bool = True             # D9
+    # M3 (opt-in, a trade-off measured 2026-10-25 on real day 1, full arm, 06-20 hours, the
+    # e2e with jobs ending at dispatch + predicted duration): off = 3,682 jobs moved / 1,907
+    # done; on = 2,193 moved / 1,783 done (-6.5 %); capped at 10 / 30 / 90 min = 3,572 /
+    # 3,147 / 2,257 moved, 1,898 / 1,839 / 1,789 done. The objective is distance only, so a
+    # late truck that keeps its chain costs nothing in the model but service in the world.
+    propagate_chains: bool = False              # old chains carry their excess lateness
+    propagate_max_push_min: Optional[float] = None  # a chain pushed further is re-planned freely
     deadline_margin_steps: Optional[int] = None  # None: one dispatch cadence (M11)
     hash_position_decimals: int = 4             # ~11 m
 
@@ -138,10 +160,10 @@ class PlanInputs(dict):
     """The JSON-able input of one planning solve (a ``dict``; ``json.dumps`` works as is).
 
     Keys: ``schema``, ``day``, ``now_s``, ``window_end_s``, ``step_seconds``,
-    ``cadence_steps``, ``classes`` {cid: {haulier, size, restricted_areas, shift, trucks,
-    synthetic}}, ``class_attrs`` {cid: [size, areas, shift]}, ``cooperation`` [[owner_class,
+    ``cadence_steps``, ``classes`` {cid: {haulier, size, restricted_areas, shift, windows,
+    trucks, synthetic}}, ``class_attrs`` {cid: [size, areas, windows]}, ``cooperation`` [[owner_class,
     carrier_class]], ``components`` [[cid]], ``trucks`` [{id, class, ready_s, loc [lat, lng],
-    anchor, anchor_job}], ``jobs`` [{id, owner, owner_class, classes, request_step, r_req,
+    anchor, anchor_job[, of, window]}], ``jobs`` [{id, owner, owner_class, classes, request_step, r_req,
     r, e, slack, deadline_s, pickup, dropoff, pickup_site, dropoff_site, first_day,
     new, status}], ``excluded`` {job: reason}, ``excluded_trucks`` {truck: reason},
     ``prev_arcs`` [[from, to]], ``params`` (``DayPlanParams.as_dict()``), ``hash``.
@@ -205,11 +227,13 @@ def _synthetic_class_id(haulier: str) -> str:
     return f"{haulier}|*none*"
 
 
-def _shift(hours: Optional[Sequence[float]], now_s: float, window_end_s: float
-           ) -> tuple[bool, Optional[list[float]]]:
-    """``(on, [start, end])`` of the earliest window of ``hours`` (elapsed seconds of day)
-    that ends after ``now_s`` and starts before ``window_end_s``; ``(True, None)`` for a
-    haulier without hours (always on); ``(False, None)`` when no window qualifies."""
+def _windows(hours: Optional[Sequence[float]], now_s: float, window_end_s: float
+             ) -> tuple[bool, Optional[list[list[float]]]]:
+    """``(on, windows)``: every window ``[start, end]`` of ``hours`` (elapsed seconds of day)
+    that ends after ``now_s`` and starts before ``window_end_s``, earliest first (an
+    overnight shift gives the plan two: the one running at day start and the evening one);
+    ``(True, None)`` for a haulier without hours (always on); ``(False, None)`` when no
+    window qualifies."""
     if hours is None:
         return True, None
     start, end = float(hours[0]), float(hours[1])
@@ -217,12 +241,21 @@ def _shift(hours: Optional[Sequence[float]], now_s: float, window_end_s: float
     if length == 0:
         return True, None
     first = math.floor(now_s / DAY_SECONDS) - 1
+    out = []
     for d in range(first, first + 4):
         s = d * DAY_SECONDS + start
         e = s + length
         if e > now_s and s < window_end_s:
-            return True, [s, e]
-    return False, None
+            out.append([s, e])
+    return (True, out) if out else (False, None)
+
+
+def _shift(hours: Optional[Sequence[float]], now_s: float, window_end_s: float
+           ) -> tuple[bool, Optional[list[float]]]:
+    """``(on, [start, end])`` of the EARLIEST window :func:`_windows` finds (kept for callers
+    that need one window)."""
+    on, wins = _windows(hours, now_s, window_end_s)
+    return on, (wins[0] if wins else None)
 
 
 def _hours_of(working_hours: Optional[Mapping[str, Any]], haulier: str) -> Optional[list[float]]:
@@ -389,17 +422,17 @@ def build_inputs(
     for cid in sorted(by_class):
         rep = by_class[cid][0]
         h = assign_constraints.haulier_of(rep)
-        on, shift = _shift(_hours_of(working_hours, h), now_s, window_end_s)
+        on, wins = _windows(_hours_of(working_hours, h), now_s, window_end_s)
         classes[cid] = {"haulier": h, "size": _truck_size(rep), "restricted_areas": _areas(rep),
-                        "shift": shift, "on": on, "trucks": [_id(t) for t in by_class[cid]],
-                        "synthetic": False}
+                        "shift": (wins[0] if wins else None), "windows": wins, "on": on,
+                        "trucks": [_id(t) for t in by_class[cid]], "synthetic": False}
     hauliers_with_class = {c["haulier"] for c in classes.values()}
     for o in orders_by_id.values():
         h = assign_constraints.haulier_of(o)
         if h is not None and h not in hauliers_with_class:
             classes.setdefault(_synthetic_class_id(h), {
-                "haulier": h, "size": None, "restricted_areas": [], "shift": None, "on": False,
-                "trucks": [], "synthetic": True})
+                "haulier": h, "size": None, "restricted_areas": [], "shift": None, "windows": None,
+                "on": False, "trucks": [], "synthetic": True})
     classes = dict(sorted(classes.items()))
     owner_class: dict[str, str] = {}
     for cid, c in classes.items():
@@ -430,8 +463,6 @@ def build_inputs(
             continue
         t = next(x for x in by_class[cid] if _id(x) == tid)
         ready = now_s
-        if c["shift"] is not None:
-            ready = max(ready, c["shift"][0])
         anchor, anchor_job, loc = "position", None, _latlng(assign_constraints.truck_anchor_loc(t))
         eng = engaged.get(tid)
         if eng is not None:
@@ -470,7 +501,9 @@ def build_inputs(
         if loc is None:
             excluded_trucks[tid] = "no_position"
             continue
-        if c["shift"] is not None and ready >= c["shift"][1]:
+        wins = c["windows"]
+        usable = [w for w in wins if max(ready, w[0]) < w[1]] if wins is not None else None
+        if usable is not None and not usable:
             excluded_trucks[tid] = "off_shift"
             continue
         if (same_day and not p.replan_idle_trucks and anchor == "position" and tid in store_itins
@@ -478,9 +511,87 @@ def build_inputs(
                         for j in store_itins.get(tid, ()))):
             excluded_trucks[tid] = "sleeping"
             continue
-        out_trucks.append({"id": tid, "class": cid, "ready_s": float(ready), "loc": loc,
+        if usable is None:
+            out_trucks.append({"id": tid, "class": cid, "ready_s": float(ready), "loc": loc,
+                               "anchor": anchor, "anchor_job": anchor_job})
+            continue
+        out_trucks.append({"id": tid, "class": cid, "ready_s": float(max(ready, usable[0][0])), "loc": loc,
                            "anchor": anchor, "anchor_job": anchor_job})
+        # M4/minor 6: a later window of the same plan (the evening half of an overnight
+        # shift) is a second START of the truck, ready at that window's start, at the
+        # truck's anchor (where it will be is unknown here; the re-plan in that window
+        # corrects it). The child appends its chain to the truck's own (``of``).
+        for k, w in enumerate(usable[1:], start=1):
+            out_trucks.append({"id": f"{tid}@w{k}", "of": tid, "window": k, "class": cid,
+                               "ready_s": float(w[0]), "loc": list(loc), "anchor": anchor,
+                               "anchor_job": anchor_job})
     working_classes = {t["class"] for t in out_trucks}
+
+    def fit(release: float, wins: Optional[Sequence[Sequence[float]]], order: Mapping[str, Any],
+            ends: dict[float, float]) -> Optional[float]:
+        """Earliest start ``max(release, window start)`` of the first window the job fits in
+        (its end inside the window); ``release`` itself without hours; ``None`` if none."""
+        if wins is None:
+            return release
+        for w in wins:
+            r_c = max(release, float(w[0]))
+            e_c = ends.get(r_c)
+            if e_c is None:
+                e_c = ends[r_c] = job_end(order, r_c)
+            if e_c <= float(w[1]):
+                return r_c
+        return None
+
+    # ---- chain propagation (M3): a still-planned job of the previous version starts no
+    # earlier than its predecessor's PROPAGATED end, from the truck's ready time on. With
+    # fixed job times a late head (an engaged truck ready after its planned end) broke its
+    # successors' arcs; propagated, the old chain stays feasible in the new instance.
+    # Minimal shift: exactly what the arc rule needs (start arc ``r_j >= ready - s_j``, link
+    # ``r_j >= e_i - s_i``), so an unchanged world changes nothing, and an end never moves
+    # EARLIER (the time model's hour buckets could shorten a later job and break its
+    # successor's ``r_k <= e_j + W``).
+    prop_r: dict[str, float] = {}
+    prop_e: dict[str, float] = {}
+
+    def slack_of(order: Mapping[str, Any]) -> float:
+        if p.late_slack_min is not None:
+            return float(p.late_slack_min) * 60.0
+        prof = _profile(order)
+        return time_model.late_slack_seconds(prof.get("pickup_facility_name"), prof.get("dropoff_facility_name"))
+
+    if same_day and p.propagate_chains:
+        ready_of = {t["id"]: t["ready_s"] for t in out_trucks if "of" not in t}
+        for tid in sorted(store_itins):
+            if tid not in ready_of:
+                continue
+            wins = classes[truck_class[tid]]["windows"]
+            cur = None   # the bound the next job's release must meet
+            for j in store_itins[tid]:
+                if (status.get(j) or {}).get("status") != "planned":
+                    continue
+                o = orders_by_id.get(j)
+                rs = _request_step(o) if o is not None else None
+                if o is None or rs is None or o.get("state") not in OPEN_ORDER_STATES:
+                    continue
+                if _latlng(assign_constraints.order_pickup_loc(o)) is None \
+                        or _latlng(assign_constraints.order_dropoff_loc(o)) is None:
+                    continue
+                base = max(rs * step_seconds, now_s)
+                sj = slack_of(o)
+                need = (ready_of[tid] - sj) if cur is None else cur
+                rj = fit(max(base, need), wins, o, {})
+                if rj is None:
+                    break  # the chain falls out of the shift here: the rest is re-planned freely
+                own = fit(base, wins, o, {})
+                if p.propagate_max_push_min is not None and rj - (base if own is None else own) \
+                        > float(p.propagate_max_push_min) * 60.0:
+                    break  # too late to keep: free trucks may take the rest at its own release
+                ej = job_end(o, rj)
+                if rj > base:
+                    prop_r[j] = rj
+                    ej = max(ej, job_end(o, base))
+                    prop_e[j] = ej
+                cur = ej - sj
 
     # ---- jobs ------------------------------------------------------------------------------
     jobs: list[dict[str, Any]] = []
@@ -509,8 +620,7 @@ def build_inputs(
         if r_req >= window_end_s:
             excluded[oid] = "outside_window"
             continue
-        r = max(r_req, now_s)
-        e = job_end(o, r)
+        r = max(r_req, now_s, prop_r.get(oid, now_s))
         prof = _profile(o)
         pf, df = prof.get("pickup_facility_name"), prof.get("dropoff_facility_name")
         slack = (float(p.late_slack_min) * 60.0 if p.late_slack_min is not None
@@ -521,7 +631,12 @@ def build_inputs(
             if r + latency + margin_steps * step_seconds > deadline:
                 excluded[oid] = "deadline"
                 continue
+        # M4: per class, the job may start at max(r, window start) -- an order released
+        # before a shift starts waits for it -- and must end inside that window.
         elig: list[str] = []
+        starts: list[float] = []
+        ends: dict[float, float] = {}
+        late_for_deadline = False
         for cid in working_classes:
             c = classes[cid]
             if not may_serve(owner, c["haulier"]):
@@ -529,12 +644,23 @@ def build_inputs(
             rep = by_class[cid][0]
             if not assign_constraints.size_compatible(rep, o) or assign_constraints.restricted_area_blocks(rep, o):
                 continue
-            if c["shift"] is not None and not (r >= c["shift"][0] and e <= c["shift"][1]):
+            r_c = fit(r, c["windows"], o, ends)
+            if r_c is None:
+                continue
+            if deadline is not None and r_c + latency + margin_steps * step_seconds > deadline:
+                late_for_deadline = True
                 continue
             elig.append(cid)
+            starts.append(r_c)
         if not elig:
-            excluded[oid] = "no_eligible_class"
+            excluded[oid] = "deadline" if late_for_deadline else "no_eligible_class"
             continue
+        r = min(starts)
+        e = ends.get(r)
+        if e is None:
+            e = job_end(o, r)
+        if oid in prop_e and r == prop_r.get(oid):
+            e = max(e, prop_e[oid])
         jobs.append({
             "id": oid, "owner": owner, "owner_class": owner_class[owner], "classes": sorted(elig),
             "request_step": rs, "r_req": r_req, "r": r, "e": e, "slack": slack,
@@ -564,7 +690,7 @@ def build_inputs(
         if t["id"] in orders_by_id:
             raise ValueError(f"truck id {t['id']} collides with an order id")
 
-    class_attrs = {cid: [c["size"], c["restricted_areas"], c["shift"]] for cid, c in classes.items()}
+    class_attrs = {cid: [c["size"], c["restricted_areas"], c["windows"]] for cid, c in classes.items()}
     # A synthetic (vehicle-less) owner class takes the attributes of its component's real
     # classes when those agree, so it never blocks the exact flow on its own (M5).
     for comp in components:
