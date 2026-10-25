@@ -19,10 +19,16 @@ stay unused), ``sid -> in_j`` (start cost), ``S -> D`` / ``D -> T`` / ``D -> in_
 capacity = the depot companies' summed ``vehicle_limit``), ``out_i -> in_j`` (edge cost),
 ``out_j -> T``.
 
-Refused (ValueError), use the MIP instead: a component that is not complete; an
-``eligible`` set that is not uniform over a component's companies for some job (it would
-make the commodities differ again); ``use_trailer_cost`` True; non-integer costs or penalty
-(costs are integer meters so the optimum is exact); duplicate edges.
+Costs are rounded to integer meters (``round``): the optimum is exact for the rounded
+costs. ``objective`` is that integer optimum; ``objective_float`` re-prices the chosen arcs
+at their original costs, so it is within ``0.5 x (arcs in the plan)`` of the MIP optimum
+(plan addendum M5: compare with an integer-rounding tolerance).
+
+Refused (ValueError), use the MIP instead: a component that is not :func:`mcf_applicable`
+(not complete; or its classes differ in ``class_attrs``, e.g. truck size / restricted areas
+/ working hours); an ``eligible`` set that is not uniform over a component's companies for
+some job (it would make the commodities differ again); ``use_trailer_cost`` True; duplicate
+edges. :func:`solve_by_component` picks the backend per component instead of refusing.
 """
 
 from __future__ import annotations
@@ -38,10 +44,10 @@ OPTIMAL, INFEASIBLE = 0, 2
 
 
 def _int(value: float, what: str) -> int:
-    iv = int(round(float(value)))
-    if abs(float(value) - iv) > 1e-9:
-        raise ValueError(f"{what} must be an integer number of meters (got {value!r})")
-    return iv
+    v = float(value)
+    if v != v or v in (float("inf"), float("-inf")):
+        raise ValueError(f"{what} must be finite (got {value!r})")
+    return int(round(v))
 
 
 def cooperation_components(companies: Iterable[Any], cooperation: Iterable[tuple[Any, Any]]) -> list[list[Any]]:
@@ -73,6 +79,27 @@ def is_complete(component: Iterable[Any], cooperation: Iterable[tuple[Any, Any]]
     return all((a, b) in coop for a in comp for b in comp)
 
 
+def mcf_applicable(component: Iterable[Any], cooperation: Iterable[tuple[Any, Any]],
+                   class_attrs: Dict[Any, Any] | None = None) -> tuple[bool, str]:
+    """Whether the single-commodity min-cost flow is EXACT for this component (addendum M5).
+
+    Needs complete directed adjacency, self pairs included, and every class (company /
+    truck class) of the component sharing the attributes that decide job eligibility:
+    ``class_attrs[c]`` (truck size, restricted areas, working hours, ... -- any hashable
+    the caller builds) must be equal across the component. A class missing from
+    ``class_attrs`` is compared as ``None``. Returns ``(ok, reason)``; ``reason`` is
+    ``"complete"`` when ok.
+    """
+    comp = list(component)
+    if not is_complete(comp, cooperation):
+        return False, "adjacency not complete"
+    if class_attrs is not None:
+        attrs = {repr(class_attrs.get(c)) for c in comp}
+        if len(attrs) > 1:
+            return False, "classes differ in eligibility attributes"
+    return True, "complete"
+
+
 def solve_min_cost_flow(params: Dict[str, Any]):
     t0 = time.time()
     if params.get("use_trailer_cost", True):
@@ -97,8 +124,10 @@ def solve_min_cost_flow(params: Dict[str, Any]):
     comps = cooperation_components(companies, cooperation)
     comp_of = {c: k for k, comp in enumerate(comps) for c in comp}
     for comp in comps:
-        if not is_complete(comp, cooperation):
-            raise ValueError(f"cooperation component {comp!r} is not complete: use the MIP")
+        ok, why = mcf_applicable(comp, cooperation, params.get("class_attrs"))
+        if not ok:
+            raise ValueError(f"cooperation component {comp!r}: {why}, so it is not complete for "
+                             "the min-cost flow: use the MIP")
 
     # A job is servable iff its owner's component serves it, filtered by `eligible`.
     serv: Dict[Any, bool] = {}
@@ -126,8 +155,11 @@ def solve_min_cost_flow(params: Dict[str, Any]):
             nid = node_ids[key] = len(node_ids)
         return nid
 
-    def arc(t, h, cap, cost, kind):
+    fcost: list = []
+
+    def arc(t, h, cap, cost, kind, float_cost=None):
         tails.append(node(t)); heads.append(node(h)); caps.append(cap); costs.append(cost); kinds.append(kind)
+        fcost.append(float(cost) if float_cost is None else float(float_cost))
 
     supplies: Dict[Any, int] = {}
     depot_cap: Dict[int, int] = {}
@@ -151,7 +183,7 @@ def solve_min_cost_flow(params: Dict[str, Any]):
             supplies[("in", j)] = -1
             supplies[("out", j)] = 1
             if defer_i is not None:
-                arc(("out", j), ("in", j), 1, defer_i, ("skip", j))
+                arc(("out", j), ("in", j), 1, defer_i, ("skip", j), float(defer))
             if serv[j]:
                 if dcap:
                     arc(D, ("in", j), 1, 0, ("depot", j, k))
@@ -162,12 +194,14 @@ def solve_min_cost_flow(params: Dict[str, Any]):
             raise ValueError(f"start edge ({sid!r}, {j!r}) names an unknown start node or order")
         c = start_nodes[sid]["company"]
         if serv[j] and job_comp[j] == comp_of[c]:
-            arc(("sid", sid), ("in", j), 1, _int(start_cost[(sid, j)], "start edge cost"), ("start", sid, j))
+            arc(("sid", sid), ("in", j), 1, _int(start_cost[(sid, j)], "start edge cost"), ("start", sid, j),
+                start_cost[(sid, j)])
     for (i, j) in edges:
         if i == j or i not in serv or j not in serv:
             continue
         if serv[i] and serv[j] and job_comp[i] == job_comp[j]:
-            arc(("out", i), ("in", j), 1, _int(edge_cost[(i, j)], "edge cost"), ("edge", i, j))
+            arc(("out", i), ("in", j), 1, _int(edge_cost[(i, j)], "edge cost"), ("edge", i, j),
+                edge_cost[(i, j)])
 
     smcf = min_cost_flow.SimpleMinCostFlow()
     if tails:
@@ -243,15 +277,17 @@ def solve_min_cost_flow(params: Dict[str, Any]):
             routes[(j, succ[j], c)] = 1.0
 
     objective = float(smcf.optimal_cost())
+    objective_float = float(sum(fcost[a_idx] * int(flows[a_idx]) for a_idx in np.flatnonzero(flows > 0).tolist()))
     result = {
         "instance_id": params.get("instance_id"),
         "status": OPTIMAL,
         "objective": objective,
+        "objective_float": objective_float,
         "assignment": assignment,
         "routes": routes,
     }
     if defer_i is not None:
         result["unplanned"] = [j for j in orders if j in unplanned_set]
-    stats.update(objective=objective, solve_time_s=time.time() - t0,
+    stats.update(objective=objective, objective_float=objective_float, solve_time_s=time.time() - t0,
                  num_unplanned=len(unplanned_set), num_orphaned=len(orphaned))
     return result, stats

@@ -432,12 +432,15 @@ def test_min_cost_flow_refuses_what_it_cannot_solve_exactly():
     p = tiny_instance(7, n_companies=2, coop_mode="oneway", start_mode="depot")
     with pytest.raises(ValueError, match="not complete"):
         solve_min_cost_flow(p)
+    p2 = tiny_instance(7, n_companies=2, coop_mode="full", start_mode="depot", eligible_mode="none")
+    with pytest.raises(ValueError, match="classes differ"):
+        solve_min_cost_flow(dict(p2, class_attrs={"A": ("20ft", "06:00-20:00"), "B": ("20ft", "08:00-18:00")}))
     p = tiny_instance(7, n_companies=2, coop_mode="full", start_mode="depot", eligible_mode="none")
     with pytest.raises(ValueError, match="use_trailer_cost"):
         solve_min_cost_flow(dict(p, use_trailer_cost=True))
     e = p["edges_input"][0]
-    with pytest.raises(ValueError, match="integer"):
-        solve_min_cost_flow(dict(p, edge_cost_input=dict(p["edge_cost_input"], **{}) | {e: 10.5}))
+    with pytest.raises(ValueError, match="finite"):
+        solve_min_cost_flow(dict(p, edge_cost_input=p["edge_cost_input"] | {e: float("nan")}))
     with pytest.raises(ValueError, match="distinct"):
         solve_min_cost_flow(dict(p, edges_input=p["edges_input"] + [e]))
     with pytest.raises(ValueError, match="not uniform"):

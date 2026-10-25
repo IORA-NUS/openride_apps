@@ -72,7 +72,24 @@ backends through `MPSolverParameters`; without one it is exactly `solver.Solve()
   elimination, so this is what keeps it from returning truck-less job cycles.
 - `chains.py`: per-start-node chains from a solved `routes` map.
 - `min_cost_flow.py`: exact single-commodity min-cost-flow backend for cooperation
-  components with complete adjacency (OR-Tools `SimpleMinCostFlow`, integer meter costs).
+  components where `mcf_applicable` holds (complete directed adjacency incl. self pairs,
+  and all classes share `class_attrs`: size / restricted areas / working hours). Costs
+  are rounded to integer meters; `objective_float` re-prices the plan at the original costs.
+- `backends.py`: `solve_by_component(params, backend="auto"|"mincostflow"|"mip")` (flow
+  where exact, MIP elsewhere, backend recorded per component), `served_upper_bound`,
+  `served_reference` and `quality_guard` (a limit-stopped MIP incumbent serving < 95% of
+  the reference is `poor_incumbent`; addendum B2).
+- `limits.py`: `memory_cap_preexec` (child `RLIMIT_AS`, default 4 GiB) and
+  `check_mip_arc_budget` (default 500,000 `x` variables; addendum minor 8).
+
+## OR-Tools version
+
+Tested with **ortools 9.14.6206**: the newest release whose METADATA accepts this repo's
+pins (`numpy>=1.13.3`, `pandas>=2.0.0`, `protobuf<6.32,>=6.31.1`). 9.15 requires
+`numpy>=2.0.2` and cannot install beside `numpy==1.26.3` (addendum M3). A clean py3.11
+`pip install --dry-run -r requirements.txt ortools==9.14.6206` resolves (protobuf 6.31.1,
+absl-py, immutabledict, typing_extensions added). The golden is byte-identical under 9.14
+and 9.15.
 
 ## Golden
 
@@ -82,5 +99,5 @@ every upstream file matches the hashes above and imports the solver from the ups
 (never from this package). Instances 1-7 were captured before either modified file was
 edited (commit 4e1ed6d); instance 8 (duplicate `edges_input` entries) was added afterwards,
 again from the pristine upstream, and instances 1-7 came out byte-identical. OR-Tools
-9.15.6755, SCIP backend (gurobipy is not installed, so the Gurobi adapter is untested
+9.15.6755 at capture, re-captured byte-identical under 9.14.6206; SCIP backend (gurobipy is not installed, so the Gurobi adapter is untested
 against a real Gurobi; a stub test checks it receives `TimeLimit` / `MIPGap`).

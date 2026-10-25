@@ -61,7 +61,7 @@ def test_verbatim_files_match_vendor_md():
 
 
 def test_vendor_table_names_every_vendored_module():
-    new = {"time_window_edges.py", "chains.py", "min_cost_flow.py"}
+    new = {"time_window_edges.py", "chains.py", "min_cost_flow.py", "backends.py", "limits.py"}
     present = {str(p.relative_to(PKG)) for p in PKG.rglob("*.py")}
     assert present - new == set(_vendor_table())
 
