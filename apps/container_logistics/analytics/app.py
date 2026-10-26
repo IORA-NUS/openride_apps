@@ -39,6 +39,16 @@ class AnalyticsApp(ORSimApp):
             # Collaboration (haulier job sharing) scalars.
             "shared_trip_rate": 0.0,
             "total_benefit_km": 0.0,
+            # Order outcomes -- SIM KPIs every run gets, whatever the solver (definitions:
+            # analytics/order_outcomes.py). Run-wide, NOT window deltas, so every one is a
+            # gauge (the frontend must not sum them). `failed` is PROVISIONAL (a sweep
+            # cancel can be resurrected, so it can fall); the done/undone figures cover
+            # CLOSED run days only. The authoritative recount is run_config.meta.order_outcomes.
+            "num_orders_released_total": 0,
+            "num_orders_failed_total": 0,
+            "num_orders_done_same_day_total": 0,
+            "num_orders_undone_at_day_end_total": 0,
+            "same_day_completion_rate": 0.0,
         }
         self._active_haul_trips: list = []
 
@@ -79,6 +89,21 @@ class AnalyticsApp(ORSimApp):
     def prep_metric_computation_queries(self, start_time, end_time):
         """Bind the analytics interval for window-scoped KPI queries."""
         self.manager.set_metric_window(start_time, end_time)
+
+    def _compute_order_outcome_kpis(self, end_time):
+        """+1 REST count per tick (an EXISTING endpoint); the per-day recount runs only on
+        the first tick after a run day closes (manager.refresh_order_outcomes_if_day_closed)."""
+        cancelled = self.manager.count_orders_by_state(OrderStateMachine.cancelled.name)
+        self.kpi_collection["num_orders_failed_total"] = cancelled
+        # released == state != created == completed + cancelled + active (count_active is
+        # $nin completed/cancelled/created); two of the three were fetched this tick.
+        self.kpi_collection["num_orders_released_total"] = (
+            self.kpi_collection["num_orders_completed_total"]
+            + cancelled
+            + self.kpi_collection["active_orders"]
+        )
+        self.manager.refresh_order_outcomes_if_day_closed(end_time)
+        self.kpi_collection.update(self.manager.order_outcome_scalars())
 
     def compute_all_metrics(self, start_time, end_time):
         try:
@@ -132,6 +157,13 @@ class AnalyticsApp(ORSimApp):
             # idle-trip ends (e.g. the final window) — see accumulate_idle_trips / compute_*.
             self.manager.accumulate_idle_trips(start_time, end_time)
             self.kpi_collection["avg_idle_time_seconds"] = self.manager.compute_avg_idle_time_seconds()
+
+            # Contained on its own: this method re-raises, and a reporting extra must never
+            # cost the tick its existing KPIs. On failure the keys keep their last values.
+            try:
+                self._compute_order_outcome_kpis(end_time)
+            except Exception:
+                logging.exception("order-outcome KPIs failed at %s (other KPIs unaffected)", time_to_str(end_time))
 
             for kpi_name, kpi_value in self.kpi_collection.items():
                 if kpi_value is None:

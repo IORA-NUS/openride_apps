@@ -68,6 +68,9 @@ logger = logging.getLogger(__name__)
 #: ``container_logistics.scenario.scenario_manager.get_run_config_meta`` (``policies`` is
 #: the planner stamp). A run-stats ``meta_key`` naming one would PATCH over it.
 #: ``tests/test_framework_integrity.py`` pins this set against that function's source.
+#: ``order_outcomes`` is the SIM's run-end order recount, written at finalize by
+#: ``SimulationRuntime._finalize_order_outcomes`` (``analytics/order_outcomes.py``); a
+#: solver's stats must never overwrite the one figure every arm is compared on.
 RESERVED_META_KEYS = frozenset({
     "facility_rules",
     "num_analytics_agents",
@@ -75,6 +78,7 @@ RESERVED_META_KEYS = frozenset({
     "num_facility_agents",
     "num_order_agents",
     "num_truck_agents",
+    "order_outcomes",
     "policies",
     "rebate",
     "scenario_display_name",

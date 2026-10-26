@@ -124,3 +124,11 @@ def test_bulk_cancel_targets_only_nonterminal_orders(monkeypatch):
     assert set(flt["state"]["$nin"]) == {"completed", "cancelled"}
     assert update["$set"]["state"] == "cancelled"
     assert update["$set"]["_updated"] == "Mon, 01 Jan 2020 04:00:00 GMT"
+    # The horizon marker the order-outcome recount reads: a DOT-PATH so meta.request_time_step
+    # survives, and the only key added to the $set.
+    assert update["$set"]["meta.cancel_reason"] == "unserved_at_horizon"
+    assert update["$set"]["meta.cancel_reason"] == bulk_cancel.HORIZON_CANCEL_REASON
+    assert set(update["$set"]) == {"state", "_updated", "meta.cancel_reason"}
+    assert set(update) == {"$set"}
+    # Filter unchanged: sweep-cancelled (and every other terminal) doc keeps its reason.
+    assert flt == {"run_id": "run_X", "state": {"$nin": ["completed", "cancelled"]}}
