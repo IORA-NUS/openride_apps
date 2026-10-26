@@ -261,13 +261,20 @@ class _Coll:
         self.docs = docs
         self.agg_rows = agg_rows or []
         self.pipelines = []
+        self.query_kw = []  # (op, kwargs) of every query: the time bounds are asserted
 
-    def find(self, flt, projection=None):
+    def find(self, flt, projection=None, **kw):
+        self.query_kw.append(("find", kw))
         return [d for d in self.docs if _matches(d, flt)]
 
     def aggregate(self, pipeline, **kw):
+        self.query_kw.append(("aggregate", kw))
         self.pipelines.append(pipeline)
         return list(self.agg_rows)
+
+    def count_documents(self, flt, **kw):
+        self.query_kw.append(("count_documents", kw))
+        return sum(1 for d in self.docs if _matches(d, flt))
 
 
 class _Client:
@@ -372,7 +379,7 @@ def test_live_refresh_fires_only_on_a_newly_closed_day():
     assert m.order_outcome_scalars()["num_orders_done_same_day_total"] == 1
     for k in range(2, 9):
         m.refresh_order_outcomes_if_day_closed(REF + timedelta(seconds=k * DAY + 1))
-    assert reader.calls == 7  # days 1..7 closed: at most days + 1 refreshes per run
+    assert reader.calls == 7  # days 1..7 closed: at most `days` refreshes per run (closed = 1..D)
     assert m.live_order_outcomes()["final"] is False
 
 
@@ -452,3 +459,209 @@ def test_completion_at_exactly_the_horizon_on_a_partial_last_day_is_later():
     rts = int(6.2 * DAY / STEP)
     out = _fold([_doc("completed", rts=rts, done_at=h)], horizon_s=h)
     assert (out["totals"]["done_same_day"], out["totals"]["done_later"]) == (0, 1)
+
+
+# ------------------------------------------------------------------ fix round FX1 (review m3/m5/m7/m8)
+
+
+def test_scalar_undone_is_published_from_undone_not_done_later():
+    """review m7: undone (2) != done_later (1) here, so a mis-mapped scalar is caught."""
+    docs = [
+        _doc("completed", rts=0, done_at=60),
+        _doc("completed", rts=0, done_at=DAY + 60),
+        _doc("cancelled", rts=0, reason=bw.SWEEP_CANCEL_REASON),
+    ]
+    s = oo.scalars_from_outcomes(_fold(docs, final=False, closed=1))
+    assert s["num_orders_undone_at_day_end_total"] == 2
+    assert s["num_orders_done_same_day_total"] == 1
+    assert s["same_day_completion_rate"] == round(1 / 3, 4)
+
+
+def test_haulier_row_rate_is_done_same_day_over_released():
+    """review m7: 1 same-day of 3 released (undone 2), so any other numerator is caught."""
+    docs = [
+        _doc("completed", rts=0, done_at=60, hid="a"),
+        _doc("completed", rts=0, done_at=DAY + 60, hid="a"),
+        _doc("cancelled", rts=0, reason=bw.SWEEP_CANCEL_REASON, hid="a"),
+    ]
+    row = oo.haulier_row_fields(_fold(docs))["a"]
+    assert (row["orders_released"], row["orders_done_same_day"], row["orders_undone_at_day_end"]) == (3, 1, 2)
+    assert row["same_day_completion_rate"] == round(1 / 3, 4)
+
+
+@pytest.mark.parametrize("uri", ["mongodb://example:27017", None])
+def test_mongo_client_is_bounded_on_selection_and_socket(monkeypatch, uri):
+    """review m5/m7: both construction branches carry the selection AND socket bounds."""
+    import pymongo
+
+    from apps import config
+
+    seen = {}
+
+    def fake_client(*args, **kw):
+        seen["args"], seen["kw"] = args, kw
+        return object()
+
+    monkeypatch.setattr(pymongo, "MongoClient", fake_client)
+    monkeypatch.setattr(config, "kpi_sink_settings",
+                        {"mongo_uri": uri, "mongo_host": "h", "mongo_port": "27017", "mongo_db": "x"})
+    oo._mongo_client()
+    assert seen["kw"]["connect"] is False
+    assert seen["kw"]["serverSelectionTimeoutMS"] == 3000
+    assert seen["kw"]["socketTimeoutMS"] == oo.LIVE_MAX_TIME_MS + oo._SOCKET_SLACK_MS
+    oo._mongo_client(server_selection_timeout_ms=1234, socket_timeout_ms=999)
+    assert seen["kw"]["serverSelectionTimeoutMS"] == 1234 and seen["kw"]["socketTimeoutMS"] == 999
+
+
+def test_default_reader_socket_bound_follows_its_query_bound(monkeypatch):
+    seen = {}
+    monkeypatch.setattr(oo, "_mongo_client", lambda **kw: seen.update(kw) or _Client(_Coll([]), _Coll([])))
+    oo.OrderOutcomeReader("r1", db_name="x", max_time_ms=7000).read(
+        reference_time=REF, step_interval=STEP, horizon_s=H)
+    assert seen == {"socket_timeout_ms": 7000 + oo._SOCKET_SLACK_MS}
+
+
+@pytest.mark.parametrize("per_doc", [False, True])
+def test_every_reader_query_carries_max_time_ms(per_doc):
+    """review m5: a slow-but-up Mongo must fail the recount, not hold the analytics step."""
+    oid = ObjectId()
+    orders = _Coll(_with_run([_doc("cancelled", rts=2000, _id=oid), _doc("created", rts=5)]))
+    hauls = _Coll(_with_run([{"order": str(oid), "state": "cancelled", "stats": {}}]))
+    client = _Client(orders, hauls)
+    oo.OrderOutcomeReader("r1", client_factory=lambda: client, db_name="x", max_time_ms=4321).read(
+        reference_time=REF, step_interval=STEP, horizon_s=H, per_doc=per_doc, count_unreleased=True)
+    calls = orders.query_kw + hauls.query_kw
+    ops = sorted(op for op, _ in calls)
+    assert ops == (["count_documents", "find", "find"] if per_doc
+                   else ["aggregate", "count_documents", "find", "find"])
+    for op, kw in calls:
+        key = "max_time_ms" if op == "find" else "maxTimeMS"
+        assert kw.get(key) == 4321, (op, kw)
+
+
+def test_compute_uses_live_bound_live_and_final_bound_final(monkeypatch):
+    built = []
+
+    class Rec(oo.OrderOutcomeReader):
+        def __init__(self, run_id, **kw):
+            built.append(kw.get("max_time_ms"))
+            super().__init__(run_id, **kw)
+
+        def read(self, **kw):
+            built.append(kw.get("count_unreleased", False))
+            return []
+
+    monkeypatch.setattr(oo, "OrderOutcomeReader", Rec)
+    oo.compute_order_outcomes("r1", step_interval=STEP, reference_time=REF, horizon_s=H, final=False, closed=1)
+    oo.compute_order_outcomes("r1", step_interval=STEP, reference_time=REF, horizon_s=H, final=True)
+    assert built == [oo.LIVE_MAX_TIME_MS, False, oo.FINAL_MAX_TIME_MS, True]
+    assert oo.LIVE_MAX_TIME_MS <= 5000
+
+
+def test_reader_timeout_is_contained_by_the_live_refresh():
+    """A maxTimeMS expiry raises inside read(); the manager keeps the previous values."""
+    from pymongo.errors import ExecutionTimeout
+
+    m = _manager()
+    reader = _ScriptedReader([[_doc("completed", rts=0, done_at=60)], ExecutionTimeout("slow")])
+    m._order_outcome_reader_factory = lambda run_id: reader
+    m.set_order_outcome_context(STEP, "2020-01-01 08:00:00", 2520)
+    assert m.refresh_order_outcomes_if_day_closed(REF + timedelta(seconds=DAY + 1)) is True
+    assert m.refresh_order_outcomes_if_day_closed(REF + timedelta(seconds=2 * DAY + 1)) is False
+    assert m.order_outcome_scalars()["num_orders_done_same_day_total"] == 1
+
+
+def test_release_at_or_after_horizon_is_an_invariant_error_not_a_failure():
+    """review m8: an order released at/after H was never published inside the run."""
+    rts_h = 2520  # t_rel == H exactly
+    docs = [
+        _doc("completed", rts=0, done_at=60),
+        _doc("cancelled", rts=rts_h, reason=HORIZON_CANCEL_REASON),
+        _doc("cancelled", rts=rts_h + 400, reason=HORIZON_CANCEL_REASON),
+    ]
+    out = _fold(docs)
+    assert out["release_beyond_horizon"] == 2
+    assert out["totals"]["released"] == 1 and out["totals"]["failed"]["total"] == 0
+    assert out["days_count"] == 7 and set(out["days"]) == {"d0"}
+    assert not out["invariants_ok"]
+    assert any("at/after the horizon" in e for e in out["invariant_errors"])
+    # just inside the horizon still counts as released and failed
+    inside = _fold([_doc("cancelled", rts=rts_h - 1, reason=HORIZON_CANCEL_REASON)])
+    assert inside["release_beyond_horizon"] == 0 and inside["invariants_ok"]
+    assert inside["totals"]["failed"]["unserved_at_horizon"] == 1
+
+
+def test_release_beyond_a_partial_last_day_horizon_is_flagged():
+    """The bound is H itself, not days_count: release day 6 < 7 days, but after H = 6.5 d."""
+    h = 6.5 * DAY
+    out = _fold([_doc("cancelled", rts=int(6.7 * DAY / STEP), reason=HORIZON_CANCEL_REASON)], horizon_s=h)
+    assert out["release_beyond_horizon"] == 1 and not out["invariants_ok"]
+
+
+def test_pipeline_groups_on_release_beyond_horizon():
+    pipe = oo.OrderOutcomeReader("r1", db_name="x").pipeline(
+        reference_time=REF, step_interval=STEP, horizon_s=H, exclude_ids=[])
+    assert pipe[1]["$group"]["_id"]["bh"] == {
+        "$gte": [{"$multiply": ["$meta.request_time_step", STEP * 1000.0]}, H * 1000.0]}
+    # and the aggregate row's bh reaches the fold
+    orders = _Coll([], agg_rows=[{"_id": {"h": "a", "hn": "A", "rd": 7.0, "bh": True, "s": "cancelled",
+                                          "r": HORIZON_CANCEL_REASON, "t": False, "dd": None, "ph": None,
+                                          "e": None, "ah": True}, "n": 4}])
+    client = _Client(orders, _Coll([]))
+    recs = oo.OrderOutcomeReader("r1", client_factory=lambda: client, db_name="x").read(
+        reference_time=REF, step_interval=STEP, horizon_s=H)
+    out = oo.fold_outcomes(recs, horizon_s=H, step_interval=STEP, reference_time=REF, final=True)
+    assert out["release_beyond_horizon"] == 4 and out["totals"]["released"] == 0
+
+
+def test_created_at_final_is_an_invariant_error():
+    """review m8: the final read counts orders still `created` (bulk cancel missed them)."""
+    orders = _Coll(_with_run([_doc("completed", rts=0, done_at=60), _doc("created", rts=10),
+                              _doc("created", rts=20)]))
+    client = _Client(orders, _Coll([]))
+    reader = oo.OrderOutcomeReader("r1", client_factory=lambda: client, db_name="x")
+    for per_doc in (False, True):
+        out = oo.compute_order_outcomes("r1", step_interval=STEP, reference_time=REF, horizon_s=H,
+                                        final=True, reader=reader, per_doc=per_doc)
+        assert out["unreleased_at_final"] == 2
+        assert out["totals"]["released"] == (0 if not per_doc else 1)  # fake agg rows are empty
+        assert any("still `created`" in e for e in out["invariant_errors"])
+    live = oo.compute_order_outcomes("r1", step_interval=STEP, reference_time=REF, horizon_s=H,
+                                     final=False, closed=1, reader=reader, per_doc=True)
+    assert "unreleased_at_final" not in live and live["invariants_ok"]
+    assert not any(op == "count_documents" for op, _ in orders.query_kw[-2:])
+
+
+def test_released_total_never_dips():
+    """review m3: separate reads can double-count then correct; the counter must not dip."""
+    from unittest.mock import MagicMock
+
+    from apps.container_logistics.analytics.app import AnalyticsApp
+
+    app = AnalyticsApp.__new__(AnalyticsApp)
+    app.manager = MagicMock()
+    app.manager.order_outcome_scalars.return_value = {}
+    seq = []
+    for completed, cancelled, active in [(10, 2, 5), (10, 3, 5), (11, 3, 2), (12, 3, 3)]:
+        app.kpi_collection = {"num_orders_completed_total": completed, "active_orders": active}
+        app.manager.count_orders_by_state.return_value = cancelled
+        app._compute_order_outcome_kpis(REF)
+        seq.append(app.kpi_collection["num_orders_released_total"])
+    assert seq == [17, 18, 18, 18]
+
+
+def test_agent_forwards_live_outcomes_to_the_breakdown_flush():
+    """review m7: the agent must hand manager.live_order_outcomes() to save_breakdowns."""
+    from unittest.mock import MagicMock
+
+    from apps.container_logistics.analytics.agent import AnalyticsAgentIndie
+
+    agent = AnalyticsAgentIndie.__new__(AnalyticsAgentIndie)
+    sentinel = object()
+    agent.app = MagicMock()
+    agent.app.manager.live_order_outcomes.return_value = sentinel
+    agent.current_time = REF
+    agent.get_current_time_str = lambda: "Wed, 01 Jan 2020 08:00:00 GMT"
+    agent._maybe_flush_breakdowns({})
+    agent.app.manager.save_breakdowns.assert_called_once_with(
+        "Wed, 01 Jan 2020 08:00:00 GMT", order_outcomes=sentinel)

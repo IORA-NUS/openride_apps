@@ -97,11 +97,18 @@ class AnalyticsApp(ORSimApp):
         self.kpi_collection["num_orders_failed_total"] = cancelled
         # released == state != created == completed + cancelled + active (count_active is
         # $nin completed/cancelled/created); two of the three were fetched this tick.
-        self.kpi_collection["num_orders_released_total"] = (
+        # The three counts are separate reads taken while the order service writes, so an
+        # order that changes state between them is counted twice or not at all (a few per
+        # tick). The catalog calls this a MONOTONIC counter: hold the high-water mark so the
+        # series can never dip. The exact figure is meta.order_outcomes (final recount).
+        released = (
             self.kpi_collection["num_orders_completed_total"]
             + cancelled
             + self.kpi_collection["active_orders"]
         )
+        released = max(released, getattr(self, "_released_total_hwm", 0))
+        self._released_total_hwm = released
+        self.kpi_collection["num_orders_released_total"] = released
         self.manager.refresh_order_outcomes_if_day_closed(end_time)
         self.kpi_collection.update(self.manager.order_outcome_scalars())
 
