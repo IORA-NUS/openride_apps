@@ -1,17 +1,24 @@
 """``DayPlanStats``: a day-plan solver's run statistics (``run_config.meta.day_plan``).
 
 Single responsibility: fold the day-plan wrapper's per-tick ``Result.tick_notes`` into run
-level KPI (design §6a / §7, plan §4 ``stats.py``, critique M11 + minor 15), decide when
+level PLANNER statistics (design §6a / §7, plan §4 ``stats.py``, minor 15), decide when
 they are pushed. A ``dispatch.run_stats.RunStatsAggregator`` with ``meta_key =
 "day_plan"``. Solver helper; stdlib only; the framework drives it without knowing it.
 
-**Notes vocabulary** (build them with :func:`plan_note`, :func:`events_note`,
-:func:`rebuild_note`; :func:`merge_notes` joins several into one tick's notes)::
+**Planner-only (schema 2).** These stats describe the PLANNER: plan versions, re-plan
+churn (jobs moved), skipped / failed re-plans, fallbacks, incidents and quality. Order
+outcomes (done / undone / failed) are sim KPIs that every arm gets,
+``run_config.meta.order_outcomes``; they are never re-derived here. Schema 1 also carried
+``plan_jobs`` / ``plan_jobs_done`` / ``plan_jobs_dispatched`` / ``plan_jobs_failed`` /
+``plan_jobs_undone`` (totals and per day, with ``by_haulier``) and ``open_at_day_end``;
+schema 2 removed them, so ``schema`` tells the two shapes apart.
+
+**Notes vocabulary** (build them with :func:`plan_note`, :func:`rebuild_note`;
+:func:`merge_notes` joins several into one tick's notes)::
 
     {"day": n,                                    # run day of the tick (elapsed axis)
      "plan": {"outcome": "solved"|"skipped"|"failed", "reason": str|null,
               "version": "d3v2"|null, "jobs_moved": int, "planned": int, "unplanned": int,
-              "new_jobs": {job: haulier},          # first planned in this version
               "first_leg_km": {haulier: km},       # this version's truck -> first job km
               "solve_ms": float, "build_ms": float, "wall_ms": float,
               "deterministic": bool, "backends": {backend: n_components},
@@ -26,27 +33,16 @@ they are pushed. A ``dispatch.run_stats.RunStatsAggregator`` with ``meta_key =
      "no_plan": 1,                                 # a dispatch tick with no plan at all
      "uncommitted": n,                             # last tick's pairs the framework did not commit
      "store_failed": str, "backend_fallback": str, # plan store / backend degradations
-     "events": [[job, status, reason|null, haulier|null], ...],
-     "rebuild": {"jobs": {job: [haulier, first_day, status, reason]},
-                 "kpi": {"d3": {"versions": k, "jobs_moved": m}}}}
+     "rebuild": {"kpi": {"d3": {"versions": k, "jobs_moved": m}}}}
 
-``status`` of an event is a store status (``dispatched``, ``done``, ``failed``,
-``planned`` for a retry that went back to the plan). Every key is optional.
-
-**Attribution (M11).** A job belongs to the day of the version that FIRST planned it
-(``new_jobs``), for ever: a job rolled over from day n and done on day n+1 counts as
-``done`` for day n, never as day-n ``undone`` and day-(n+1) ``done``. The per-job status is
-the latest one, so a job that failed (``infeasible``), was re-planned and then done counts
-once, as done. ``plan_jobs_undone`` (per day, at snapshot time) = the day's jobs that are
-neither ``done``, ``dispatched`` nor ``failed``; ``open_at_day_end`` freezes the same count
-when the next day's first plan tick arrives (the design's "undone at day end").
+Every key is optional. A day record is created only by a plan note (or a rebuild's
+``kpi``). :meth:`DayPlanStats.fold` IGNORES an ``events`` key (a schema-1 wrapper's
+per-job status changes): job statuses are the dispatch store's business, not run stats.
 
 **Restart (minor 15).** The aggregator is in-memory. After an agent restart the wrapper
-folds :func:`rebuild_note` (from ``PlanStore.state()``, the Redis record) once: per-job
-status and attribution come back exactly where the record carries ``first_day`` in the job
-fields (else the day of the job's status version); per-day ``versions`` / ``jobs_moved``
-come back from the store's KPI hash; solve times and skip / failure counters of the lost
-process cannot, so ``restarts`` is stamped.
+folds :func:`rebuild_note` (from ``PlanStore.state()``, the Redis record) once: per-day
+``versions`` / ``jobs_moved`` come back from the store's KPI hash; solve times and skip /
+failure counters of the lost process cannot, so ``restarts`` is stamped.
 
 **Incidents** (§6.21 class: a run must not read ``ok`` while degraded): every degradation
 note is counted in ``incidents`` (``store_failed``, ``backend_fallback`` {backend: n},
@@ -69,15 +65,12 @@ fallback plan (or a failed fallback) and a rebuild; otherwise every :data:`PUSH_
 from __future__ import annotations
 
 import math
-import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Mapping
 
-__all__ = ["DayPlanStats", "PUSH_EVERY", "events_note", "merge_notes", "plan_note", "rebuild_note"]
+__all__ = ["DayPlanStats", "PUSH_EVERY", "merge_notes", "plan_note", "rebuild_note"]
 
 PUSH_EVERY = 10
-SCHEMA = 1
-_DONE, _DISPATCHED, _FAILED = "done", "dispatched", "failed"
-_VERSION_RE = re.compile(r"^d(\d+)v\d+$")
+SCHEMA = 2
 
 
 # ------------------------------------------------------------------------------ notes
@@ -99,7 +92,6 @@ def plan_note(inputs: Mapping[str, Any] | None, *, outcome: str, version: str | 
         if inputs is None or solve is None:
             raise ValueError("a solved plan note needs inputs and the solve result")
         st = solve.get("stats") or {}
-        jobs = {j["id"]: j for j in inputs["jobs"]}
         truck_h = {t["id"]: inputs["classes"][t["class"]]["haulier"] for t in inputs["trucks"]}
         first: dict[str, float] = {}
         for tid, m in (st.get("first_leg_m") or {}).items():
@@ -111,7 +103,6 @@ def plan_note(inputs: Mapping[str, Any] | None, *, outcome: str, version: str | 
             moved={k: int(ws.get(f"moved_{k}", 0)) for k in ("truck", "position", "to_unplanned")},
             planned=int(ws.get("planned", sum(len(c) for c in solve.get("itineraries", {}).values()))),
             unplanned=int(ws.get("unplanned", len(solve.get("unplanned", ())))),
-            new_jobs={j: jobs[j]["owner"] for j in sorted(jobs) if jobs[j].get("new")},
             first_leg_km={h: round(v, 3) for h, v in sorted(first.items())},
             solve_ms=float(st.get("solve_ms", 0.0)), build_ms=float(st.get("build_ms", 0.0)),
             wall_ms=float(st.get("wall_ms", 0.0)), deterministic=bool(st.get("deterministic", True)),
@@ -125,34 +116,13 @@ def plan_note(inputs: Mapping[str, Any] | None, *, outcome: str, version: str | 
     return {"day": d, "plan": plan}
 
 
-def events_note(day: int, events: Iterable[Iterable[Any]]) -> dict[str, Any]:
-    """Notes of a dispatch tick: ``[(job, status, reason, haulier), ...]`` status changes."""
-    out = []
-    for ev in events:
-        ev = list(ev)
-        ev += [None] * (4 - len(ev))
-        job, status, reason, haulier = ev[:4]
-        if status.startswith("failed:"):
-            status, reason = _FAILED, reason or status.split(":", 1)[1]
-        out.append([str(job), str(status), reason, haulier])
-    return {"day": int(day), "events": out}
-
-
 def rebuild_note(store_state: Mapping[str, Any]) -> dict[str, Any]:
-    """Notes that restore the aggregator from ``PlanStore.state()`` after a restart."""
+    """Notes that restore the aggregator from ``PlanStore.state()`` after a restart
+    (planner KPI only: per-day ``versions`` / ``jobs_moved``)."""
     cur = store_state.get("current") or {}
-    fields = cur.get("jobs") or {}
-    jobs = {}
-    for j, rec in sorted((store_state.get("status") or {}).items()):
-        f = fields.get(j) or {}
-        d = f.get("first_day")
-        if not isinstance(d, int):
-            m = _VERSION_RE.match(str(rec.get("version") or ""))
-            d = int(m.group(1)) if m else None
-        jobs[j] = [f.get("haulier"), d, rec.get("status"), rec.get("reason")]
     kpi = {k: {"versions": int(v.get("versions", 0)), "jobs_moved": int(v.get("jobs_moved", 0))}
            for k, v in sorted((store_state.get("kpi") or {}).items())}
-    return {"day": cur.get("day"), "rebuild": {"jobs": jobs, "kpi": kpi}}
+    return {"day": cur.get("day"), "rebuild": {"kpi": kpi}}
 
 
 def merge_notes(*notes: Mapping[str, Any]) -> dict[str, Any]:
@@ -160,9 +130,7 @@ def merge_notes(*notes: Mapping[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for n in notes:
         for k, v in n.items():
-            if k == "events":
-                out.setdefault("events", []).extend(v)
-            elif k in out and k != "day":
+            if k in out and k != "day":
                 raise ValueError(f"two notes carry {k!r}")
             else:
                 out[k] = v
@@ -186,7 +154,6 @@ class DayPlanStats:
     meta_key = "day_plan"
 
     def __init__(self) -> None:
-        self._jobs: dict[str, list] = {}       # job -> [haulier, first_day, status, reason]
         self._days: dict[int, dict[str, Any]] = {}
         self._solve_ms: list[float] = []
         self._build_ms: list[float] = []
@@ -262,8 +229,7 @@ class DayPlanStats:
             if day is None:
                 raise ValueError("a plan note needs its day")
             forced |= self._fold_plan(int(day), plan)
-        for ev in tick_notes.get("events") or ():
-            self._fold_event(day, ev)
+        # an ``events`` key (schema-1 job status changes) is ignored: planner-only stats
         return forced
 
     def push_due(self, *, force: bool = False) -> bool:
@@ -281,7 +247,7 @@ class DayPlanStats:
     def _blank_day() -> dict[str, Any]:
         return {"versions": 0, "replans_skipped": 0, "replans_failed": {}, "jobs_moved": 0,
                 "moved": {"truck": 0, "position": 0, "to_unplanned": 0},
-                "prev_arcs": {}, "fallbacks": 0, "planned": None, "unplanned": None, "first_leg_km": None, "open_at_day_end": None}
+                "prev_arcs": {}, "fallbacks": 0, "planned": None, "unplanned": None, "first_leg_km": None}
 
     def _day(self, d: int) -> dict[str, Any]:
         rec = self._days.get(d)
@@ -289,18 +255,12 @@ class DayPlanStats:
             rec = self._days[d] = self._blank_day()
         return rec
 
-    def _close_days_before(self, day: int) -> None:
-        for d in sorted(self._days):
-            if d < day and self._days[d]["open_at_day_end"] is None:
-                self._days[d]["open_at_day_end"] = self._open_counts(d)
-
     def _fold_plan(self, day: int, plan: Mapping[str, Any]) -> bool:
         self._plan_ticks += 1
         forced = False
         if self._last_day is None or day > self._last_day:
             if self._last_day is not None:
                 forced = True
-            self._close_days_before(day)
             self._last_day = day
         rec = self._day(day)
         outcome = plan.get("outcome")
@@ -323,9 +283,6 @@ class DayPlanStats:
             rec["unplanned"] = int(plan.get("unplanned", 0))
             if rec["first_leg_km"] is None:  # the day plan (v1); re-plans start mid-day
                 rec["first_leg_km"] = {h: float(v) for h, v in sorted((plan.get("first_leg_km") or {}).items())}
-            for j, h in (plan.get("new_jobs") or {}).items():
-                if j not in self._jobs:
-                    self._jobs[j] = [h, day, "planned", None]
             for k, ms in (("solve_ms", self._solve_ms), ("build_ms", self._build_ms), ("wall_ms", self._wall_ms)):
                 if plan.get(k) is not None:
                     ms.append(float(plan[k]))
@@ -337,22 +294,8 @@ class DayPlanStats:
             raise ValueError(f"unknown plan outcome {outcome!r}")
         return forced
 
-    def _fold_event(self, day: Any, ev: Iterable[Any]) -> None:
-        ev = list(ev) + [None] * 4
-        job, status, reason, haulier = ev[0], ev[1], ev[2], ev[3]
-        rec = self._jobs.get(job)
-        if rec is None:  # a job the aggregator never saw planned (restart without rebuild)
-            rec = self._jobs[job] = [haulier, int(day) if day is not None else None, None, None]
-        elif rec[0] is None and haulier is not None:
-            rec[0] = haulier
-        rec[2], rec[3] = status, (reason if status == _FAILED else None)
-
     def _rebuild(self, data: Mapping[str, Any]) -> None:
         self._restarts += 1
-        for j, (h, d, s, r) in (data.get("jobs") or {}).items():
-            old = self._jobs.get(j)
-            self._jobs[j] = [h if h is not None else (old[0] if old else None),
-                             d if d is not None else (old[1] if old else None), s, r]
         for k, v in (data.get("kpi") or {}).items():
             rec = self._day(int(str(k).lstrip("d")))
             rec["versions"] = max(rec["versions"], int(v.get("versions", 0)))
@@ -362,32 +305,6 @@ class DayPlanStats:
             self._last_day = max(days + ([self._last_day] if self._last_day is not None else []))
 
     # -- views ----------------------------------------------------------------------
-    def _open_counts(self, d: int) -> dict[str, Any]:
-        total, by_h = 0, {}
-        for h, fd, s, _ in self._jobs.values():
-            if fd == d and s not in (_DONE, _DISPATCHED, _FAILED):
-                total += 1
-                by_h[str(h)] = by_h.get(str(h), 0) + 1
-        return {"total": total, "by_haulier": dict(sorted(by_h.items()))}
-
-    @staticmethod
-    def _counts(rows: Iterable[list]) -> dict[str, Any]:
-        c = {"plan_jobs": 0, "plan_jobs_done": 0, "plan_jobs_dispatched": 0,
-             "plan_jobs_failed": {}, "plan_jobs_undone": 0}
-        for _, _, s, r in rows:
-            c["plan_jobs"] += 1
-            if s == _DONE:
-                c["plan_jobs_done"] += 1
-            elif s == _DISPATCHED:
-                c["plan_jobs_dispatched"] += 1
-            elif s == _FAILED:
-                key = str(r or "unknown")
-                c["plan_jobs_failed"][key] = c["plan_jobs_failed"].get(key, 0) + 1
-            else:
-                c["plan_jobs_undone"] += 1
-        c["plan_jobs_failed"] = dict(sorted(c["plan_jobs_failed"].items()))
-        return c
-
     #: incident key -> the ``quality.reasons`` entry it raises (V-M1).
     _DEGRADING = (("plan_fallbacks", "fallback_plan"), ("fallback_failed", "fallback_failed"),
                   ("component_fallbacks", "component_fallback"), ("accepted_poor", "accepted_poor"),
@@ -408,18 +325,10 @@ class DayPlanStats:
                 "solver's own exact answer; compare this arm with care (run_config.meta.day_plan.quality)."]
 
     def snapshot(self) -> dict[str, Any]:
-        by_day: dict[int, list] = {}
-        for row in self._jobs.values():
-            by_day.setdefault(row[1], []).append(row)
         days_out = {}
-        for d in sorted(set(self._days) | {k for k in by_day if k is not None}):
-            rec = self._days.get(d) or self._blank_day()
-            rows = by_day.get(d, [])
-            hs: dict[str, list] = {}
-            for row in rows:
-                hs.setdefault(str(row[0]), []).append(row)
+        for d in sorted(self._days):
+            rec = self._days[d]
             days_out[f"d{d}"] = {
-                **self._counts(rows),
                 "plan_jobs_moved": rec["jobs_moved"],
                 "plan_jobs_moved_by": dict(sorted(rec["moved"].items())),
                 "prev_arcs": dict(sorted(rec["prev_arcs"].items())),
@@ -430,10 +339,8 @@ class DayPlanStats:
                 "replans_skipped": rec["replans_skipped"],
                 "replans_failed": dict(sorted(rec["replans_failed"].items())),
                 "planned_last": rec["planned"], "unplanned_last": rec["unplanned"],
-                "open_at_day_end": rec["open_at_day_end"],
-                "by_haulier": {h: self._counts(r) for h, r in sorted(hs.items())},
             }
-        totals = self._counts(self._jobs.values())
+        totals: dict[str, Any] = {}
         totals["plan_jobs_moved"] = sum(r["jobs_moved"] for r in self._days.values())
         by: dict[str, int] = {"truck": 0, "position": 0, "to_unplanned": 0}
         for r in self._days.values():

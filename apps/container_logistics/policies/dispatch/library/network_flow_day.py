@@ -60,7 +60,8 @@ A job dispatched to a truck that is FREE again while its order is still ``unassi
 and unclaimed was refused: it is paired once more (retry once), then
 ``failed:refused``. An empty itinerary means the truck sleeps until the next plan; it is
 never refilled by an online matcher. Every status change is written through
-(``PlanStore.set_statuses``) and reported in the tick notes (``stats.events_note``).
+(``PlanStore.set_statuses``). Order outcomes (done / undone / failed) are sim KPIs
+(``run_config.meta.order_outcomes``), never re-derived in this solver's run stats.
 
 **Cadence (M1).** The latency model and the deadline margin use the run's own dispatch
 cadence (world ``assignment_cadence_steps``); ``nf_cadence_steps`` only overrides it
@@ -91,7 +92,7 @@ keeps the previous version; both are noted ``store_failed``. After an agent rest
 first tick with a run id reloads the record (``PlanStore.load_current``) and folds a
 ``rebuild`` note into the run stats, so the dispatch continues from the stored plan.
 
-**Determinism.** Every list is in id order (trucks, jobs, events, prefetch); the solve is
+**Determinism.** Every list is in id order (trucks, jobs, status changes, prefetch); the solve is
 exact min-cost flow by default (``deterministic`` false only when a MIP hit its time
 limit); nothing draws randomness.
 
@@ -593,10 +594,6 @@ class NetworkFlowDay(DispatchPolicy):
         for job, *_ in changes:
             st.overlay.pop(job, None)
 
-    def _event(self, st: _RunState, job: str, status: str, reason: str | None) -> list[Any]:
-        fields = st.store.job_fields(job) or {}
-        return [job, status, reason, fields.get("haulier")]
-
     def _prefetch(self, st: _RunState) -> tuple[str, ...]:
         return prefetch_ids(st.store, st.trucks, lambda j: self._status(st, j), first=sorted(st.tentative))
 
@@ -616,7 +613,7 @@ class NetworkFlowDay(DispatchPolicy):
     # -- committing last tick's pairs (minor 2) ------------------------------------------------
 
     def _confirm_tentative(self, st: _RunState, tick: Any, *, free: frozenset[str] | None,
-                           changes: list, events: list, notes: dict[str, Any]) -> None:
+                           changes: list, notes: dict[str, Any]) -> None:
         """Write the previous result's pairs ``dispatched`` once it is seen COMMITTED, else
         put them back to ``planned`` (no retry is spent).
 
@@ -640,7 +637,6 @@ class NetworkFlowDay(DispatchPolicy):
             if seen or committed or (free is not None and tid not in free):
                 if not retry:  # a retry's job is already ``dispatched`` in the store
                     changes.append((j, "dispatched", None, tid))
-                    events.append(self._event(st, j, "dispatched", None))
                 continue
             reverted += 1
             st.dispatched_at.pop(j, None)
@@ -655,7 +651,7 @@ class NetworkFlowDay(DispatchPolicy):
     # -- settling statuses from the lookup ----------------------------------------------------
 
     def _settle(self, st: _RunState, tick: Any, *, free: frozenset[str],
-                changes: list, events: list) -> dict[str, str]:
+                changes: list) -> dict[str, str]:
         """Settle every truck's dispatched jobs from ``tick.lookup``; returns ``{truck: refused job}``.
 
         done (completed by our truck), ``failed:taken`` (another truck hauls it),
@@ -692,11 +688,10 @@ class NetworkFlowDay(DispatchPolicy):
                 if outcome is not None:
                     status, reason = outcome
                     changes.append((j, status, reason, tid))
-                    events.append(self._event(st, j, status, reason))
                     st.retries.pop(j, None)
         return refused
 
-    def _adopt_engaged(self, st: _RunState, tick: Any, changes: list, events: list) -> None:
+    def _adopt_engaged(self, st: _RunState, tick: Any, changes: list) -> None:
         """A planning tick sees every busy truck's open haul: a job of the plan still
         ``planned`` in the record while a truck hauls it (a pair confirmed late) is
         ``dispatched`` to that truck."""
@@ -708,7 +703,6 @@ class NetworkFlowDay(DispatchPolicy):
             rec = self._status(st, j) or {}
             if rec.get("status") in ("planned", "unplanned"):
                 changes.append((j, "dispatched", None, str(tid)))
-                events.append(self._event(st, j, "dispatched", None))
 
     # -- planning --------------------------------------------------------------------------
 
@@ -769,14 +763,13 @@ class NetworkFlowDay(DispatchPolicy):
         st.step_seconds = int(w.step_seconds)
         step_s = float(w.step_seconds)
         changes: list = []
-        events: list = []
         late = int(w.now_step) - int(w.start_step)
         if late > 0:
             notes["late_steps"] = late
-        self._confirm_tentative(st, tick, free=None, changes=changes, events=events, notes=notes)
+        self._confirm_tentative(st, tick, free=None, changes=changes, notes=notes)
         if st.store.current_id is not None:
-            self._settle(st, tick, free=frozenset(), changes=changes, events=events)
-            self._adopt_engaged(st, tick, changes, events)
+            self._settle(st, tick, free=frozenset(), changes=changes)
+            self._adopt_engaged(st, tick, changes)
         self._write_statuses(st, changes, notes)
         trucks, engaged, orders = self._plan_documents(tick, w.now_step)
         arm = cooperation.resolve_arm(tick.world)
@@ -809,11 +802,11 @@ class NetworkFlowDay(DispatchPolicy):
         except (ValueError, TypeError) as exc:
             logger.error("NetworkFlowDay: day %d instance not built (%s); the previous plan stays", w.day, exc)
             plan = plan_stats.plan_note(None, outcome="failed", reason="bad_input", day=w.day)
-            return self._plan_result(st, notes, events, plan, w.day)
+            return self._plan_result(st, notes, plan, w.day)
         if inputs.hash == st.last_hash and st.store.current_day == w.day:
             plan = plan_stats.plan_note(inputs, outcome="skipped", reason="unchanged",
                                         version=st.store.current_id)
-            return self._plan_result(st, notes, events, plan, w.day)
+            return self._plan_result(st, notes, plan, w.day)
         backend = self._effective_backend(st, params.nf_backend)
         # M2: the day has no plan to keep (none yet, or only an earlier day's): a failed
         # solve must still leave one, so the guard's refusal is waived and a failure
@@ -833,7 +826,7 @@ class NetworkFlowDay(DispatchPolicy):
                 logger.error("NetworkFlowDay: day %d solve failed (%s: %s); the previous plan stays",
                              w.day, reason, exc)
                 plan = plan_stats.plan_note(inputs, outcome="failed", reason=reason)
-                return self._plan_result(st, notes, events, plan, w.day)
+                return self._plan_result(st, notes, plan, w.day)
             logger.error("NetworkFlowDay: day %d solve failed (%s: %s) with NO plan for the day; "
                          "falling back to a greedy plan", w.day, reason, exc)
             try:
@@ -844,7 +837,7 @@ class NetworkFlowDay(DispatchPolicy):
                              w.day, reason2, exc2)
                 plan = plan_stats.plan_note(inputs, outcome="failed", reason=reason)
                 plan["plan"]["fallback_failed"] = reason2
-                return self._plan_result(st, notes, events, plan, w.day)
+                return self._plan_result(st, notes, plan, w.day)
             fallback = reason
         try:
             summary = st.store.write_version(w.day, out["itineraries"], plan_instance.store_job_fields(inputs))
@@ -858,7 +851,7 @@ class NetworkFlowDay(DispatchPolicy):
             notes["store_failed"] = f"version: {type(exc).__name__}: {exc}"
             logger.error("NetworkFlowDay: plan version refused by the store (%s); the previous plan stays", exc)
             plan = plan_stats.plan_note(inputs, outcome="failed", reason="store_refused")
-            return self._plan_result(st, notes, events, plan, w.day)
+            return self._plan_result(st, notes, plan, w.day)
         st.last_hash = inputs.hash if fallback is None else None  # a fallback plan is re-solved next tick
         for j in list(st.overlay):
             if (st.store.status_of(j) or {}).get("status") in ("planned", "unplanned"):
@@ -878,7 +871,7 @@ class NetworkFlowDay(DispatchPolicy):
                                ", ".join(f"{k}: {v}" for k, v in inexact.items()), backend)
         if backend != params.nf_backend:
             notes["backend_fallback"] = backend
-        return self._plan_result(st, notes, events, plan, w.day)
+        return self._plan_result(st, notes, plan, w.day)
 
     def _solve(self, inputs: Any, backend: str, params: Any, *, deadline: float,
                accept_poor: bool = False) -> dict[str, Any]:
@@ -894,9 +887,9 @@ class NetworkFlowDay(DispatchPolicy):
             timeout_s=timeout, deadline_s=max(0.5, timeout - 1.0), accept_poor=accept_poor,
             memory_cap_bytes=int(float(params.nf_memory_cap_gib) * 1024 ** 3))
 
-    def _plan_result(self, st: _RunState, notes: dict[str, Any], events: list, plan: Mapping[str, Any],
+    def _plan_result(self, st: _RunState, notes: dict[str, Any], plan: Mapping[str, Any],
                      day: int) -> Result:
-        tick_notes = plan_stats.merge_notes(notes, plan, plan_stats.events_note(day, events) if events else {})
+        tick_notes = plan_stats.merge_notes(notes, plan)
         tick_notes["day"] = int(day)
         return Result(pairs=(), prefetch=self._prefetch(st), tick_notes=tick_notes)
 
@@ -906,8 +899,7 @@ class NetworkFlowDay(DispatchPolicy):
         trucks_by_id, orders_by_id = tick.id_index
         free = frozenset(trucks_by_id)
         changes: list = []
-        events: list = []
-        self._confirm_tentative(st, tick, free=free, changes=changes, events=events, notes=notes)
+        self._confirm_tentative(st, tick, free=free, changes=changes, notes=notes)
         if st.store.current_id is None:  # no plan yet (or it could not be loaded): nothing to hand out
             self._write_statuses(st, changes, notes)
             notes["no_plan"] = 1
@@ -919,7 +911,7 @@ class NetworkFlowDay(DispatchPolicy):
                              int(tick.clock.time_step), len(free))
             return Result(tick_notes=notes, prefetch=self._prefetch(st))
         lookup = tick.lookup
-        refused = self._settle(st, tick, free=free, changes=changes, events=events)
+        refused = self._settle(st, tick, free=free, changes=changes)
         settled = {c[0] for c in changes}
         pairs: list[tuple[Any, Any]] = []
         paired_orders: set[str] = set()
@@ -928,7 +920,6 @@ class NetworkFlowDay(DispatchPolicy):
         def change(job: str, status: str, reason: str | None, tid: str) -> None:
             changes.append((job, status, reason, tid))
             settled.add(job)
-            events.append(self._event(st, job, status, reason))
 
         for tid in sorted(free):
             truck = trucks_by_id[tid]
@@ -974,11 +965,7 @@ class NetworkFlowDay(DispatchPolicy):
                 change(j, status, reason or None, tid)
         self._write_statuses(st, changes, notes)
         st.tentative = tentative  # confirmed (written) on the next tick, once seen committed
-        day = st.store.current_day or 0
-        if events:
-            notes.update(plan_stats.events_note(day, events))
-        else:
-            notes["day"] = int(day)
+        notes["day"] = int(st.store.current_day or 0)
         return Result.from_pairs(pairs, tick_notes=notes, prefetch=self._prefetch(st))
 
     @staticmethod
