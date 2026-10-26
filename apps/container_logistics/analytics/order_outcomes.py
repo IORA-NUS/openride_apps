@@ -50,6 +50,7 @@ from __future__ import annotations
 import logging
 import math
 from datetime import datetime, timezone
+from functools import partial
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -95,6 +96,16 @@ _CREATED = "created"
 _ORDER_COLLECTION = "container_logistics_order"
 _HAUL_COLLECTION = "container_logistics_haul_trip"
 _START_STAMPS = ("reposition_started_at", "pickup_queue_arrival_time", "loaded_started_at")
+
+#: Server-side bound (``maxTimeMS``) on every query the reader issues. The LIVE recount
+#: runs inside the analytics agent's step reply, so a Mongo that is up but slow (disk
+#: pressure, CLAUDE.md §6.23) must fail the recount -- contained by the caller, which keeps
+#: the previous values -- rather than hold the step. Measured ~200 ms on a 35k-order run.
+LIVE_MAX_TIME_MS = 5000
+#: The finalize recount is off the step barrier and is the authoritative one: a looser bound.
+FINAL_MAX_TIME_MS = 60000
+#: Client-side socket bound on top of ``maxTimeMS`` (covers a server that never answers).
+_SOCKET_SLACK_MS = 5000
 
 
 # --------------------------------------------------------------------------- time axis
@@ -261,6 +272,8 @@ def record_from_doc(
         "h": profile.get("haulier_id"),
         "hn": profile.get("haulier_name"),
         "rd": None if t_rel is None else int(t_rel // DAY_SECONDS),
+        # Nominal release at/after the horizon: never released inside the run (m8).
+        "bh": t_rel is not None and t_rel >= float(horizon_s),
         "s": state,
         "r": reason,
         "t": doc.get("truck") is not None,
@@ -362,6 +375,9 @@ def fold_outcomes(
     days: Dict[int, Dict[str, Any]] = {}
     by_h: Dict[str, Dict[str, Any]] = {}
     release_unknown = 0
+    release_beyond_horizon = 0
+    unreleased = 0
+    d_count = days_count(horizon_s)
 
     for rec in records:
         n = int(rec.get("n", 1))
@@ -369,12 +385,19 @@ def fold_outcomes(
             continue
         state = rec.get("s")
         if state in (None, _CREATED):
-            continue  # not released
+            unreleased += n  # not released (the reader only reports these on a final read)
+            continue
         rd = rec.get("rd")
         if rd is None:
             release_unknown += n
             continue
         rd = int(rd)
+        if rec.get("bh") or rd >= d_count:
+            # Nominal release at/after the horizon: the order was never published inside
+            # the run (only bulk_cancel touched it). Counting it released + failed
+            # unserved_at_horizon would be silent; it is excluded and flagged instead.
+            release_beyond_horizon += n
+            continue
         if not final and rd >= closed:
             continue
         hid = rec.get("h")
@@ -432,13 +455,22 @@ def fold_outcomes(
         errors.append(f"{totals['completed_untimed']} completed order(s) with no date sim_clock")
     if release_unknown:
         errors.append(f"{release_unknown} released order(s) with no meta.request_time_step")
+    if release_beyond_horizon:
+        errors.append(
+            f"{release_beyond_horizon} order(s) with a nominal release at/after the horizon "
+            "(never released inside the run; excluded from every count)"
+        )
+    if final and unreleased:
+        errors.append(
+            f"{unreleased} order(s) still `created` at the final recount "
+            "(the unserved-orders bulk cancel did not run or did not finish)"
+        )
     if final and totals["open"]:
         errors.append(
             f"{totals['open']} order(s) still open at the final recount "
             "(the unserved-orders bulk cancel did not run or did not finish)"
         )
 
-    d_count = days_count(horizon_s)
     out: Dict[str, Any] = {
         "schema": SCHEMA,
         "final": bool(final),
@@ -452,6 +484,7 @@ def fold_outcomes(
         "attribution": "owner",
         "totals": totals,
         "release_unknown": release_unknown,
+        "release_beyond_horizon": release_beyond_horizon,
         "days": {f"d{d}": days[d] for d in sorted(days)},
         "by_haulier": {
             hkey: {**{k: v for k, v in h.items() if k != "days"},
@@ -461,7 +494,9 @@ def fold_outcomes(
         "invariants_ok": not errors,
         "invariant_errors": errors,
     }
-    if not final:
+    if final:
+        out["unreleased_at_final"] = unreleased
+    else:
         out["closed_days"] = int(closed)
     return out
 
@@ -528,22 +563,27 @@ def zero_haulier_row_fields(final: bool) -> Dict[str, Any]:
 # --------------------------------------------------------------------------- Mongo reader
 
 
-def _mongo_client(server_selection_timeout_ms: int = 3000):
+def _mongo_client(
+    server_selection_timeout_ms: int = 3000,
+    socket_timeout_ms: int = LIVE_MAX_TIME_MS + _SOCKET_SLACK_MS,
+):
     """Same construction as batch_writer (``connect=False``), with a SHORT server-selection
-    timeout: this runs on the analytics tick and must never stall it for pymongo's 30 s."""
+    timeout and a socket timeout: this runs on the analytics tick and must never stall it
+    for pymongo's 30 s selection default or an unbounded read. Each query also carries a
+    server-side ``maxTimeMS`` (:class:`OrderOutcomeReader`)."""
     from pymongo import MongoClient
 
     from apps.config import kpi_sink_settings
 
-    uri = kpi_sink_settings.get("mongo_uri")
-    if uri:
-        return MongoClient(uri, connect=False, serverSelectionTimeoutMS=server_selection_timeout_ms)
-    return MongoClient(
-        kpi_sink_settings["mongo_host"],
-        int(kpi_sink_settings["mongo_port"]),
+    bounds = dict(
         connect=False,
         serverSelectionTimeoutMS=server_selection_timeout_ms,
+        socketTimeoutMS=socket_timeout_ms,
     )
+    uri = kpi_sink_settings.get("mongo_uri")
+    if uri:
+        return MongoClient(uri, **bounds)
+    return MongoClient(kpi_sink_settings["mongo_host"], int(kpi_sink_settings["mongo_port"]), **bounds)
 
 
 def _as_object_id(value: Any) -> Any:
@@ -557,11 +597,24 @@ def _as_object_id(value: Any) -> Any:
 
 class OrderOutcomeReader:
     """Read-only Mongo reader. One client PER CALL (created and closed in ``read``), so
-    nothing leaks across runs in a long-lived celery worker."""
+    nothing leaks across runs in a long-lived celery worker.
 
-    def __init__(self, run_id: str, *, client_factory=None, db_name: Optional[str] = None):
+    Every query carries ``maxTimeMS=max_time_ms``; a timeout raises like any other read
+    failure and the caller contains it (live: keep the previous values; final: logged)."""
+
+    def __init__(
+        self,
+        run_id: str,
+        *,
+        client_factory=None,
+        db_name: Optional[str] = None,
+        max_time_ms: int = LIVE_MAX_TIME_MS,
+    ):
         self.run_id = run_id
-        self._client_factory = client_factory or _mongo_client
+        self.max_time_ms = int(max_time_ms)
+        self._client_factory = client_factory or partial(
+            _mongo_client, socket_timeout_ms=self.max_time_ms + _SOCKET_SLACK_MS
+        )
         self._db_name = db_name
 
     def _db(self, client):
@@ -603,6 +656,8 @@ class OrderOutcomeReader:
                                 {"$floor": {"$divide": [t_rel_ms, day_ms]}},
                             ]
                         },
+                        # null request_time_step -> null product -> false (BSON order).
+                        "bh": {"$gte": [t_rel_ms, h_ms]},
                         "s": "$state",
                         "r": {"$ifNull": ["$meta.cancel_reason", None]},
                         "t": {"$ne": [{"$ifNull": ["$truck", None]}, None]},
@@ -634,9 +689,13 @@ class OrderOutcomeReader:
         step_interval: float,
         horizon_s: float,
         per_doc: bool = False,
+        count_unreleased: bool = False,
     ) -> List[Dict[str, Any]]:
         """Fold records for this run. ``per_doc=True`` folds every order doc in Python
-        instead of grouping in Mongo -- a cross-check of the pipeline, not for production."""
+        instead of grouping in Mongo -- a cross-check of the pipeline, not for production.
+        ``count_unreleased=True`` (the final recount) adds one ``created`` record so the fold
+        can flag orders the bulk cancel left behind."""
+        mt = self.max_time_ms
         client = self._client_factory()
         try:
             db = self._db(client)
@@ -644,8 +703,18 @@ class OrderOutcomeReader:
                 db[_HAUL_COLLECTION].find(
                     {"run_id": self.run_id, "state": {"$ne": _COMPLETED}, "order": {"$ne": None}},
                     {"order": 1, "state": 1, "sim_clock": 1, **{f"stats.{k}": 1 for k in _START_STAMPS}},
+                    max_time_ms=mt,
                 )
             )
+            unreleased: List[Dict[str, Any]] = []
+            if count_unreleased:
+                k = int(
+                    db[_ORDER_COLLECTION].count_documents(
+                        {"run_id": self.run_id, "state": _CREATED}, maxTimeMS=mt
+                    )
+                )
+                if k:
+                    unreleased.append({"s": _CREATED, "n": k})
             evidence = _haul_evidence(hauls, reference_time=reference_time, horizon_s=horizon_s)
             projection = {
                 "profile.haulier_id": 1,
@@ -658,29 +727,32 @@ class OrderOutcomeReader:
             }
             kw = dict(reference_time=reference_time, step_interval=step_interval, horizon_s=horizon_s)
             if per_doc:
-                return [
+                return unreleased + [
                     record_from_doc(doc, haul=evidence.get(str(doc["_id"])), **kw)
                     for doc in db[_ORDER_COLLECTION].find(
-                        {"run_id": self.run_id, "state": {"$ne": _CREATED}}, projection
+                        {"run_id": self.run_id, "state": {"$ne": _CREATED}}, projection,
+                        max_time_ms=mt,
                     )
                 ]
             oids = [_as_object_id(o) for o in evidence]
-            records: List[Dict[str, Any]] = []
+            records: List[Dict[str, Any]] = list(unreleased)
             if oids:
                 # Cancelled orders a non-completed haul points at: classified per doc (bounded
                 # by the haul list), and EXCLUDED from the group below so none counts twice.
                 for doc in db[_ORDER_COLLECTION].find(
-                    {"run_id": self.run_id, "state": _CANCELLED, "_id": {"$in": oids}}, projection
+                    {"run_id": self.run_id, "state": _CANCELLED, "_id": {"$in": oids}}, projection,
+                    max_time_ms=mt,
                 ):
                     records.append(record_from_doc(doc, haul=evidence.get(str(doc["_id"])), **kw))
             for row in db[_ORDER_COLLECTION].aggregate(
-                self.pipeline(exclude_ids=oids, **kw), allowDiskUse=False
+                self.pipeline(exclude_ids=oids, **kw), allowDiskUse=False, maxTimeMS=mt
             ):
                 key = dict(row["_id"])
                 rec = {
                     "h": key.get("h"),
                     "hn": key.get("hn"),
                     "rd": None if key.get("rd") is None else int(key["rd"]),
+                    "bh": bool(key.get("bh")),
                     "s": key.get("s"),
                     "r": key.get("r"),
                     "t": bool(key.get("t")),
@@ -709,12 +781,17 @@ def compute_order_outcomes(
     reader: Optional[OrderOutcomeReader] = None,
     per_doc: bool = False,
 ) -> Dict[str, Any]:
-    """Read + fold. Raises on a read failure -- callers decide how to contain it."""
+    """Read + fold. Raises on a read failure (a ``maxTimeMS`` timeout included) -- callers
+    decide how to contain it. The default reader's query bound is ``LIVE_MAX_TIME_MS`` for a
+    live recount and ``FINAL_MAX_TIME_MS`` for the final one."""
     ref = parse_reference_time(reference_time)
-    reader = reader or OrderOutcomeReader(run_id)
-    records = reader.read(
-        reference_time=ref, step_interval=step_interval, horizon_s=horizon_s, per_doc=per_doc
+    reader = reader or OrderOutcomeReader(
+        run_id, max_time_ms=FINAL_MAX_TIME_MS if final else LIVE_MAX_TIME_MS
     )
+    read_kw = dict(reference_time=ref, step_interval=step_interval, horizon_s=horizon_s, per_doc=per_doc)
+    if final:
+        read_kw["count_unreleased"] = True
+    records = reader.read(**read_kw)
     return fold_outcomes(
         records,
         horizon_s=horizon_s,

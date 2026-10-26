@@ -272,9 +272,16 @@ def test_save_breakdowns_merges_owner_fields_into_haulier_rows_only(monkeypatch)
     assert hrows["a"]["order_outcomes_final"] is True
     assert hrows["z"]["orders_released"] == 0  # recorded zero, not "not recorded"
     assert by_scope["haulier"]["extra"]["order_outcomes_attribution"] == "owner"
+    assert by_scope["haulier"]["extra"]["order_outcomes_final"] is True  # review m7
     oo_keys = set(oo.zero_haulier_row_fields(True))
     assert not any(oo_keys & set(r) for r in by_scope["truck"]["rows"])
     assert by_scope["truck"]["extra"] is None
+
+    docs.clear()
+    m.save_breakdowns("Wed, 01 Jan 2020 08:00:00 GMT", order_outcomes={**outcomes, "final": False})
+    live = [d for d in docs if d["scope"] == "haulier"][0]
+    assert live["extra"]["order_outcomes_final"] is False
+    assert {r["id"]: r for r in live["rows"]}["a"]["order_outcomes_final"] is False
 
     docs.clear()
     m.save_breakdowns("Wed, 01 Jan 2020 08:00:00 GMT", final=True)

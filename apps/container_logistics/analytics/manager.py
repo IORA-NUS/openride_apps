@@ -78,7 +78,7 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         self._coop_components: List[List[str]] = []
         # Order outcomes (sim KPIs, analytics/order_outcomes.py). Context arrives once from
         # the agent's orsim_settings; until then nothing is computed. The live cache is
-        # PROVISIONAL and covers CLOSED run days only; refreshed at most days+1 times a run.
+        # PROVISIONAL and covers CLOSED run days only; refreshed at most `days` times a run (closed = 1..D).
         self._oo_context: Optional[Dict[str, Any]] = None
         self._oo_closed_days: int = 0
         self._oo_live: Optional[Dict[str, Any]] = None
