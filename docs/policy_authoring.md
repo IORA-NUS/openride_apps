@@ -1029,6 +1029,19 @@ Comparability, each a boundary of the CLAUDE.md §6.3 / §6.16 class:
   segment: check `simulation_settings.WORKING_HOURS` before comparing two runs.
 - **Hold time.** Planning runs spend wall time in held steps; compare step time with
   `sum_step_ms_excl_hold`, not raw wall.
+- **Order outcomes are SIM KPIs.** How many orders were released, done the same day, done
+  later, undone at day end and failed (by reason: `overdue_unassigned`,
+  `cancelled_in_progress`, `unserved_at_horizon`, `other`) is computed by the sim's analytics
+  agent for every run, whatever the solver. Compare arms on `run_config.meta.order_outcomes`
+  (the authoritative run-end recount, `final: true`), the `num_orders_*` /
+  `same_day_completion_rate` scalars (live values are provisional) and the `orders_*` fields of
+  the `final=True` `kpi_breakdown` haulier rows: every arm gets them, computed the same way.
+  A planner's run stats must never re-derive done / undone / failed from its own job
+  statuses: its job set and status vocabulary are its own, so its count is not comparable
+  with an online arm's (which has none), and a second, differently defined "failed" next to
+  the sim's invites quoting the wrong one.
+  (NetworkFlowDay's `meta.day_plan` dropped its job counters for this reason in schema 2;
+  docs/27-network-flow-day-plan.md §6.)
 
 ### 14.8 Validate a planning solver
 
@@ -1072,3 +1085,7 @@ refusal fixtures: `ToyPlanCommits` (R6), `ToyBadPrefetch` (R7), `ToyPlanNotTopOn
   per agent per step" rule (`_hold_expired_step`) has no test that kills its mutant.
 - The dashboard does not yet filter `top_only` out of its solver dropdown, and the perf export
   does not yet carry `hold_ms` to VictoriaMetrics.
+- A planning top's `run_stats` are planner-only: plan versions, jobs moved per re-plan,
+  re-plan failures, fallbacks, incidents, `quality.degraded`. Its job statuses (`done`,
+  `failed:*`, `undone`) are dispatch state that it keeps for its own walk, not an outcome
+  metric; order outcomes come from the sim (§14.7).
