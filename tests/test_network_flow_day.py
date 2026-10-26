@@ -61,6 +61,7 @@ class Sim:
         self.inst.store_factory = lambda rid: MemoryPlanStore(rid or "local", kv=self.kv)
         self.run_id = run_id
         self.stats: dict = {}
+        self.notes: list = []  # every recorded tick's notes, in order
 
     @property
     def store(self):
@@ -68,6 +69,7 @@ class Sim:
 
     def _record(self, out, tick):
         if out.result is not None:
+            self.notes.append(out.result.tick_notes)
             record_tick(self.stats, DayPlanStats, out.result.tick_notes, tick.clock, lambda *_a, **_k: None)
 
     def plan(self, trucks, orders, step, *, engaged=None, lookup=None, reason="day_start", hold_started_s=None):
@@ -172,12 +174,12 @@ def test_head_rule_table(row):
     assert ids(out.pairs) == expected
     if next_paired:
         assert sim.status(o1) == ("dispatched", None)
-    events = out.result.tick_notes.get("events", [])
+    assert "events" not in out.result.tick_notes  # schema 2: statuses live in the store only
     paired_o0 = (t0, o0) in ids(out.pairs)
     if want[0] != "planned" and not paired_o0:
-        assert [o0, want[0], want[1], "acme"] in events
-    if paired_o0:  # minor 2: a pair is not in the record (nor an event) until the framework committed it
-        assert sim.stored(o0) == ("planned", None) and not any(e[0] == o0 for e in events)
+        assert sim.stored(o0) == want  # written through to the record
+    if paired_o0:  # minor 2: a pair is not in the record until the framework committed it
+        assert sim.stored(o0) == ("planned", None)
     if next_paired:
         assert sim.stored(o1) == ("planned", None)
 
@@ -309,15 +311,44 @@ def test_plan_then_dispatch_through_the_runner_with_a_memory_store():
     assert d.pairs, "every released head is paired"
     for tid, jid in ids(d.pairs):
         assert heads[tid] == jid and sim.status(jid) == ("dispatched", None)
-    assert sim.stats["day_plan"].snapshot()["totals"]["plan_jobs_dispatched"] == 0  # not committed yet
+    for _tid, jid in ids(d.pairs):  # not committed yet: the record still reads planned
+        assert sim.stored(jid) == ("planned", None)
     busy = {tid for tid, _ in ids(d.pairs)}
     later = {str(o["_id"]): o for o in released(orders, step + 6) if str(o["_id"]) in set(d.result.prefetch)}
     nxt = sim.dispatch([t for t in trucks if str(t["_id"]) not in busy], [], step + 6, lookup=later)
     for tid, jid in ids(d.pairs):
         assert sim.stored(jid) == ("dispatched", None)
     snap = sim.stats["day_plan"].snapshot()
-    assert snap["totals"]["plan_jobs_dispatched"] == len(d.pairs) and snap["totals"]["versions"] == 1
+    stored = sim.store.state()["status"]
+    assert sum(1 for r in stored.values() if r.get("status") == "dispatched") == len(d.pairs)
+    assert snap["totals"]["versions"] == 1 and snap["schema"] == 2
     assert nxt.result is not None
+
+
+def test_tick_notes_carry_no_order_outcomes_through_plan_dispatch_and_replan():
+    """Schema 2: order outcomes are sim KPIs. No tick note carries ``events``, a plan's
+    ``new_jobs`` or a rebuild's ``jobs``, through plan -> dispatch -> commit -> settle -> re-plan."""
+    trucks, orders = _day()
+    sim = Sim()
+    p = sim.plan(trucks, orders, 0)
+    step = 340
+    view = released(orders, step)
+    lookup = {str(o["_id"]): o for o in view if str(o["_id"]) in set(p.result.prefetch)}
+    d = sim.dispatch(trucks, [o for o in view if o["state"] == "unassigned"], step, lookup=lookup)
+    assert d.pairs
+    busy = {tid for tid, _ in ids(d.pairs)}
+    done = {jid: L(next(o for o in orders if str(o["_id"]) == jid), state="completed", truck_id=tid)
+            for tid, jid in ids(d.pairs)}
+    sim.dispatch([t for t in trucks if str(t["_id"]) not in busy], [], step + 6, lookup=done)
+    sim.dispatch(trucks, [], step + 12, lookup=done)
+    assert any(r.get("status") == "done" for r in sim.store.state()["status"].values())
+    sim.plan(trucks, orders, step + 18, reason="interval", lookup=done)
+    assert len(sim.notes) == 5
+    for n in sim.notes:
+        assert "events" not in n and "new_jobs" not in (n.get("plan") or {}), n
+        assert "jobs" not in (n.get("rebuild") or {}), n
+        assert isinstance(n.get("day"), int)
+    assert sim.stats["day_plan"].snapshot()["schema"] == 2
 
 
 def test_locked_head_survives_a_replan_and_unchanged_instances_are_skipped():
@@ -497,7 +528,7 @@ def test_a_dispatched_job_hauled_by_another_truck_is_taken():
         s.dispatch([T0], [O0, O1], 6)
         out = s.dispatch([], [], 12, lookup={o0: L(O0, state=state, truck_id=t9)})
         assert s.stored(o0) == ("failed", "taken"), state
-        assert [o0, "failed", "taken", "acme"] in out.result.tick_notes["events"]
+        assert "events" not in out.result.tick_notes
     # claimed (open haul) by another truck while the doc still reads unassigned: taken too
     s = Sim()
     s.install({t0: [o0, o1]}, [O0, O1])
@@ -530,7 +561,7 @@ def test_pairs_are_recorded_only_once_the_framework_committed_them():
     sim.dispatch([], [], 18, lookup={o0: L(O0, state="assigned", truck_id=t0)})
     assert sim.stored(o0) == ("dispatched", None)
     snap = sim.stats["day_plan"].snapshot()
-    assert snap["totals"]["plan_jobs_dispatched"] == 1 and snap["incidents"]["uncommitted_pairs"] == 1
+    assert sim.store.status_of(o0)["status"] == "dispatched" and snap["incidents"]["uncommitted_pairs"] == 1
 
 
 def test_a_discarded_pair_is_reverted_on_a_planning_tick_too():
