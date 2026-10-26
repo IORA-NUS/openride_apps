@@ -1,0 +1,430 @@
+"""Whole-tick dispatch capture (``dispatch/capture.py``) and the whole-tick bench (``testing/bench.py``).
+
+What is locked (round 2, ``docs/plans/policy_slots_round2_whole_tick.md`` §5 C5; plan
+``docs/plans/policy_slots_p0_p3.md`` §4 P3.4, P3.5):
+
+- With ``profile["policy_capture"]`` set, the runner writes one byte-stable
+  ``openride.dispatch_context/3`` file per captured TICK, ``step_<n>.json.gz``, at
+  most ``max_files``, carrying the tick seed, the module RNG state, the selection in
+  stamp form, the run world (the raw profile slice: cooperation menu, candidate
+  knobs, ``max_travel_time_pickup``), the accounting dials, the top declaration, the
+  documents, the raw result's pairs and ``rebate_aware``; without it nothing is
+  written and the runner has no hook.
+- Capturing never changes what is assigned (it reads RNG state, never draws).
+- A captured tick replays to its live heads EXACTLY, through ``Partitioned`` (module
+  RNG, shuffle tie-breaks) and ``PooledMarket`` (tick ``Random``, rounds), with
+  either leaf and either candidate kind.
+- A format ``/2`` file is converted on read (``compat.capture_v2``) and replays to the
+  same pairs; format ``/1`` (one scope) is refused with message 22, and a tick captured with
+  ``rebate_aware: true`` is refused on replay (the rebate book is not captured).
+- A failing write is logged with ``PLANNER CAPTURE FAILED`` and the tick goes on.
+- ``bench`` decides whole ticks, accepts aliases, counts plans the invariants reject
+  as violations, and reports the framework's accounting (``cross_company``,
+  ``benefit_km_total`` from ``assignment.accounting.account_shares``) and the
+  selection's ``badge`` (its top node's stamped provenance badge) and ``label`` for every
+  policy alike.
+
+Why: captured ticks are the input of offline policy screening; a capture that did
+not replay exactly, or that perturbed the run it captured, would screen a policy
+on a world that never happened, and a bench that accounted each solver its own way
+would compare nothing.
+"""
+
+from __future__ import annotations
+
+import gzip
+import json
+import logging
+import math
+import os
+import random
+from dataclasses import dataclass
+
+import pytest
+
+from apps.container_logistics.assignment import accounting
+from apps.container_logistics.assignment import constraints as assign_constraints
+from apps.container_logistics.policies.dispatch import capture
+from apps.container_logistics.policies.dispatch.base import DispatchPolicy
+from apps.container_logistics.policies.compat.legacy_context import Plan
+from apps.container_logistics.policies.dispatch.runner import build_runner_for_app, build_runner_for_policy
+from apps.container_logistics.policies.dispatch.tick import tick_seed
+from apps.container_logistics.policies.framework import PolicyParams, policy
+from apps.container_logistics.policies.framework.errors import PolicyError
+from apps.container_logistics.policies.framework.registry import isolated_registry
+from apps.container_logistics.policies.solver_lib.candidates import CandidateSettings
+from apps.container_logistics.policies.testing import fixtures as fx
+from apps.container_logistics.policies.testing.bench import (
+    BENCH_COLUMNS,
+    BENCH_HEADER,
+    bench,
+    load_fixtures,
+    render_table,
+)
+from openride_control.policies import cmd_policy_bench, parse_bench_params
+from tests.test_assignment_cooperation import _coop, _order, _truck
+from tests.test_assignment_pooled import _app
+
+
+def _ids(matches):
+    return sorted((str(t["_id"]), str(o["_id"])) for t, o in matches)
+
+
+def _world():
+    """Three hauliers, acme+borax partnered; co-located groups so tie-breaking decides."""
+    trucks, orders = [], []
+    for h, lon in (("acme", 103.85), ("borax", 103.86), ("cargo", 103.90)):
+        for i in range(4):
+            t = _truck(f"t_{h}_{i}", h, lon, 1.30)
+            t["profile"]["last_dropoff_loc"] = {"type": "Point", "coordinates": [lon, 1.30]}
+            trucks.append(t)
+        for i in range(3):
+            orders.append(_order(f"o_{h}_{i}", h, lon + 0.001 * i, 1.30))
+    trucks.append(_truck("t_acme_far", "acme", 103.95, 1.32))
+    return trucks, orders
+
+
+def _capturing_app(tmp_path, *, topology, strategy, spatial, every=1, max_files=50):
+    trucks, orders = _world()
+    app = _app(trucks, orders, cooperation=_coop([("acme", "borax")]), topology=topology, strategy=strategy)
+    prof = app.behavior["profile"]
+    prof["use_spatial_matching"] = spatial
+    prof["max_trucks_per_haulier"] = 3  # below the scope sizes, so the sampled kind really samples
+    if tmp_path is not None:
+        prof["policy_capture"] = {"dir": str(tmp_path), "every_n_ticks": every, "max_files": max_files}
+    return app
+
+
+_LIVE_CASES = [
+    ("partitioned", "GreedyNearest", True),
+    ("partitioned", "GreedyNearest", False),
+    ("partitioned", "RandomAssignment", True),
+    ("pooled", "GreedyNearest", True),
+    ("pooled", "GreedyNearest", False),
+    ("pooled", "RandomAssignment", True),
+]
+_LIVE_IDS = [f"{t}-{s}-{'spatial' if sp else 'sampled'}" for t, s, sp in _LIVE_CASES]
+_TOP = {"partitioned": "Partitioned", "pooled": "PooledMarket"}
+
+
+def _active_adjacency(world):
+    coop = world["cooperation"]
+    return next(s for s in coop["structures"] if s["id"] == coop["active"])["adjacency"]
+
+
+@pytest.mark.parametrize("topology,strategy,spatial", _LIVE_CASES, ids=_LIVE_IDS)
+def test_replay_whole_tick_reproduces_live_heads(tmp_path, topology, strategy, spatial):
+    """Verified to have teeth (each mutation in ``capture.py`` restored after, by copy):
+    recording ``module_rng_state`` from a fresh ``random.Random(0)`` instead of the
+    module failed exactly the three partitioned cases (the pooled ones never read the
+    module); recording ``tick_seed + 1`` failed all six; replaying on a world without
+    the captured ``cooperation`` (``context_from_fixture`` dropping that key) failed all
+    six (the acme+borax component became two haulier groups / no pools, and the top
+    declared no pairs)."""
+    app = _capturing_app(tmp_path, topology=topology, strategy=strategy, spatial=spatial)
+    random.seed(11)
+    for step in range(3):
+        app.assign("Wed, 01 Jan 2020 08:00:00 GMT", time_step=step)
+    paths = sorted(tmp_path.glob("step_*.json.gz"))
+    assert [p.name for p in paths] == ["step_0.json.gz", "step_1.json.gz", "step_2.json.gz"], (
+        "one file per captured tick"
+    )
+    for step, path in enumerate(paths):
+        fixture = capture.read_fixture(str(path))
+        assert fixture["format"] == "openride.dispatch_context/3"
+        assert fixture["selection"]["name"] == _TOP[topology]
+        assert fixture["selection"]["label"] == f"{_TOP[topology]}/{strategy}"
+        assert fixture["tick_seed"] == tick_seed("run_test", step)
+        assert _active_adjacency(fixture["world"]) == {"acme": ["borax"], "borax": ["acme"]}
+        assert fixture["declaration"]["cross_company"] == [["acme", "borax"], ["borax", "acme"]]
+        assert fixture["rebate_aware"] is False
+        assert fixture["live_pairs"], f"{path.name}: an empty tick would make the replay comparison vacuous"
+        assert capture.replay_heads(fixture) == fixture["live_pairs"], (
+            f"{path.name}: replay of a captured {topology} {strategy} tick did not reproduce its live heads"
+        )
+    # The captured directory benches like a synthetic one.
+    report = bench(["GreedyNearest", "RandomAssignment", "Partitioned"], load_fixtures(str(tmp_path)))
+    assert [r.fixtures for r in report.rows] == [3, 3, 3]
+    assert all(r.violations == 0 for r in report.rows)
+
+
+@pytest.mark.parametrize("topology,strategy,spatial", _LIVE_CASES, ids=_LIVE_IDS)
+def test_capture_does_not_change_what_is_assigned(tmp_path, topology, strategy, spatial):
+    """Verified to have teeth: drawing ``random.random()`` inside ``before_solve`` failed
+    all six cases (the partitioned assignments, and the module stream after every case)."""
+    results = []
+    for directory in (None, tmp_path):
+        app = _capturing_app(directory, topology=topology, strategy=strategy, spatial=spatial)
+        random.seed(11)
+        ticks = [_ids(app.assign("Wed, 01 Jan 2020 08:00:00 GMT", time_step=s)) for s in range(3)]
+        results.append((ticks, random.random()))
+    assert results[0] == results[1], "capturing changed the assignments or the module RNG stream"
+    assert list(tmp_path.glob("step_*.json.gz"))
+
+
+def test_capture_writes_fixture_when_enabled(tmp_path):
+    prof = {"strategy": "GreedyNearest",
+            "policy_capture": {"dir": str(tmp_path / "cap"), "every_n_ticks": 2, "max_files": 2}}
+    runner = build_runner_for_app(build_runner_for_policy("GreedyNearest").policy, prof)
+    fixture = fx.three_company_chain()
+    for step in (3, 4, 6, 8):  # ticks 0..3: every 2nd TICK is 3 and 6; 8 would be past max_files
+        fixture = fx.Fixture(**{**fixture.__dict__, "time_step": step})
+        runner.run(fixture.context(runner))
+    names = sorted(os.listdir(tmp_path / "cap"))
+    assert names == ["step_3.json.gz", "step_6.json.gz"]
+    raw = (tmp_path / "cap" / names[0]).read_bytes()
+    assert raw[4:8] == b"\x00\x00\x00\x00", "gzip mtime must be 0 (byte-stable files)"
+    doc = capture.read_fixture(str(tmp_path / "cap" / names[0]))
+    assert set(doc) == {"format", "run_id", "time_step", "sim_clock", "horizon_steps", "tick_seed",
+                        "module_rng_state", "selection", "world", "accounting_params", "declaration",
+                        "trucks", "orders", "live_pairs", "rebate_aware"}
+    assert doc["format"] == "openride.dispatch_context/3"
+    assert doc["time_step"] == 3 and doc["tick_seed"] == fx.Fixture(**{**fixture.__dict__, "time_step": 3}).tick_seed
+    assert doc["selection"]["label"] == "Partitioned/GreedyNearest"
+    assert doc["selection"]["params"]["inner"] == {
+        "type": "GreedyNearest", "version": "1",
+        "params": {"candidates": "spatial", "dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5}}
+    assert "information_model" not in doc["selection"] and "share_tag_format" not in doc["selection"]
+    assert set(doc["world"]) == {"cooperation", "max_travel_time_pickup", "spatial_cell_deg",
+                                 "spatial_candidates_per_order", "spatial_max_rings", "max_trucks_per_haulier"}
+    assert _active_adjacency(doc["world"])["h_b"] == ["h_a", "h_c"]
+    assert doc["accounting_params"] == {"dual_cycle_bonus_km": 5.0, "dual_cycle_radius_km": 0.5}
+    assert doc["declaration"] == {
+        "cross_company": [["h_a", "h_b"], ["h_b", "h_a"], ["h_b", "h_c"], ["h_c", "h_b"]],
+        "hints": {"planner": None, "planner.inner": "spatial"}}
+    assert len(doc["module_rng_state"][1]) == 625
+    assert len(doc["trucks"]) == 12 and len(doc["orders"]) == 8 and len(doc["live_pairs"]) == 8
+    assert capture.replay_heads(doc) == doc["live_pairs"]
+
+
+def _as_format_2(doc):
+    """A ``/3`` document written back in the round-2 ``/2`` shape (what old capture files hold)."""
+    world = doc["world"]
+    coop = world.get("cooperation")
+    structure = None if coop is None else next(s for s in coop["structures"] if s["id"] == coop["active"])
+    return {
+        **{k: doc[k] for k in ("run_id", "time_step", "sim_clock", "horizon_steps", "tick_seed",
+                               "module_rng_state", "trucks", "orders", "rebate_aware")},
+        "format": "openride.dispatch_context/2",
+        "selection": {**doc["selection"], "information_model": "per_group", "share_tag_format": "v1"},
+        "candidate_settings": CandidateSettings.from_profile(world).to_dict(),
+        "world": {"structure": structure, "max_travel_time_pickup": world.get("max_travel_time_pickup"),
+                  "accounting_params": doc["accounting_params"]},
+        "live_heads": doc["live_pairs"],
+    }
+
+
+@pytest.mark.parametrize("topology,strategy,spatial", _LIVE_CASES, ids=_LIVE_IDS)
+def test_format_2_capture_is_converted_and_replays_identically(tmp_path, topology, strategy, spatial):
+    """A ``/2`` file (``compat.capture_v2``) reads as ``/3``, rebuilds the same tick and replays its pairs.
+
+    Verified to have teeth (each restored after, by copy): dropping the ``cooperation``
+    rebuild in ``read_fixture_v2`` failed all six cases; mapping ``max_trucks_per_scope``
+    to a wrong profile key failed all six (the cap fell back to 500, so the sampled
+    cases sampled differently and every converted world's knobs differed).
+    """
+    app = _capturing_app(tmp_path / "v3", topology=topology, strategy=strategy, spatial=spatial)
+    random.seed(11)
+    for step in range(2):
+        app.assign("Wed, 01 Jan 2020 08:00:00 GMT", time_step=step)
+    for path in sorted((tmp_path / "v3").glob("step_*.json.gz")):
+        doc = capture.read_fixture(str(path))
+        old_path = tmp_path / path.name
+        _write_raw(old_path, _as_format_2(doc))
+        converted = capture.read_fixture(str(old_path))
+        assert converted["format"] == "openride.dispatch_context/3"
+        assert converted["live_pairs"] == doc["live_pairs"] and doc["live_pairs"]
+        settings = CandidateSettings.from_profile
+        assert settings(converted["world"]) == settings(doc["world"])
+        assert converted["world"]["cooperation"]["active"] == doc["world"]["cooperation"]["active"]
+        assert converted["accounting_params"] == doc["accounting_params"]
+        assert capture.replay_heads(converted) == doc["live_pairs"]
+        assert capture.replay_heads(_as_format_2(doc)) == doc["live_pairs"]
+    assert len(load_fixtures(str(tmp_path))) == 2
+
+
+def _write_raw(path, doc):
+    with gzip.open(path, "wt", encoding="utf-8") as fh:
+        json.dump(doc, fh)
+
+
+def test_format_1_is_refused(tmp_path):
+    """Message 22, from the reader, the bench loader and the replay alike."""
+    path = tmp_path / "step_5_partition-haulier-h_a.json.gz"
+    _write_raw(path, {"format": "openride.dispatch_context/1", "scope": {"kind": "partition"}})
+    want = (f"dispatch fixture {path} is format openride.dispatch_context/1 (one scope); this version "
+            "replays whole ticks (format /3). Re-capture with --capture-dispatch.")
+    with pytest.raises(PolicyError) as exc:
+        capture.read_fixture(str(path))
+    assert str(exc.value) == want
+    with pytest.raises(PolicyError, match=r"format /3\)\. Re-capture with --capture-dispatch\."):
+        load_fixtures(str(tmp_path))
+    with pytest.raises(PolicyError, match="is format openride.dispatch_context/1"):
+        capture.replay_heads({"format": "openride.dispatch_context/1"})
+
+
+def test_rebate_aware_capture_is_refused_on_replay(tmp_path):
+    prof = {"strategy": "GreedyNearest", "planner": {"rebate_aware": True},
+            "policy_capture": {"dir": str(tmp_path), "every_n_ticks": 1, "max_files": 5}}
+    runner = build_runner_for_app(build_runner_for_policy("GreedyNearest").policy, prof)
+    runner.run(fx.one_haulier().context(runner))
+    (path,) = tmp_path.glob("step_*.json.gz")
+    doc = capture.read_fixture(str(path))
+    assert doc["rebate_aware"] is True
+    with pytest.raises(PolicyError, match="rebate_aware: true"):
+        capture.replay_heads(doc)
+
+
+def test_capture_off_by_default_writes_nothing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert capture.CaptureSettings.from_profile({"strategy": "GreedyNearest"}) is None
+    app = _capturing_app(None, topology="partitioned", strategy="GreedyNearest", spatial=True)
+    app.assign("Wed, 01 Jan 2020 08:00:00 GMT", time_step=0)
+    assert app._dispatch_runner(app.behavior["profile"])._capture is None
+    assert list(tmp_path.rglob("*.json.gz")) == []
+
+
+def test_capture_write_failure_is_logged_and_does_not_block_the_tick(tmp_path, caplog):
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x")
+    prof = {"strategy": "GreedyNearest", "policy_capture": {"dir": str(blocker), "every_n_ticks": 1, "max_files": 5}}
+    runner = build_runner_for_app(build_runner_for_policy("GreedyNearest").policy, prof)
+    with caplog.at_level(logging.ERROR):
+        pairs = runner.run(fx.one_haulier().context(runner)).pairs
+    assert len(pairs) == 6, "a failed capture must not change the committed pairs"
+    assert "PLANNER CAPTURE FAILED" in caplog.text
+
+
+def test_bench_reports_both_policies_on_synthetic():
+    fixtures = [fx.scale(n_trucks=200, n_orders=100, hauliers=1, seed=3), fx.tied_costs(), fx.empty_orders()]
+    report = bench(["GreedyNearest", "RandomAssignment"], fixtures)
+    assert report.header == BENCH_HEADER
+    assert [r.policy for r in report.rows] == ["GreedyNearest", "RandomAssignment"]
+    for row in report.rows:
+        assert row.fixtures == 3 and row.orders == 106 and row.violations == 0
+        assert 0 < row.assign_rate <= 1 and row.assigned <= row.orders
+        assert row.solve_ms_max >= row.solve_ms_p50 >= 0
+    greedy, rand = report.rows
+    assert greedy.deadhead_km_total < rand.deadhead_km_total, "nearest-greedy must beat random on deadhead"
+    table = render_table(report)
+    assert table.splitlines()[0] == BENCH_HEADER
+    assert "GreedyNearest" in table and "RandomAssignment" in table and "deadhead_km_mean" in table
+
+
+def _accounted(name, params, fixture):
+    """``(cross_company, benefit_km)`` recomputed here, straight from ``account_shares``."""
+    runner = build_runner_for_policy(name, params)
+    with fixture.module_random():
+        tick = fixture.context(runner)
+        pairs = runner.run(tick).pairs
+    mtt = fixture.max_travel_time_pickup
+    shares = accounting.account_shares(
+        pairs, candidates=list(tick.raw_trucks), cost=tick.measure.cost,
+        own_allowed=lambda t, o: assign_constraints.pair_allowed(t, o, max_travel_time_pickup=mtt))
+    benefit = sum(a.owner_reserve_km - a.awarded_cost_km for a in shares
+                  if a.owner_reserve_km is not None and math.isfinite(a.owner_reserve_km)
+                  and math.isfinite(a.awarded_cost_km))
+    return len(shares), benefit
+
+
+def test_bench_reports_framework_accounting_columns():
+    """Verified to have teeth (each restored after, by hash): counting ``cross_company``
+    from the pairs whose truck and order ids differ (not ``account_shares``) in
+    ``bench._bench_one`` failed this test; summing ``awarded_cost_km`` instead of
+    ``reserve - awarded`` failed it too."""
+    fixtures = [fx.three_company_chain(), fx.tied_costs(), fx.scale(n_trucks=60, n_orders=40, hauliers=3, seed=2)]
+    entries = ["Partitioned", "pm=PooledMarket", "pg=PooledMarket", "GreedyNearest"]
+    overrides = {"pg": {"inner": "GreedyNearest"}}
+    report = bench(entries, fixtures, overrides)
+    for col in ("badge", "cross_company", "benefit_km_total", "label"):
+        assert col in BENCH_COLUMNS and col in render_table(report).splitlines()[2]
+    rows = {r.policy: r for r in report.rows}
+    assert list(rows) == ["Partitioned", "pm", "pg", "GreedyNearest"]
+    assert {k: (r.label, r.badge) for k, r in rows.items()} == {
+        "Partitioned": ("Partitioned/RandomAssignment", "per group"),
+        "pm": ("PooledMarket/RandomAssignment", "per company"),
+        "pg": ("PooledMarket/GreedyNearest", "per company"),
+        "GreedyNearest": ("GreedyNearest", "central"),
+    }
+    params = {"Partitioned": None, "pm": None, "pg": {"inner": {"type": "GreedyNearest"}}, "GreedyNearest": None}
+    names = {"Partitioned": "Partitioned", "pm": "PooledMarket", "pg": "PooledMarket", "GreedyNearest": "GreedyNearest"}
+    for alias, row in rows.items():
+        got = [_accounted(names[alias], params[alias], f) for f in fixtures]
+        assert row.cross_company == sum(c for c, _b in got), alias
+        assert row.benefit_km_total == pytest.approx(round(sum(b for _c, b in got), 3), abs=1e-6), alias
+        assert row.violations == 0
+    assert rows["GreedyNearest"].cross_company > 0, "the chain must produce shares, or the columns are vacuous"
+
+
+def test_bench_aliases_through_the_control_plane():
+    """Spec §3.3's form: ``--policies pm=PooledMarket,pr=PooledMarket --policy-param pr.inner=...``."""
+    assert parse_bench_params(["pm=PooledMarket", "pr=PooledMarket"],
+                              ["pr.inner=GreedyNearest", "pr.inner.candidates=sampled", "pm.max_rounds=3"]) == {
+        "pr": {"inner": {"type": "GreedyNearest", "params": {"candidates": "sampled"}}},
+        "pm": {"max_rounds": 3},
+    }
+    result = cmd_policy_bench("planner", "pm=PooledMarket,pr=PooledMarket", synthetic="three_company_chain",
+                              params=["pr.inner=GreedyNearest"])
+    assert result["ok"], result
+    assert [(r["policy"], r["label"]) for r in result["report"]["rows"]] == [
+        ("pm", "PooledMarket/RandomAssignment"), ("pr", "PooledMarket/GreedyNearest")]
+    bad = cmd_policy_bench("planner", "pm=PooledMarket", synthetic="tied_costs", params=["px.inner=GreedyNearest"])
+    assert not bad["ok"] and "'px', which is not benched" in bad["message"]
+    dup = cmd_policy_bench("planner", "pm=PooledMarket,pm=Partitioned", synthetic="tied_costs")
+    assert not dup["ok"] and "used twice" in dup["message"]
+
+
+def test_bench_counts_violations():
+    """Verified to have teeth: reading ``violations`` as ``0`` in ``_bench_one`` failed this test."""
+    with isolated_registry():
+        @policy(slot="planner", name="DoubleBooker", version="1", description="one order to every truck")
+        class DoubleBooker(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                pass
+
+            def decide(self, ctx):
+                if not ctx.raw_orders:
+                    return Plan(chains={})
+                oid = str(ctx.raw_orders[0]["_id"])
+                return Plan(chains={str(t["_id"]): (oid,) for t in ctx.raw_trucks})
+
+        report = bench(["DoubleBooker"], [fx.one_haulier(), fx.tied_costs(), fx.single_truck()])
+    (row,) = report.rows
+    assert row.violations == 2, "one_haulier and tied_costs double-book; single_truck cannot"
+    assert row.assigned == 1, "violating plans commit nothing; single_truck's one head is committed"
+
+
+def test_capture_sees_the_raw_plan_before_the_invariants(tmp_path):
+    """The hook runs after the solve and BEFORE ``check_result``: a double-booking result reaches
+    it with no problems attached, and its fixture records the raw pairs the runner discards.
+
+    Verified to have teeth: moving the capture call after ``check_result`` in
+    ``DispatchRunner.run`` failed this test."""
+    with isolated_registry():
+        @policy(slot="planner", name="DoubleBooker2", version="1", description="one order to two trucks")
+        class DoubleBooker2(DispatchPolicy):
+            @dataclass(frozen=True)
+            class Params(PolicyParams):
+                pass
+
+            def decide(self, ctx):
+                oid = str(ctx.raw_orders[0]["_id"])
+                return Plan(chains={str(t["_id"]): (oid,) for t in ctx.raw_trucks[:2]})
+
+        seen = []
+        recorder = capture.CaptureRecorder(
+            capture.CaptureSettings(dir=str(tmp_path), every_n_ticks=1, max_files=5),
+            resolved=build_runner_for_policy("DoubleBooker2").resolved,
+        )
+
+        def hook(**kw):
+            seen.append(kw["problems"])
+            recorder(**kw)
+
+        hook.before_solve = recorder.before_solve
+        runner = build_runner_for_policy("DoubleBooker2", capture=hook)
+        assert runner.run(fx.one_haulier().context(runner)).pairs == []
+    assert seen == [[]], "capture must see the plan before the invariants judged it"
+    (path,) = tmp_path.glob("step_*.json.gz")
+    assert capture.read_fixture(str(path))["live_pairs"] == [["t000", "o000"], ["t001", "o000"]]

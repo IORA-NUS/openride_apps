@@ -8,6 +8,7 @@ visual geo/loc streaming) and that we keep stdout to stream a live view.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import signal
@@ -82,12 +83,22 @@ class SimulationRunner:
         run_id: Optional[str] = None,
         headless: bool = True,
         cooperation_structure: Optional[str] = None,
-        sharing_policy: Optional[str] = None,
+        policy_overrides: Optional[dict] = None,
+        capture_dispatch: Optional[str] = None,
+        assignment_cadence: Optional[int] = None,
+        max_orders_per_tick: Optional[int] = None,
     ) -> None:
         self.scenario = scenario
+        # Already range-checked (control.validate_assignment_run_inputs, R8); ship as
+        # ORSIM_ASSIGNMENT_CADENCE / ORSIM_MAX_ORDERS_PER_TICK.
+        self.assignment_cadence = assignment_cadence
+        self.max_orders_per_tick = max_orders_per_tick
         self.solver = solver
+        # Already validated (openride_control.policies); ships as ORSIM_POLICY_OVERRIDES.
+        self.policy_overrides = policy_overrides or None
+        # Already validated (control.validate_capture_dispatch); ships as ORSIM_CAPTURE_DISPATCH.
+        self.capture_dispatch = capture_dispatch or None
         self.cooperation_structure = cooperation_structure
-        self.sharing_policy = sharing_policy
         self.run_name = run_name
         self.run_id = run_id or new_run_id()
         self.headless = headless
@@ -125,10 +136,16 @@ class SimulationRunner:
             env["ORSIM_RUN_NAME"] = self.run_name
         if self.solver:
             env["ORSIM_SOLVER"] = self.solver
+        if self.policy_overrides:
+            env["ORSIM_POLICY_OVERRIDES"] = json.dumps(self.policy_overrides, sort_keys=True)
+        if self.capture_dispatch:
+            env["ORSIM_CAPTURE_DISPATCH"] = self.capture_dispatch
         if self.cooperation_structure:
             env["ORSIM_COOP_STRUCTURE"] = self.cooperation_structure
-        if self.sharing_policy:
-            env["ORSIM_SHARING_POLICY"] = self.sharing_policy
+        if self.assignment_cadence is not None:
+            env["ORSIM_ASSIGNMENT_CADENCE"] = str(int(self.assignment_cadence))
+        if self.max_orders_per_tick is not None:
+            env["ORSIM_MAX_ORDERS_PER_TICK"] = str(int(self.max_orders_per_tick))
         if self.headless:
             env["ORSIM_HEADLESS"] = "1"
         return env

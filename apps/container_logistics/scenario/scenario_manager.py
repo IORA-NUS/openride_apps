@@ -106,6 +106,9 @@ class ScenarioManager(BaseScenarioManager):
             # WORLD PHYSICS — an analyst comparing two runs must be able to SEE that
             # the gate counts differ rather than infer it from a KPI that moved.
             "facility_rules": self.orsim_settings.get("FACILITY_RULES"),
+            # The EFFECTIVE policy selection (post-override), stamped at run start
+            # (policy slots plan §4 P2.5): which dispatch policy, version and params ran.
+            "policies": self.orsim_settings.get("POLICIES"),
             "services": {
                 "assignment_agents": self.get_agent_collection("assignment"),
                 "analytics_agents": self.get_agent_collection("analytics"),

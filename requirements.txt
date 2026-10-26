@@ -11,6 +11,21 @@
 # Python 3.11 (the tree is developed and tested on 3.11.2).
 
 # ── Simulation engine ────────────────────────────────────────────────────────
+# orsim 1.4.0 — released 2026-10-05, tag v1.4.0 (branch feat/transport-abstraction,
+# commit 537d009 + the bumpversion commit d485c02).
+#
+# 1.4.0 adds the pluggable messenger transport: `MessengerTransport` (the ABC),
+# `PahoTransport` (today's MQTT/RabbitMQ behaviour, now including the RabbitMQ
+# management-API `register_user` call that used to sit in the broker-neutral
+# Messenger), a `Messenger.transport=` parameter that finally works, and
+# `orsim.messenger.conformance` — 20 runnable checks any transport is validated
+# against. `self.client` keeps its name, so no app call site changed.
+#
+# Nothing observable changes with no transport supplied: the four-argument
+# Messenger behaves exactly as 1.3.0 did. This release exists so the app side can
+# inject a KafkaTransport (openride_apps apps/transport/) from a clean clone.
+#
+# Previous release, for context:
 # orsim 1.3.0 — released 2026-08-23 from IORA-NUS/orsim master, tag v1.3.0.
 #
 # This ENDS the fork. Previously this line was `-e file:///home/user/orsim`, a
@@ -23,7 +38,7 @@
 # and an event-driven `confirm_responses` in place of a polling loop.
 #
 # Not on PyPI, so the tag is the distribution point. Tag v1.3.0 == be8b811.
-orsim @ git+https://github.com/IORA-NUS/orsim.git@v1.3.0
+orsim @ git+https://github.com/IORA-NUS/orsim.git@v1.4.0
 
 # ── Agent runtime: task queue, brokers, transport ────────────────────────────
 celery==5.6.2
@@ -55,6 +70,16 @@ geopandas==0.14.1
 geopy==2.4.1
 haversine==2.8.0
 polyline==2.0.1
+
+# ── Optimisation ─────────────────────────────────────────────────────────────
+# OR-Tools for the NetworkFlowDay planner (policies/dispatch/library/network_flow_day.py:
+# exact min-cost flow per cooperation group, the MIP fallback via pywraplp/SCIP). The
+# solver declares requires=("ortools",), so without it the catalog lists it unavailable
+# and a run selecting it is refused; nothing else imports it.
+# 9.14.6206 is the newest release whose metadata accepts numpy==1.26.3 / pandas==2.1.4
+# (9.15 needs numpy>=2.0.2 and protobuf>=6.33.1); verified with `pip install --dry-run -r requirements.txt` in a
+# clean Python 3.11 venv (addendum M3).
+ortools==9.14.6206
 
 # ── Process / telemetry ──────────────────────────────────────────────────────
 psutil==7.2.2
@@ -91,3 +116,20 @@ Pyomo==6.7.0
 # the simulation, and ~/pyjupenv stops being load-bearing.
 rich==15.0.0
 questionary==2.1.1
+
+# ── Celery broker for phase 5 of the RabbitMQ -> Kafka cutover ───────────────
+# Celery cannot move to Kafka with the rest of the simulation's messaging:
+# kombu.transport.confluentkafka.Channel inherits `supports_fanout = False` from
+# kombu/transport/virtual/base.py:444, and Celery's remote control (the pidbox
+# behind app.control.ping / broadcast) is a FANOUT exchange. Without fanout the
+# broadcast is accepted and delivered to nobody, so `celery inspect ping` reports
+# "no nodes replied" against a healthy pool -- and four live call sites believe
+# it: openride_control/registry.py::celery_ping, apps/simulation/preflight.py
+# (which ABORTS the run), openride_control/manager.py's two-ping-then-restart,
+# and the /services "Celery workers" tile.
+# kombu.transport.redis.Channel declares `supports_fanout = True` (redis.py:631),
+# so Celery moves to Redis instead. redis-py is the client kombu's Redis
+# transport imports; without it the transport raises at connect time.
+# Verified on this box: `celery inspect ping` over redis://127.0.0.1:6379
+# answered "1 node online", and app.control.ping(limit=1) returned in 62 ms.
+redis==8.1.0

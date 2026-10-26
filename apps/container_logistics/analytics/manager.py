@@ -25,6 +25,16 @@ def _sim_clock_http_param(value: Any) -> str:
     raise TypeError(f"Unsupported sim_clock type: {type(value)!r}")
 
 
+#: The run setting the cooperation record rides in, and the record itself (final review
+#: M3). Both MOVED, unchanged, to ``policies/compat/cooperation_record.py`` (round-2
+#: review M-C: the control-plane dry run computes the record and must not import this
+#: module, which pulls in orsim); re-exported here for every existing caller.
+from apps.container_logistics.policies.compat.cooperation_record import (  # noqa: E402,F401
+    COOPERATION_SETTING,
+    cooperation_record,
+)
+
+
 class AnalyticsManager(ResourceClientMixin, ORSimManager):
     """Fetches haul-trip and order snapshots from OpenRide and persists KPI rows."""
 
@@ -60,14 +70,26 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         self._run_start_time: Optional[Any] = None
         # Collaboration (haulier job sharing): run-wide counters for the scalar
         # KPIs, plus the active structure's planner groups (set by the analytics
-        # app from orsim_settings["COOPERATION"]; empty => no planner scope rows).
+        # app from orsim_settings["COOPERATION"], which the sim main derives from the
+        # world's active arm, `cooperation_record`; empty => no planner scope rows).
         self._shared_trip_count: int = 0
         self._total_benefit_km: float = 0.0
         self._coop_structure_id: Optional[str] = None
         self._coop_components: List[List[str]] = []
+        # Order outcomes (sim KPIs, analytics/order_outcomes.py). Context arrives once from
+        # the agent's orsim_settings; until then nothing is computed. The live cache is
+        # PROVISIONAL and covers CLOSED run days only; refreshed at most `days` times a run (closed = 1..D).
+        self._oo_context: Optional[Dict[str, Any]] = None
+        self._oo_closed_days: int = 0
+        self._oo_live: Optional[Dict[str, Any]] = None
+        self._oo_warned: bool = False
+        self._order_outcome_reader_factory = None  # tests inject a fake reader factory
 
     def set_cooperation(self, coop: Optional[Dict[str, Any]]) -> None:
         """Receive the active cooperation structure (shipped via orsim_settings).
+
+        ``coop`` is the framework's :func:`cooperation_record` of the run's world (never
+        a solver's own choice, final review M3), or ``None`` without an arm.
 
         Only multi-member components become planner groups — a solo haulier's
         "planner" is just the company itself (already a haulier row)."""
@@ -80,6 +102,94 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
             for members in comps
             if isinstance(members, (list, tuple)) and len(members) > 1
         ]
+
+    # ------------------------------------------------------------------ order outcomes
+
+    def set_order_outcome_context(
+        self, step_interval: Any, reference_time: Any, horizon_steps: Any
+    ) -> None:
+        """Receive the run's time axis (shipped via orsim_settings). NEVER raises: an
+        unusable context only disables the order-outcome KPIs (logged once)."""
+        from .order_outcomes import parse_reference_time
+
+        try:
+            step = float(step_interval)
+            steps = int(horizon_steps)
+            ref = parse_reference_time(reference_time)
+            if step <= 0 or steps <= 0:
+                raise ValueError(f"step_interval={step_interval!r} horizon_steps={horizon_steps!r}")
+            self._oo_context = {
+                "step_interval": step,
+                "reference_time": reference_time if isinstance(reference_time, str) else ref,
+                "ref": ref,
+                "horizon_s": steps * step,
+            }
+        except Exception as exc:
+            self._oo_context = None
+            logger.warning("order-outcome KPIs disabled for run %s: bad time axis (%s)", self.run_id, exc)
+
+    def _order_outcome_elapsed_s(self, end_time: Any) -> Optional[float]:
+        from .order_outcomes import _as_time
+
+        ctx = self._oo_context
+        end = _as_time(end_time)
+        if ctx is None or end is None:
+            return None
+        return (end - ctx["ref"]).total_seconds()
+
+    def refresh_order_outcomes_if_day_closed(self, end_time: Any) -> bool:
+        """Recount once per newly CLOSED run day (the first analytics tick after a day
+        boundary). Returns True when a recount ran and succeeded.
+
+        A failure is a WARNING (once per run) and the previous cache stays. The closed-day
+        marker advances even on failure, so a dead Mongo costs one bounded attempt per day,
+        never one per tick.
+        """
+        from .order_outcomes import closed_days, compute_order_outcomes
+
+        elapsed = self._order_outcome_elapsed_s(end_time)
+        if elapsed is None:
+            return False
+        ctx = self._oo_context
+        closed = closed_days(elapsed, ctx["horizon_s"])
+        if closed <= self._oo_closed_days:
+            return False
+        self._oo_closed_days = closed
+        try:
+            reader = (
+                self._order_outcome_reader_factory(self.run_id)
+                if self._order_outcome_reader_factory is not None
+                else None
+            )
+            self._oo_live = compute_order_outcomes(
+                self.run_id,
+                step_interval=ctx["step_interval"],
+                reference_time=ctx["reference_time"],
+                horizon_s=ctx["horizon_s"],
+                final=False,
+                closed=closed,
+                reader=reader,
+            )
+            return True
+        except Exception as exc:
+            if not self._oo_warned:
+                self._oo_warned = True
+                logger.warning(
+                    "order-outcome recount failed for run %s (keeping previous values): %s",
+                    self.run_id,
+                    exc,
+                )
+            return False
+
+    def order_outcome_scalars(self) -> Dict[str, Any]:
+        """The closed-day scalar KPIs from the live cache (zeros until day 0 closes)."""
+        from .order_outcomes import scalars_from_outcomes
+
+        return scalars_from_outcomes(self._oo_live)
+
+    def live_order_outcomes(self) -> Optional[Dict[str, Any]]:
+        """The PROVISIONAL closed-days outcomes, or None before the first recount."""
+        return self._oo_live
 
     def on_init(self):
         pass
@@ -1344,8 +1454,20 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         rows.sort(key=lambda r: (r["backhaul_strength"], r["ab_trips"] + r["ba_trips"]), reverse=True)
         return rows[:200]
 
-    def save_breakdowns(self, sim_clock: Any, *, final: bool = False) -> None:
-        """Persist truck + haulier + lane breakdown snapshots from the current accumulators."""
+    def save_breakdowns(
+        self,
+        sim_clock: Any,
+        *,
+        final: bool = False,
+        order_outcomes: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist truck + haulier + lane breakdown snapshots from the current accumulators.
+
+        ``order_outcomes`` (analytics/order_outcomes.py) adds the ``orders_*`` fields to the
+        HAULIER rows only, attributed to the order's OWNER (not the carrier that
+        ``num_orders_completed`` counts), plus ``order_outcomes_attribution`` on the doc.
+        None (the default) leaves every document exactly as before.
+        """
         from apps.utils import time_to_str
         from .kpi_breakdown_persist import persist_kpi_breakdown
 
@@ -1360,8 +1482,18 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         # or contains real job attrition. Rides `breakdown`'s allow_unknown (G13).
         censoring = getattr(self, "_rebate_censoring", None)
         extra = {"rebate_censoring": censoring} if censoring else None
+        oo_fields = None
+        if order_outcomes is not None:
+            from .order_outcomes import haulier_row_fields
+
+            oo_fields = haulier_row_fields(order_outcomes)
+            extra = dict(extra or {})
+            extra["order_outcomes_attribution"] = "owner"
+            extra["order_outcomes_final"] = bool(order_outcomes.get("final"))
         for scope in ("truck", "haulier"):
             rows = self.build_breakdown(scope, end_time)
+            if scope == "haulier" and oo_fields is not None:
+                self._merge_order_outcome_fields(rows, oo_fields, bool(order_outcomes.get("final")))
             persist_kpi_breakdown(
                 self.user,
                 self.run_id,
@@ -1392,11 +1524,24 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
                 final=final,
             )
 
+    @staticmethod
+    def _merge_order_outcome_fields(
+        rows: List[Dict[str, Any]], fields: Dict[str, Dict[str, Any]], final: bool
+    ) -> None:
+        """Owner-attributed ``orders_*`` onto each haulier row; a haulier owning no counted
+        order gets real zeros (the outcomes WERE recorded)."""
+        from .order_outcomes import zero_haulier_row_fields
+
+        for row in rows:
+            row.update(fields.get(str(row.get("id")), zero_haulier_row_fields(final)))
+
     #: Sim-time spacing of the intermediate breakdown checkpoints emitted by the finalize
     #: recompute (~28 points for a 7-day run) — drives the per-haulier "over time" view.
     CHECKPOINT_INTERVAL_HOURS = 6
 
-    def recompute_breakdowns_full(self, sim_clock: Any) -> None:
+    def recompute_breakdowns_full(
+        self, sim_clock: Any, *, order_outcomes: Optional[Dict[str, Any]] = None
+    ) -> None:
         """Authoritative end-of-run recompute: full scan of completed trips → a per-haulier
         time series of cumulative breakdown snapshots, ending with the definitive ``final=True``.
 
@@ -1404,6 +1549,10 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         accumulators) so it is independent of the live agent's tick cadence: replaying the sorted
         trips and persisting at fixed sim-time checkpoints yields a deterministic time series even
         when no live snapshots were captured.
+
+        ``order_outcomes`` (the FINAL recount) is attached to the last ``final=True`` flush
+        ONLY: putting run-end values on a day-2 checkpoint would be anachronistic, so the
+        intermediate checkpoints carry no order-outcome fields at all.
         """
         from datetime import timedelta
 
@@ -1444,7 +1593,7 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
             # looked like a clean empty result rather than a totally truncated one.
             self.accumulate_forfeited_arrivals()
             self.set_metric_window(None, sim_clock)
-            self.save_breakdowns(sim_clock, final=True)
+            self.save_breakdowns(sim_clock, final=True, order_outcomes=order_outcomes)
             return
 
         ordered = sorted(trips, key=self._trip_sort_key)
@@ -1458,7 +1607,9 @@ class AnalyticsManager(ResourceClientMixin, ORSimManager):
         def _flush(window_end: Any, *, final: bool) -> None:
             # Cumulative breakdown as of ``window_end``; window end drives elapsed-day rates.
             self.set_metric_window(self._run_start_time, window_end)
-            self.save_breakdowns(window_end, final=final)
+            self.save_breakdowns(
+                window_end, final=final, order_outcomes=order_outcomes if final else None
+            )
 
         step = timedelta(hours=self.CHECKPOINT_INTERVAL_HOURS)
         start_dt = _to_dt(self._run_start_time)

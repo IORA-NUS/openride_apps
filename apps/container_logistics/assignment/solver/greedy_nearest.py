@@ -1,13 +1,43 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Iterable, List, Tuple
+
+from apps.container_logistics.policies.dispatch.result import Result
+from apps.container_logistics.policies.framework import PolicyParams, param, policy
+from apps.container_logistics.policies.solver_lib import candidates, objective
+from apps.container_logistics.policies.solver_lib.pair_leaf import CENTRAL_BADGE, CENTRAL_BADGE_TOOLTIP, PairLeafMixin
 
 from ..tiebreak import pair_tiebreak
 from .base import Assignment, BaseAssignmentSolver, Cost, Order, PairAllowed, Truck
 
 
-class GreedyNearestSolver(BaseAssignmentSolver):
+@policy(
+    slot="planner",
+    name="GreedyNearest",
+    version="1",
+    description="Globally greedy nearest-pair sweep, dual-cycle aware.",
+    # Scope-agnostic leaf: selected at top level it plans the whole tick centrally (its
+    # stamped provenance then carries this badge); as a composite's inner it decides one
+    # scope (round-2 §2.4).
+    badge=CENTRAL_BADGE,
+    badge_tooltip=CENTRAL_BADGE_TOOLTIP,
+    # Budget for the battery's performance.scale check (plan P3.3): max(3 x worst, 500).
+    # Measured 2026-10-21, decide() on testing.fixtures.scale() (1000 trucks x 500
+    # orders, spatial), 2 x 5 runs, load avg 4.5 on 32 cores: 108.0-133.4 ms, worst
+    # 133.4 ms -> 3 x 133.4 = 400 -> floor 500. This box varies 1.3-2x on its own
+    # (CLAUDE.md §17), hence the 3x margin and the battery's best-of-3.
+    perf_budget_ms=500,
+    # Per-arm budget (round-2 C5 rule: max(3 x worst of 2 x 5 runs, 500)). Measured
+    # 2026-10-21 on the whole-tick testing.fixtures.scale() (1000 trucks x 500 orders,
+    # one haulier, tick-scope sample cap 500 -> 250k pairs), 2 x 5 runs, load avg
+    # 5.8-6.5 on 32 cores: 1865.1-1929.1 ms, worst 1929.1 -> 3 x 1929.1 = 5787 -> 5790.
+    # ABOVE STEP_SETTLE_SECONDS (2000 ms): at 1000 x 500 this arm makes the assignment
+    # agent a per-step straggler (its ~1.9 s solve alone is close to the settle window).
+    arm_budgets_ms={"candidates=sampled": 5790},
+)
+class GreedyNearestSolver(PairLeafMixin, BaseAssignmentSolver):
     """Globally greedy nearest-pair matching within a haulier bucket.
 
     Builds every feasible ``(truck, order)`` pair, sorts by injected ``cost``
@@ -22,6 +52,62 @@ class GreedyNearestSolver(BaseAssignmentSolver):
     Complexity: O(T x O) to build pairs + O(T x O log(T x O)) to sort. At the
     current per-tick caps (<=500 orders, bucketed per haulier) this is cheap.
     """
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        candidates: str = param(
+            "spatial",
+            choices=("spatial", "sampled"),
+            help=(
+                "How candidate (truck, order) pairs are generated: 'spatial' asks the "
+                "spatial index for nearby pairs only; 'sampled' samples a capped set of "
+                "trucks per haulier and scores every truck x order pair."
+            ),
+        )
+        dual_cycle_bonus_km: float = param(
+            5.0,
+            ge=0,
+            help=(
+                "Km subtracted from a pair's deadhead cost when the truck's last drop-off "
+                "is within dual_cycle_radius_km of the order's pickup (a dual cycle). "
+                "The cost is clamped at 0. 0 disables the bonus."
+            ),
+        )
+        dual_cycle_radius_km: float = param(
+            0.5,
+            ge=0,
+            help=(
+                "Max distance in km between the truck's last drop-off and the order's "
+                "pickup for the pair to count as a dual cycle and earn the bonus."
+            ),
+        )
+
+    def solve_tick(self, tick, params) -> Result:
+        """Rank by the dual-cycle cost built from this policy's own params.
+
+        With the default/legacy params this equals the framework's accounting cost,
+        because both are ``constraints.assignment_cost`` with the same two floats.
+        Runs under ``decision_rng``: the shuffle / tiebreak are the tick's. On the
+        spatial path the caller's ``tick.candidates`` are used when supplied (a market's
+        round prebuild), else the tick's own spatial pairs; the sampled path ignores them.
+        """
+        p = params
+        # ``objective.dual_cycle_cost`` with the knobs bound once (same function, same
+        # floats): this is called once per candidate pair, and a per-call knob-dict build
+        # cost ~3-7 ms per golden tick (gate 6). The pairs scored here are raw documents.
+        cost = objective.dual_cycle_cost_fn(
+            bonus_km=p.dual_cycle_bonus_km, radius_km=p.dual_cycle_radius_km
+        )
+        settings = candidates.CandidateSettings.from_world(tick.world)
+
+        with self.decision_rng(tick):
+            if p.candidates == "spatial":
+                pairs = tick.candidates if tick.candidates is not None else candidates.spatial_pairs(tick, settings)
+                return Result.from_pairs(self.solve_pairs(pairs, cost=cost))
+            return Result.from_pairs(
+                self.solve(candidates.tick_sampled_trucks(tick, settings), list(tick.raw_orders),
+                           pair_allowed=tick.permitted, cost=cost)
+            )
 
     def solve(
         self,

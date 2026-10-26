@@ -69,11 +69,76 @@ import traceback
 
 from orsim.lifecycle import ORSimAgent
 
+from apps.agent_transport import select_agent_transport
 
-class OpenRideAgent(ORSimAgent):
+
+class InitFailureReporting:
+    """Mixin: an agent whose app raised at init answers the boot handshake with ``init_error``.
+
+    Stock ``ORSimAgent`` catches the exception of ``_create_app`` in ``__init__``,
+    sets ``agent_failed`` and carries on: ``start_listening`` subscribes to nothing,
+    then ``take_first_step`` publishes ``ready`` exactly like a healthy agent (the
+    ``init_error`` payload it builds is never sent). The scheduler cannot tell the
+    two apart, so the run went on without the agent and reported ``ok`` (round-2
+    review L-D). Here ``take_first_step`` publishes ``{'action': 'init_error',
+    'details': <the init traceback>}`` instead when the agent failed, and
+    ``OpenRideScheduler`` fails the run on it (``init_failure_handler='hard'``). A
+    healthy agent's handshake is untouched, byte for byte.
+
+    The traceback is captured by wrapping this INSTANCE's ``_create_app`` before
+    ``ORSimAgent.__init__`` calls it (the subclass's method, unchanged otherwise).
+    Declare the mixin before ``ORSimAgent`` in the bases.
+    """
+
+    #: The init traceback, ``None`` when the app was created (or never attempted).
+    _init_failure_details = None
 
     def __init__(self, *args, **kwargs):
+        create_app = self._create_app
+
+        def _recording_create_app():
+            try:
+                return create_app()
+            except Exception:
+                self._init_failure_details = traceback.format_exc()
+                raise
+
+        self._create_app = _recording_create_app
         super().__init__(*args, **kwargs)
+
+    def take_first_step(self, dummy_payload):
+        if not getattr(self, "agent_failed", False):
+            return super().take_first_step(dummy_payload)
+        payload = {
+            'agent_id': self.unique_id,
+            'time_step': getattr(self, 'current_time_step', -1),
+            'action': 'init_error',
+            'did_step': False,
+            'run_time': time.time() - getattr(self, 'start_time', time.time()),
+            'details': self._init_failure_details or "the agent's app failed to initialise",
+        }
+        try:
+            self.messenger.client.publish(
+                f'{self.run_id}/{self.scheduler_id}/ORSimScheduler', json.dumps(payload))
+        except Exception:
+            logging.exception(
+                f"Agent {getattr(self, 'unique_id', '?')}: could not publish init_error; the "
+                "scheduler's never-answered-a-step guard will report it instead")
+        self.message_processing_active = False
+
+
+class OpenRideAgent(InitFailureReporting, ORSimAgent):
+
+    def __init__(self, *args, **kwargs):
+        # ── Transport selection (RabbitMQ -> Kafka migration, phase 2) ───────
+        # select_agent_transport reads OPENRIDE_AGENT_TRANSPORT and builds the
+        # transport here, inside the celery worker process — a transport
+        # INSTANCE cannot cross orsim's AgentClass(**kwargs) celery boundary.
+        # With the flag unset (the default) it returns kwargs unchanged and
+        # WITHOUT a transport key, so this call is byte-identical to the
+        # pre-phase-2 one and the installed orsim v1.3.0, which has no such
+        # parameter, keeps working untouched.
+        super().__init__(*args, **select_agent_transport(args, kwargs, 'OpenRideAgent'))
         # Last time a message was received from the scheduler on this agent's run
         # topic. Used as a liveness signal: if it goes stale the run has ended or
         # this agent was pruned, and we tear down to release the MQTT connection.
@@ -305,7 +370,42 @@ class OpenRideAgent(ORSimAgent):
                 self._shutdown = True
 
     def start_listening(self):
-        super().start_listening()
+        # A RAISE IN HERE MUST NOT ESCAPE, and before this guard it did.
+        # ``ORSimAgent.start_listening`` calls ``self.messenger.client.subscribe(...)``
+        # unguarded and spawns the teardown heartbeat greenlet only AFTER it.
+        # ``KafkaTransport.subscribe`` is documented to RAISE on an
+        # ``incremental_assign`` failure (deliberately — paho returns an error
+        # code instead, which is a lie the caller cannot detect), and
+        # ``_ensure_assigned``'s own docstring calls ``_CONFLICT`` a real and
+        # reachable error on this broker: ~1060 agents x 2 topics is ~2120
+        # assign attempts per run. Letting that escape cost three silent things
+        # at once: the scheduler had marked this agent ``pending_boot`` and
+        # ``_begin_step_barrier`` excludes those from ``expected`` with NO
+        # deadline, so the agent simply never participated and the run finished
+        # with fewer orders reporting ``ok: true``; the failed-init teardown
+        # below was skipped, as was the heartbeat greenlet that would otherwise
+        # have called it; and the transport kept its claim on the process-level
+        # Kafka bus forever, pinning one Consumer and one native poll thread in
+        # a long-lived celery worker. Falling through to the existing teardown
+        # is the fix: it is exactly what a failed agent is already supposed to
+        # do, and ``KafkaTransport.disconnect`` releases the bus.
+        try:
+            super().start_listening()
+        except Exception:
+            self.agent_failed = True
+            self._init_failure_details = traceback.format_exc()
+            # Best-effort init_error so the scheduler fails the run (round-2 review
+            # L-D) instead of waiting on a pending_boot agent that never replies.
+            try:
+                self.take_first_step({'action': 'init', 'time_step': getattr(self, 'current_time_step', 0)})
+            except Exception:
+                pass
+            logging.exception(
+                f"Agent {getattr(self, 'unique_id', '?')}: start_listening FAILED; "
+                "treating the agent as failed so its messenger/transport is released "
+                "instead of leaking. This agent will never answer the step barrier — "
+                "the scheduler's boot-deadline guard is what makes that visible."
+            )
 
         # An agent that failed to initialise never spawned the heartbeat greenlet that
         # would otherwise disconnect it, so release its broker connection explicitly.

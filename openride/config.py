@@ -74,20 +74,6 @@ DEFAULT_DOMAIN = os.environ.get("ORSIM_DOMAIN", "container_logistics")
 # only resolves when the checkout happens to be named openride_apps.
 REPORT_BASE = _REPO_ROOT / "apps" / "output"
 
-# Assignment solver strategies (mirror SOLVER_REGISTRY / the dashboard select).
-SOLVERS = ["GreedyNearest", "RandomAssignment"]
-DEFAULT_SOLVER = "GreedyNearest"
-
-# Per-role generation policies (mirror the datagen POLICY_REGISTRY / `known-policies`
-# control command / the dashboard dropdowns). `openride scenario new` validates a
-# requested policy against these, and the server re-validates authoritatively.
-POLICIES = {
-    "truck": ["default", "random", "historical"],
-    "order": ["historical", "random"],
-    "facility": ["allocate", "random"],
-}
-DEFAULT_POLICIES = {"truck": "default", "order": "historical", "facility": "allocate"}
-
 # How often the live dashboard re-polls Mongo for breakdown snapshots.
 LIVE_POLL_SECONDS = float(os.environ.get("OPENRIDE_CLI_POLL_SECONDS", "2.0"))
 

@@ -15,8 +15,6 @@ from apps.container_logistics.assignment import pooled_planner as PP
 from apps.container_logistics.assignment.pooled_planner import (
     DEFAULT_MAX_ROUNDS,
     MAX_ROUNDS_CEILING,
-    effective_cooperation_stamp,
-    resolve_market_config,
 )
 from apps.container_logistics.datagen import hauliers as H
 from apps.container_logistics.datagen.preprocess import (
@@ -25,6 +23,11 @@ from apps.container_logistics.datagen.preprocess import (
     MARKET_MAX_ROUNDS_MIN,
 )
 
+from apps.container_logistics.assignment.arbitration import ARBITRATION_REGISTRY
+from apps.container_logistics.assignment.policy.claim import CLAIM_REGISTRY
+from apps.container_logistics.assignment.policy.offer import OFFER_REGISTRY
+from apps.container_logistics.policies.compat.legacy import market_echo
+from apps.container_logistics.policies.dispatch.profile import resolve_dispatch_for_profile
 from tests.test_assignment_cooperation import _coop, _order, _truck
 from tests.test_assignment_pooled import _app, _ids
 
@@ -172,14 +175,35 @@ def test_max_rounds_default_and_ceiling_are_in_sync_across_modules():
     assert MARKET_MAX_ROUNDS_MIN == 1
 
 
-def test_runtime_clamps_into_the_backstop_range():
-    assert resolve_market_config({"market": {"max_rounds": 0}})["max_rounds"] == 1
-    assert resolve_market_config({"market": {"max_rounds": 10_000}})["max_rounds"] == 100
-    assert resolve_market_config({"market": {"max_rounds": "nope"}})["max_rounds"] == 20
-    assert resolve_market_config(None)["max_rounds"] == 20
+def test_max_rounds_is_validated_into_the_backstop_range():
+    """The selection refuses a backstop outside 1..100 (fail loud, WS4b: the soft clamp of
+    the deleted ``pooled_planner.resolve_market_config`` had no caller left); the engine
+    still clamps defensively (``run_pooled_market``)."""
+    from apps.container_logistics.policies.dispatch.library.pooled_market import PooledMarket
+    from apps.container_logistics.policies.framework import PolicyParamsError
+
+    params = PooledMarket.Params
+    assert params.from_mapping(None, where="t").max_rounds == DEFAULT_MAX_ROUNDS == 20
+    assert params.from_mapping({"max_rounds": 1}, where="t").max_rounds == 1
+    assert params.from_mapping({"max_rounds": MAX_ROUNDS_CEILING}, where="t").max_rounds == 100
+    for bad in (0, 10_000, "nope"):
+        with pytest.raises(PolicyParamsError):
+            params.from_mapping({"max_rounds": bad}, where="t")
 
 
 # --- FIX-7: the run stamp describes what actually runs -----------------------
+# The COOPERATION record moved to the solvers' run declaration (WS4b,
+# ``solver_lib.cooperation.stamp``); the market config is in meta.policies.planner.params.
+
+def _bound_stamp(profile):
+    from apps.container_logistics.policies.dispatch.bind import bind_profile
+    from apps.container_logistics.policies.framework import policies_stamp
+    from apps.container_logistics.scenario.scenario_overrides import current_policies_for_profile
+
+    tree = bind_profile(profile)
+    resolved, source = current_policies_for_profile(profile)
+    return tree, policies_stamp(resolved, tree=tree, accounting_params={}, source=source)["planner"]
+
 
 def test_run_stamp_records_effective_pools_for_an_edges_only_bundle():
     """F7: every shipped bundle is edges-only with no compiled 'pools' key, yet the
@@ -194,50 +218,63 @@ def test_run_stamp_records_effective_pools_for_an_edges_only_bundle():
     legacy_active = {k: v for k, v in active.items() if k != "pools"}
     assert "pools" not in legacy_active
 
-    stamp = effective_cooperation_stamp({"planner": {"topology": "pooled"}}, legacy_active)
+    profile = {"strategy": "GreedyNearest", "planner": {"topology": "pooled"},
+               "cooperation": {"active": "chain", "structures": [legacy_active]}}
+    tree, _planner = _bound_stamp(profile)
+    stamp = tree.declaration.stamp_settings["COOPERATION"]
 
     assert stamp["pools"] == [
         {"id": "p:acme+borax", "members": ["acme", "borax"]},
         {"id": "p:borax+cargo", "members": ["borax", "cargo"]},
     ], "stamp must record the EFFECTIVE derived pools, not the absent compiled key"
-    assert stamp["topology"] == "pooled"
+    assert list(stamp) == ["structure_id", "components", "adjacency", "pools"]
     assert stamp["structure_id"] == "chain"
     assert stamp["adjacency"] == active["adjacency"]
+    assert tree.declaration.run_name_segments == ("chain",)
 
 
 def test_run_stamp_records_the_resolved_market_block_with_defaults_applied():
     """No compiled bundle carries a market block, so run_config could not record
-    which rules ran. The stamp resolves the defaults explicitly."""
-    stamp = effective_cooperation_stamp({"planner": {"topology": "pooled"}}, {"id": "x"})
-    market = stamp["market"]
-    assert market["offer"]["type"] == "OfferAll"
-    assert market["claim"]["type"] == "ClaimAllPlanned"
-    assert market["arbitration"]["type"] == "LowestCost"
-    assert market["max_rounds"] == DEFAULT_MAX_ROUNDS
+    which rules ran. The stamped planner params resolve the defaults explicitly."""
+    _tree, planner = _bound_stamp({"strategy": "GreedyNearest", "planner": {"topology": "pooled"}})
+    params = planner["params"]
+    assert planner["name"] == "PooledMarket"
+    assert params["offer"]["type"] == "OfferAll"
+    assert params["claim"]["type"] == "ClaimAllPlanned"
+    assert params["arbitration"]["type"] == "LowestCost"
+    assert params["max_rounds"] == DEFAULT_MAX_ROUNDS
 
 
 def test_run_stamp_reflects_an_override_rather_than_the_compiled_default():
-    stamp = effective_cooperation_stamp(
-        {"planner": {"topology": "two-stage",
+    _tree, planner = _bound_stamp(
+        {"strategy": "GreedyNearest",
+         "planner": {"topology": "two-stage",
                      "market": {"arbitration": {"type": "OwnerFirst"}, "max_rounds": 7}}},
-        {"id": "x"},
     )
-    assert stamp["topology"] == "pooled"  # deprecated alias resolved
-    assert stamp["market"]["arbitration"]["type"] == "OwnerFirst"
-    assert stamp["market"]["max_rounds"] == 7
+    assert planner["name"] == "PooledMarket"  # deprecated alias resolved
+    assert planner["params"]["arbitration"]["type"] == "OwnerFirst"
+    assert planner["params"]["max_rounds"] == 7
 
 
 def test_stamp_market_matches_what_the_app_actually_instantiates():
-    """The stamp and the runtime resolve through the SAME function, so they cannot
+    """The stamp and the runtime resolve through the SAME selection, so they cannot
     disagree. This asserts the wiring, not just the helper."""
-    profile = {"planner": {"topology": "pooled",
+    profile = {"strategy": "GreedyNearest",
+               "planner": {"topology": "pooled",
                            "market": {"offer": {"type": "OfferNone"}, "max_rounds": 6}}}
     app = _app([], [], cooperation=_coop([]))
-    offer, _claim, _arb, max_rounds = app._market_components(profile)
-    stamp = effective_cooperation_stamp(profile, {"id": "x"})
-    assert max_rounds == stamp["market"]["max_rounds"] == 6
-    assert type(offer).__name__.startswith("OfferNone")
-    assert stamp["market"]["offer"]["type"] == "OfferNone"
+    # Round 2: the runtime is the PooledMarket selection the profile resolves to.
+    _tree, planner = _bound_stamp(profile)
+    market = market_echo(planner["params"])
+    assert market == market_echo(resolve_dispatch_for_profile(profile).params)
+    offer, claim, arbitration = app._dispatch_runner(profile).policy.components()
+    assert market["max_rounds"] == 6
+    assert [type(c) for c in (offer, claim, arbitration)] == [
+        OFFER_REGISTRY[market["offer"]["type"]],
+        CLAIM_REGISTRY[market["claim"]["type"]],
+        ARBITRATION_REGISTRY[market["arbitration"]["type"]],
+    ]
+    assert market["offer"]["type"] == "OfferNone"
 
 
 # --- R3-7: private commits count as progress (plan §14.5, review MEDIUM-10) ---
@@ -345,6 +382,8 @@ def test_market_stamp_is_flushed_at_close():
     app.assign("2020-01-01 08:00:00", time_step=0)
 
     flushed = []
-    app._patch_round_stats_to_run_config = lambda force=False: flushed.append(force) or True
+    # WS4a: the round stats are the market's declared run-stats aggregator; close()
+    # force-pushes every aggregator through the app's run-record writer.
+    app._patch_run_config_meta = lambda key, value: flushed.append((key, value)) or True
     app.close("2020-01-01 09:00:00")
-    assert flushed == [True], "close() did not force a final provenance flush"
+    assert flushed == [("market", app.round_stats())], "close() did not force a final provenance flush"

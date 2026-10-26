@@ -14,7 +14,7 @@ import subprocess
 import sys
 from typing import Optional
 
-from . import analyze_cmd, run_group, scenario_cmd, services_cmd
+from . import analyze_cmd, policy_cmd, run_group, scenario_cmd, services_cmd
 from .control import ControlError
 from .ui import console
 
@@ -29,6 +29,7 @@ def _build_parser() -> argparse.ArgumentParser:
     scenario_cmd.register(sub)
     analyze_cmd.register(sub)
     services_cmd.register(sub)
+    policy_cmd.register(sub)
     return parser
 
 

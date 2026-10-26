@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -13,7 +14,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import scenario_config
-from ..assignment.solver import DEFAULT_SOLVER, SOLVER_REGISTRY
+from apps.container_logistics.policies.compat.legacy import LEGACY_LEAF_DEFAULT
+from apps.container_logistics.policies.framework import leaf_policies
 from .order_demand import (
     LEGACY_EARLY_ORDER_COUNT,
     hourly_weights_from_spec,
@@ -21,15 +23,22 @@ from .order_demand import (
     recommended_early_order_count,
 )
 
-# Selectable assignment strategies, sourced from the solver registry so the
-# frontend/scenario layer can never drift from what the sim can actually run.
-KNOWN_SOLVERS = frozenset(SOLVER_REGISTRY)
+logger = logging.getLogger(__name__)
 
 
 def normalize_solver(raw: Any) -> str:
-    """Coerce a requested solver name to a known one, else the default."""
+    """Coerce a requested solver name to a registered dispatch policy, else the legacy leaf default.
+
+    Legacy-only: serves the legacy synth paths (``normalize_generate_spec``,
+    ``frontend_scenario_config_override``), which read old or foreign recipes and must
+    still produce a config. The editForm no longer coerces (``policy_slots_from_spec``). The strict surface is compile time
+    (``spec_compile``) and run start, which raise on an unknown name. Names are read
+    from the policy registry at call time, never frozen at import.
+    """
     name = str(raw or "").strip()
-    return name if name in KNOWN_SOLVERS else DEFAULT_SOLVER
+    # A strategy is a per-scope (leaf) solver: a decomposition (or a top_only planner) is never one.
+    known = {spec.name for spec in leaf_policies("planner")}
+    return name if name in known else LEGACY_LEAF_DEFAULT
 
 
 def parse_trip_matrix(raw: Any) -> dict[str, Any]:
@@ -467,6 +476,9 @@ SPEC_KEYS: dict[str, Carry] = {
     "planner": Carry.CARRY_IF_ABSENT,
     "solver": Carry.CARRY_IF_ABSENT,
     "solverParams": Carry.CARRY_IF_ABSENT,
+    # The policy-slot selection (plan docs/plans/policy_slots_p0_p3.md §4 P2.4). It
+    # supersedes `solver`/`solverParams`: see drop_dispatch_dials_superseded_by.
+    "policies": Carry.CARRY_IF_ABSENT,
     "roleSettings": Carry.CARRY_IF_ABSENT,
     "overrides": Carry.CARRY_IF_ABSENT,
     # --- per-facility rules (facility rules plan §9) -------------------------
@@ -497,6 +509,14 @@ SPEC_KEYS: dict[str, Carry] = {
     # the bundle regenerating the digest: it would then always match and guard
     # nothing, while looking exactly like a guard.
     "facilityRulesWorld": Carry.CARRY_IF_ABSENT,
+    # --- day-plan run inputs (F4 / F4b) ---------------------------------------
+    # The assignment agent's dispatch cadence (sim steps, 1..360; default 28) and its
+    # per-tick unassigned-order read cap (1..20000; default 500). Compiled into the
+    # assignment behavior only when present, and echoed into the recipe so the sim
+    # main can stamp them as source "bundle". CARRY_IF_ABSENT like `overrides`: a
+    # dashboard save that does not speak them must not drop them.
+    "assignmentCadenceSteps": Carry.CARRY_IF_ABSENT,
+    "maxOrdersPerTick": Carry.CARRY_IF_ABSENT,
 }
 
 #: Accepted spellings per key. A client that speaks any alias has SUPPLIED the key.
@@ -575,9 +595,14 @@ SPEC_KEY_NULL_POLICY: dict[str, NullPolicy] = {
     "solverParams": NullPolicy.CLEARS,
     "overrides": NullPolicy.CLEARS,
     # CLEARS: solver and planner.deployment.type are ONE dial and `solver` wins when
-    # both are given, so null is how an author says "defer to the planner". No other
-    # spelling expresses that.
+    # both are given, so null is how an author says "defer to the planner" (and, next
+    # to a `policies` block, "defer to policies.planner", which supersedes both).
+    # No other spelling expresses that.
     "solver": NullPolicy.CLEARS,
+    # UNSUPPLIED: a clear is `{}`, meaning all slot defaults; null is what a form
+    # serialiser emits for an untouched field, and honouring it would silently revert
+    # the scenario's dispatch policy and params to the legacy translation.
+    "policies": NullPolicy.UNSUPPLIED,
     # CLEARS: the legacy sibling of `overrides`; same semantics, same reasoning.
     "roleSettings": NullPolicy.CLEARS,
     # --- per-facility rules ----------------------------------------------------------
@@ -589,6 +614,10 @@ SPEC_KEY_NULL_POLICY: dict[str, NullPolicy] = {
     # There is no "cleared world": a baseline is either recorded or deleted outright.
     # A null here would also orphan the rules it was recorded for.
     "facilityRulesWorld": NullPolicy.UNSUPPLIED,
+    # A form serialiser's null for an untouched field must not silently revert an
+    # authored cadence / read cap to the engine default (a different arm).
+    "assignmentCadenceSteps": NullPolicy.UNSUPPLIED,
+    "maxOrdersPerTick": NullPolicy.UNSUPPLIED,
 }
 
 # Completeness is enforced at IMPORT, so it fires on test collection rather than on
@@ -651,6 +680,37 @@ def _key_supplied(raw: dict[str, Any], key: str) -> bool:
         if value is None or (isinstance(value, str) and not value.strip()):
             return False
     return supplied
+
+
+def drop_dispatch_dials_superseded_by(
+    incoming: dict[str, Any], carried: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """``carried`` without its legacy dispatch dials when ``incoming`` supplies ``policies``.
+
+    A body that speaks ``policies`` (non-null) is authoritative about dispatch, so the
+    legacy spellings it superseded must not be inherited back next to it (the compile
+    refuses a contradicting pair): ``solver``, ``solverParams`` and the carried
+    ``planner.deployment``, ``planner.topology`` and ``planner.market`` (the legacy
+    spellings of the per-scope solver and of the decomposition, round-2 §3.6; the rest
+    of the carried ``planner`` stays). Asymmetric on purpose: a stale legacy client that sends
+    only ``solver`` over a carried ``policies`` is NOT reconciled here and gets the
+    compile's loud "solver disagrees with policies.planner" error instead of being
+    silently ignored. Returns ``carried`` unchanged (same object) otherwise; never
+    mutates it.
+    """
+    if not isinstance(carried, dict) or not isinstance(incoming, dict):
+        return carried
+    if incoming.get("policies") is None:
+        return carried
+    out = {k: v for k, v in carried.items() if k not in ("solver", "solverParams")}
+    planner = out.get("planner")
+    if isinstance(planner, dict) and any(k in planner for k in _PLANNER_DISPATCH_SPELLINGS):
+        out["planner"] = {k: v for k, v in planner.items() if k not in _PLANNER_DISPATCH_SPELLINGS}
+    return out
+
+
+#: The carried ``planner`` keys that spell the dispatch selection (dropped next to ``policies``).
+_PLANNER_DISPATCH_SPELLINGS = ("deployment", "topology", "market")
 
 
 def assemble_spec(
@@ -733,6 +793,7 @@ def assemble_spec(
         "planner": deepcopy(raw.get("planner")),
         "solver": raw.get("solver"),
         "solverParams": deepcopy(solver_params) if solver_params else None,
+        "policies": deepcopy(raw.get("policies")),
         "roleSettings": deepcopy(role_settings) if role_settings else None,
         "overrides": deepcopy(overrides) if overrides else None,
         # Echoed verbatim — never normalised here. ``Preprocessor`` is the single
@@ -740,6 +801,8 @@ def assemble_spec(
         # authored and compiled forms drift apart.
         "facilityRules": deepcopy(raw.get("facilityRules")),
         "facilityRulesWorld": deepcopy(raw.get("facilityRulesWorld")),
+        "assignmentCadenceSteps": raw.get("assignmentCadenceSteps"),
+        "maxOrdersPerTick": raw.get("maxOrdersPerTick"),
     }
     # Every declared key must have a value builder — a key added to SPEC_KEYS
     # without one is a loud failure here rather than a silent null in the spec.
@@ -747,7 +810,7 @@ def assemble_spec(
     if missing:
         raise RuntimeError(f"assemble_spec: SPEC_KEYS without a value builder: {missing}")
 
-    prev = previous if isinstance(previous, dict) else None
+    prev = drop_dispatch_dials_superseded_by(raw, previous if isinstance(previous, dict) else None)
     out: dict[str, Any] = {}
     for key, policy in SPEC_KEYS.items():
         if policy is Carry.CARRY_IF_ABSENT and not _key_supplied(raw, key) and prev and key in prev:
@@ -823,8 +886,21 @@ def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
     )
     trip_matrix = parse_trip_matrix(maybe_parse_spec_file(raw.get("tripMatrix"), "matrix"))
     hauliers = scenario_config.normalize_hauliers(raw.get("hauliers"))
-    solver = normalize_solver(raw.get("solver"))
-    solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
+    # policies.planner is the dial when present; this legacy path only knows the
+    # strategy/solver_params spelling, so it is translated here, in one place.
+    policies = raw.get("policies") if isinstance(raw.get("policies"), dict) else None
+    dispatch = (policies or {}).get("planner")
+    if isinstance(dispatch, dict):
+        # The per-scope solver is the innermost one (round 2: dispatch may be a tree).
+        from apps.container_logistics.datagen.preprocess import Preprocessor
+
+        leaf = Preprocessor.dispatch_leaf_entry(dispatch)
+        solver = normalize_solver(leaf.get("type"))
+        params = leaf.get("params")
+        solver_params = params if isinstance(params, dict) and params else None
+    else:
+        solver = normalize_solver(raw.get("solver"))
+        solver_params = raw.get("solverParams") if isinstance(raw.get("solverParams"), dict) else None
     role_settings = raw.get("roleSettings")
     if not isinstance(role_settings, dict):
         role_settings = raw.get("roleProfiles")
@@ -870,6 +946,7 @@ def normalize_generate_spec(raw: dict[str, Any]) -> dict[str, Any]:
         "hauliers": hauliers,
         "solver": solver,
         "solverParams": deepcopy(solver_params) if solver_params else None,
+        "policies": deepcopy(policies),
         "roleSettings": deepcopy(role_settings) if role_settings else None,
         "overrides": deepcopy(overrides) if overrides else None,
         # Carried so the LEGACY path can REFUSE a rules-carrying scenario (R2-2).
@@ -912,7 +989,7 @@ def build_generation_spec_payload(spec: dict[str, Any]) -> dict[str, Any]:
         "orderDemandCurve": deepcopy(spec.get("orderDemandCurve")),
         "tripMatrix": deepcopy(spec.get("tripMatrix")),
         "hauliers": deepcopy(spec.get("hauliers")),
-        "solver": spec.get("solver") or DEFAULT_SOLVER,
+        "solver": spec.get("solver") or LEGACY_LEAF_DEFAULT,
         "solverParams": deepcopy(spec.get("solverParams")),
         "roleSettings": deepcopy(spec.get("roleSettings")),
         "overrides": deepcopy(spec.get("overrides")),
@@ -1461,6 +1538,70 @@ def _cooperation_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, 
     return {"active": coop.get("active"), "structures": structures}
 
 
+def policy_slots_from_spec(generation_spec: dict[str, Any] | None) -> dict[str, Any]:
+    """The editForm ``policySlots``: the recipe's ``policies``, or the legacy translation.
+
+    A spec without ``policies`` (compiled before policy slots) is translated exactly as
+    the compiler would (``solver`` > ``planner.deployment.type`` > default, params from
+    ``deployment.params`` and ``solverParams``), minus params the policy does not
+    declare. A spec the compiler would refuse still yields a form: its authored block,
+    or ``{"planner": {"type": <raw solver>}}``, so the editor can show the error.
+    That fallback is logged at WARNING (``POLICY SLOTS EDITFORM FALLBACK``, naming
+    the slug and the error) so a display-only recovery is never invisible.
+    """
+    from apps.container_logistics.datagen.preprocess import Preprocessor
+    from apps.container_logistics.policies.framework import (
+        PolicyError,
+        authored_after_resolution,
+        resolve_policies_block,
+    )
+
+    gs = generation_spec if isinstance(generation_spec, dict) else {}
+    try:
+        planner_cfg = Preprocessor._normalize_planner(gs.get("planner"))
+        authored, provenance = Preprocessor._normalize_policies(gs, planner_cfg)
+        legacy = [s for s, p in provenance.items() if p == "legacy"]
+        resolved = resolve_policies_block(authored, legacy_slots=legacy)
+        return authored_after_resolution(authored, resolved, legacy)
+    except (PolicyError, ValueError) as exc:
+        logger.warning(
+            "POLICY SLOTS EDITFORM FALLBACK: scenario %r does not compile its policies "
+            "(%s: %s); the editor shows the raw authored selection so the error can be fixed.",
+            gs.get("slug"), type(exc).__name__, exc,
+        )
+        if isinstance(gs.get("policies"), dict) and gs["policies"]:
+            return deepcopy(gs["policies"])
+        return {"planner": _legacy_fallback_selection(gs)}
+
+
+def _legacy_fallback_selection(gs: dict[str, Any]) -> dict[str, Any]:
+    """A legacy spec's raw ``solver`` as a NESTED selection, for display only.
+
+    Always ``{type: <decomposition>, params: {inner: {type: <raw solver>, ...}}}`` (the
+    editor reads ``policySlots`` nested, round-2 §3.4): the decomposition the raw
+    ``planner`` names when it translates, else ``Partitioned``. The raw solver text is
+    kept as written so the editor can show the error.
+    """
+    from apps.container_logistics.policies.compat import legacy
+
+    raw_solver = gs.get("solver")
+    leaf = {"type": str(raw_solver).strip() if raw_solver else LEGACY_LEAF_DEFAULT, "params": {}}
+    try:
+        return legacy.wrap_legacy_leaf(leaf, gs.get("planner"))
+    except ValueError:  # PolicyError: the planner itself does not translate
+        return {"type": legacy.PARTITIONED, "params": {"inner": leaf}}
+
+
+def _edit_form_solver(policy_slots: dict[str, Any]) -> Any:
+    """The editForm ``solver``: the raw innermost solver name of ``policySlots.planner`` (or ``None``)."""
+    from apps.container_logistics.datagen.preprocess import Preprocessor
+
+    dispatch = policy_slots.get("planner")
+    if not isinstance(dispatch, dict) or dispatch.get("type") is None:
+        return None
+    return Preprocessor.dispatch_leaf_entry(dispatch)["type"]
+
+
 def scenario_edit_form_from_detail(
     entry: dict[str, Any],
     generation_spec: dict[str, Any] | None,
@@ -1517,6 +1658,7 @@ def scenario_edit_form_from_detail(
         if order_patch.get("early_order_count") is not None:
             early_order_count = int(order_patch["early_order_count"])
 
+    policy_slots = policy_slots_from_spec(generation_spec)
     form: dict[str, Any] = {
         "name": entry.get("name") or entry.get("slug") or "",
         "slug": entry.get("slug") or "",
@@ -1529,9 +1671,11 @@ def scenario_edit_form_from_detail(
         "hauliers": scenario_config.normalize_hauliers(
             generation_spec.get("hauliers") if isinstance(generation_spec, dict) else None
         ),
-        "solver": normalize_solver(
-            generation_spec.get("solver") if isinstance(generation_spec, dict) else None
-        ),
+        # Raw text, never coerced: the dashboard shows the registered name or the
+        # error, not a silently substituted default.
+        # The innermost per-scope solver of the (possibly nested) dispatch selection.
+        "solver": _edit_form_solver(policy_slots),
+        "policySlots": policy_slots,
         "solverParams": (
             generation_spec.get("solverParams")
             if isinstance(generation_spec, dict) and isinstance(generation_spec.get("solverParams"), dict)
@@ -1675,6 +1819,29 @@ def _stage_external_sources(payload: dict[str, Any], tmp_dir: str) -> None:
     pol["source"] = os.path.join("inputs", dst_name)  # folder-relative → portable
 
 
+def _spec_from_recipe(recipe: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """The ``spec.json`` to persist: the recipe, minus every ``policies`` slot the spec did not author.
+
+    The recipe's ``policies`` block also carries the LEGACY translation of a spec that
+    never wrote one (``solver`` + ``planner.topology`` -> ``Partitioned{inner: X}``);
+    echoing that derived block into ``spec.json`` dirtied every git-tracked legacy
+    spec on its first compile, and a spec written by an older translation would then
+    be read as authored (final review MINOR-6). So only the slots ``payload`` authored
+    are written; a legacy spec keeps its legacy keys (``solver``, ``planner``), from
+    which the next compile translates the same selection. The bundle's ``$.recipe``
+    is untouched (it stays the self-contained round-trip source).
+    """
+    authored = payload.get("policies") if isinstance(payload.get("policies"), dict) else {}
+    block = recipe.get("policies")
+    if not isinstance(block, dict):
+        return recipe
+    kept = {slot: entry for slot, entry in block.items() if slot in authored}
+    out = {k: v for k, v in recipe.items() if k != "policies"}
+    if kept:
+        out["policies"] = kept
+    return out
+
+
 def _compile_into_folder(
     datahub_dir: str,
     domain: str,
@@ -1737,7 +1904,7 @@ def _compile_into_folder(
         # source is self-contained (matrix/curve inlined) and round-trips cleanly
         # through the Preprocessor on the next recompile.
         recipe = bundle.get("recipe") if isinstance(bundle, dict) else None
-        write_spec(tmp, recipe if isinstance(recipe, dict) else payload)
+        write_spec(tmp, _spec_from_recipe(recipe, payload) if isinstance(recipe, dict) else payload)
 
         if not bundle_complete(tmp):
             raise RuntimeError("Scenario generation incomplete")
@@ -2047,6 +2214,9 @@ def edit_scenario(
     base = read_spec(target) or _load_generation_spec_from_disk(target) or {}
     if not isinstance(base, dict):
         base = {}
+    # Before the shallow merge, or the base's legacy solver/solverParams would ride
+    # into `merged` as if the patch had supplied them next to its `policies`.
+    base = drop_dispatch_dials_superseded_by(patch or {}, base)
     merged = {**base, **(patch or {}), "slug": slug, "domain": domain}
     _guard_cooperation_not_emptied(
         base, merged.get("cooperation"), slug, allow_reset=allow_cooperation_reset
@@ -2084,8 +2254,18 @@ def get_scenario_spec(datahub_dir: str, domain: str, slug: str) -> dict[str, Any
 
 
 def known_solvers() -> dict[str, Any]:
-    """The runtime-selectable assignment solver strategies (the single source of truth)."""
-    return {"solvers": sorted(SOLVER_REGISTRY.keys()), "default": DEFAULT_SOLVER}
+    """The per-scope solvers ``--solver`` / ``ORSIM_SOLVER`` accept, and the default one.
+
+    ``solvers`` are the registered dispatch LEAVES (a decomposition such as
+    ``Partitioned``/``PooledMarket`` is selected with ``--policy planner=...``, never
+    as a solver); ``default`` is ``LEGACY_LEAF_DEFAULT``, the slot default
+    ``Partitioned``'s inner. Derived from the policy registry at call time (the single
+    source of truth).
+    """
+    return {
+        "solvers": [spec.name for spec in leaf_policies("planner")],
+        "default": LEGACY_LEAF_DEFAULT,
+    }
 
 
 def known_policies() -> dict[str, Any]:

@@ -91,9 +91,12 @@ _SENTINELS = {
     "agents": {"truck": {"count": 7}, "order": {"count": 8}, "facility": {"count": 9}},
     "tripMatrix": {"MT": {"CU": 1.0}},
     "hauliers": [{"id": "acme", "fleet_share": 100.0, "order_share": 100.0}],
+    "policies": {"planner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 3.25}}},
     "facilityRules": [{"match": {"code": "CT"}, "set": {"gate_count": 6}}],
     "facilityRulesWorld": {"site_digest": "blake2b16:1111111111111111",
                            "facility_count": 30, "code_counts": {"CT": 6}},
+    "assignmentCadenceSteps": 12,
+    "maxOrdersPerTick": 900,
 }
 
 

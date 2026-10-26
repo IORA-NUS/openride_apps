@@ -229,7 +229,12 @@ def cmd_known_solvers() -> dict[str, Any]:
 
 
 def cmd_known_policies() -> dict[str, Any]:
-    return {"ok": True, "action": "known_policies", **known_policies()}
+    """Datagen role policies (``policies``/``defaults``), the policy-slot catalog
+    (``slots``) and the market component catalog (``components``)."""
+    from apps.container_logistics.policies.framework.catalog import component_catalog, policy_catalog
+
+    return {"ok": True, "action": "known_policies", **known_policies(),
+            "slots": policy_catalog(), "components": component_catalog()}
 
 
 def cmd_scenario_exists(slug: str, *, domain: str | None = None) -> dict[str, Any]:

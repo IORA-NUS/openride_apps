@@ -1,10 +1,14 @@
-"""FIX-11 housekeeping (review F11, F15, F16, F17, S1) — one assertion each."""
+"""FIX-11 housekeeping (review F11, F15, F16, S1) — one assertion each.
+
+F17 (the run-time sharing override creating a planner block) is gone with the override
+itself (plan item 34, WS7): ``planner.sharing`` is read only at compile time.
+"""
 
 import logging
 import typing
 
 from apps.container_logistics.assignment.pools import Award, pools_from_structure
-from apps.container_logistics.scenario.scenario_overrides import apply_cooperation_override
+from apps.container_logistics.policies.dispatch.profile import build_policy_tree, resolve_dispatch_for_profile
 
 from tests.test_assignment_cooperation import _coop
 from tests.test_assignment_pooled import _app
@@ -43,21 +47,24 @@ def test_award_owner_haulier_id_is_annotated_optional():
 
 
 def test_market_components_pick_up_a_behavior_patched_after_construction():
-    """F16: ``_resolved_topology`` deliberately re-reads the profile while
-    ``_market_components`` cached forever — two adjacent resolvers arguing opposite
-    staleness positions. Now both follow the profile."""
+    """F16: the topology was re-read from the profile while the market components
+    cached forever — two adjacent resolvers arguing opposite staleness positions.
+    Round 2: both are the dispatch runner's selection, keyed on ``planner``; and the
+    INSTANCE that runs must follow it, not only the reported selection (review C3 #4),
+    so ``_solver`` is the full tree ``__init__`` builds.
+
+    Verified to have teeth: reusing the top instance unconditionally in
+    ``profile.bind_instance`` failed the instance and component assertions while the
+    ``resolved`` one still passed.
+    """
     app = _app([], [], cooperation=_coop([]))
-    profile = {"planner": {"topology": "pooled", "market": {"max_rounds": 3}}}
-    assert app._market_components(profile)[3] == 3
+    profile = {"strategy": "GreedyNearest", "planner": {"topology": "pooled", "market": {"max_rounds": 3}}}
+    app._solver = build_policy_tree(resolve_dispatch_for_profile(profile))
+    first = app._dispatch_runner(profile)
+    assert first.resolved.params.max_rounds == 3 and first.policy.params["max_rounds"] == 3
     profile["planner"]["market"]["max_rounds"] = 9
-    assert app._market_components(profile)[3] == 9, "stale cache survived a profile patch"
-
-
-def test_sharing_override_creates_a_planner_block_like_the_topology_override_does():
-    """F17: one module created a missing planner block, the adjacent one warned and
-    refused. Aligned on CREATE, because §8 promises old bundles stay runnable under
-    a per-run override without recompiling."""
-    collection = {"assignment_main": {"profile": {"strategy": "GreedyNearest"}}}
-    apply_cooperation_override(collection, sharing="transfer-when-cheaper")
-    planner = collection["assignment_main"]["profile"]["planner"]
-    assert planner["sharing"]["type"] == "transfer-when-cheaper"
+    profile["planner"]["market"]["offer"] = {"type": "OfferNone"}
+    runner = app._dispatch_runner(profile)
+    assert runner.resolved.params.max_rounds == 9, "stale cache survived a profile patch"
+    assert runner.policy.params["max_rounds"] == 9, "the instance that runs kept the stale backstop"
+    assert type(runner.policy.components()[0]).__name__ == "OfferNonePolicy", "stale market components"

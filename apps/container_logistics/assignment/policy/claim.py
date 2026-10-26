@@ -11,6 +11,11 @@ contested) and ``pooled_pairs`` (pairs on pooled orders — foreign, or own but
 contributed). A claim policy turns ``pooled_pairs`` into the subset it wants to
 bid on. It is a *company* decision, so it may only read that company's own
 data: its own pairs, its own cost function, and pool membership.
+
+Each concrete class declares ``version`` and a typed nested ``Params`` (a
+``PolicyParams``): the component catalog and the ``PooledMarket`` dispatch policy's
+refs validate against it (``policies/framework/components.py``, round-2 plan §3.2).
+The instance itself still receives a plain ``params`` dict.
 """
 
 from __future__ import annotations
@@ -19,7 +24,10 @@ import logging
 import math
 import random
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Type
+
+from apps.container_logistics.policies.framework import PolicyParams, param, register_component_kind
 
 from ..pools import Bid, PoolMarket
 from ..solver.base import Cost, Order, Truck
@@ -78,6 +86,12 @@ class ClaimAllPlannedPolicy(BaseClaimPolicy):
     ``cost(truck, order)``. The pool id is looked up as the pool through which
     *this* company can see the order (``market.pool_of_order``)."""
 
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
+
     def bids(
         self,
         *,
@@ -112,6 +126,12 @@ class ClaimNonePolicy(BaseClaimPolicy):
     """Control: never claim a pooled order (own contributed orders included).
     A company running this still serves its own *private* orders — those are
     direct awards and never reach a claim policy."""
+
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
 
     def bids(
         self,
@@ -150,6 +170,18 @@ class ClaimIfGainExceedsPolicy(BaseClaimPolicy):
     - when ``own_pairs`` is **empty** there is no own alternative, so the gain
       is unbounded (``+inf``) and the pair is **always** bid.
     """
+
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        min_gain_km: float = param(
+            0.0,
+            help=(
+                "Bid on a pooled pair only when it beats the truck's best own alternative "
+                "by at least this many km (negative values allow a loss)."
+            ),
+        )
 
     def bids(
         self,
@@ -216,6 +248,11 @@ CLAIM_REGISTRY: Dict[str, Type[BaseClaimPolicy]] = {
 }
 
 DEFAULT_CLAIM_POLICY = "ClaimAllPlanned"
+
+# This module owns the component kind 'market.claim': the framework resolves refs of that kind
+# against the live registry above (framework/components.py, round-2 review #5).
+register_component_kind("market.claim", lambda: CLAIM_REGISTRY, DEFAULT_CLAIM_POLICY,
+                        "Which planned pool pairs a company bids for.", order=20)
 
 
 def get_claim_policy(

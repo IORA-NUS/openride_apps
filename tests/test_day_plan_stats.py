@@ -1,0 +1,245 @@
+"""``DayPlanStats``: folding the day-plan notes into ``run_config.meta.day_plan`` (plan §4 ``stats.py``;
+minor 15). Pure Python, no OR-Tools. Schema 2: planner-only stats; order outcomes
+(done / undone / failed) are sim KPIs (``run_config.meta.order_outcomes``), never here.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from apps.container_logistics.policies.dispatch import run_stats
+from apps.container_logistics.policies.solver_lib.day_plan import store as plan_store
+from apps.container_logistics.policies.solver_lib.day_plan.instance import build_inputs, store_job_fields
+from apps.container_logistics.policies.solver_lib.day_plan.stats import (
+    PUSH_EVERY,
+    SCHEMA,
+    DayPlanStats,
+    merge_notes,
+    plan_note,
+    rebuild_note,
+)
+from apps.container_logistics.policies.solver_lib.day_plan.time_model import TimeModel
+
+from tests._day_plan_fixtures import STEP_S, oid, order, truck
+
+TM = TimeModel.default()
+
+
+class Clock:
+    def __init__(self, step, horizon=2520):
+        self.time_step, self.horizon_steps = step, horizon
+
+
+def _inputs(day, orders, trucks, state=None):
+    return build_inputs(trucks, {}, orders, state, TM, None, now_s=day * 86400.0, day=day,
+                        window_end_s=(day + 1) * 86400.0, step_seconds=STEP_S,
+                        cooperation_arm={"acme": ["cargo"], "cargo": ["acme"]}, working_hours=None,
+                        max_wait_steps=None, cadence_steps=6)
+
+
+def _fake_solve(inputs, plan):
+    """A runner.solve-shaped answer: ``plan`` = {truck: [job]}."""
+    planned = {j for c in plan.values() for j in c}
+    return {"itineraries": plan, "unplanned": sorted(j["id"] for j in inputs["jobs"] if j["id"] not in planned),
+            "stats": {"solve_ms": 12.0, "build_ms": 3.0, "wall_ms": 40.0, "deterministic": True,
+                      "backends": {"mincostflow": 1},
+                      "first_leg_m": {t: 1500.0 for t, c in plan.items() if c}}}
+
+
+O = lambda n: oid("order", n)  # noqa: E731
+T = lambda n: oid("truck", n)  # noqa: E731
+
+
+@pytest.fixture
+def day0():
+    trucks = [truck(0, "acme"), truck(1, "cargo")]
+    orders = [order(0, "acme", 100, "port_000", "customer_000"), order(1, "cargo", 110, "port_000", "customer_001"),
+              order(2, "acme", 120, "port_001", "customer_002"), order(3, "cargo", 130, "port_001", "customer_003")]
+    inp = _inputs(0, orders, trucks)
+    return trucks, orders, inp
+
+
+#: schema-1 order-outcome keys, removed in schema 2 (they are sim KPIs now)
+_REMOVED = {"plan_jobs", "plan_jobs_done", "plan_jobs_dispatched", "plan_jobs_failed", "plan_jobs_undone",
+            "open_at_day_end", "by_haulier"}
+
+
+def _keys(obj):
+    """Every dict key at any depth."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            yield k
+            yield from _keys(v)
+    elif isinstance(obj, (list, tuple)):
+        for v in obj:
+            yield from _keys(v)
+
+
+def test_plan_notes_fold_into_planner_day_stats(day0):
+    trucks, orders, inp = day0
+    agg = DayPlanStats()
+    solve = _fake_solve(inp, {T(0): [O(0), O(2)], T(1): [O(1)]})
+    note = plan_note(inp, outcome="solved", version="d0v1", solve=solve,
+                     write_summary={"jobs_moved": 0, "planned": 3, "unplanned": 1})
+    assert "new_jobs" not in note["plan"]
+    assert agg.fold(note, Clock(0)) is False
+    snap = agg.snapshot()
+    d0 = snap["days"]["d0"]
+    assert d0["versions"] == 1 and d0["planned_last"] == 3 and d0["unplanned_last"] == 1
+    assert d0["plan_first_leg_km"] == {"acme": 1.5, "cargo": 1.5}
+    assert snap["backends"] == {"mincostflow": 1} and snap["totals"]["versions"] == 1
+    assert snap["solve_ms"]["n"] == 1 and snap["solve_ms"]["p50"] == 12.0
+    json.dumps(snap)
+
+
+def test_schema_2_carries_no_order_outcome_key_at_any_depth(day0):
+    """Order outcomes are sim KPIs: no ``plan_jobs*`` / ``open_at_day_end`` / ``by_haulier``
+    anywhere in the snapshot, even after a day change, a rebuild and schema-1 ``events``."""
+    trucks, orders, inp = day0
+    agg = DayPlanStats()
+    assert SCHEMA == 2 and agg.snapshot()["schema"] == 2
+    agg.fold(plan_note(inp, outcome="solved", version="d0v1", solve=_fake_solve(inp, {T(0): [O(0)]})), Clock(0))
+    # a schema-1 ``events`` key is ignored, never folded
+    agg.fold({"day": 0, "events": [[O(0), "done", None, "acme"], [O(1), "failed", "taken", "cargo"]]}, Clock(6))
+    inp1 = _inputs(1, orders, trucks)
+    assert agg.fold(plan_note(inp1, outcome="solved", version="d1v1", solve=_fake_solve(inp1, {})), Clock(360))
+    agg.fold({"day": 1, "rebuild": {"kpi": {"d1": {"versions": 1, "jobs_moved": 0}}}}, Clock(370))
+    for snap in (agg.snapshot(), DayPlanStats.empty_snapshot()):
+        assert snap["schema"] == 2
+        assert _REMOVED.isdisjoint(set(_keys(snap))), _REMOVED & set(_keys(snap))
+    assert sorted(agg.snapshot()["days"]) == ["d0", "d1"]  # days come from plan notes only
+
+
+def test_events_alone_create_no_day(day0):
+    agg = DayPlanStats()
+    agg.fold({"day": 3, "events": [["o", "dispatched", None, "acme"]]}, Clock(6))
+    assert agg.snapshot()["days"] == {}
+
+
+def test_skipped_and_failed_replans_and_the_push_cadence(day0):
+    _, _, inp = day0
+    agg = DayPlanStats()
+    assert agg.push_due(force=True) is False  # nothing folded yet
+    assert agg.fold(plan_note(inp, outcome="solved", version="d0v1", solve=_fake_solve(inp, {})), Clock(0)) is False
+    assert agg.fold(plan_note(None, outcome="skipped", day=0), Clock(18)) is False
+    assert agg.fold(plan_note(None, outcome="failed", reason="timeout", day=0), Clock(36)) is True
+    d0 = agg.snapshot()["days"]["d0"]
+    assert d0["replans_skipped"] == 1 and d0["replans_failed"] == {"timeout": 1}
+    assert agg.push_due(force=True)
+    agg.mark_pushed()
+    for k in range(PUSH_EVERY - 1):
+        agg.fold({}, Clock(40 + k))
+        assert not agg.push_due()
+    agg.fold({}, Clock(99))
+    assert agg.push_due()
+    with pytest.raises(ValueError):
+        plan_note(None, outcome="weird", day=0)
+
+
+def test_nondeterministic_solve_is_stamped(day0):
+    _, _, inp = day0
+    agg = DayPlanStats()
+    solve = _fake_solve(inp, {})
+    solve["stats"]["deterministic"] = False
+    agg.fold(plan_note(inp, outcome="solved", version="d0v1", solve=solve), Clock(0))
+    assert agg.snapshot()["deterministic"] is False
+
+
+def test_rebuild_from_the_store_after_a_restart(day0):
+    """Minor 15: a new aggregator + rebuild_note(store.state()) restores the planner KPI
+    (versions / jobs_moved per day); the note carries no per-job data."""
+    _, _, inp = day0
+    st = plan_store.MemoryPlanStore("s", kv=plan_store.MemoryKV())
+    st.write_version(0, {T(0): [O(0), O(2)], T(1): [O(1)]}, store_job_fields(inp))
+    st.set_statuses([(O(0), "done", None, T(0)), (O(1), "failed", "cancelled", None)])
+    trucks, orders, _ = day0
+    replan = _inputs(0, orders, trucks, state=st.state())       # done / cancelled are left out
+    assert {O(0), O(1)}.isdisjoint(replan.job_ids)
+    st.write_version(0, {T(0): [O(2)]}, store_job_fields(replan))  # a re-plan: d0v2
+    # the agent restarts: memory is gone, the Redis record (here MemoryKV) is not
+    st2 = plan_store.MemoryPlanStore("s", kv=st.kv)
+    st2.load_current()
+    note = rebuild_note(st2.state())
+    assert set(note["rebuild"]) == {"kpi"} and "jobs" not in note["rebuild"]
+    fresh = DayPlanStats()
+    assert fresh.fold(note, Clock(20)) is True
+    b = fresh.snapshot()
+    assert b["restarts"] == 1 and b["days"]["d0"]["versions"] == 2
+    assert b["days"]["d0"]["plan_jobs_moved"] == st2.state()["kpi"]["d0"]["jobs_moved"]
+    assert _REMOVED.isdisjoint(set(_keys(b)))
+
+
+def test_merge_notes_joins_a_plan_and_tick_notes(day0):
+    _, _, inp = day0
+    n = merge_notes({"uncommitted": 1}, plan_note(inp, outcome="solved", version="d0v1",
+                                                  solve=_fake_solve(inp, {T(0): [O(0)]})))
+    assert n["uncommitted"] == 1 and n["plan"]["version"] == "d0v1" and "events" not in n
+    agg = DayPlanStats()
+    agg.fold(n, Clock(0))
+    assert agg.snapshot()["days"]["d0"]["versions"] == 1
+    assert agg.snapshot()["incidents"]["uncommitted_pairs"] == 1
+    with pytest.raises(ValueError):
+        merge_notes({"plan": {}}, {"plan": {}})
+
+
+def test_driven_by_the_framework_run_stats_writer(day0):
+    _, _, inp = day0
+    run_stats.check_meta_key(DayPlanStats, "test")
+    pushed = []
+    store = {}
+    agg = run_stats.record_tick(store, DayPlanStats, plan_note(inp, outcome="failed", reason="crashed", day=0),
+                                Clock(0), lambda k, v: pushed.append((k, v)) or True)
+    assert isinstance(agg, DayPlanStats) and pushed and pushed[-1][0] == "day_plan"
+    assert pushed[-1][1]["days"]["d0"]["replans_failed"] == {"crashed": 1}
+    run_stats.flush(store, lambda k, v: pushed.append((k, v)) or True)
+    assert DayPlanStats.empty_snapshot()["totals"]["versions"] == 0
+
+
+def test_moved_split_survival_fallbacks_and_incidents_are_folded(day0):
+    _, _, inp = day0
+    solve = _fake_solve(inp, {T(0): [O(0), O(2)], T(1): [O(1)]})
+    solve["stats"].update(prev_arcs={"prev_job_arcs": 4, "prev_job_arcs_feasible": 3, "prev_start_arcs": 2,
+                                     "prev_start_arcs_feasible": 2, "prev_arcs_kept": 4},
+                          fallbacks={"deadline": 2}, accepted_poor=True)
+    ws = {"id": "d0v2", "jobs_moved": 5, "moved_truck": 3, "moved_position": 1, "moved_to_unplanned": 1,
+          "planned": 3, "unplanned": 1}
+    note = plan_note(inp, outcome="solved", version="d0v2", write_summary=ws, solve=solve)
+    assert note["plan"]["moved"] == {"truck": 3, "position": 1, "to_unplanned": 1}
+    note["plan"].update(fallback="greedy", fallback_reason="timeout")
+    agg = DayPlanStats()
+    agg.fold(merge_notes(note, {"late_steps": 2, "store_failed": "version: down", "backend_fallback": "greedy"}),
+             Clock(0))
+    agg.fold({"day": 0, "no_plan": 1, "uncommitted": 3}, Clock(6))
+    snap = agg.snapshot()
+    d0 = snap["days"]["d0"]
+    assert d0["plan_jobs_moved"] == 5 and d0["plan_jobs_moved_by"] == {"position": 1, "to_unplanned": 1, "truck": 3}
+    assert d0["prev_arcs"]["prev_job_arcs_feasible"] == 3 and d0["fallback_plans"] == 1
+    assert snap["totals"]["plan_jobs_moved_by"] == {"position": 1, "to_unplanned": 1, "truck": 3}
+    assert snap["incidents"] == {
+        "accepted_poor": 1, "backend_fallback": {"greedy": 1}, "component_fallbacks": {"deadline": 2},
+        "fallback_failed": 0, "inexact_components": {}, "late_plans": 1, "late_steps_max": 2, "no_plan_ticks": 1,
+        "plan_fallbacks": {"timeout": 1}, "store_failed": 1, "uncommitted_pairs": 3}
+    assert snap["quality"] == {"degraded": True, "reasons": ["fallback_plan", "component_fallback",
+                                                             "accepted_poor", "backend_fallback"]}
+    json.dumps(snap)
+    assert DayPlanStats.empty_snapshot()["incidents"]["no_plan_ticks"] == 0
+    assert DayPlanStats.empty_snapshot()["quality"] == {"degraded": False, "reasons": []}
+
+
+def test_quality_flags_an_inexact_plan_and_warns_at_run_end(day0):
+    """Review V-M1: an exact-first plan the flow could not take is degraded, beyond incidents."""
+    _, _, inp = day0
+    clean = DayPlanStats()
+    clean.fold(plan_note(inp, outcome="solved", version="d0v1", solve=_fake_solve(inp, {T(0): [O(0)]})), Clock(0))
+    assert clean.snapshot()["quality"]["degraded"] is False and clean.run_end_warnings() == []
+    note = plan_note(inp, outcome="solved", version="d0v1", solve=_fake_solve(inp, {T(0): [O(0)]}))
+    note["plan"]["inexact_components"] = {"classes differ in eligibility attributes": 2}
+    agg = DayPlanStats()
+    agg.fold(note, Clock(0))
+    snap = agg.snapshot()
+    assert snap["quality"] == {"degraded": True, "reasons": ["inexact"]}
+    assert snap["incidents"]["inexact_components"] == {"classes differ in eligibility attributes": 2}
+    [line] = agg.run_end_warnings()
+    assert "DEGRADED" in line and "inexact_components" in line

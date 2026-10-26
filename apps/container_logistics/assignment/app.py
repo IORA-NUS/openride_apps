@@ -1,62 +1,48 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import random
 from typing import Any, Dict, List, Tuple
 
-# The greedy solver builds every feasible (truck, order) pair — O(trucks x orders).
-# Past ~500 trucks/haulier that quadratic dominates and a single assign() call can
-# no longer finish inside the scheduler step barrier, so nothing gets assigned at
-# all (observed: a 5000-truck fleet produced 0 haul trips while 500 produced ~464).
-# We bound the trucks fed to the solver *per haulier bucket* — a randomly sampled
-# subset each tick, so every truck rotates into consideration across ticks without
-# the matching cost growing with fleet size. Tunable via the assignment behavior
-# profile (``max_trucks_per_haulier``).
-#
-# Default 500 keeps the worst case (one haulier holding the whole order batch) at
-# 500 trucks x 500 orders = 250K pairs — the same envelope as the proven-fast
-# 500-truck runs (which produced ~464 haul trips). Above the cap, sampling means a
-# 5000-truck fleet costs the same per tick as a 500-truck one; trucks just rotate
-# in over successive assignment ticks. Raise it to widen the candidate pool (better
-# match quality) at the cost of per-tick solve time.
-_DEFAULT_MAX_TRUCKS_PER_HAULIER = 500
-
-# How often the pooled market's round provenance is pushed onto run_config.
-# Cheap (two HTTP calls, a few dozen times per run) and bounded: the recorded
-# stats can lag the true tick count by at most this many ticks, but a truncation
-# event is pushed immediately, so `ticks_truncated_by_backstop` is never stale.
-_ROUND_STATS_PATCH_EVERY = 5
+# Appended to an UnknownPolicyError raised agent-side (celery journal, not sim.log):
+# a name the worker does not know is the one failure a stale worker explains.
+_STALE_WORKER_HINT = (
+    " If you just added this policy, restart the celery workers "
+    "(systemctl --user restart openride-celery): agents import policy code once at worker start."
+)
 
 from apps.common.user_registry import UserRegistry
 from apps.container_logistics.message_data_models import AssignedHaulTripPayload
 from apps.container_logistics.rebate import RebateBook
-from apps.container_logistics.statemachine import ContainerLogisticsActions
-from .solver import get_solver
+from apps.container_logistics.statemachine import ContainerLogisticsActions, OrderStateMachine
+from apps.container_logistics.policies.compat.run_stats import LegacyAppAccessors
+from apps.container_logistics.policies.compat.wire import wire_fields
+from apps.container_logistics.policies.framework import UnknownPolicyError
 from orsim.lifecycle import ORSimApp
 
+from . import accounting
 from . import constraints as assign_constraints
-from . import spatial
-from .arbitration import get_arbitration_rule
+from . import planning as assign_planning
 from .manager import AssignmentManager
-from .policy.claim import get_claim_policy
-from .policy.offer import get_offer_policy
-from .pooled_planner import PooledPlannerContext, resolve_market_config, run_pooled_market
-from .pools import PoolMarket
 
-# Optional: run the (CPU-bound) per-haulier solve in a real worker thread so it
-# yields the eventlet hub instead of blocking the other agents sharing the worker
-# process. Off by default — with spatial matching the solve is small enough that
-# this rarely matters; enable via the assignment profile (``solve_in_thread``) for
-# very heavy scenarios. Guarded so non-eventlet contexts (tests, smoke) still work.
+# Optional: run each (CPU-bound) per-group solve in a real worker thread so it yields
+# the eventlet hub instead of blocking the other agents sharing the worker process.
+# Off by default — with spatial matching the solve is small enough that this rarely
+# matters; enable via the assignment profile (``solve_in_thread``) for very heavy
+# scenarios. It reaches the solver as ``ctx.execute``. Guarded so non-eventlet
+# contexts (tests, smoke) still work.
 try:  # pragma: no cover - depends on runtime pool
     from eventlet import tpool as _eventlet_tpool
 except Exception:  # pragma: no cover
     _eventlet_tpool = None
 
 
-class AssignmentApp(ORSimApp):
+def _direct_call(fn, *args):
+    """``ctx.execute`` without ``solve_in_thread``: a plain call."""
+    return fn(*args)
+
+
+class AssignmentApp(LegacyAppAccessors, ORSimApp):
     """Periodic assignment: match unassigned orders to feasible online trucks, then notify trucks."""
 
     def __init__(self, run_id: str, sim_clock: str, behavior: Dict[str, Any], messenger, agent_helper=None):
@@ -67,16 +53,33 @@ class AssignmentApp(ORSimApp):
             messenger=messenger,
             agent_helper=agent_helper,
         )
-        # Plug-and-play solver selection: ``strategy`` names a solver in the
-        # registry, ``solver_params`` tunes it (e.g. dual-cycle bonus). Unknown
-        # strategy falls back to the default (logged once) rather than crashing.
+        # Plug-and-play dispatch selection: the compiled ``policies.planner`` block,
+        # or the legacy keys, resolves to a selection TREE of registered dispatch
+        # policies. It is checked and BOUND HERE, eagerly, failing loud (final review
+        # M12): ``_check_selection_at_start`` runs the sim main's own run-start check
+        # (bundle format -- a round-1 flat block is refused with the sim main's
+        # message --, resolution, mirrors, binding), then the tree is built and bound
+        # exactly as every tick binds it. Any refusal raises out of ``__init__``, so
+        # ORSim logs ONE error and marks the agent failed: the agent refuses to run
+        # instead of logging the same error on every tick. An unknown name raises (no
+        # fallback); only that error gets the stale-worker suffix -- a param or timing
+        # error is not explained by it.
         prof = self.behavior.get("profile") or {}
-        self._solver = get_solver(prof.get("strategy"), prof.get("solver_params"))
+        agent_id = str(getattr(agent_helper, "unique_id", None) or "assignment")
+        try:
+            self._check_selection_at_start(agent_id, prof)
+            self._solver = self._build_dispatch_policy(prof)
+        except UnknownPolicyError as exc:
+            raise type(exc)(f"{exc}{_STALE_WORKER_HINT}") from exc
         self._solver_params = prof.get("solver_params") or {}
         # Logged once if haulier scoping blocks all matches (likely missing haulier_id).
         self._warned_haulier_block = False
         # (truck_id, order_id) -> collaboration tag for the current tick's matches.
         self._share_tags: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # The eager bind: the same ``bind_profile`` the sim main's stamp binds with, the
+        # runner every tick reuses while the profile is unchanged. Its ceiling is the run
+        # start's: no runner built later may widen it (review N5).
+        self._run_ceiling = self._dispatch_runner(prof).tree.ceiling
 
     @property
     def managed_statemachine(self):
@@ -116,6 +119,90 @@ class AssignmentApp(ORSimApp):
     def _assignment_profile(self) -> Dict[str, Any]:
         return self.behavior.get("profile") or {}
 
+    # --- the dispatch slot (round 2: docs/plans/policy_slots_round2_whole_tick.md §2) ---
+    #
+    # Import-cycle rule (round-2 §4): ``policies.dispatch`` modules are imported ONLY
+    # locally: in the two accessors below (``_build_dispatch_policy``,
+    # ``_dispatch_runner``), in ``_tick_seed`` (the one seed formula,
+    # ``dispatch.tick.tick_seed``), in ``_dispatch_tick`` (the clock value, the run
+    # stats) and in ``close`` / ``_patch_run_config_meta`` (``dispatch.run_stats``).
+    # ``policies.dispatch`` reaches back into this package (constraints, spatial,
+    # pooled_planner), so a module-top import here would cycle through
+    # ``assignment/__init__`` (tests/test_policy_import_cycles.py pins it). The leaf
+    # ``policies.framework`` and ``assignment.accounting`` are safe at module top.
+
+    @staticmethod
+    def _check_selection_at_start(agent_id: str, prof: Dict[str, Any]) -> None:
+        """The sim main's run-start check on this agent's profile (raises ``PolicyError``).
+
+        ``dispatch.profile.assert_assignment_profiles_resolvable``: the
+        ``policies_format`` marker (``compat.legacy.check_policies_format``, the sim
+        main's check and message), resolution, the legacy mirrors (message 13) and the
+        binding (messages 14, 23, 24), the agent id prefixed as at run start. A worker
+        reached by a stale bundle (smoke/stress paths, an old scheduler) is refused
+        here exactly as the sim main would have refused it.
+        """
+        from apps.container_logistics.policies.dispatch.profile import (  # local: cycle rule
+            assert_assignment_profiles_resolvable,
+        )
+
+        assert_assignment_profiles_resolvable({agent_id: {"profile": prof}})
+
+    @staticmethod
+    def _build_dispatch_policy(prof: Dict[str, Any]):
+        """Resolve the profile's dispatch selection and instantiate its tree (raises)."""
+        from apps.container_logistics.policies.dispatch.profile import (  # local: cycle rule
+            build_policy_tree,
+            resolve_dispatch_for_profile,
+        )
+
+        return build_policy_tree(resolve_dispatch_for_profile(prof))
+
+    def _dispatch_runner(self, prof: Dict[str, Any]):
+        """The ``DispatchRunner`` for ``self._solver`` under ``prof``, cached on its inputs.
+
+        Rebuilt (and re-bound) when ``_solver`` is swapped, a profile key the selection
+        reads (``policies``, ``strategy``, ``solver_params``, ``use_spatial_matching``,
+        ``planner``) is patched after construction (the tests that build the app via
+        ``__new__`` rely on it), or a WORLD key the bound tree's ``bind`` read
+        (``BoundTree.world_reads``, e.g. ``cooperation``) changed. ``_solver`` is fitted
+        into the selection (``bind_instance``: reused as the top, or wrapped as the
+        innermost leaf). When a reused top's composites were stale (a patched profile)
+        and ``bind_instance`` rebuilt them around the same leaf, the rebuilt top becomes
+        ``_solver``, so later injections (``_inject_rebate_book``) reach the tree that
+        runs (review C3 #4). Raises ``PolicyError`` on a mismatch or a refused
+        declaration.
+        """
+        from apps.container_logistics.policies.dispatch.runner import build_runner_for_app  # local: cycle rule
+
+        def _key(runner):
+            return (
+                id(self._solver),
+                json.dumps(prof.get("policies"), sort_keys=True, default=str),
+                prof.get("strategy"),
+                json.dumps(prof.get("solver_params"), sort_keys=True, default=str),
+                prof.get("use_spatial_matching", True),
+                json.dumps(prof.get("planner"), sort_keys=True, default=str),
+                runner.tree.digest(prof),
+            )
+
+        cached_key, cached = getattr(self, "_dispatch_runner_cache", (None, None))
+        if cached is not None and cached_key == _key(cached):
+            return cached
+        # A solver's notes may not set a field publish() writes from its own share tag
+        # (``wire_fields``' keyword set) unless the top declared it (review L3).
+        # The run-start cross-company ceiling (``__init__``'s bind) bounds every rebuilt
+        # runner: a profile that widens it mid-run is refused (review N5).
+        runner = build_runner_for_app(self._solver, prof, wire_fields=tuple(wire_fields({})),
+                                      run_ceiling=getattr(self, "_run_ceiling", None))
+        if runner.policy is not self._solver and runner.tree.leaf.instance is not self._solver:
+            self._solver = runner.policy  # the stale top was rebuilt (bind_instance)
+        self._dispatch_runner_cache = (_key(runner), runner)
+        # The top's planning declaration, cached HERE (critique minor 2): the agent asks
+        # for it on every step, and a step must not rebuild (or fail to rebuild) a runner.
+        self._planning_decl = runner.tree.declaration.planning
+        return runner
+
     def _order_publish_payload(self, order: Dict[str, Any]) -> Dict[str, Any]:
         """Shape expected by ``TruckApp.handle_assignment`` / smoke tests."""
         prof = order.get("profile") or {}
@@ -132,31 +219,14 @@ class AssignmentApp(ORSimApp):
             "dropoff_facility_resource_id": dropoff_facility_resource_id,
         }
 
-    # --- shared-pool cooperation (plan §6.6) ---------------------------------
-
-    @staticmethod
-    def _resolved_topology(prof: Dict[str, Any]) -> str:
-        """Effective planner topology, with ``two-stage`` as a deprecated alias.
-
-        Read from the profile on every call rather than cached in ``__init__`` so a
-        behavior patched after construction (and the tests that build the app via
-        ``__new__``) resolve correctly. Unknown values fail soft to ``partitioned``.
-        """
-        planner = (prof or {}).get("planner")
-        topology = str((planner or {}).get("topology") or "partitioned")
-        if topology == "two-stage":
-            return "pooled"
-        return topology if topology in ("partitioned", "pooled") else "partitioned"
-
     # --- the solver seam (plan §3.2, §7 R-I1b) --------------------------------
 
     @staticmethod
     def _rebate_aware(prof: Dict[str, Any]) -> bool:
         """Whether the compiled profile opts a solver into rebate pricing.
 
-        Read from the profile on every call, matching ``_resolved_topology``'s
-        deliberate re-read policy, so a behavior patched after construction takes
-        effect. Defaults ``false`` — and no shipped scenario sets it — so the book
+        Read from the profile on every call (like the dispatch runner's cache key),
+        so a behavior patched after construction takes effect. Defaults ``false`` — and no shipped scenario sets it — so the book
         below is constructed, and ``set_rebate_book`` is called, on **no** shipped
         path today (plan §3.2).
         """
@@ -220,314 +290,35 @@ class AssignmentApp(ORSimApp):
 
     @staticmethod
     def _tick_seed(run_id: str, time_step: int) -> int:
-        """Stable 64-bit per-tick seed. Identical inputs => identical awards (I-P5).
+        """Stable 64-bit per-tick seed (``dispatch.tick.tick_seed``). Identical inputs => identical awards (I-P5).
 
         Scope honesty: this makes the PLANNER deterministic for a given tick input.
         It does NOT make a whole run reproducible — agent scheduling is async.
         """
-        digest = hashlib.blake2b(f"{run_id}|{time_step}".encode("utf-8"), digest_size=8)
-        return int.from_bytes(digest.digest(), "big")
+        from apps.container_logistics.policies.dispatch.tick import tick_seed  # local: cycle rule
 
-    def _market_components(self, prof: Dict[str, Any]):
-        """Resolve (offer, claim, arbitration, max_rounds) from ``planner.market``.
+        return tick_seed(run_id, time_step)
 
-        Cached per app instance. Algorithm names are FAIL-SOFT (the registries log
-        once and fall back) — a typo must degrade a run, never abort it. ``market``
-        is optional so a bundle compiled before it existed still runs pooled.
-        """
-        # ONE resolver, shared with the run stamp, so a run can never record a
-        # market block different from the one it executed (plan §13.4 FIX-7).
-        effective = resolve_market_config((prof or {}).get("planner"))
-        # Cache KEYED ON the resolved config rather than "forever": this matches
-        # `_resolved_topology`'s deliberate re-read policy, so a behavior patched
-        # after construction takes effect in both places instead of one (review
-        # F16 — two adjacent resolvers arguing opposite staleness positions). The
-        # key is cheap; instantiating three policy objects per tick is not.
-        cache_key = json.dumps(effective, sort_keys=True, default=str)
-        cached_key, cached = getattr(self, "_market_cache", (None, None))
-        if cached is not None and cached_key == cache_key:
-            return cached
-        cached = (
-            get_offer_policy(effective["offer"]["type"], effective["offer"]["params"]),
-            get_claim_policy(effective["claim"]["type"], effective["claim"]["params"]),
-            get_arbitration_rule(
-                effective["arbitration"]["type"], effective["arbitration"]["params"]
-            ),
-            effective["max_rounds"],
-        )
-        self._market_cache = (cache_key, cached)
-        return cached
+    def _patch_run_config_meta(self, key: str, value: Any) -> bool:
+        """Write one run-stats snapshot onto ``run_config.meta.<key>`` (best-effort; ``dispatch.run_stats``)."""
+        from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
 
-    def round_stats(self) -> Dict[str, Any]:
-        """Per-run round provenance for the pooled market (plan §14.4 R3-5/R3-6).
-
-        ``ticks_truncated_by_backstop > 0`` means the auction was cut short on at
-        least one tick, so that tick under-served and the run's throughput and
-        deadhead numbers are suspect. A trustworthy cooperation result needs 0.
-
-        Two round-2 corrections are baked in here:
-
-        * ``rounds_mean`` averages over **auction ticks only** (``rounds_used >= 1``).
-          Averaging in the no-op ticks — where the market opened with nothing free to
-          allocate — diluted the figure that is quoted as *auction depth* and made a
-          deeper auction look shallower (review MEDIUM-9). Idle ticks are still
-          reported, as ``ticks_idle``, because losing them would hide the opposite
-          error.
-        * ``ticks`` is split into ``ticks_in_horizon`` / ``ticks_drain`` so the count
-          sits on the same horizon as the KPI block beside it (review HIGH-4).
-        """
-        s = getattr(self, "_round_stats", None)
-        if not s or not s.get("ticks"):
-            return {
-                "ticks": 0, "ticks_in_horizon": 0, "ticks_drain": 0,
-                "ticks_idle": 0, "auction_ticks": 0,
-                "rounds_min": None, "rounds_mean": None, "rounds_max": None,
-                "ticks_truncated_by_backstop": 0, "max_rounds_backstop": None,
-                "candidate_pairs_round1": 0, "candidate_pairs_total": 0,
-            }
-        auction = s["auction_ticks"]
-        return {
-            "ticks": s["ticks"],
-            "ticks_in_horizon": s["ticks_in_horizon"],
-            "ticks_drain": s["ticks_drain"],
-            "ticks_idle": s["ticks_idle"],
-            "auction_ticks": auction,
-            # min/mean over ticks where an auction actually ran; max over all.
-            "rounds_min": s["rounds_min"],
-            "rounds_mean": (round(s["rounds_sum"] / auction, 3) if auction else None),
-            "rounds_max": s["rounds_max"],
-            "ticks_truncated_by_backstop": s["truncated"],
-            "max_rounds_backstop": s.get("backstop"),
-            "candidate_pairs_round1": s["cand_round1"],
-            "candidate_pairs_total": s["cand_total"],
-        }
-
-    def _patch_round_stats_to_run_config(self, *, force: bool = False) -> bool:
-        """Write the market's round provenance onto ``run_config.meta.market``.
-
-        **Why it is done from the AGENT and not at finalize.** The pooled market runs
-        inside the long-lived celery workers (CLAUDE.md §8) and the run record is
-        written by a different process, so there is no in-process handoff. The wire
-        cannot carry it either: ``trip.meta.collaboration`` only rides along on
-        SHARED assignments (``truck/app.py`` attaches ``_collaboration`` only when
-        ``shared`` is true), so a tick that truncated while awarding nothing
-        cross-haulier would leave no trace at all — and truncation is exactly the
-        condition that must never be silent.
-
-        So the agent PATCHes the run record itself, using the admin REST client it
-        already holds. ``run_config.meta`` is an unschema'd dict in the Eve model, so
-        this needs **no new resource and no api container rebuild** (CLAUDE.md §8).
-
-        Best-effort by construction: any failure is logged at debug and swallowed —
-        provenance must never be able to break an assignment tick.
-        """
-        stats = getattr(self, "_round_stats", None)
-        if not stats or not stats.get("ticks"):
-            return False
-        # Push on a schedule, and additionally whenever the round profile grows —
-        # a new maximum is new information and there may be few ticks in total, so
-        # a pure modulo cadence can leave the final snapshot stale.
-        grew = stats.get("rounds_max") != stats.get("_last_pushed_max")
-        if not force and not grew and stats["ticks"] % _ROUND_STATS_PATCH_EVERY:
-            return False
-        stats["_last_pushed_max"] = stats.get("rounds_max")
-        try:
-            from apps.common.resource_client_mixin import get_http_session
-            from apps.config import settings
-
-            base = settings["OPENRIDE_SERVER_URL"]
-            timeout = settings.get("NETWORK_REQUEST_TIMEOUT", 10)
-            session = get_http_session()
-            found = session.get(
-                f"{base}/run-config",
-                headers=self.user.get_headers(),
-                params={"where": json.dumps({"run_id": self.run_id})},
-                timeout=timeout,
-            )
-            items = (found.json() or {}).get("_items") or []
-            if not items:
-                return False
-            doc = items[0]
-            # Dotted patch: leaves every other meta key untouched, and mirrors how
-            # SimulationRuntime.update_status patches `step_metrics.<k>`.
-            response = session.patch(
-                f"{base}/run-config/{doc['_id']}",
-                headers=self.user.get_headers(etag=doc["_etag"]),
-                data=json.dumps({"meta.market": self.round_stats()}),
-                timeout=timeout,
-            )
-            return response.status_code in (200, 201)
-        except Exception:
-            logging.debug("Round-stats provenance patch failed (non-fatal).", exc_info=True)
-            return False
-
-    def _record_round_stats(self, result, max_rounds=None, time_step=None) -> None:
-        s = getattr(self, "_round_stats", None)
-        if s is None:
-            s = {"ticks": 0, "ticks_in_horizon": 0, "ticks_drain": 0, "ticks_idle": 0,
-                 "auction_ticks": 0, "rounds_sum": 0, "rounds_min": None,
-                 "rounds_max": None, "truncated": 0, "backstop": None, "warned": False,
-                 "cand_round1": 0, "cand_total": 0}
-            self._round_stats = s
-        r = int(result.rounds_used)
-        # Candidate provenance (plan §14.4 R3-2): round-1 parity with `partitioned`
-        # is the guarantee; the per-tick total legitimately exceeds it in a
-        # multi-round auction. Recording both makes the ratio auditable instead of
-        # arguable.
-        s["cand_round1"] += int(getattr(result, "candidate_pairs_round1", 0) or 0)
-        s["cand_total"] += int(getattr(result, "candidate_pairs_total", 0) or 0)
-        if max_rounds is not None:
-            s["backstop"] = int(max_rounds)
-        s["ticks"] += 1
-
-        # Horizon split: a tick past the simulation horizon is post-horizon DRAIN,
-        # not part of the measured window the KPI block covers.
-        horizon = getattr(self, "_sim_horizon_steps", None)
-        if horizon and time_step is not None and int(time_step) >= int(horizon):
-            s["ticks_drain"] += 1
-        else:
-            s["ticks_in_horizon"] += 1
-
-        if r >= 1:
-            s["auction_ticks"] += 1
-            s["rounds_sum"] += r
-            s["rounds_min"] = r if s["rounds_min"] is None else min(s["rounds_min"], r)
-        else:
-            # The market opened with nothing free to allocate. Real, but not depth.
-            s["ticks_idle"] += 1
-        s["rounds_max"] = r if s["rounds_max"] is None else max(s["rounds_max"], r)
-
-        if not result.converged:
-            s["truncated"] += 1
-            # Push immediately: truncation is the one condition that must never be
-            # silent, and the run may end before the next scheduled patch.
-            self._patch_round_stats_to_run_config(force=True)
-            if not s["warned"]:
-                # Loud, once, and greppable in celery_log.txt — agent-side logs do
-                # not reach simulation_log.txt (CLAUDE.md §8).
-                logging.error(
-                    "POOLED MARKET TRUNCATED BY BACKSTOP on tick %d (rounds_used=%d). "
-                    "The auction had not converged; this run under-serves and its "
-                    "cooperation numbers are NOT trustworthy. Raise "
-                    "planner.market.max_rounds.",
-                    s["ticks"], r,
-                )
-                s["warned"] = True
+        return run_stats.patch_run_config_meta(self, key, value)
 
     def close(self, sim_clock):
-        """FINAL FLUSH of the market provenance before the agent leaves (R3-5).
+        """FINAL FLUSH of the declared run stats before the agent leaves (R3-5).
 
         Without this the stamp was whatever the last scheduled push happened to
         catch — the review measured ``ticks: 15`` against a true 17. A provenance
         stamp that stops early is worse than none, because it reads exact.
         """
         try:
-            self._patch_round_stats_to_run_config(force=True)
+            from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
+
+            run_stats.flush(getattr(self, "_run_stats", None) or {}, self._patch_run_config_meta)
         except Exception:  # pragma: no cover - never block shutdown
-            logging.debug("final market-provenance flush failed", exc_info=True)
+            logging.debug("final run-stats flush failed", exc_info=True)
         return super().close(sim_clock)
-
-    def _assign_pooled(
-        self,
-        candidates: List[Dict[str, Any]],
-        orders: List[Dict[str, Any]],
-        prof: Dict[str, Any],
-        time_step: int,
-    ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
-        """One planner per company, cooperating through shared order pools.
-
-        Seeds the tick RNG, builds the :class:`PoolMarket` from the active
-        structure, and hands off to :func:`run_pooled_market` (plan §4.1 steps 2-7).
-        """
-        max_pickup_travel = prof.get("max_travel_time_pickup")
-
-        def _cost(t: Dict[str, Any], o: Dict[str, Any]) -> float:
-            return assign_constraints.assignment_cost(t, o, self._solver_params)
-
-        def _pair_allowed_own(t: Dict[str, Any], o: Dict[str, Any]) -> bool:
-            return assign_constraints.pair_allowed(
-                t, o, max_travel_time_pickup=max_pickup_travel
-            )
-
-        def _pair_allowed_pooled(t: Dict[str, Any], o: Dict[str, Any]) -> bool:
-            return assign_constraints.pair_allowed_ignoring_haulier(
-                t, o, max_travel_time_pickup=max_pickup_travel
-            )
-
-        tick_seed = self._tick_seed(str(self.run_id), int(time_step or 0))
-        rng = random.Random(tick_seed)
-        # Inject the seeded RNG so the solver's equal-cost shuffle is reproducible
-        # for this tick. Solvers default to the `random` MODULE when unset, so the
-        # legacy path is completely unaffected by this (plan §6.7).
-        try:
-            self._solver.set_rng(rng)
-        except AttributeError:  # pragma: no cover - a third-party solver without it
-            pass
-        # Order-independent tie-breaking for the pooled path (plan §13.4 FIX-3).
-        # Never set on the legacy path, so `partitioned` keeps its shuffle exactly.
-        try:
-            self._solver.set_tiebreak(tick_seed)
-        except AttributeError:  # pragma: no cover
-            pass
-
-        structure = assign_constraints.active_cooperation_structure(prof)
-        market = PoolMarket.from_structure(structure)
-
-        trucks_by_haulier: Dict[str, List[Dict[str, Any]]] = {}
-        for t in candidates:
-            hid = assign_constraints.haulier_of(t)
-            if hid:  # a truck with no haulier can never match (fail-closed)
-                trucks_by_haulier.setdefault(hid, []).append(t)
-        orders_by_haulier: Dict[str, List[Dict[str, Any]]] = {}
-        for o in orders:
-            hid = assign_constraints.haulier_of(o)
-            if hid:
-                orders_by_haulier.setdefault(hid, []).append(o)
-
-        offer, claim, arbitration, max_rounds = self._market_components(prof)
-        ctx = PooledPlannerContext(
-            solver=self._solver,
-            offer=offer,
-            claim=claim,
-            arbitration=arbitration,
-            max_rounds=max_rounds,
-            pair_allowed_own=_pair_allowed_own,
-            pair_allowed_pooled=_pair_allowed_pooled,
-            cost=_cost,
-            rng=rng,
-            tick_seed=tick_seed,
-            spatial_params={
-                "cell_deg": float(prof.get("spatial_cell_deg", spatial.DEFAULT_CELL_DEG)),
-                "per_order": max(1, int(prof.get(
-                    "spatial_candidates_per_order", spatial.DEFAULT_PER_ORDER_CANDIDATES
-                ))),
-                "max_rings": max(0, int(prof.get("spatial_max_rings", spatial.DEFAULT_MAX_RINGS))),
-            },
-            use_spatial=bool(prof.get("use_spatial_matching", True)),
-            max_trucks_per_haulier=max(
-                1, int(prof.get("max_trucks_per_haulier", _DEFAULT_MAX_TRUCKS_PER_HAULIER))
-            ),
-        )
-
-        result = run_pooled_market(
-            trucks_by_haulier=trucks_by_haulier,
-            orders_by_haulier=orders_by_haulier,
-            market=market,
-            ctx=ctx,
-        )
-        assignment, share_tags = result.assignment, result.share_tags
-        self._share_tags = share_tags
-        self._record_round_stats(result, max_rounds, time_step=time_step)
-        self._patch_round_stats_to_run_config()
-        if share_tags:
-            logging.info(
-                "Pooled cooperation: %d cross-haulier award(s) this tick "
-                "(structure %s, round cap %d).",
-                len(share_tags),
-                (structure or {}).get("id"),
-                max_rounds,
-            )
-        return assignment
 
     def assign(self, sim_clock: str, time_step: int = 0) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
         # Reset the collaboration tags up front so a mid-assign exception can never
@@ -539,18 +330,6 @@ class AssignmentApp(ORSimApp):
         self._inject_rebate_book(prof)
         respect_online = bool(prof.get("respect_truck_online_state", True))
         reject_busy = bool(prof.get("reject_if_active_haul_trip", True))
-        max_pickup_travel = prof.get("max_travel_time_pickup")
-        max_trucks_per_haulier = max(
-            1, int(prof.get("max_trucks_per_haulier", _DEFAULT_MAX_TRUCKS_PER_HAULIER))
-        )
-        # Spatial matching: only score trucks near each order's pickup instead of
-        # the full per-haulier cross product. Bounds cost *and* favours low-deadhead
-        # (nearest) trucks. On by default; the random-sample cap above is the
-        # fallback when disabled or when the solver can't take pre-built pairs.
-        use_spatial = bool(prof.get("use_spatial_matching", True))
-        cell_deg = float(prof.get("spatial_cell_deg", spatial.DEFAULT_CELL_DEG))
-        per_order = max(1, int(prof.get("spatial_candidates_per_order", spatial.DEFAULT_PER_ORDER_CANDIDATES)))
-        max_rings = max(0, int(prof.get("spatial_max_rings", spatial.DEFAULT_MAX_RINGS)))
         solve_in_thread = bool(prof.get("solve_in_thread", False))
 
         projection_truck = {"state": 1, "profile": 1, "persona": 1, "_id": 1, "meta": 1}
@@ -580,179 +359,29 @@ class AssignmentApp(ORSimApp):
             reject_if_active_haul_trip=reject_busy,
             online_state_name=self.manager.online_state_name(),
         )
+        if prof.get("working_hours"):
+            # F5: only a profile that compiled working hours filters, and only DISPATCH
+            # ticks (a planning tick sees every online truck; plan D6).
+            candidates = self._on_shift_trucks(prof["working_hours"], candidates, time_step)
 
-        # Shared-pool cooperation (plan §6.6): ONE planner per company, cooperating
-        # through shared order pools. Selected per run via ORSIM_PLANNER_TOPOLOGY;
-        # the DEFAULT IS STILL 'partitioned' and everything below this branch is the
-        # legacy path, byte-for-byte unchanged — it is the regression guard for I-P7.
-        if self._resolved_topology(prof) == "pooled":
-            return self._assign_pooled(candidates, orders, prof, time_step)
+        lookup = None
+        if getattr(self, "_prefetch", None):
+            # F3: the top asked for these orders on its previous tick. NO request is made
+            # on any tick without a pending prefetch (every non-planning run).
+            lookup, extra = self._prefetch_lookup(projection_order, claimed_order_ids, orders)
+            orders = orders + extra
 
-        # Cooperation (collaboration plan §3): the baked structure decides which
-        # hauliers may share jobs. No structure / no edges => adjacency is empty and
-        # everything below degenerates to today's own-haulier-only behavior.
-        structure = assign_constraints.active_cooperation_structure(prof)
-        adjacency = assign_constraints.share_adjacency(structure)
-        component_of: Dict[str, int] = {}
-        if adjacency and isinstance(structure, dict):
-            for idx, members in enumerate(structure.get("components") or []):
-                if isinstance(members, (list, tuple)) and len(members) > 1:
-                    for hid in members:
-                        component_of[str(hid)] = idx
-
-        def _pair_allowed(t: Dict[str, Any], o: Dict[str, Any]) -> bool:
-            # Own-haulier pairs keep the strict rule; cross pairs require a
-            # structure edge (share_eligible) + physical feasibility. Own and
-            # partner trucks compete ON EQUAL FOOTING — the deadhead cost decides,
-            # never fleet availability.
-            if assign_constraints.haulier_matches(t, o):
-                return assign_constraints.pair_allowed(
-                    t, o, max_travel_time_pickup=max_pickup_travel
-                )
-            if adjacency and assign_constraints.share_eligible(t, o, adjacency):
-                return assign_constraints.pair_allowed_ignoring_haulier(
-                    t, o, max_travel_time_pickup=max_pickup_travel
-                )
-            return False
-
-        def _cost(t: Dict[str, Any], o: Dict[str, Any]) -> float:
-            # Soft objective (deadhead km, dual-cycle aware). Cost-blind solvers
-            # (e.g. RandomAssignment) ignore this; greedy minimises it.
-            return assign_constraints.assignment_cost(t, o, self._solver_params)
-
-        # Partition both sides by the structure's connected component — one logical
-        # PLANNER per component. A haulier with no partners (or no structure at all)
-        # is its own singleton partition, which is exactly the pre-cooperation
-        # haulier bucket, so matching stays structural and fleet-scale-safe.
-        def _partition_key(haulier_id):
-            if haulier_id is None:
-                return None
-            hid = str(haulier_id)
-            if hid in component_of:
-                return ("component", component_of[hid])
-            return ("haulier", hid)
-
-        truck_buckets: Dict[Any, List[Dict[str, Any]]] = {}
-        for t in candidates:
-            truck_buckets.setdefault(
-                _partition_key(assign_constraints.haulier_of(t)), []
-            ).append(t)
-
-        order_buckets: Dict[Any, List[Dict[str, Any]]] = {}
-        for o in orders:
-            order_buckets.setdefault(
-                _partition_key(assign_constraints.haulier_of(o)), []
-            ).append(o)
-
-        def _serves(truck_haulier: str, order_haulier: str) -> bool:
-            return truck_haulier == order_haulier or (
-                order_haulier in adjacency.get(truck_haulier, ())
-            )
-
-        def _solve_bucket(
-            bucket_trucks: List[Dict[str, Any]],
-            bucket_orders: List[Dict[str, Any]],
-        ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
-            if use_spatial and hasattr(self._solver, "solve_pairs"):
-                # Candidates are generated PER ORDER-HAULIER over only the trucks
-                # eligible to serve that haulier (own + edge partners). A single
-                # component-wide index let share-INELIGIBLE trucks (in the bucket
-                # but with no edge — e.g. C's trucks for A's orders in a chain
-                # A-B-C) consume the per-order candidate cap by pure proximity and
-                # starve orders while their own haulier had free trucks in range.
-                # ONE solve still runs over the union of pairs, so trucks/orders
-                # are never double-assigned across the groups.
-                orders_by_haulier: Dict[str, List[Dict[str, Any]]] = {}
-                for o in bucket_orders:
-                    oh = assign_constraints.haulier_of(o)
-                    if oh:
-                        orders_by_haulier.setdefault(oh, []).append(o)
-                pairs: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-                for oh, o_group in orders_by_haulier.items():
-                    eligible = [
-                        t for t in bucket_trucks
-                        if (assign_constraints.haulier_of(t) or "") and _serves(
-                            assign_constraints.haulier_of(t), oh
-                        )
-                    ]
-                    if not eligible:
-                        continue
-                    pairs.extend(
-                        spatial.iter_candidate_pairs(
-                            eligible,
-                            o_group,
-                            pair_allowed=_pair_allowed,
-                            cell_deg=cell_deg,
-                            per_order=per_order,
-                            max_rings=max_rings,
-                        )
-                    )
-                return list(self._solver.solve_pairs(pairs, cost=_cost))
-            # Fallback (spatial disabled, or a solver without solve_pairs): bound
-            # the cross product by random-sampling the truck pool per partition.
-            bt = bucket_trucks
-            if len(bt) > max_trucks_per_haulier:
-                bt = random.sample(bt, max_trucks_per_haulier)
-            return list(
-                self._solver.solve(bt, bucket_orders, pair_allowed=_pair_allowed, cost=_cost)
-            )
-
-        assignment: List[Tuple[Dict[str, Any], Dict[str, Any]]] = []
-        share_tags: Dict[Tuple[str, str], Dict[str, Any]] = {}
-        for partition_key, bucket_orders in order_buckets.items():
-            # ``None`` haulier never matches (fail-closed in haulier_matches); skip it.
-            if partition_key is None:
-                continue
-            bucket_trucks = truck_buckets.get(partition_key)
-            if not bucket_trucks:
-                continue
-            if solve_in_thread and _eventlet_tpool is not None:
-                result = _eventlet_tpool.execute(_solve_bucket, bucket_trucks, bucket_orders)
-            else:
-                result = _solve_bucket(bucket_trucks, bucket_orders)
-            # benefit_km = owner's best own truck STILL FREE after this solve minus
-            # the chosen cost — computed by a direct scan of the partition's own-fleet
-            # trucks (bounded: cross matches are few), NOT from the capped candidate
-            # list, so a crowded-out own truck can't fabricate "unserveable" (F2).
-            # SIGNED on purpose (F3): cost-blind solvers (RandomAssignment) and
-            # cap-limited greedy can genuinely pick a worse-than-own partner truck —
-            # a negative benefit is real information, not an error. None = the owner
-            # truly had no free feasible truck after the solve.
-            used_truck_ids = {str(t.get("_id")) for t, _o in result}
-            for truck, order in result:
-                t_haulier = assign_constraints.haulier_of(truck)
-                o_haulier = assign_constraints.haulier_of(order)
-                if t_haulier and o_haulier and t_haulier != o_haulier:
-                    oid = str(order.get("_id"))
-                    own_costs = [
-                        _cost(t, order)
-                        for t in bucket_trucks
-                        if str(t.get("_id")) not in used_truck_ids
-                        and assign_constraints.haulier_of(t) == o_haulier
-                        and _pair_allowed(t, order)
-                    ]
-                    finite = [c for c in own_costs if c != float("inf")]
-                    best = min(finite) if finite else None
-                    share_tags[(str(truck.get("_id")), oid)] = {
-                        "shared": True,
-                        "owner_haulier_id": o_haulier,
-                        "carrier_haulier_id": t_haulier,
-                        "benefit_km": (round(best - _cost(truck, order), 3)
-                                       if best is not None else None),
-                    }
-            assignment.extend(result)
-        self._share_tags = share_tags
-        if share_tags:
-            logging.info(
-                "Cooperation: %d cross-haulier assignment(s) this tick (structure %s).",
-                len(share_tags),
-                (structure or {}).get("id"),
-            )
+        assignment = self._dispatch_tick(prof, candidates, orders, sim_clock, time_step, solve_in_thread,
+                                         lookup=lookup)
 
         # Haulier scoping is enforced (no fallback). If there were assignable trucks AND
         # unassigned orders but nothing matched, the data is almost certainly missing or
         # mismatched haulier_id — surface it loudly instead of silently running dead.
-        if candidates and orders and not assignment and not self._warned_haulier_block:
+        # Not on a tick whose result (or a sub-tick's) the framework discarded or whose
+        # solver noted an incident: that was already logged (message 18/19/20), the haulier text
+        # would misdiagnose it, and the one-shot warning must stay armed (review C3 #6).
+        if candidates and orders and not assignment and not self._warned_haulier_block \
+                and not getattr(self, "_tick_contract_events", 0):
             missing_truck = sum(1 for t in candidates if assign_constraints.haulier_of(t) is None)
             missing_order = sum(1 for o in orders if assign_constraints.haulier_of(o) is None)
             logging.error(
@@ -765,31 +394,355 @@ class AssignmentApp(ORSimApp):
             self._warned_haulier_block = True
         return assignment
 
+    def _dispatch_tick(
+        self,
+        prof: Dict[str, Any],
+        candidates: List[Dict[str, Any]],
+        orders: List[Dict[str, Any]],
+        sim_clock: str,
+        time_step: int,
+        solve_in_thread: bool,
+        *,
+        lookup: Dict[str, Dict[str, Any]] | None = None,
+    ) -> List[Tuple[Dict[str, Any], Dict[str, Any]]]:
+        """Decide the whole tick with the selected policy; account the shares; record provenance.
+
+        The FRAMEWORK half of a tick (plan ``plan_contract_final.md`` §2.7): the tick,
+        the runner (solve -> check against ownership-or-declared and physical
+        feasibility -> commit the pairs), then the solver-independent share accounting
+        (priced with the tick's measurement, dials ``self._solver_params``) and, when
+        the top declared run stats, folds the tick's notes into them
+        (``dispatch.run_stats``). Returns the committed pairs.
+        """
+        from apps.container_logistics.policies.dispatch.tick import DispatchClock  # local: cycle rule
+
+        runner = self._dispatch_runner(prof)
+        use_tpool = solve_in_thread and _eventlet_tpool is not None
+        tick = runner.tick(
+            candidates=candidates,
+            orders=orders,
+            profile=prof,
+            clock=DispatchClock(
+                sim_clock=sim_clock,
+                time_step=int(time_step or 0),
+                horizon_steps=getattr(self, "_sim_horizon_steps", None),
+            ),
+            seed=self._tick_seed(str(getattr(self, "run_id", "")), int(time_step or 0)),
+            execute=_eventlet_tpool.execute if use_tpool else _direct_call,
+            dials=self._solver_params,
+            **self._planning_tick_kwargs(runner, lookup),
+        )
+        events_before = runner.stats.get("violations", 0) + runner.stats.get("crashes", 0)
+        self._tick_contract_events = 0
+        outcome = runner.run(tick)
+        self._tick_contract_events = (
+            runner.stats.get("violations", 0) + runner.stats.get("crashes", 0) - events_before)
+        # Review V-m1: a kept prefetch is the top's proof that its result was COMMITTED (its
+        # next tick reads a non-empty lookup as "my pairs went out"). So it is staged only
+        # once the accounting and the run stats below succeeded, and kept only when
+        # ``publish`` then sent every pair (``_staged_prefetch``); any exception on the way
+        # leaves the next tick without one (the top falls back to per-pair evidence).
+        # ``_prefetch`` was already consumed by this tick's read. Empty on every default run.
+        self._prefetch = ()
+        self._staged_prefetch = ()
+        mtt = prof.get("max_travel_time_pickup")
+
+        def own_allowed(t, o):
+            # The owner reserve's rule: the strict own-haulier feasibility.
+            return assign_constraints.pair_allowed(t, o, max_travel_time_pickup=mtt)
+
+        self._share_tags = accounting.render_share_tags(
+            accounting.account_shares(outcome.pairs, candidates=candidates,
+                                      cost=tick.measure.cost, own_allowed=own_allowed),
+            fmt=runner.tag_format,
+            solver_notes=outcome.solver_notes,
+        )
+        stats_cls = runner.tree.top.declaration.run_stats
+        if stats_cls is not None and outcome.result is not None:
+            # Solver provenance: only a top that declared run stats has them, and a
+            # discarded tick (message 18) is never folded.
+            from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
+
+            store = getattr(self, "_run_stats", None)
+            if store is None:
+                store = self._run_stats = {}
+            run_stats.record_tick(store, stats_cls, outcome.tick_notes, tick.clock, self._patch_run_config_meta)
+        self._staged_prefetch = self._result_prefetch(outcome)
+        if self._share_tags:
+            logging.info("Planner %s: %d cross-company assignment(s) this tick.",
+                         runner.resolved.label, len(self._share_tags))
+        return outcome.pairs
+
+    # --- planning (NetworkFlowDay F1), prefetch (F3), working hours (F5) ---------------
+    #
+    # Every method below is reached ONLY when the bound top declared ``planning``, a
+    # previous tick returned a non-empty ``Result.prefetch``, or the profile compiled
+    # ``working_hours``. No shipped scenario does any of the three, so the default tick
+    # makes exactly the requests it always made (pinned by tests/test_assignment_planning_app.py).
+
+    #: Fields of an order document a lookup / prefetched order carries beyond the tick's own projection.
+    _LOOKUP_EXTRA_FIELDS = ("truck", "meta")
+    #: The key a planning tick's ``engaged`` order document carries its open haul under.
+    ENGAGED_HAUL_KEY = "open_haul"
+    #: The key a ``lookup`` document carries the truck of its open haul under (``None``: none).
+    CLAIMED_BY_KEY = "claimed_by"
+
+    def planning_spec(self):
+        """The bound top's ``Declaration.planning`` (cached when the runner was built), or ``None``."""
+        return getattr(self, "_planning_decl", None)
+
+    def _step_seconds_value(self) -> int:
+        """Sim seconds per step: set by the agent (``STEP_INTERVAL``); 240 if never handed over."""
+        value = getattr(self, "_step_seconds", None)
+        if not value:
+            helper = getattr(self, "agent_helper", None)
+            value = ((getattr(helper, "orsim_settings", None) or {}).get("STEP_INTERVAL")
+                     if helper is not None else None)
+        if not value:
+            if not getattr(self, "_warned_step_seconds", False):
+                logging.warning("AssignmentApp: STEP_INTERVAL was never handed over; assuming 240 s per step")
+                self._warned_step_seconds = True
+            value = 240
+        return int(value)
+
+    def _planning_schedule(self) -> "assign_planning.PlanningSchedule":
+        sched = getattr(self, "_plan_schedule", None)
+        if sched is None:
+            sched = self._plan_schedule = assign_planning.PlanningSchedule()
+        return sched
+
+    def planning_due(self, time_step: Any, *, step_seconds: Any = None, horizon_steps: Any = None):
+        """The ``planning.Due`` of ``time_step``, or ``None``: never when the top declared no planning."""
+        spec = self.planning_spec()
+        if not spec:
+            return None
+        if horizon_steps is None:
+            horizon_steps = getattr(self, "_sim_horizon_steps", None)
+        return self._planning_schedule().due(
+            spec, time_step, step_seconds=step_seconds or self._step_seconds_value(),
+            horizon_steps=horizon_steps)
+
+    def _on_shift_trucks(self, record: Dict[str, Any], trucks: List[Dict[str, Any]], time_step: Any):
+        """F5: the trucks whose haulier is inside its working hours at ``time_step`` (elapsed axis)."""
+        second = assign_planning.seconds_of_day(int(time_step or 0), self._step_seconds_value())
+        return [t for t in trucks
+                if assign_planning.on_shift(record, assign_constraints.haulier_of(t), second)]
+
+    def _lookup_projection(self, projection_order: Dict[str, Any]) -> Dict[str, Any]:
+        proj = dict(projection_order)
+        for key in self._LOOKUP_EXTRA_FIELDS:
+            proj[key] = 1
+        return proj
+
+    def _claimed_by(self, rows: List[Dict[str, Any]]) -> Dict[str, str]:
+        """``{order_id: truck_id}`` of the open hauls in ``rows``."""
+        out: Dict[str, str] = {}
+        for row in rows:
+            oid, tid = row.get("order"), row.get("truck")
+            if oid and tid:
+                out[str(oid)] = str(tid)
+        return out
+
+    def _prefetch_lookup(
+        self,
+        projection_order: Dict[str, Any],
+        claimed_order_ids,
+        orders: List[Dict[str, Any]],
+        *,
+        haul_rows: List[Dict[str, Any]] | None = None,
+    ) -> Tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+        """The pending prefetch read: ``(lookup, extra orders)`` (and the prefetch is consumed).
+
+        ``lookup`` is ``{order_id: doc}`` for every requested order found (any state), each
+        doc carrying ``claimed_by`` (the truck of its open haul, else ``None``: critique M4,
+        a doc can still read ``unassigned`` while its haul exists). ``extra`` are the
+        looked-up orders the tick may also match: ``unassigned``, not claimed, not already in
+        ``orders``, in prefetch order AFTER the oldest-N. Every pair is still judged by
+        ``permitted`` and the result check. A failed read logs and yields nothing (the tick
+        then runs on the oldest-N alone, exactly like a tick without a prefetch).
+        """
+        ids = list(getattr(self, "_prefetch", ()) or ())
+        self._prefetch = ()
+        if not ids:
+            return {}, []
+        try:
+            docs = self.manager.orders_by_ids(ids, projection=self._lookup_projection(projection_order))
+            if haul_rows is None:
+                haul_rows = self.manager.open_haul_rows()
+        except Exception:
+            logging.exception("AssignmentApp: the prefetch read of %d order(s) failed; "
+                              "this tick runs without its lookup", len(ids))
+            return {}, []
+        claimed_by = self._claimed_by(haul_rows)
+        by_id: Dict[str, Dict[str, Any]] = {}
+        for doc in docs:
+            oid = str(doc.get("_id"))
+            if oid in by_id:
+                continue
+            item = dict(doc)
+            item[self.CLAIMED_BY_KEY] = claimed_by.get(oid)
+            by_id[oid] = item
+        lookup = {oid: by_id[oid] for oid in dict.fromkeys(str(i) for i in ids) if oid in by_id}
+        present = {str(o.get("_id")) for o in orders}
+        claimed = {str(x) for x in (claimed_order_ids or ())}
+        extra: List[Dict[str, Any]] = []
+        for oid, doc in lookup.items():
+            if (doc.get("state") == OrderStateMachine.unassigned.name and oid not in present
+                    and oid not in claimed and doc.get(self.CLAIMED_BY_KEY) is None):
+                extra.append(doc)
+                present.add(oid)
+        return lookup, extra
+
+    def _planning_tick_kwargs(self, runner, lookup) -> Dict[str, Any]:
+        """The planning members of an ordinary DISPATCH tick: none unless a lookup / a planning top."""
+        kwargs: Dict[str, Any] = {}
+        if lookup:
+            kwargs["lookup"] = lookup
+        if runner.tree.declaration.planning is not None:
+            kwargs["run_id"] = str(getattr(self, "run_id", "") or "")
+        return kwargs
+
+    @staticmethod
+    def _result_prefetch(outcome) -> tuple:
+        """The top's ``Result.prefetch`` of ``outcome`` (empty when the result was discarded)."""
+        result = getattr(outcome, "result", None)
+        return tuple(getattr(result, "prefetch", ()) or ()) if result is not None else ()
+
+    def _store_prefetch(self, outcome) -> None:
+        """Keep the top's ``Result.prefetch`` for the next tick (empty when the result was discarded)."""
+        self._prefetch = self._result_prefetch(outcome)
+
+    def plan(self, sim_clock: str, time_step: int, due=None, *, hold_started_s: float | None = None):
+        """Run one PLANNING tick (``kind="plan"``) for the bound top; commits and publishes nothing.
+
+        - trucks: every online truck (no busy and no working-hours filter: plan D6);
+        - ``engaged``: ``{truck_id: order doc}`` of the open hauls (one paged
+          ``/truck/trip`` read with state + leg start stamps, then the orders by id); each
+          doc carries the haul under ``open_haul`` (``_id``, ``state``, ``stats``);
+        - orders: every ``created`` / ``unassigned`` order with
+          ``meta.request_time_step < window.end_step`` (stable ``_id`` order), minus the
+          orders of open hauls;
+        - ``lookup``: the pending prefetch (as on a dispatch tick).
+
+        The window: ``foresight == "day"`` runs to the end of the run day, ``"none"`` to
+        ``time_step + 1``; ``start_step`` is the boundary being planned (a late plan has
+        ``now_step > start_step``). Returns the ``TickOutcome``; the top's ``prefetch`` is
+        kept for the next tick and its notes fold into the declared run stats.
+        ``hold_started_s``: the agent's ``time.monotonic()`` when it published the hold
+        (``PlanningWindow.hold_started_s``, review V-m2), else ``None``.
+        """
+        from apps.container_logistics.policies.dispatch.tick import DispatchClock, PlanningWindow  # local: cycle rule
+
+        prof = self._assignment_profile()
+        runner = self._dispatch_runner(prof)
+        spec = runner.tree.declaration.planning
+        step = int(time_step or 0)
+        step_seconds = self._step_seconds_value()
+        if due is None:
+            due = self.planning_due(step, step_seconds=step_seconds)
+        if due is None:  # a caller asked anyway: plan the step as an on-time interval
+            spd = assign_planning.steps_per_day(step_seconds)
+            due = assign_planning.Due("interval", step, step // spd, step, 0)
+        spd = assign_planning.steps_per_day(step_seconds)
+        end = (due.day + 1) * spd if spec.get("foresight") == "day" else step + 1
+        window = PlanningWindow(reason=due.reason, day=due.day, start_step=due.boundary, end_step=end,
+                                now_step=step, step_seconds=step_seconds, hold_started_s=hold_started_s)
+        # Marked BEFORE the reads: a failing plan is not retried on every following step
+        # (each retry would hold the barrier again); the next boundary plans again.
+        self._planning_schedule().mark(due, spec, step_seconds=step_seconds)
+        if due.late_steps > 0:
+            logging.warning("AssignmentApp: LATE PLAN %s for day %d boundary step %d planned at step %d "
+                            "(%d step(s) late)", due.reason, due.day, due.boundary, step, due.late_steps)
+
+        respect_online = bool(prof.get("respect_truck_online_state", True))
+        solve_in_thread = bool(prof.get("solve_in_thread", False))
+        projection_truck = {"state": 1, "profile": 1, "persona": 1, "_id": 1, "meta": 1}
+        projection_order = {
+            "state": 1, "profile": 1, "pickup_loc": 1, "dropoff_loc": 1, "pickup_service_time": 1,
+            "dropoff_service_time": 1, "order_size": 1, "_id": 1, "meta": 1,
+        }
+        trucks = self.manager.list_trucks(projection=projection_truck, online_only=respect_online)
+        haul_rows = self.manager.open_haul_rows()
+        claimed_by = self._claimed_by(haul_rows)
+        engaged_ids = [str(r["order"]) for r in haul_rows if r.get("order") and r.get("truck")]
+        engaged_docs = {
+            str(d.get("_id")): d
+            for d in (self.manager.orders_by_ids(engaged_ids, projection=self._lookup_projection(projection_order))
+                      if engaged_ids else [])
+        }
+        engaged: Dict[str, Dict[str, Any]] = {}
+        for row in haul_rows:
+            oid, tid = row.get("order"), row.get("truck")
+            doc = engaged_docs.get(str(oid)) if oid else None
+            if doc is None or not tid:
+                continue
+            item = dict(doc)
+            item[self.ENGAGED_HAUL_KEY] = {"_id": row.get("_id"), "state": row.get("state"),
+                                           "stats": dict(row.get("stats") or {})}
+            engaged[str(tid)] = item
+        orders = [o for o in self.manager.list_open_orders_until(window.end_step, projection=projection_order)
+                  if str(o.get("_id")) not in claimed_by]
+        lookup = None
+        if getattr(self, "_prefetch", None):
+            lookup, _extra = self._prefetch_lookup(projection_order, set(claimed_by), orders,
+                                                   haul_rows=haul_rows)
+        use_tpool = solve_in_thread and _eventlet_tpool is not None
+        tick = runner.tick(
+            candidates=trucks,
+            orders=orders,
+            profile=prof,
+            clock=DispatchClock(sim_clock=sim_clock, time_step=step,
+                                horizon_steps=getattr(self, "_sim_horizon_steps", None)),
+            seed=self._tick_seed(str(getattr(self, "run_id", "")), step),
+            execute=_eventlet_tpool.execute if use_tpool else _direct_call,
+            dials=self._solver_params,
+            kind="plan",
+            planning=window,
+            engaged=engaged,
+            lookup=lookup or None,
+            run_id=str(getattr(self, "run_id", "") or ""),
+        )
+        outcome = runner.run(tick)
+        self._prefetch = ()  # V-m1: kept only once the run stats below succeeded
+        stats_cls = runner.tree.top.declaration.run_stats
+        if stats_cls is not None and outcome.result is not None:
+            from apps.container_logistics.policies.dispatch import run_stats  # local: cycle rule
+
+            store = getattr(self, "_run_stats", None)
+            if store is None:
+                store = self._run_stats = {}
+            run_stats.record_tick(store, stats_cls, outcome.tick_notes, tick.clock, self._patch_run_config_meta)
+        self._store_prefetch(outcome)
+        logging.info("AssignmentApp: planning tick %s day %d step %d: %d truck(s), %d engaged, %d order(s), "
+                     "%d prefetch id(s)", due.reason, due.day, step, len(trucks), len(engaged), len(orders),
+                     len(getattr(self, "_prefetch", ()) or ()))
+        return outcome
+
     def publish(self, assignment: List[Tuple[Dict[str, Any], Dict[str, Any]]]) -> None:
         share_tags = getattr(self, "_share_tags", {}) or {}
+        # V-m1: the dispatch tick's staged prefetch becomes the next tick's only once every
+        # pair below went out (taken first, so a raise anywhere here drops it).
+        staged = getattr(self, "_staged_prefetch", ())
+        self._staged_prefetch = ()
+        sent_all = True
         for truck, order in assignment:
             tid = truck.get("_id")
             if not tid:
                 continue
             tag = share_tags.get((str(tid), str(order.get("_id")))) or {}
+            # The share fields (and a solver's ``solver_notes``) come from the tag via
+            # the compat wire table; an unshared pair gets the dataclass defaults.
             payload = AssignedHaulTripPayload(
                 action=ContainerLogisticsActions.ASSIGNED_HAUL_TRIP,
                 order=self._order_publish_payload(order),
                 truck_id=tid,
-                shared=bool(tag.get("shared", False)),
-                owner_haulier_id=tag.get("owner_haulier_id"),
-                carrier_haulier_id=tag.get("carrier_haulier_id"),
-                benefit_km=tag.get("benefit_km"),
-                # Shared-pool audit trail (plan §D6): these make benefit_km a
-                # CHECKABLE identity (benefit == reserve - awarded) instead of a
-                # bare difference. All optional — absent on the legacy path.
-                pool_id=tag.get("pool_id"),
-                awarded_cost_km=tag.get("awarded_cost_km"),
-                owner_reserve_km=tag.get("owner_reserve_km"),
-                market_round=tag.get("market_round"),
+                **wire_fields(tag),
             )
             topic = f"{self.run_id}/{tid}"
             try:
-                self.messenger.client.publish(topic, json.dumps(payload.__dict__, default=str))
+                self.messenger.client.publish(topic, json.dumps(payload.to_wire_dict(), default=str))
             except Exception:
+                sent_all = False
                 logging.exception("Failed to publish assignment to %s", topic)
+        if staged and sent_all:
+            self._prefetch = staged

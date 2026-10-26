@@ -20,6 +20,8 @@ from apps.container_logistics.assignment.policy.claim import (
 )
 from apps.container_logistics.assignment.pools import Bid, PoolMarket
 from apps.container_logistics.assignment.solver import get_solver
+from apps.container_logistics.policies.compat import legacy
+from apps.container_logistics.policies.framework import PolicyError, UnknownPolicyError
 
 from tests.test_assignment_cooperation import (
     _StubManager,
@@ -483,9 +485,11 @@ def test_offer_none_reproduces_no_cooperation_under_pooled():
     assert app._share_tags == {}
 
 
-def test_unknown_policy_names_are_fail_soft_and_still_assign():
-    """A typo in a policy name must DEGRADE a run (fall back to the default), never
-    abort the assignment agent mid-run (plan §7)."""
+def test_unknown_market_component_names_fail_loud():
+    """A typo in a market component name is LOUD (round 2 §3.6, §6 fail-loud flips):
+    the pre-v2 runtime fell back to the default silently, so a typo silently ran a
+    different arm. ``assign`` raises ``UnknownPolicyError`` naming the typo and the
+    registered names (at run start the same error refuses the launch)."""
     trucks = [
         _truck("t_acme", "acme", 103.85 + 0.10, 1.30),
         _truck("t_borax", "borax", 103.85 + 0.01, 1.30),
@@ -501,16 +505,18 @@ def test_unknown_policy_names_are_fail_soft_and_still_assign():
             "arbitration": {"type": "StillNope", "params": {}},
         },
     )
-    matches = app.assign("2020-01-01 08:00:00")
-    assert _ids(matches) == [("t_borax", "o_acme")]  # defaults applied
+    with pytest.raises(UnknownPolicyError) as exc:
+        app.assign("2020-01-01 08:00:00")
+    msg = str(exc.value)
+    assert "'NopePolicy'" in msg and "Registered: OfferAll, OfferNone, OfferSpare" in msg, msg
 
 
 def test_two_stage_topology_is_an_alias_for_pooled():
-    prof = {"planner": {"topology": "two-stage"}}
-    assert AssignmentApp._resolved_topology(prof) == "pooled"
+    assert legacy.legacy_topology({"topology": "two-stage"}) == "pooled"
 
 
-def test_unknown_or_missing_topology_falls_back_to_partitioned():
-    assert AssignmentApp._resolved_topology({}) == "partitioned"
-    assert AssignmentApp._resolved_topology({"planner": {}}) == "partitioned"
-    assert AssignmentApp._resolved_topology({"planner": {"topology": "nonsense"}}) == "partitioned"
+def test_unknown_topology_is_loud_and_missing_is_partitioned():
+    assert legacy.legacy_topology(None) == "partitioned"   # profile without planner
+    assert legacy.legacy_topology({}) == "partitioned"     # planner without topology
+    with pytest.raises(PolicyError, match=r"planner.topology='nonsense' is not a legacy topology"):
+        legacy.legacy_topology({"topology": "nonsense"})

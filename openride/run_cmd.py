@@ -70,17 +70,50 @@ def run_vanilla(args, valid_slugs: set[str]) -> int:
     if args.scenario not in valid_slugs:
         _log(f"error: unknown scenario slug: {args.scenario}")
         return EXIT_BAD_ARGS
-    # Solver choice is already constrained by argparse; None = scenario default.
+    # --solver X is the innermost per-scope solver (ORSIM_SOLVER), shipped next to the
+    # --policy/--policy-param overrides. Both are validated against the scenario's
+    # compiled assignment profile before anything spawns; None = scenario default.
+    from . import control
+
+    if getattr(args, "sharing_policy", None) is not None:
+        _log(f"error: {control.SHARING_POLICY_REMOVED}")
+        return EXIT_BAD_ARGS
+    try:
+        assignment_cadence, max_orders_per_tick = control.validate_assignment_run_inputs(
+            getattr(args, "assignment_cadence", None), getattr(args, "max_orders_per_tick", None)
+        )
+    except control.ControlError as exc:
+        _log(f"error: {exc}")
+        return EXIT_BAD_ARGS
+    try:
+        policy_overrides = control.validate_run_policies(
+            args.scenario, args.solver, getattr(args, "policy", None),
+            getattr(args, "policy_param", None),
+            cooperation_structure=getattr(args, "structure", None),
+            assignment_cadence=assignment_cadence,
+            max_orders_per_tick=max_orders_per_tick,
+        )
+    except control.ControlError as exc:
+        _log(f"error: invalid policy override: {exc}")
+        return EXIT_BAD_ARGS
+    try:
+        capture_dispatch = control.validate_capture_dispatch(getattr(args, "capture_dispatch", None))
+    except control.ControlError as exc:
+        _log(f"error: {exc}")
+        return EXIT_BAD_ARGS
     solver = args.solver
     headless = not args.no_headless
 
     runner = SimulationRunner(
         scenario=args.scenario,
         solver=solver,
+        policy_overrides=policy_overrides,
+        capture_dispatch=capture_dispatch,
         run_name=args.run_name,
         headless=headless,
         cooperation_structure=getattr(args, "structure", None),
-        sharing_policy=getattr(args, "sharing_policy", None),
+        assignment_cadence=assignment_cadence,
+        max_orders_per_tick=max_orders_per_tick,
     )
 
     started_at = _now_iso()
@@ -229,6 +262,8 @@ def _result_doc(
         "run_name": runner.run_name,
         "scenario": scenario,
         "solver": solver or "scenario-default",
+        "policy_overrides": runner.policy_overrides,
+        "capture_dispatch": runner.capture_dispatch,
         "headless": headless,
         "status": status,
         "ok": status == "completed",
@@ -253,7 +288,50 @@ def _result_doc(
         "report_dir": str(runner.report_dir),
         "log_path": str(runner.log_path),
         "report_final": bool((summary or {}).get("final")),
+        # ORSim transport verdict (Kafka transport only; absent on the paho
+        # default). `transport_degraded: true` means at least one celery worker
+        # LOST transport traffic, so the agents behind it went unresponsive and
+        # were pruned or heartbeat-killed: the run finished short and its KPIs
+        # are not comparable, even though `status`/`ok` above say completed.
+        # `null` means UNKNOWN (no worker published its counters), which is not
+        # the same as clean -- see apps/transport/health_stream.py.
+        **_transport_fields(runner.run_id),
     }
+
+
+def _transport_fields(run_id: str) -> dict[str, Any]:
+    """`{}` on the paho default; the transport verdict on a Kafka run.
+
+    Reads the per-process counters back off `transport_health_stream`, which is
+    the ONLY path from a transport loss to the run's own outcome: the agents
+    live in ~64 celery workers and this process hosts no buses, so without this
+    a run in which several workers dropped hundreds of agent replies writes
+    `ok: true` with the evidence sitting in a journal nobody greps (CLAUDE.md
+    §8 / §6.23, and §6.21 on that journal specifically).
+    """
+    try:
+        from apps.config import messenger_backend
+
+        if messenger_backend.get("AGENT_TRANSPORT", "paho") == "paho":
+            return {}
+        from apps.transport.health_stream import collect_transport_health
+
+        health = collect_transport_health(
+            run_id, messenger_backend.get("KAFKA_BOOTSTRAP_SERVERS"))
+    except Exception as exc:  # noqa: BLE001 - never fail a finished run's summary
+        _log(f"warning: could not read transport health: {exc}")
+        return {"transport_degraded": None, "transport": {"available": False}}
+
+    if health.get("degraded"):
+        _log(
+            "WARNING: ORSIM TRANSPORT DEGRADED — "
+            f"{len(health.get('degraded_pids') or [])} of {health.get('processes')} "
+            "worker process(es) lost transport traffic. This run finished SHORT; "
+            "its KPIs are NOT comparable."
+        )
+    elif not health.get("available"):
+        _log("warning: no worker published transport counters — transport health UNKNOWN.")
+    return {"transport_degraded": health.get("degraded"), "transport": health}
 
 
 def _exit_code_for(status: str) -> int:

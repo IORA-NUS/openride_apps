@@ -82,7 +82,40 @@ def _run(argv: list[str] | None = None) -> int:
     run_p.add_argument(
         "--solver",
         default=None,
-        help="Assignment solver strategy override (ORSIM_SOLVER): RandomAssignment | GreedyNearest",
+        help="Innermost per-scope solver override (ORSIM_SOLVER): a registered dispatch "
+        "leaf, set as the inner of the selected decomposition (list: openride solver list)",
+    )
+    run_p.add_argument(
+        "--policy",
+        action="append",
+        default=[],
+        metavar="SLOT=NAME",
+        help="Per-run policy override, repeatable (e.g. planner=PooledMarket; a leaf such as "
+        "planner=GreedyNearest is a CENTRAL solver). Validated before spawning.",
+    )
+    run_p.add_argument(
+        "--policy-param",
+        action="append",
+        default=[],
+        metavar="SLOT.PATH=VALUE",
+        help="Per-run policy param override, repeatable, nested through refs (e.g. "
+        "planner.inner.dual_cycle_bonus_km=0, planner.inner=RandomAssignment, "
+        "planner.offer=OfferSpare); VALUE is JSON when it parses, else a string.",
+    )
+    run_p.add_argument(
+        "--policy-overrides",
+        default=None,
+        metavar="JSON",
+        help="Full per-run policy overrides object {slot: {type?, timing?, params?}}; merged "
+        "with --policy/--policy-param (the same field set twice to different values is "
+        "refused); --solver then sets its innermost solver. Validated before spawning.",
+    )
+    run_p.add_argument(
+        "--capture-dispatch",
+        default=None,
+        metavar="every=N,max=M",
+        help="Capture dispatch contexts for `policy-bench --fixtures` (ORSIM_CAPTURE_DISPATCH): "
+        "every N-th dispatch tick (not sim step), at most M files, under <datahub>/fixtures/dispatch/<run_id>.",
     )
     run_p.add_argument(
         "--cooperation-structure",
@@ -90,17 +123,30 @@ def _run(argv: list[str] | None = None) -> int:
         help="Cooperation structure id override (ORSIM_COOP_STRUCTURE): a structure "
         "declared in the scenario's spec.json cooperation block",
     )
-    run_p.add_argument(
-        "--sharing-policy",
-        default=None,
-        help="Sharing algorithm override for two-stage planners (ORSIM_SHARING_POLICY)",
-    )
+    # REMOVED (plan item 34): planner.sharing is read only at compile time, so the
+    # run-time override was inert. Still parsed, so a caller gets the reason as a JSON
+    # refusal instead of an argparse usage error.
+    run_p.add_argument("--sharing-policy", default=None, help=argparse.SUPPRESS)
     run_p.add_argument(
         "--order-lifecycle",
         choices=["agents", "service"],
         default=None,
         help="Order lifecycle mode: 'agents' (per-order agents, default) or 'service' "
         "(one order-lifecycle service agent).",
+    )
+    run_p.add_argument(
+        "--assignment-cadence",
+        default=None,
+        metavar="STEPS",
+        help="Per-run assignment dispatch cadence in sim steps, 1..360 (ORSIM_ASSIGNMENT_CADENCE); "
+        "stamped as ASSIGNMENT_CADENCE and tagged ' · cadence:N' on the run name. A new arm.",
+    )
+    run_p.add_argument(
+        "--max-orders-per-tick",
+        default=None,
+        metavar="N",
+        help="Per-run cap on unassigned orders read per dispatch tick, 1..20000 "
+        "(ORSIM_MAX_ORDERS_PER_TICK); stamped as MAX_ORDERS_PER_TICK, tagged ' · orders:N'.",
     )
 
     list_sc_p = sub.add_parser("list-scenarios", help="List scenario metadata on disk")
@@ -156,6 +202,48 @@ def _run(argv: list[str] | None = None) -> int:
 
     sub.add_parser("known-solvers", help="List runtime-selectable assignment solver strategies")
     sub.add_parser("known-policies", help="List selectable generation policies per role")
+
+    pval_p = sub.add_parser("policy-validate", help="Run a policy's contract battery (PASS/FAIL per check)")
+    pval_p.add_argument("--slot", required=True)
+    pval_p.add_argument("--name", required=True)
+
+    pbench_p = sub.add_parser("policy-bench", help="Whole-tick bench of policies on synthetic or captured fixtures")
+    pbench_p.add_argument("--slot", required=True)
+    pbench_p.add_argument("--policies", required=True, metavar="A,ALIAS=B",
+                          help="Comma-separated NAME or ALIAS=NAME entries, e.g. pm=PooledMarket,pr=PooledMarket")
+    pbench_src = pbench_p.add_mutually_exclusive_group(required=True)
+    pbench_src.add_argument("--fixtures", default=None, metavar="DIR",
+                            help="Directory of captured step_*.json.gz (run-simulation --capture-dispatch)")
+    pbench_src.add_argument("--synthetic", default=None, metavar="NAME[,NAME]|all",
+                            help="Synthetic fixture(s), e.g. scale")
+    pbench_p.add_argument("--policy-param", action="append", default=[], metavar="ALIAS.PATH=VALUE",
+                          help="Param override for one benched entry, repeatable (nested: pr.inner=RandomAssignment, "
+                          "pr.inner.candidates=spatial); VALUE is JSON when it parses.")
+
+    vrp_p = sub.add_parser(
+        "validate-run-policies",
+        help="Dry-run a run's policy flags against a scenario's bundle (what run-simulation "
+        "checks before spawning); synchronous, writes nothing",
+    )
+    vrp_p.add_argument("--scenario", default=None)
+    vrp_p.add_argument("--solver", default=None)
+    vrp_p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME")
+    vrp_p.add_argument("--policy-param", action="append", default=[], metavar="SLOT.PATH=VALUE")
+    vrp_p.add_argument("--policy-overrides", default=None, metavar="JSON")
+    vrp_p.add_argument("--cooperation-structure", default=None,
+                       help="Cooperation structure id override, refused like run-simulation refuses it")
+
+    pre_p = sub.add_parser(
+        "run-preflight",
+        help="Bind a scenario's planner (after the run's overrides) and report the world keys "
+        "it reads and the declared cooperation structures; synchronous, writes nothing",
+    )
+    pre_p.add_argument("--scenario", default=None)
+    pre_p.add_argument("--solver", default=None)
+    pre_p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME")
+    pre_p.add_argument("--policy-param", action="append", default=[], metavar="SLOT.PATH=VALUE")
+    pre_p.add_argument("--policy-overrides", default=None, metavar="JSON")
+    pre_p.add_argument("--cooperation-structure", default=None)
 
     exists_sc_p = sub.add_parser("scenario-exists", help="Check whether a scenario slug is runnable")
     exists_sc_p.add_argument("--slug", required=True)
@@ -224,14 +312,42 @@ def _run(argv: list[str] | None = None) -> int:
         return 0 if ok else 1
 
     if args.cmd == "run-simulation":
+        from openride_control.policies import validate_capture_arg, validate_run_policy_args
+
+        # Validate BEFORE spawning: the dashboard spawns this command detached, so an
+        # error raised by the sim itself would only reach its log.
+        if args.sharing_policy is not None:
+            _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
+                   "message": "--sharing-policy removed: inert at run time (set planner.sharing "
+                              "in spec.json and recompile)"})
+            return 1
+        policy_overrides = validate_run_policy_args(
+            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides,
+            args.cooperation_structure,
+            order_lifecycle=args.order_lifecycle,
+            assignment_cadence=args.assignment_cadence,
+            max_orders_per_tick=args.max_orders_per_tick,
+        )
+        if isinstance(policy_overrides, str):
+            _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
+                   "message": policy_overrides})
+            return 1
+        capture_error = validate_capture_arg(args.capture_dispatch)
+        if capture_error:
+            _emit({"commandId": command_id, "ok": False, "action": "run_simulation",
+                   "message": capture_error})
+            return 1
         result = mgr.run_simulation_background(
             scenario=args.scenario,
             run_name=args.run_name,
             run_id=args.run_id,
             solver=args.solver,
+            policy_overrides=policy_overrides or None,
+            capture_dispatch=args.capture_dispatch,
             cooperation_structure=args.cooperation_structure,
-            sharing_policy=args.sharing_policy,
             order_lifecycle=args.order_lifecycle,
+            assignment_cadence=args.assignment_cadence,
+            max_orders_per_tick=args.max_orders_per_tick,
         )
         _emit(_result_payload(result, command_id=command_id, action="run_simulation"))
         return 0 if result.ok else 1
@@ -349,6 +465,51 @@ def _run(argv: list[str] | None = None) -> int:
         from openride_control.scenario import cmd_known_policies
 
         payload = cmd_known_policies()
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "policy-validate":
+        from openride_control.policies import cmd_policy_validate
+
+        payload = cmd_policy_validate(args.slot, args.name)
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "policy-bench":
+        from openride_control.policies import cmd_policy_bench
+
+        payload = cmd_policy_bench(
+            args.slot, args.policies, fixtures_dir=args.fixtures,
+            synthetic=args.synthetic, params=args.policy_param,
+        )
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "validate-run-policies":
+        from openride_control.policies import cmd_validate_run_policies
+
+        payload = cmd_validate_run_policies(
+            args.scenario, args.solver, args.policy, args.policy_param, args.policy_overrides,
+            args.cooperation_structure,
+        )
+        payload["commandId"] = command_id
+        _emit(payload)
+        return 0 if payload.get("ok") else 1
+
+    if args.cmd == "run-preflight":
+        from openride_control.policies import run_preflight
+
+        payload = run_preflight(
+            args.scenario,
+            cooperation_structure=args.cooperation_structure,
+            solver=args.solver,
+            policies=args.policy,
+            params=args.policy_param,
+            overrides_json=args.policy_overrides,
+        )
         payload["commandId"] = command_id
         _emit(payload)
         return 0 if payload.get("ok") else 1

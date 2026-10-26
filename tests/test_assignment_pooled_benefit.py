@@ -48,7 +48,7 @@ def test_owner_reserve_is_the_cheapest_of_several_free_trucks():
     """``owner_reserve_km`` must be the MINIMUM over the owner's free feasible
     trucks — the review's F8 gap (plan §13.4 FIX-8).
 
-    Mutating ``pooled_planner.owner_reserve_km``'s ``if best is None or c < best``
+    Mutating ``accounting.owner_reserve_km`` (moved from ``pooled_planner``)'s ``if best is None or c < best``
     to ``c > best`` SURVIVED the whole suite, because every other benefit fixture
     leaves the owner **at most one** free feasible truck, and with n <= 1 min == max.
     A ``max`` implementation reports 11.117 where the truth is 0.111 — a 100x error

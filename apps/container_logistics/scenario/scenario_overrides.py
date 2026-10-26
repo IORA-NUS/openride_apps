@@ -1,212 +1,694 @@
-"""Temporary scenario_config overrides (e.g. smoke generation)."""
+"""Per-run overrides of a LOADED scenario: the dispatch selection, cooperation, smoke config.
 
+The dispatch selection has ONE application point, :func:`run_dispatch_overrides`
+(``ORSIM_POLICY_OVERRIDES``, ``ORSIM_SOLVER``, and the legacy dispatch variables,
+handed through opaquely as ``legacy_env`` and translated by
+``policies/compat/legacy_env.py``), shared by the sim main and the control-plane dry
+run (``docs/plans/policy_slots_round2_whole_tick.md`` §3.6, §5 C4); the older entry
+points (:func:`apply_policy_overrides`, :func:`apply_solver_override`) are
+compatibility shims with no run-path caller; the legacy env helpers themselves are
+imported from ``policies/compat/legacy_env.py`` (no re-export here). Everything
+here patches the loaded behaviors in memory; the on-disk bundle is never written.
+
+The run's own ``ORSIM_*`` inputs are read here too (:func:`policy_overrides_from_env`,
+:func:`solver_from_env`, :func:`structure_from_env`, :func:`refuse_removed_sharing_env`),
+each from an ``environ`` mapping it is handed, so the sim main (``os.environ``) and
+the control-plane dry run (the environment the spawned sim will inherit) read them
+with ONE implementation and one set of messages (final review L8).
+"""
+
+import copy
+import json
 import logging
 from contextlib import contextmanager
 from copy import deepcopy
 
+from apps.container_logistics.policies.compat import legacy_env as _legacy_env
+
 from .validation_config import smoke_scenario_config_bundle
 
 
-def known_solvers():
-    """Solver strategy names accepted by ``apply_solver_override`` — sourced from the
-    single registry the assignment agent itself uses, so the two never drift."""
-    from apps.container_logistics.assignment.solver import SOLVER_REGISTRY
+#: Removed per-run variable (plan item 34): ``planner.sharing`` is read only at
+#: compile time (``datagen/preprocess.py``), so patching it at run start changed nothing.
+REMOVED_SHARING_ENV = "ORSIM_SHARING_POLICY"
 
-    return tuple(SOLVER_REGISTRY.keys())
+#: The run's per-run selection variables (read by the functions below).
+POLICY_OVERRIDES_ENV = "ORSIM_POLICY_OVERRIDES"
+SOLVER_ENV = "ORSIM_SOLVER"
+STRUCTURE_ENV = "ORSIM_COOP_STRUCTURE"
+ORDER_LIFECYCLE_ENV = "ORSIM_ORDER_LIFECYCLE"
+#: Per-run assignment run inputs (F4 / F4b): ``--assignment-cadence`` / ``--max-orders-per-tick``.
+ASSIGNMENT_CADENCE_ENV = "ORSIM_ASSIGNMENT_CADENCE"
+MAX_ORDERS_PER_TICK_ENV = "ORSIM_MAX_ORDERS_PER_TICK"
+
+#: Valid ranges (refusal R8). The cadence is in sim steps (360 = one 240 s-step day).
+ASSIGNMENT_CADENCE_RANGE = (1, 360)
+MAX_ORDERS_PER_TICK_RANGE = (1, 20000)
+
+#: The order-lifecycle modes (``service``: one lifecycle agent, orders are data -- the
+#: default since 2026-07-29; ``agents``: the legacy per-order-agent topology).
+ORDER_LIFECYCLE_MODES = ("service", "agents")
+DEFAULT_ORDER_LIFECYCLE = "service"
+
+
+def order_lifecycle_from_env(environ):
+    """The order-lifecycle mode ``environ`` selects (``ORSIM_ORDER_LIFECYCLE``).
+
+    Unset/blank -> ``service``; an unknown value fails soft to ``service`` with a
+    warning (the sim main's long-standing behaviour). Shared by the sim main and the
+    control-plane dry run, so refusal R3 is decided on the same mode in both.
+    """
+    value = (environ or {}).get(ORDER_LIFECYCLE_ENV, "").strip().lower()
+    if not value:
+        return DEFAULT_ORDER_LIFECYCLE
+    if value in ORDER_LIFECYCLE_MODES:
+        return value
+    logging.warning("Unknown %s=%r; falling back to %r.", ORDER_LIFECYCLE_ENV, value, DEFAULT_ORDER_LIFECYCLE)
+    return DEFAULT_ORDER_LIFECYCLE
+
+
+def _bounded_int(value, *, flag, what, bounds):
+    """``value`` as an int in ``bounds`` (inclusive); ``None`` for ``None``/blank. Raises ``PolicyError`` (R8)."""
+    from apps.container_logistics.policies.framework import PolicyError
+
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    lo, hi = bounds
+    number = None
+    if isinstance(value, int) and not isinstance(value, bool):
+        number = value
+    elif isinstance(value, str) and value.strip().lstrip("+").isdigit():
+        number = int(value.strip())
+    if number is None or not lo <= number <= hi:
+        raise PolicyError(f"{flag} must be an integer {what} in {lo}..{hi} (got {value!r})")
+    return number
+
+
+def parse_assignment_cadence(value, *, flag="--assignment-cadence"):
+    """``--assignment-cadence`` / ``ORSIM_ASSIGNMENT_CADENCE``: steps between dispatch ticks, or ``None``."""
+    return _bounded_int(value, flag=flag, what="step count", bounds=ASSIGNMENT_CADENCE_RANGE)
+
+
+def parse_max_orders_per_tick(value, *, flag="--max-orders-per-tick"):
+    """``--max-orders-per-tick`` / ``ORSIM_MAX_ORDERS_PER_TICK``: orders read per dispatch tick, or ``None``."""
+    return _bounded_int(value, flag=flag, what="order count", bounds=MAX_ORDERS_PER_TICK_RANGE)
+
+
+def assignment_cadence_from_env(environ):
+    """``ORSIM_ASSIGNMENT_CADENCE`` from ``environ`` (R8 on a bad value), ``None`` when unset."""
+    return parse_assignment_cadence((environ or {}).get(ASSIGNMENT_CADENCE_ENV))
+
+
+def max_orders_per_tick_from_env(environ):
+    """``ORSIM_MAX_ORDERS_PER_TICK`` from ``environ`` (R8 on a bad value), ``None`` when unset."""
+    return parse_max_orders_per_tick((environ or {}).get(MAX_ORDERS_PER_TICK_ENV))
+
+
+def apply_assignment_run_overrides(assignment_collection, *, cadence=None, max_orders=None):
+    """Patch every assignment behavior with the per-run cadence / max-orders inputs (in place).
+
+    ``cadence`` -> ``behavior["steps_per_action"]`` (the agent's dispatch gate);
+    ``max_orders`` -> ``profile["max_orders_per_tick"]`` (the manager's per-tick read cap).
+    ``None`` leaves the behavior untouched. Returns ``(cadence_steps, max_orders)`` as the
+    FIRST behavior carries them afterwards (``None`` where it has no value).
+    """
+    first = None
+    for behavior in (assignment_collection or {}).values():
+        if not isinstance(behavior, dict):
+            continue
+        if cadence is not None:
+            behavior["steps_per_action"] = int(cadence)
+        if max_orders is not None:
+            behavior.setdefault("profile", {})["max_orders_per_tick"] = int(max_orders)
+        if first is None:
+            first = behavior
+    if first is None:
+        return None, None
+    return first.get("steps_per_action"), (first.get("profile") or {}).get("max_orders_per_tick")
+
+
+#: The recipe (``GENERATION_SPEC``) keys that carry a spec-authored cadence / read cap.
+SPEC_ASSIGNMENT_CADENCE_KEY = "assignmentCadenceSteps"
+SPEC_MAX_ORDERS_PER_TICK_KEY = "maxOrdersPerTick"
+
+
+def assignment_run_input_records(effective, recipe, *, cadence=None, max_orders=None):
+    """The ``ASSIGNMENT_CADENCE`` / ``MAX_ORDERS_PER_TICK`` stamps and run-name segments of a run.
+
+    ``effective`` is ``(cadence_steps, max_orders)`` as the first assignment behavior
+    carries them AFTER :func:`apply_assignment_run_overrides`; ``recipe`` the bundle's
+    ``GENERATION_SPEC``; ``cadence`` / ``max_orders`` the per-run overrides (``None``:
+    not overridden). A record is produced only when the value was OVERRIDDEN
+    (``source: "override"``) or the spec authored it (``source: "bundle"``) -- never
+    from the value alone, so an old bundle whose engine default differs gains no key
+    (critique minor 5). Segments (``cadence:N`` / ``orders:N``) only on override.
+    Returns ``(cadence_record | None, max_orders_record | None, [segment, ...])``.
+    """
+    recipe = recipe if isinstance(recipe, dict) else {}
+    eff_cadence, eff_orders = effective
+    segments = []
+
+    def record(override, key, value, field, tag):
+        if override is not None:
+            segments.append(f"{tag}:{int(override)}")
+            return {field: int(override), "source": "override"}
+        if recipe.get(key) is not None and value is not None:
+            return {field: int(value), "source": "bundle"}
+        return None
+
+    cadence_record = record(cadence, SPEC_ASSIGNMENT_CADENCE_KEY, eff_cadence, "steps", "cadence")
+    orders_record = record(max_orders, SPEC_MAX_ORDERS_PER_TICK_KEY, eff_orders, "orders", "orders")
+    return cadence_record, orders_record, segments
+
+
+#: The assignment-profile key the sim main ships ``UNASSIGNED_ORDER_MAX_WAIT_STEPS`` under,
+#: ONLY on a run whose top declares planning (critique M11): the overdue sweep cancels an
+#: order still unassigned this many steps after its request step, and a day plan must
+#: not schedule a job past that deadline. World data (``world.get(...)``) for the
+#: planner; absent on every other run, so default profiles and bundles are unchanged.
+PLANNING_MAX_WAIT_PROFILE_KEY = "unassigned_order_max_wait_steps"
+
+
+def ship_planning_world(assignment_collection, max_wait_steps):
+    """Write :data:`PLANNING_MAX_WAIT_PROFILE_KEY` onto every assignment profile (in place).
+
+    Called by the sim main only when the bound top declares planning; ``None`` writes
+    nothing. Returns the number of profiles written.
+    """
+    if max_wait_steps is None:
+        return 0
+    n = 0
+    for behavior in (assignment_collection or {}).values():
+        if isinstance(behavior, dict):
+            behavior.setdefault("profile", {})[PLANNING_MAX_WAIT_PROFILE_KEY] = int(max_wait_steps)
+            n += 1
+    return n
+
+
+def refuse_removed_sharing_env(environ):
+    """Raise ``PolicyError`` when ``environ`` sets the removed ``ORSIM_SHARING_POLICY``.
+
+    It used to be ignored silently; a stray value inherited from the launching shell
+    would otherwise make every run exit 2 out of sight (final review L8).
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+
+    value = (environ or {}).get(REMOVED_SHARING_ENV, "").strip()
+    if value:
+        raise PolicyError(
+            f"{REMOVED_SHARING_ENV}={value!r} is removed: set planner.sharing in spec.json and "
+            "recompile; the run-time override was inert."
+        )
+
+
+def policy_overrides_from_env(environ):
+    """``ORSIM_POLICY_OVERRIDES`` (JSON) from ``environ``, ``{}`` when unset/blank.
+
+    ``ORSIM_SOLVER`` travels separately (:func:`solver_from_env`). Raises ``PolicyError``
+    for malformed JSON or a non-object.
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+
+    raw = (environ or {}).get(POLICY_OVERRIDES_ENV, "").strip()
+    if not raw:
+        return {}
+    try:
+        overrides = json.loads(raw)
+    except ValueError as exc:
+        raise PolicyError(f"{POLICY_OVERRIDES_ENV} is not valid JSON ({exc}): {raw!r}") from exc
+    if not isinstance(overrides, dict):
+        raise PolicyError(f"{POLICY_OVERRIDES_ENV} must be a JSON object of slot -> entry (got {raw!r}).")
+    return overrides
+
+
+def solver_from_env(environ):
+    """``ORSIM_SOLVER`` (the innermost per-scope solver) from ``environ``, ``None`` when unset/blank."""
+    return (environ or {}).get(SOLVER_ENV, "").strip() or None
+
+
+def structure_from_env(environ):
+    """``ORSIM_COOP_STRUCTURE`` (the cooperation structure id) from ``environ``, ``None`` when unset/blank."""
+    return (environ or {}).get(STRUCTURE_ENV, "").strip() or None
+
+
+def known_solvers():
+    """The per-scope solvers ``--solver``/``ORSIM_SOLVER`` accept (registered dispatch
+    leaves), sorted -- read from the policy registry at call time (the same registry the
+    assignment agent resolves against)."""
+    from apps.container_logistics.policies.framework import leaf_policies
+
+    return tuple(spec.name for spec in leaf_policies("planner"))
+
+
+def current_policies_for_profile(profile):
+    """The resolved policies of one assignment ``profile``: ``({slot: ResolvedPolicy}, source)``.
+
+    The SAME function the assignment agent resolves with
+    (``dispatch/profile.py::resolve_profile_policies``), so the run stamp, the
+    per-run override base and the agent can never disagree; nothing is stripped
+    silently (an unknown entry key or slot raises). ``source`` is ``"bundle"`` or
+    ``"legacy-profile"``. Raises ``PolicyError``.
+    """
+    from apps.container_logistics.policies.dispatch.profile import resolve_profile_policies
+
+    return resolve_profile_policies(profile)
+
+
+def apply_policy_overrides(assignment_collection, overrides):
+    """Apply per-run policy ``overrides`` to every assignment behavior, in memory.
+
+    ``overrides`` is ``{slot: {type?, timing?, params?}}`` (see
+    ``framework.resolve.merge_policy_overrides``), applied LITERALLY: ``{"planner":
+    {"type": "GreedyNearest"}}`` selects a CENTRAL GreedyNearest (round-2 §3.6); the
+    per-scope solver of a decomposition is ``planner.params.inner`` (or ``--solver``,
+    :func:`run_dispatch_overrides`). Each profile gets ``profile["policies"]``
+    (resolved, ``to_profile`` form) and -- exactly as compile does -- the selection's
+    legacy mirrors (``strategy`` = the innermost solver, the keys ``solver_params`` and
+    ``planner.deployment.params`` already carry, ``planner.topology``,
+    ``planner.market``; ``compat/mirrors.py::mirror_dispatch_selection``). So a
+    per-run arm equals the same edit compiled into ``spec.json``: the framework's
+    accounting (``benefit_km``, owner reserve, claims, arbitration) ranks with what
+    the policy ranks with (review F1).
+
+    A changed dispatch TYPE resets the policy params to its defaults plus any
+    override params, except that a decomposition keeps the current per-scope solver
+    as its ``inner`` (``merge_policy_overrides``). A legacy profile's
+    ``use_spatial_matching`` is removed once folded into the block, because the
+    runtime resolver refuses it next to ``policies``. Every behavior is validated
+    before any is mutated. Returns the first behavior's resolved policies, or
+    ``None`` for empty ``overrides``. Raises ``PolicyError``.
+
+    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
+    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
+    Kept for tests and external callers.
+    """
+    if not overrides:
+        return None
+    planned = [(profile, _merged(current, overrides))
+               for profile, current in _profiles_with_current(assignment_collection)]
+    _commit(planned)
+    if planned:
+        return planned[0][1]
+    from apps.container_logistics.policies.framework import resolve_policies_block
+
+    return _merged(resolve_policies_block({}), overrides)
+
+
+def _profiles_with_current(assignment_collection):
+    """``[(profile, {slot: ResolvedPolicy}), ...]`` for every dict behavior (profiles created if absent).
+
+    Each SOURCE profile's format marker is checked first (``legacy.check_policies_format``,
+    the agent id prefixed), BEFORE anything is resolved or committed: an override must
+    never manufacture the round-2 marker on a round-1 flat bundle, whose
+    ``policies.planner {type: X}`` meant the per-scope solver X and would otherwise
+    run as a CENTRAL X (final review MAJOR-1). Raises ``PolicyError``.
+    """
+    from apps.container_logistics.policies.compat import legacy
+    from apps.container_logistics.policies.framework import PolicyError
+
+    out = []
+    for agent_id, behavior in (assignment_collection or {}).items():
+        if not isinstance(behavior, dict):
+            continue
+        profile = behavior.setdefault("profile", {})
+        try:
+            legacy.check_policies_format(profile)
+        except PolicyError as exc:
+            raise type(exc)(f"assignment agent {agent_id!r}: {exc}") from exc
+        out.append((profile, current_policies_for_profile(profile)[0]))
+    return out
+
+
+def _merged(current, overrides):
+    from apps.container_logistics.policies.framework import merge_policy_overrides
+
+    return merge_policy_overrides(current, overrides)
+
+
+def _commit(planned):
+    """Write each ``(profile, merged)`` selection, its format marker and its mirrors (in place).
+
+    Refuses (before writing anything) to stamp the marker onto a profile whose
+    ``policies`` block lacks it: only a legacy profile (no ``policies``, translated) or
+    a round-2 block may be committed (final review MAJOR-1; the primary check is
+    :func:`_profiles_with_current`, this is the backstop at the write).
+    """
+    from apps.container_logistics.policies.compat import legacy
+    from apps.container_logistics.policies.compat.mirrors import mirror_dispatch_selection
+
+    for profile, _merged_sel in planned:
+        legacy.check_policies_format(profile)
+    for profile, merged in planned:
+        profile["policies"] = {slot: r.to_profile() for slot, r in merged.items()}
+        profile[legacy.POLICIES_FORMAT_KEY] = legacy.POLICIES_FORMAT
+        profile.pop("use_spatial_matching", None)
+        mirror_dispatch_selection(profile, merged["planner"])
+
+
+def precheck_override_names(overrides, solver=None):
+    """Validate the NAMES of a run's dispatch request before any bundle is read.
+
+    ``framework.check_named_overrides(overrides)`` (every named slot, policy and
+    component is registered, and the params of every named type validate against it)
+    and ``solver`` (a registered per-scope solver; message 11 for a decomposition).
+    So ``validate-run-policies --scenario nope --solver Nope`` names ``Nope``, not the
+    missing scenario. Raises ``PolicyError``.
+    """
+    from apps.container_logistics.policies.framework import check_named_overrides
+
+    check_named_overrides(overrides or {})
+    _checked_solver(solver)
+
+
+def run_dispatch_overrides(
+    assignment_collection,
+    *,
+    overrides=None,
+    solver=None,
+    legacy_env=None,
+):
+    """Apply every per-run dispatch selection input to the loaded assignment behaviors.
+
+    The ONE application point the sim main and the control-plane dry run share
+    (round-2 §5 C4). Applied in this order, per behavior, into ONE override entry
+    that is merged once (``merge_policy_overrides``) and committed with the mirrors
+    (:func:`apply_policy_overrides`' write):
+
+    1. ``overrides`` (``ORSIM_POLICY_OVERRIDES``; ``--policy``/``--policy-param``),
+       literally: ``planner.type`` is the TOP of the selection;
+    2-3. ``legacy_env``: the legacy dispatch variables
+       (``compat.legacy_env.read_legacy_dispatch_env``), opaque here; checked by
+       ``compat.legacy_env.legacy_env_request`` and folded into the entry by
+       ``compat.legacy_env.apply_legacy_env`` (messages 9 and 10 are raised there);
+    4. ``solver`` (``--solver``/``ORSIM_SOLVER``): the INNERMOST per-scope solver (the
+       ``inner`` chain; a leaf top is replaced); a changed type resets its params.
+       Message 11 for a decomposition name, message 12 when ``overrides`` names a
+       different type at that place.
+
+    Every behavior is validated before any is mutated; nothing requested mutates
+    nothing. Returns ``(merged_overrides, labels)``: the override object actually
+    merged into the first behavior (``{}`` when nothing was requested), and
+    ``{"planner": <run-name segment or None>, "legacy": [<run-name segment>, ...]}``
+    (:func:`dispatch_override_label`; ``legacy`` is
+    ``compat.legacy_env.LegacyEnvRequest.segments``, appended by the caller where the
+    legacy segment always went). Raises ``PolicyError`` (unknown names are
+    ``UnknownPolicyError``).
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+
+    overrides = dict(overrides or {})
+    if not isinstance(overrides.get("planner", {}), dict):
+        raise PolicyError(f"policy overrides.planner must be an object (got {overrides['planner']!r}).")
+    explicit = overrides.get("planner") or {}
+    request = _legacy_env.legacy_env_request(legacy_env)
+    leaf = _checked_solver(solver)
+    if not request and leaf is None and not overrides:
+        return {}, {"planner": None, "legacy": []}
+
+    pairs = _profiles_with_current(assignment_collection)
+    if not pairs:
+        from apps.container_logistics.policies.framework import resolve_policies_block
+
+        pairs = [(None, resolve_policies_block({}))]
+    planned, first = [], None
+    for profile, current in pairs:
+        entry = _dispatch_entry(current, (profile or {}).get("planner"), explicit,
+                                request=request, leaf=leaf)
+        merged_overrides = dict(overrides)
+        if entry:
+            merged_overrides["planner"] = entry
+        else:
+            merged_overrides.pop("planner", None)
+        merged = _merged(current, merged_overrides)
+        if first is None:
+            first = (merged_overrides, merged)
+        if profile is not None:
+            planned.append((profile, merged))
+    _commit(planned)
+    merged_overrides, merged = first
+    labels = {
+        "planner": dispatch_override_label(overrides, merged, solver=leaf),
+        "legacy": request.segments(),
+    }
+    return merged_overrides, labels
+
+
+def _checked_solver(solver):
+    """The registered name of a ``--solver``/``ORSIM_SOLVER`` value (a per-scope solver), or ``None``.
+
+    Raises ``UnknownPolicyError`` for an unknown name and ``PolicyError`` (message 11)
+    for a decomposition.
+    """
+    from apps.container_logistics.policies.framework import PolicyError, get_policy_spec, leaf_policies
+
+    from apps.container_logistics.policies.framework import UnknownPolicyError
+
+    if solver is None or not str(solver).strip():
+        return None
+    try:
+        spec = get_policy_spec("planner", str(solver).strip())
+    except UnknownPolicyError as exc:
+        raise UnknownPolicyError(f"--solver {str(solver).strip()!r}: {exc}") from exc
+    if spec.top_only:
+        # R5: a top_only policy (it plans whole days) is never a per-scope solver.
+        raise PolicyError(
+            f"planner policy {spec.name} plans whole days and must be the top of the selection "
+            "(top_only); it cannot be the inner of a decomposition or the --solver leaf. Select it "
+            f"with --policy planner={spec.name}."
+        )
+    if spec.is_composite:
+        leaves = ", ".join(s.name for s in leaf_policies("planner"))
+        raise PolicyError(
+            f"--solver {spec.name!r} names a decomposition, not a per-scope solver. --solver "
+            f"sets the inner solver ({leaves}); select a decomposition with --policy "
+            f"planner={spec.name}."
+        )
+    return spec.name
+
+
+def _dispatch_entry(current, planner, explicit, *, request, leaf):
+    """The ONE dispatch override entry for a profile whose resolved selection is ``current``.
+
+    The legacy env ``request`` is folded in first (``compat.legacy_env.apply_legacy_env``,
+    which reads ``planner``, the profile's legacy block), then ``leaf`` (``--solver``).
+    """
+    entry = copy.deepcopy(explicit)
+    if request:
+        _legacy_env.apply_legacy_env(entry, explicit, current, planner, request)
+    if leaf is not None:
+        _set_innermost(entry, explicit, current, leaf)
+    return entry
+
+
+def _set_innermost(entry, explicit, current, leaf):
+    """Point ``entry`` at ``leaf`` as the innermost per-scope solver (in place); message 12 on a conflict."""
+    from apps.container_logistics.policies.framework import PolicyError
+
+    trial = _merged(current, {"planner": entry})["planner"] if entry else current["planner"]
+    path, innermost = innermost_path(trial)
+    if innermost == leaf:
+        return
+    stated = _type_at(explicit, path)
+    if stated is not None and stated != leaf:
+        where = ".".join(["planner", *path, "type"])
+        raise PolicyError(
+            f"--solver {leaf!r} conflicts with {where}={stated!r} from --policy/--policy-param/"
+            "--policy-overrides; --solver is shorthand for the innermost solver, pass one of them."
+        )
+    if not path:
+        entry["type"] = leaf
+        return
+    node = entry
+    for name in path:
+        params = node.setdefault("params", {})
+        child = params.get(name)
+        if isinstance(child, str):
+            child = {"type": child}
+        params[name] = child = dict(child) if isinstance(child, dict) else {}
+        node = child
+    node["type"] = leaf
+
+
+def innermost_path(resolved):
+    """``([ref param, ...], innermost name)`` of a resolved dispatch selection (the ``inner`` chain)."""
+    from apps.container_logistics.policies.framework import get_policy_spec
+
+    path, name, params = [], resolved.name, resolved.params
+    while True:
+        descend = get_policy_spec("planner", name).inner_param
+        child = params.get(descend) if descend is not None else None
+        if not isinstance(child, dict):
+            return path, name
+        path.append(descend)
+        name, params = child["type"], child.get("params") or {}
+
+
+def _type_at(entry, path):
+    """The type ``entry`` states at ``path`` (``planner.params.<p>...``), or ``None``."""
+    node = entry
+    for name in path:
+        params = node.get("params") if isinstance(node, dict) else None
+        node = params.get(name) if isinstance(params, dict) else None
+        if isinstance(node, str):
+            node = {"type": node}
+    value = node.get("type") if isinstance(node, dict) else None
+    return value.strip() if isinstance(value, str) else value
+
+
+def dispatch_override_label(overrides, resolved, *, solver=None):
+    """The ``· <segment>`` a dispatch override appends to the run name, or ``None``.
+
+    ``overrides`` is the raw ``{slot: entry}`` request (``ORSIM_POLICY_OVERRIDES`` /
+    ``--policy``/``--policy-param``), ``solver`` the ``--solver``/``ORSIM_SOLVER``
+    name, ``resolved`` the merged ``{slot: ResolvedPolicy}``. The legacy env variables
+    never contribute (``labels["legacy"]`` carries their own segment, as before).
+    A node of the selection's ``inner`` chain is TOUCHED when the request names its
+    type (``--solver`` names the innermost one) or sets one of its own params.
+    Formats (the frontend's ``lib/runNameMeta.ts`` reads bare names, ``Name(k=v,...)``
+    and ``A/B`` labels whose every part is one of those):
+
+    - only the innermost per-scope solver touched: ``<Leaf>`` or ``<Leaf>(k=v,...)``
+      (the pre-v2 ``--solver X`` segment, unchanged);
+    - any node above it touched: the full chain, each node ``<Name>`` or
+      ``<Name>(k=v,...)`` joined by ``/``, e.g. ``PooledMarket/GreedyNearest`` (the
+      stamp ``label``) or ``PooledMarket(max_rounds=5)/GreedyNearest``;
+    - nothing touched (e.g. a timing-only override): ``None``.
+
+    ``(k=v,...)`` lists ONLY the params the request set on that node, keys sorted,
+    each value the validated value as compact JSON (``json.dumps``, separators
+    ``,``/``:``, keys sorted); a component ref (``offer``) renders as ``<Type>`` or
+    ``<Type>(k=v,...)`` by the same rule.
+    """
+    from apps.container_logistics.policies.framework import get_policy_spec
+
+    entry = overrides.get("planner") if isinstance(overrides, dict) else None
+    entry = entry if isinstance(entry, dict) else {}
+    node = resolved["planner"]
+    levels = []  # (name, resolved params, stated entry, inner param)
+    name, params, stated = node.name, node.params, entry
+    while True:
+        descend = get_policy_spec("planner", name).inner_param
+        levels.append((name, params, stated, descend))
+        child = params.get(descend) if descend is not None else None
+        if not isinstance(child, dict):
+            break
+        sub = (stated.get("params") or {}).get(descend) if isinstance(stated.get("params"), dict) else None
+        stated = {"type": sub} if isinstance(sub, str) else (sub if isinstance(sub, dict) else {})
+        name, params = child["type"], child.get("params") or {}
+
+    def keys(level):
+        _name, _params, st, descend = level
+        own = st.get("params") if isinstance(st.get("params"), dict) else {}
+        return sorted(k for k in own if k != descend)
+
+    touched = [bool(lv[2].get("type")) or bool(keys(lv)) for lv in levels]
+    if solver:
+        touched[-1] = True
+    if not any(touched):
+        return None
+
+    def fmt(level):
+        name, params, st, _descend = level
+        ks = keys(level)
+        if not ks:
+            return name
+        own = st["params"]
+        return f"{name}({','.join(f'{k}={_label_value(params.get(k), own[k])}' for k in ks)})"
+
+    if not any(touched[:-1]):
+        return fmt(levels[-1])
+    return "/".join(fmt(lv) for lv in levels)
+
+
+def _label_value(value, stated):
+    """One overridden param value in a run-name label (a component ref as ``Type`` / ``Type(k=v)``)."""
+    if isinstance(value, dict) and "type" in value and isinstance(stated, (dict, str)):
+        sub = stated.get("params") if isinstance(stated, dict) else None
+        ks = sorted(sub) if isinstance(sub, dict) else []
+        inner = value.get("params") or {}
+        if not ks:
+            return value["type"]
+        return f"{value['type']}({','.join(f'{k}={_label_value(inner.get(k), sub[k])}' for k in ks)})"
+    # ensure_ascii=True is LOAD-BEARING (final review MINOR-3): it escapes a value's " · "
+    # (and any non-ASCII) so a param value can never forge a run-name segment separator.
+    return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
 
 
 def apply_solver_override(assignment_collection, strategy):
-    """Set ``profile.strategy`` on every assignment behavior in ``assignment_collection``
-    (a ``{agent_id: behavior}`` dict) so a run uses ``strategy`` without regenerating the
-    scenario or touching the on-disk behavior files.
+    """Per-run per-scope solver override: ``--solver X`` / ``ORSIM_SOLVER``.
 
-    Mutates the behaviors in place (same objects the agent source ships to the workers).
-    Returns the applied strategy, or ``None`` if ``strategy`` is unknown / falsy — in which
-    case nothing is changed and the scenario's own default solver stands (the assignment
-    agent's ``get_solver`` is itself lenient about unknown names).
+    A wrapper of :func:`run_dispatch_overrides` (``solver=strategy``): ``X`` becomes
+    the innermost per-scope solver, params reset when the type changes. Returns its
+    registered name, or ``None`` if ``strategy`` is falsy (nothing changed). Raises
+    ``UnknownPolicyError`` for an unregistered name and ``PolicyError`` (message 11)
+    for a decomposition, before anything is mutated.
+
+    Compatibility shim (verification review MINOR-11): no run path calls it; the sim
+    main and the control-plane dry run go through :func:`run_dispatch_overrides`.
+    Kept for tests and external callers.
     """
     if not strategy:
         return None
-    valid = known_solvers()
-    if strategy not in valid:
-        logging.warning(
-            "Ignoring unknown solver override %r (known: %s); using scenario default.",
-            strategy,
-            ", ".join(valid),
-        )
-        return None
-    for behavior in (assignment_collection or {}).values():
-        if isinstance(behavior, dict):
-            behavior.setdefault("profile", {})["strategy"] = strategy
-    return strategy
+    run_dispatch_overrides(assignment_collection, solver=strategy)
+    return _checked_solver(strategy)
 
 
-def apply_cooperation_override(assignment_collection, structure=None, sharing=None):
-    """Per-run collaboration overrides (mirror of ``apply_solver_override``).
+def apply_cooperation_override(assignment_collection, structure=None):
+    """Per-run cooperation-structure override: ``--structure X`` / ``ORSIM_COOP_STRUCTURE``.
 
-    ``structure``: id of a structure declared in the baked ``profile.cooperation`` —
-    patches ``cooperation.active`` in place. ``sharing``: sharing-algorithm name —
-    patches ``planner.sharing.type``. Both fail-soft: unknown/falsy values are
-    ignored with a warning and the scenario's own defaults stand. Mutates the loaded
-    behaviors only (never the on-disk bundle). Returns the applied structure id (or
-    ``None``).
+    Patches ``cooperation.active`` in place on every assignment profile to the
+    declared structure ``structure`` names. The match is on the SLUG
+    (``datagen.hauliers.structure_id_slug``, F6), so the authored form
+    ``"Port Alliance"`` finds the compiled ``"port-alliance"``. Mutates the loaded
+    behaviors only (never the on-disk bundle).
+
+    Returns ``(applied_id, patched_world_keys)``: the structure id now active (or
+    ``None`` when ``structure`` is falsy, nothing changed) and the world keys the
+    patch wrote (``frozenset({"cooperation"})``, or empty). The caller hands the keys
+    to the run-start check (``dispatch.profile.assert_assignment_profiles_resolvable``),
+    which refuses a patch the bound planner tree never reads (message 25).
+
+    Fail-loud (message 26, ``PolicyError``, raised before anything is mutated): an id
+    no structure declares, any structure on a profile with no cooperation block, or any
+    structure when the collection has NO assignment agent at all (there is no arm to
+    select, so the override would be a silent no-op; final review L9). It used to warn
+    and run the scenario's own arm, so a typo produced a run labelled as one
+    experiment that was another.
     """
-    applied = None
-    for behavior in (assignment_collection or {}).values():
+    from apps.container_logistics.datagen.hauliers import structure_id_slug
+    from apps.container_logistics.policies.framework import PolicyError
+
+    if not structure:
+        return None, frozenset()
+    wanted = structure_id_slug(structure) or structure
+    blocks = []
+    for agent_id, behavior in (assignment_collection or {}).items():
         if not isinstance(behavior, dict):
             continue
-        profile = behavior.setdefault("profile", {})
-        coop = profile.get("cooperation")
-        if structure and isinstance(coop, dict):
-            # Compiled structure ids are slugs — slugify the override input too so
-            # the authored form ("Port Alliance") matches ("port-alliance") instead
-            # of silently keeping the scenario default (F6).
-            from apps.container_logistics.datagen.hauliers import structure_id_slug
-
-            wanted = structure_id_slug(structure) or structure
-            declared = {s.get("id") for s in coop.get("structures", []) if isinstance(s, dict)}
-            if wanted in declared:
-                coop["active"] = wanted
-                applied = wanted
-            else:
-                logging.warning(
-                    "Ignoring unknown cooperation structure override %r (declared: %s); "
-                    "using the scenario's active structure.",
-                    structure,
-                    ", ".join(sorted(d for d in declared if d)),
-                )
-        elif structure:
-            logging.warning(
-                "Cooperation structure override %r requested but this scenario has no "
-                "baked cooperation block (recompile it with the new pipeline).",
-                structure,
+        coop = (behavior.get("profile") or {}).get("cooperation")
+        if not isinstance(coop, dict):
+            raise PolicyError(
+                f"cooperation structure override {structure!r}: assignment agent {agent_id!r} has no "
+                "cooperation block (declared structures: none), so there is no arm to select. Drop the "
+                "override, or declare structures in the scenario's spec.json cooperation block and recompile."
             )
-        if sharing:
-            planner = profile.get("planner")
-            if not isinstance(planner, dict):
-                # Aligned with ``apply_planner_topology_override``: CREATE the block
-                # on a legacy bundle rather than warn-and-refuse. Both behaviours
-                # were defensible; having both in adjacent modules was not (review
-                # F17). Creating wins because §8 promises old bundles stay runnable
-                # under a per-run override without recompiling.
-                logging.info(
-                    "Sharing override %r: creating a planner block (bundle predates it).",
-                    sharing,
-                )
-                planner = {}
-                profile["planner"] = planner
-            planner["sharing"] = {"type": str(sharing), "params": dict(
-                (planner.get("sharing") or {}).get("params") or {}
-            )}
-    return applied
-
-
-def known_planner_topologies():
-    """Planner topologies accepted by ``apply_planner_topology_override`` — sourced
-    from the same constant ``Preprocessor._normalize_planner`` validates against, so
-    CLI/override validation and the compiler can never drift (plan §6.11/§7)."""
-    from apps.container_logistics.datagen.preprocess import PLANNER_TOPOLOGIES
-
-    return tuple(PLANNER_TOPOLOGIES)
-
-
-def apply_planner_topology_override(assignment_collection, topology):
-    """Per-run planner-topology override (mirror of ``apply_solver_override``).
-
-    Patches ``profile.planner.topology`` on every loaded assignment behavior so the
-    SAME compiled scenario can be run ``partitioned`` or ``pooled`` with zero file
-    edits — exactly what the A/B ladder needs (plan §D5). Mutates the loaded
-    behaviors only; the on-disk bundle is never touched.
-
-    ``"two-stage"`` is a deprecated alias and resolves to ``"pooled"``, matching the
-    compiler. Fail-soft: an unknown/falsy topology is ignored with a warning and the
-    scenario's own topology stands. Returns the applied (resolved) topology, or
-    ``None``.
-    """
-    if not topology:
-        return None
-    valid = known_planner_topologies()
-    if topology not in valid:
-        logging.warning(
-            "Ignoring unknown planner topology override %r (known: %s); using the "
-            "scenario's own topology.",
-            topology,
-            ", ".join(valid),
+        declared = [s.get("id") for s in coop.get("structures", []) if isinstance(s, dict) and s.get("id")]
+        if wanted not in declared:
+            raise PolicyError(
+                f"cooperation structure override {structure!r} is not declared by assignment agent "
+                f"{agent_id!r} (declared structures: {', '.join(declared) or 'none'}). Pick a declared id "
+                "or fix the typo (it is never replaced by the scenario's own arm)."
+            )
+        blocks.append(coop)
+    if not blocks:
+        raise PolicyError(
+            f"cooperation structure override {structure!r}: the scenario has no assignment agent "
+            "(declared structures: none), so there is no arm to select. Drop the override, or "
+            "use a scenario with an assignment agent."
         )
-        return None
-    resolved = "pooled" if topology == "two-stage" else topology
-    for behavior in (assignment_collection or {}).values():
-        if isinstance(behavior, dict):
-            profile = behavior.setdefault("profile", {})
-            planner = profile.get("planner")
-            if not isinstance(planner, dict):
-                # Legacy bundles compiled before the planner block existed: create it
-                # rather than refuse, so an old scenario is still runnable both ways.
-                planner = {}
-                profile["planner"] = planner
-            planner["topology"] = resolved
-    return resolved
-
-
-def apply_market_override(
-    assignment_collection, *, offer=None, claim=None, arbitration=None, max_rounds=None
-):
-    """Per-run pooled-market overrides (offer/claim/arbitration policy + rounds).
-
-    Patches ``profile.planner.market`` in place on the loaded behaviors only. Each
-    argument is optional — only the ones supplied are changed, and each policy's
-    existing ``params`` are preserved (only ``type`` is replaced), mirroring how
-    ``apply_cooperation_override`` patches ``planner.sharing``.
-
-    Algorithm NAMES are deliberately NOT validated here: they are fail-soft at
-    runtime (the registries fall back to their default and log), exactly like
-    ``deployment.type``. ``max_rounds`` IS a framework constant, so a value outside
-    ``1..10`` is rejected with a warning. Returns the applied market patch dict, or
-    ``None`` when nothing was requested/applied.
-    """
-    patch = {}
-    for role, value in (("offer", offer), ("claim", claim), ("arbitration", arbitration)):
-        if value:
-            patch[role] = str(value)
-    if max_rounds is not None:
-        try:
-            rounds = int(max_rounds)
-        except (TypeError, ValueError):
-            logging.warning("Ignoring non-integer market max_rounds override %r.", max_rounds)
-            rounds = None
-        else:
-            if 1 <= rounds <= 10:
-                patch["max_rounds"] = rounds
-            else:
-                logging.warning(
-                    "Ignoring out-of-range market max_rounds override %r (must be 1..10).",
-                    max_rounds,
-                )
-    if not patch:
-        return None
-
-    applied = None
-    for behavior in (assignment_collection or {}).values():
-        if not isinstance(behavior, dict):
-            continue
-        profile = behavior.setdefault("profile", {})
-        planner = profile.get("planner")
-        if not isinstance(planner, dict):
-            planner = {}
-            profile["planner"] = planner
-        market = planner.get("market")
-        if not isinstance(market, dict):
-            market = {}
-            planner["market"] = market
-        for role in ("offer", "claim", "arbitration"):
-            if role in patch:
-                existing = market.get(role)
-                params = dict(existing.get("params") or {}) if isinstance(existing, dict) else {}
-                market[role] = {"type": patch[role], "params": params}
-        if "max_rounds" in patch:
-            market["max_rounds"] = patch["max_rounds"]
-        applied = dict(patch)
-    return applied
+    for coop in blocks:
+        coop["active"] = wanted
+    return wanted, frozenset({"cooperation"})
 
 
 @contextmanager

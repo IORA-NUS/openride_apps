@@ -5,10 +5,15 @@ from dateutil.relativedelta import relativedelta
 
 from orsim.lifecycle import ORSimAgent
 
+from apps.agent_transport import TransportSelectingAgent
+
 from .app import AnalyticsApp
 
 
-class AnalyticsAgentIndie(ORSimAgent):
+# TransportSelectingAgent (a no-op while OPENRIDE_AGENT_TRANSPORT is unset) keeps this
+# agent on the SAME broker as the scheduler; it subclasses ORSimAgent directly rather
+# than through OpenRideAgent.
+class AnalyticsAgentIndie(TransportSelectingAgent, ORSimAgent):
     """Service-style agent: periodically aggregates haul/order KPIs for a run."""
 
     def _create_app(self):
@@ -58,6 +63,15 @@ class AnalyticsAgentIndie(ORSimAgent):
             if not getattr(self, "_coop_forwarded", False):
                 self.app.manager.set_cooperation(self.orsim_settings.get("COOPERATION"))
                 self._coop_forwarded = True
+            # The run's time axis for the order-outcome KPIs, also once (no RNG draw).
+            # set_order_outcome_context never raises; a bad axis only disables those KPIs.
+            if not getattr(self, "_order_outcome_ctx_forwarded", False):
+                self.app.manager.set_order_outcome_context(
+                    self.orsim_settings.get("STEP_INTERVAL"),
+                    self.orsim_settings.get("REFERENCE_TIME"),
+                    self.orsim_settings.get("SIMULATION_LENGTH_IN_STEPS"),
+                )
+                self._order_outcome_ctx_forwarded = True
             self.compute_all_metrics()
             profile = self.behavior.get("profile") or {}
             self._maybe_flush_breakdowns(profile)
@@ -105,7 +119,12 @@ class AnalyticsAgentIndie(ORSimAgent):
             if last is not None and (now - last).total_seconds() < min_gap_s:
                 return
             self._last_breakdown_flush_time = now
-            self.app.manager.save_breakdowns(self.get_current_time_str())
+            # The PROVISIONAL closed-days order outcomes (None before day 0 closes, which
+            # leaves the snapshot exactly as before: absent fields mean "not recorded").
+            self.app.manager.save_breakdowns(
+                self.get_current_time_str(),
+                order_outcomes=self.app.manager.live_order_outcomes(),
+            )
         except Exception as e:
             logging.warning("breakdown snapshot flush failed: %s", e)
 

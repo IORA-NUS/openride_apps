@@ -372,15 +372,149 @@ def rebuild_index(domain: str | None = None) -> dict[str, Any]:
 
 
 def known_solvers() -> dict[str, Any]:
-    """Return ``{solvers: [...], default: str}`` from the live SOLVER_REGISTRY."""
+    """Return ``{solvers: [...], default: str}`` from the live dispatch policy registry."""
     payload = _ok(_run_command(["known-solvers"]))
     return {"solvers": payload.get("solvers") or [], "default": payload.get("default")}
+
+
+#: ``--sharing-policy`` refusal (plan item 34): ``planner.sharing`` is read only at compile.
+SHARING_POLICY_REMOVED = (
+    "--sharing-policy removed: inert at run time (set planner.sharing in spec.json and recompile)"
+)
+
+
+def validate_run_policies(
+    scenario: Optional[str],
+    solver: Optional[str],
+    policies: Optional[list[str]] = None,
+    params: Optional[list[str]] = None,
+    *,
+    cooperation_structure: Optional[str] = None,
+    assignment_cadence: Optional[int] = None,
+    max_orders_per_tick: Optional[int] = None,
+) -> dict[str, Any]:
+    """Dry-run a run's ``--solver``/``--policy``/``--policy-param``/``--structure`` against the scenario.
+
+    In-process, like ``runner.py``'s ``ServiceManager`` use: the same check
+    ``run-simulation`` runs before it spawns (an undeclared structure, or one the bound
+    planner never reads, is refused here). ``assignment_cadence`` /
+    ``max_orders_per_tick`` are overlaid on the environment the dry run reads, as the
+    runner injects them. Returns the ``ORSIM_POLICY_OVERRIDES`` object (``{}`` when no
+    policy flag was given); raises ``ControlError`` with the message.
+    """
+    from openride_control.policies import validate_run_policy_args
+
+    result = validate_run_policy_args(
+        scenario, solver, policies or [], params or [], cooperation_structure=cooperation_structure,
+        assignment_cadence=assignment_cadence, max_orders_per_tick=max_orders_per_tick,
+    )
+    if isinstance(result, str):
+        err = ControlError(result)
+        err.code = "INVALID"
+        raise err
+    return result
+
+
+def validate_assignment_run_inputs(cadence: Any, max_orders: Any) -> tuple[Optional[int], Optional[int]]:
+    """``--assignment-cadence`` / ``--max-orders-per-tick`` as ints (``None`` when unset).
+
+    The sim's own parsers (``scenario_overrides.parse_assignment_cadence`` /
+    ``parse_max_orders_per_tick``), so the CLI and the sim refuse with one text (R8);
+    raises ``ControlError`` (code ``INVALID``).
+    """
+    from apps.container_logistics.policies.framework import PolicyError
+    from apps.container_logistics.scenario.scenario_overrides import (
+        parse_assignment_cadence,
+        parse_max_orders_per_tick,
+    )
+
+    try:
+        return parse_assignment_cadence(cadence), parse_max_orders_per_tick(max_orders)
+    except PolicyError as exc:
+        err = ControlError(str(exc))
+        err.code = "INVALID"
+        raise err
+
+
+def validate_capture_dispatch(text: Optional[str]) -> Optional[str]:
+    """Check a ``--capture-dispatch every=N,max=M`` value in-process; return it stripped.
+
+    ``None`` when unset. Uses the sim's own parser (``dispatch.capture.parse_capture_spec``
+    via ``openride_control.policies``); raises ``ControlError`` (code ``INVALID``).
+    """
+    from openride_control.policies import validate_capture_arg
+
+    error = validate_capture_arg(text)
+    if error:
+        err = ControlError(error)
+        err.code = "INVALID"
+        raise err
+    return text.strip() if text and text.strip() else None
 
 
 def known_policies() -> dict[str, Any]:
     """Return ``{policies: {role: [...]}, defaults: {role: str}}`` from the POLICY_REGISTRY."""
     payload = _ok(_run_command(["known-policies"]))
     return {"policies": payload.get("policies") or {}, "defaults": payload.get("defaults") or {}}
+
+
+def known_policy_slots() -> dict[str, Any]:
+    """Return the policy-slot catalog (``known-policies.slots``): ``{slot: entry}``."""
+    payload = _ok(_run_command(["known-policies"]))
+    slots = payload.get("slots")
+    if not isinstance(slots, dict):
+        raise ControlError("known-policies returned no 'slots' catalog (control plane predates policy slots?)")
+    return slots
+
+
+def known_policy_components() -> dict[str, Any]:
+    """Return the component catalog (``known-policies.components``): ``{kind: entry}``.
+
+    Round 2: the market components (``market.offer``/``claim``/``arbitration``) that
+    ``PooledMarket`` references; ``ControlError`` when the control plane predates them.
+    """
+    payload = _ok(_run_command(["known-policies"]))
+    components = payload.get("components")
+    if not isinstance(components, dict):
+        raise ControlError("known-policies returned no 'components' catalog (control plane predates round 2?)")
+    return components
+
+
+def policy_validate(slot: str, name: str) -> dict[str, Any]:
+    """Run the contract battery; return ``{ok, slot, name, results: [...], message}``.
+
+    A battery that ran but had a FAIL comes back with ``ok: false`` and its
+    ``results`` (the caller renders them). A refusal with no results (unknown slot or
+    name) raises ``ControlError``.
+    """
+    payload = _run_command(["policy-validate", "--slot", slot, "--name", name], timeout=300.0)
+    if isinstance(payload.get("results"), list):
+        return payload
+    return _ok(payload)
+
+
+def policy_bench(
+    slot: str,
+    policies: list[str],
+    *,
+    fixtures_dir: str | None = None,
+    synthetic: str | None = None,
+    params: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """Bench ``policies`` on one tick per fixture; return ``{report, table}``.
+
+    Exactly one of ``fixtures_dir`` / ``synthetic``. Raises ``ControlError`` with the
+    control plane's message on any refusal.
+    """
+    args = ["policy-bench", "--slot", slot, "--policies", ",".join(policies)]
+    if fixtures_dir is not None:
+        args += ["--fixtures", fixtures_dir]
+    if synthetic is not None:
+        args += ["--synthetic", synthetic]
+    for p in params or []:
+        args += ["--policy-param", p]
+    payload = _ok(_run_command(args, timeout=600.0))
+    return {"report": payload.get("report") or {}, "table": payload.get("table") or ""}
 
 
 # -- services -------------------------------------------------------------

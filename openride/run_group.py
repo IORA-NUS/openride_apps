@@ -8,6 +8,7 @@ geo/truck-location streaming that only feeds the map, so analysis-only runs go f
 
 from __future__ import annotations
 
+import argparse
 import sys
 import time
 from typing import Optional
@@ -46,7 +47,8 @@ def _pick_solver() -> Optional[str]:
     import questionary
 
     choices = [questionary.Choice("Scenario default", value="__default__")]
-    choices += [questionary.Choice(s, value=s) for s in config.SOLVERS]
+    # Names come from the engine's policy registry; a ControlError propagates to the caller.
+    choices += [questionary.Choice(s, value=s) for s in control.known_solvers().get("solvers") or []]
     answer = questionary.select("Assignment solver:", choices=choices).ask()
     if answer in (None, "__default__"):
         return None
@@ -120,14 +122,34 @@ def _cmd_run(args) -> int:
         return 2
 
     solver = args.solver
-    if solver is None and not args.scenario:
+    if solver is None and not args.scenario and not getattr(args, "policy", None):
         solver = _pick_solver()
+
+    # --solver X is the innermost per-scope solver (ORSIM_SOLVER, shipped separately);
+    # validated with the policy flags against the scenario now, not after the sim has spawned.
+    if getattr(args, "sharing_policy", None) is not None:
+        console.print(f"[red]Invalid flag:[/] {control.SHARING_POLICY_REMOVED}")
+        return 2
+    try:
+        policy_overrides = control.validate_run_policies(
+            scenario, solver, getattr(args, "policy", None), getattr(args, "policy_param", None),
+            cooperation_structure=getattr(args, "structure", None),
+        )
+    except control.ControlError as exc:
+        console.print(f"[red]Invalid policy override:[/] {exc}")
+        return 2
+    try:
+        capture_dispatch = control.validate_capture_dispatch(getattr(args, "capture_dispatch", None))
+    except control.ControlError as exc:
+        console.print(f"[red]Invalid --capture-dispatch:[/] {exc}")
+        return 2
 
     headless = not args.no_headless
     runner = SimulationRunner(
-        scenario=scenario, solver=solver, run_name=args.run_name, headless=headless,
+        scenario=scenario, run_name=args.run_name, headless=headless, solver=solver,
         cooperation_structure=getattr(args, "structure", None),
-        sharing_policy=getattr(args, "sharing_policy", None),
+        policy_overrides=policy_overrides,
+        capture_dispatch=capture_dispatch,
     )
 
     if runner.another_run_active():
@@ -175,10 +197,30 @@ def register(sub) -> None:
     p = sub.add_parser("run", help="Run a simulation (interactive TUI, or --json scriptable)")
     p.add_argument("scenario_pos", nargs="?", metavar="SCENARIO", help="Scenario slug to run")
     p.add_argument("--scenario", help="Scenario slug (alternative to the positional)")
-    p.add_argument("--solver", choices=config.SOLVERS, help="Assignment solver override")
+    p.add_argument("--solver",
+                   help="Innermost per-scope solver override: the inner solver of the selected "
+                        "decomposition (e.g. Partitioned/<solver>), validated by the engine; "
+                        "list: openride solver list")
+    p.add_argument("--policy", action="append", default=[], metavar="SLOT=NAME",
+                   help="Per-run policy override, repeatable (e.g. planner=PooledMarket keeps the "
+                        "per-scope solver; a leaf such as planner=GreedyNearest is a CENTRAL solver)")
+    p.add_argument("--policy-param", dest="policy_param", action="append", default=[],
+                   metavar="SLOT.PATH=VALUE",
+                   help="Per-run policy param override, repeatable, nested through refs (e.g. "
+                        "planner.inner.dual_cycle_bonus_km=0, planner.offer=OfferSpare); VALUE is "
+                        "JSON when it parses")
+    p.add_argument("--capture-dispatch", dest="capture_dispatch", metavar="every=N,max=M",
+                   help="Capture dispatch contexts every N-th dispatch tick (not sim step; at most M files) under "
+                        "<datahub>/fixtures/dispatch/<run_id>, for openride policy bench --fixtures")
     p.add_argument("--structure", help="Cooperation structure id override (declared in the scenario's spec.json)")
-    p.add_argument("--sharing-policy", dest="sharing_policy",
-                   help="Sharing algorithm override for two-stage planners")
+    p.add_argument("--assignment-cadence", dest="assignment_cadence", metavar="STEPS",
+                   help="Assignment dispatch cadence in sim steps, 1..360 (default: the scenario's, 28); "
+                        "a new arm, tagged ' · cadence:N'")
+    p.add_argument("--max-orders-per-tick", dest="max_orders_per_tick", metavar="N",
+                   help="Unassigned orders read per dispatch tick, 1..20000 (default: the scenario's, 500); "
+                        "tagged ' · orders:N'")
+    # REMOVED (plan item 34): inert at run time. Still parsed so the refusal names the reason.
+    p.add_argument("--sharing-policy", dest="sharing_policy", help=argparse.SUPPRESS)
     p.add_argument("--run-name", help="Human-readable run name")
     p.add_argument("--no-headless", action="store_true",
                    help="Keep geo/truck-location streaming on (slower; same as a dashboard run)")

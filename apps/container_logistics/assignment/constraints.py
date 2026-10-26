@@ -7,7 +7,7 @@ Policy knobs are driven primarily by ``scenario_config.assignment_settings["prof
 from __future__ import annotations
 
 import math
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
 
 from apps.container_logistics.scenario.scenario_config import facility_settings
 
@@ -172,6 +172,11 @@ def assignment_cost(
     bonus_km = float(params.get("dual_cycle_bonus_km", _DEFAULT_DUAL_CYCLE_BONUS_KM))
     radius_km = float(params.get("dual_cycle_radius_km", _DEFAULT_DUAL_CYCLE_RADIUS_KM))
 
+    # The dual-cycle predicate, INLINED on purpose (gate 6, round-2 performance):
+    # this function runs once per candidate pair (~20k per tick on the golden
+    # chain), and the extra call into ``_is_dual_cycle_pair`` was measurable there.
+    # ``_is_dual_cycle_pair`` below is the same predicate for ``objective.is_dual_cycle``;
+    # tests/test_dispatch_context_helpers.py pins both against the pre-refactor oracle.
     is_dual_cycle = False
     last_fac = _truck_last_dropoff_facility(truck)
     order_pickup_fac = (order.get("profile") or {}).get("pickup_facility_name")
@@ -186,6 +191,32 @@ def assignment_cost(
 
     cost = base_km - (bonus_km if is_dual_cycle else 0.0)
     return max(0.0, cost)
+
+
+def _is_dual_cycle_pair(
+    truck: Dict[str, Any],
+    order: Dict[str, Any],
+    pickup: Optional[Dict[str, Any]],
+    radius_km: float,
+) -> bool:
+    """The dual-cycle predicate of :func:`assignment_cost` (which inlines a copy for speed).
+
+    True when the order's pickup facility is the truck's last drop-off facility
+    (name match), else when the last drop-off point lies within ``radius_km`` of
+    ``pickup`` (haversine). ``pickup`` is passed in rather than recomputed so
+    ``assignment_cost`` keeps its exact arithmetic; ``None`` disables only the
+    radius branch.
+    """
+    last_fac = _truck_last_dropoff_facility(truck)
+    order_pickup_fac = (order.get("profile") or {}).get("pickup_facility_name")
+    if last_fac is not None and order_pickup_fac is not None and last_fac == str(order_pickup_fac):
+        return True
+    last_loc = _truck_last_dropoff_loc(truck)
+    if last_loc is not None:
+        d = _haversine_km(last_loc, pickup)
+        if d is not None and d <= radius_km:
+            return True
+    return False
 
 
 def haulier_of(entity: Dict[str, Any]) -> Optional[str]:
@@ -318,6 +349,30 @@ def share_adjacency(structure: Optional[Dict[str, Any]]) -> Dict[str, set]:
     if not isinstance(adj, dict):
         return {}
     return {str(k): {str(p) for p in v} for k, v in adj.items() if isinstance(v, (list, tuple, set))}
+
+
+def declared_partnerships(profile: Dict[str, Any]) -> FrozenSet[Tuple[str, str]]:
+    """Every ``(owner, carrier)`` pair ANY cooperation structure of ``profile`` declares.
+
+    The union over ``profile["cooperation"]["structures"][*]`` of
+    ``{(owner, carrier): owner in share_adjacency(s)[carrier], owner != carrier}``:
+    the ceiling a planner's declared cross-company pairs must stay inside
+    (``policies.dispatch.bind``, message 23), over every arm of the menu so an arm
+    switch never widens it. Directional exactly like :func:`share_eligible` (a carrier's
+    trucks may serve an owner's orders iff the owner is in the carrier's adjacency).
+    Defensive like :func:`share_adjacency`: never raises; empty without a valid block.
+    """
+    coop = (profile or {}).get("cooperation")
+    if not isinstance(coop, dict):
+        return frozenset()
+    structures = coop.get("structures")
+    if not isinstance(structures, list):
+        return frozenset()
+    out = set()
+    for structure in structures:
+        for carrier, owners in share_adjacency(structure).items():
+            out.update((owner, carrier) for owner in owners if owner != carrier)
+    return frozenset(out)
 
 
 def share_eligible(truck: Dict[str, Any], order: Dict[str, Any], adjacency: Dict[str, set]) -> bool:

@@ -11,10 +11,15 @@ from random import random
 
 from orsim.lifecycle import ORSimAgent
 
+from apps.agent_transport import TransportSelectingAgent
+
 from .app import OrderLifecycleApp
 
 
-class OrderLifecycleAgent(ORSimAgent):
+# TransportSelectingAgent (a no-op while OPENRIDE_AGENT_TRANSPORT is unset) keeps this
+# agent on the SAME broker as the scheduler; see the docstring above for why it does
+# not inherit the rest of OpenRideAgent.
+class OrderLifecycleAgent(TransportSelectingAgent, ORSimAgent):
     def _create_app(self):
         return OrderLifecycleApp(
             run_id=self.run_id,

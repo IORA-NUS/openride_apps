@@ -7,6 +7,8 @@ drop-off. The cost function degrades to ``inf`` (random ordering) when geometry
 is missing rather than crashing.
 """
 
+import pytest
+
 from apps.container_logistics.assignment import constraints as C
 from apps.container_logistics.assignment.solver import (
     DEFAULT_SOLVER,
@@ -15,6 +17,8 @@ from apps.container_logistics.assignment.solver import (
     RandomAssignmentSolver,
     get_solver,
 )
+from apps.container_logistics.policies.compat.legacy import LEGACY_LEAF_DEFAULT
+from apps.container_logistics.policies.framework import SLOTS, UnknownPolicyError
 
 
 def _pt(lon, lat):
@@ -52,9 +56,22 @@ def test_get_solver_by_name():
     assert isinstance(get_solver("RandomAssignment", None), RandomAssignmentSolver)
 
 
-def test_get_solver_unknown_falls_back_to_default():
-    solver = get_solver("DoesNotExist", None)
-    assert type(solver) is SOLVER_REGISTRY[DEFAULT_SOLVER]
+def test_get_solver_unknown_name_raises_listing_known():
+    """No silent fallback: an unknown name raises and names what is registered."""
+    with pytest.raises(UnknownPolicyError) as excinfo:
+        get_solver("DoesNotExist", None)
+    message = str(excinfo.value)
+    assert "DoesNotExist" in message
+    assert "GreedyNearest" in message and "RandomAssignment" in message
+
+
+def test_get_solver_none_is_the_legacy_leaf_default():
+    """``None``/empty means the default LEAF solver (round 2: the slot default is the
+    ``Partitioned`` decomposition, whose inner defaults to this leaf)."""
+    assert DEFAULT_SOLVER == LEGACY_LEAF_DEFAULT == "RandomAssignment"
+    assert SLOTS["planner"].default == "Partitioned"
+    assert type(get_solver(None, None)) is SOLVER_REGISTRY[DEFAULT_SOLVER]
+    assert type(get_solver("", None)) is SOLVER_REGISTRY[DEFAULT_SOLVER]
 
 
 def test_solver_params_are_passed_through():

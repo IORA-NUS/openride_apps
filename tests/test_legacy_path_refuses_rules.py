@@ -143,6 +143,9 @@ _DECLARED_UNSUPPORTED = {
         # the legacy path is being retired, not extended.
         "name", "slug", "domain", "source", "seed", "referenceTime", "cooperation",
         "planner", "overrides", "orderCountUnit", "agents",
+        # Day-plan run inputs (F4/F4b): compiled by the Preprocessor only; the legacy
+        # scenario_config path has no per-run assignment cadence / read-cap analogue.
+        "assignmentCadenceSteps", "maxOrdersPerTick",
     },
 }
 

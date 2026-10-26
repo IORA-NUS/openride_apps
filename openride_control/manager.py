@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import signal
@@ -458,10 +459,22 @@ class ServiceManager:
         run_id: str | None = None,
         solver: str | None = None,
         cooperation_structure: str | None = None,
-        sharing_policy: str | None = None,
         order_lifecycle: str | None = None,
+        policy_overrides: dict | None = None,
+        capture_dispatch: str | None = None,
+        assignment_cadence: str | int | None = None,
+        max_orders_per_tick: str | int | None = None,
     ) -> ActionResult:
-        """Start backend deps + simulation detached; logs to simulation_log.txt."""
+        """Start backend deps + simulation detached; logs to simulation_log.txt.
+
+        ``assignment_cadence`` / ``max_orders_per_tick`` (already range-checked, R8) ship as
+        ``ORSIM_ASSIGNMENT_CADENCE`` / ``ORSIM_MAX_ORDERS_PER_TICK``.
+
+        ``policy_overrides`` (``{slot: {type?, timing?, params?}}``, already validated by
+        ``openride_control.policies``) ships as ``ORSIM_POLICY_OVERRIDES`` JSON.
+        ``capture_dispatch`` (``every=N,max=M``, already validated by
+        ``dispatch.capture.parse_capture_spec``) ships as ``ORSIM_CAPTURE_DISPATCH``.
+        """
         with self._lock:
             if self.is_simulation_running():
                 return ActionResult(
@@ -492,10 +505,16 @@ class ServiceManager:
                     extra_env["ORSIM_SOLVER"] = solver.strip()
                 if cooperation_structure and cooperation_structure.strip():
                     extra_env["ORSIM_COOP_STRUCTURE"] = cooperation_structure.strip()
-                if sharing_policy and sharing_policy.strip():
-                    extra_env["ORSIM_SHARING_POLICY"] = sharing_policy.strip()
                 if order_lifecycle and order_lifecycle.strip():
                     extra_env["ORSIM_ORDER_LIFECYCLE"] = order_lifecycle.strip()
+                if policy_overrides:
+                    extra_env["ORSIM_POLICY_OVERRIDES"] = json.dumps(policy_overrides, sort_keys=True)
+                if capture_dispatch and capture_dispatch.strip():
+                    extra_env["ORSIM_CAPTURE_DISPATCH"] = capture_dispatch.strip()
+                if assignment_cadence is not None and str(assignment_cadence).strip():
+                    extra_env["ORSIM_ASSIGNMENT_CADENCE"] = str(assignment_cadence).strip()
+                if max_orders_per_tick is not None and str(max_orders_per_tick).strip():
+                    extra_env["ORSIM_MAX_ORDERS_PER_TICK"] = str(max_orders_per_tick).strip()
                 proc = spawn_simulation_process(extra_env=extra_env or None, background=True)
                 self.processes[SIMULATION_PROCESS_KEY] = proc
                 time.sleep(2)

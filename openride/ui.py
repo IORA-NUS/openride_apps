@@ -45,13 +45,19 @@ def render_scenario_detail(detail: dict[str, Any]) -> None:
     form = detail.get("editForm") if isinstance(detail.get("editForm"), dict) else {}
     agents = detail.get("agents") or {}
     hauliers = detail.get("hauliers") or form.get("hauliers") or []
-    solver = detail.get("solver") or form.get("solver")
+    slots = form.get("policySlots") if isinstance(form.get("policySlots"), dict) else {}
+    dispatch = slots.get("planner") if isinstance(slots.get("planner"), dict) else {}
+    solver = dispatch.get("type") or detail.get("solver") or form.get("solver")
+    params = dispatch.get("params") if isinstance(dispatch.get("params"), dict) else {}
+    param_text = ", ".join(f"{k}={v}" for k, v in sorted(params.items()))
     lines = [
         f"[bold]{detail.get('name', detail.get('slug'))}[/]  [dim]({detail.get('slug')})[/]",
         f"days={detail.get('simulationDays', '?')}  "
         f"trucks={agents.get('truck', '?')}  orders={agents.get('order', '?')}  "
         f"facilities={agents.get('facility', '?')}",
-        f"solver={solver or 'scenario default'}",
+        f"policies.planner={solver or 'scenario default'}"
+        + (f" timing={dispatch['timing']}" if dispatch.get("timing") else "")
+        + (f"  [dim]({param_text})[/]" if param_text else ""),
     ]
     console.print(Panel("\n".join(lines), border_style="cyan", title="scenario"))
     if hauliers:

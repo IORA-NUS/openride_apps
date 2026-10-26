@@ -51,6 +51,12 @@ def _sentinel_for(key: str):
                     "market": {"max_rounds": 7}},
         "solver": "GreedyNearest",
         "solverParams": {"dual_cycle_bonus_km": 3.25},
+        # The policy-slot selection (policy slots plan §4 P2.4). CARRY_IF_ABSENT: a save
+        # that does not speak it must keep the authored dispatch policy and params.
+        # Round 2 (§3.6): the same selection spelled as a tree, so it agrees with the
+        # sentinel planner's topology 'pooled' / market (messages 7, 8) and solver.
+        "policies": {"planner": {"type": "PooledMarket", "timing": "online", "params": {
+            "max_rounds": 7, "inner": {"type": "GreedyNearest", "params": {"dual_cycle_bonus_km": 3.25}}}}},
         "roleSettings": {"truck": {"speed": 42}},
         "overrides": {"facility": {"gate_count": 8}},
         # Per-facility rules (facility rules plan §9). CARRY_IF_ABSENT, matching
@@ -69,6 +75,10 @@ def _sentinel_for(key: str):
         "facilityRulesWorld": {"site_digest": "blake2b16:0000000000000000",
                                "facility_count": 300,
                                "code_counts": {"CT": 6, "CU": 234, "MT": 60}},
+        # Day-plan run inputs (F4/F4b). CARRY_IF_ABSENT: the editor does not speak them,
+        # so a save must keep an authored cadence / read cap (a different arm otherwise).
+        "assignmentCadenceSteps": 6,
+        "maxOrdersPerTick": 2000,
     }
     if key not in special:
         raise AssertionError(
@@ -237,7 +247,7 @@ def test_pools_declared_but_partitioned_resolved_emits_a_warning(caplog):
         compiled = Preprocessor.compile({**spec, **_uncompilable_sentinels()},
                                         domain="container_logistics")
     assert compiled.recipe["planner"]["topology"] == "partitioned"
-    assert any("shared-pool planning is OFF" in r.getMessage() for r in caplog.records), \
+    assert any("decomposition (PooledMarket) is OFF" in r.getMessage() for r in caplog.records), \
         "a pools-declaring scenario resolved to partitioned with no warning"
 
 
@@ -251,4 +261,31 @@ def test_no_warning_when_the_scenario_actually_resolves_pooled(caplog):
         compiled = Preprocessor.compile({**spec, **_uncompilable_sentinels()},
                                         domain="container_logistics")
     assert compiled.recipe["planner"]["topology"] == "pooled"
-    assert not any("shared-pool planning is OFF" in r.getMessage() for r in caplog.records)
+    assert not any("decomposition (PooledMarket) is OFF" in r.getMessage() for r in caplog.records)
+
+
+def test_pools_warning_reads_the_resolved_dispatch_selection(caplog):
+    """Final review MINOR-5: the warning decides on the RESOLVED ``policies.planner``
+    top, not on ``planner.topology`` (which defaults to partitioned): an authored
+    ``PooledMarket`` block with no ``planner`` is NOT warned, an authored
+    ``Partitioned`` one is, in ``policies.planner`` terms.
+
+    Verified to have teeth: restoring the old ``planner_cfg["topology"] ==
+    "partitioned"`` condition warned the authored PooledMarket spec."""
+    import logging
+
+    from apps.container_logistics.datagen.preprocess import Preprocessor
+
+    base = {k: v for k, v in assemble_spec(_dashboard_body(), DOMAIN).items() if k != "planner"}
+    for top, warned in (("PooledMarket", False), ("Partitioned", True)):
+        caplog.clear()
+        spec = {**base, **_uncompilable_sentinels(), "policies": {
+            "planner": {"type": top, "params": {"inner": {"type": "GreedyNearest"}}}}}
+        spec.pop("solver", None)
+        with caplog.at_level(logging.WARNING):
+            Preprocessor.compile(spec, domain="container_logistics")
+        msgs = [r.getMessage() for r in caplog.records if "cooperation pool(s)" in r.getMessage()]
+        assert bool(msgs) is warned, (top, msgs)
+        if warned:
+            assert "policies.planner resolves to Partitioned" in msgs[0]
+            assert "set policies.planner.type='PooledMarket'" in msgs[0], msgs[0]

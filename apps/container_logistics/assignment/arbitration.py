@@ -23,6 +23,11 @@ rather than of caller order.
 
 Scope honesty (plan §5): I-P5 is a per-tick planner guarantee. It does not make
 a whole run reproducible — agent scheduling is async.
+
+Each concrete class declares ``version`` and a typed nested ``Params`` (a
+``PolicyParams``): the component catalog and the ``PooledMarket`` dispatch policy's
+refs validate against it (``policies/framework/components.py``, round-2 plan §3.2).
+The instance itself still receives a plain ``params`` dict.
 """
 
 from __future__ import annotations
@@ -31,7 +36,10 @@ import logging
 import math
 import random
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple, Type
+
+from apps.container_logistics.policies.framework import PolicyParams, param, register_component_kind
 
 from .pools import Award, Bid, PoolMarket
 from .tiebreak import stable_tiebreak
@@ -151,6 +159,12 @@ class LowestCostRule(BaseArbitrationRule):
     asks us to measure (plan D2).
     """
 
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
+
     def resolve(
         self,
         bids: Sequence[Bid],
@@ -180,6 +194,12 @@ class OwnerFirstRule(BaseArbitrationRule):
     is identical, and it is the implementation the phase brief specifies.
     Models a company that will not cede a job it can do itself.
     """
+
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
 
     def resolve(
         self,
@@ -218,6 +238,12 @@ class HighestBenefitRule(BaseArbitrationRule):
     ``benefit_km`` recorded for analytics stays the policy-independent shadow
     price of D6. The two numbers can disagree, deliberately.
     """
+
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
 
     def resolve(
         self,
@@ -262,6 +288,12 @@ class RandomAwardRule(BaseArbitrationRule):
     the caller's list order.
     """
 
+    version = "1"
+
+    @dataclass(frozen=True)
+    class Params(PolicyParams):
+        """Declares no params."""
+
     def resolve(
         self,
         bids: Sequence[Bid],
@@ -286,6 +318,11 @@ ARBITRATION_REGISTRY: Dict[str, Type[BaseArbitrationRule]] = {
 }
 
 DEFAULT_ARBITRATION_RULE = "LowestCost"
+
+# This module owns the component kind 'market.arbitration': the framework resolves refs of that kind
+# against the live registry above (framework/components.py, round-2 review #5).
+register_component_kind("market.arbitration", lambda: ARBITRATION_REGISTRY, DEFAULT_ARBITRATION_RULE,
+                        "Who wins when two companies bid for the same pooled order.", order=30)
 
 
 def get_arbitration_rule(
