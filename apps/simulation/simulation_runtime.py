@@ -314,6 +314,9 @@ class SimulationRuntime(ORSimRuntime):
 
     def on_simulation_complete(self, elapsed: float):
         self._finalize_unserved_orders()
+        # After the unserved bulk cancel (its horizon marker must be in place) and before
+        # the breakdowns, which carry the SAME final recount on their haulier rows.
+        self._finalize_order_outcomes()
         self._finalize_kpi_breakdowns()
         # R3-4: the terminal status write happens BEFORE the perf summary, so the summary
         # can carry its outcome. That ordering is what makes a failed terminal write
@@ -522,10 +525,116 @@ class SimulationRuntime(ORSimRuntime):
             # Fresh manager: hand it the active cooperation structure (stamped into
             # orsim_settings at boot) so the final=True planner-scope rows exist.
             manager.set_cooperation(self.orsim_settings.get("COOPERATION"))
-            manager.recompute_breakdowns_full(sim_clock_str)
+            manager.recompute_breakdowns_full(
+                sim_clock_str,
+                order_outcomes=getattr(self, "_final_order_outcomes", None),
+            )
             logger.info("Run %s: finalized KPI breakdowns (truck + haulier).", self.run_id)
         except Exception:
             logger.exception("Run %s: KPI breakdown finalize failed (continuing).", self.run_id)
+
+    def _finalize_order_outcomes(self) -> Optional[dict]:
+        """The AUTHORITATIVE order-outcome recount (container_logistics only).
+
+        Runs after ``_finalize_unserved_orders``: the order-lifecycle service has stopped, so
+        no sweep cancel can be resurrected any more and the horizon marker is in place. The
+        result is PATCHed to ``run_config.meta.order_outcomes`` and cached for
+        ``_finalize_kpi_breakdowns``, so the final haulier rows and the meta are ONE
+        computation. Best-effort: logged, never raised. It is deliberately NOT carried in
+        the terminal-status PATCH (a reporting bug must not leave the run "In Progress"),
+        and no kpi doc is written (a finalize timepoint would break the series coverage
+        check, CLAUDE.md §6.6).
+        """
+        self._final_order_outcomes = None
+        if self.domain != simulation_domains.get("container_logistics", "container-logistics-sim"):
+            return None
+        try:
+            from apps.container_logistics.analytics.order_outcomes import (
+                META_KEY,
+                compute_order_outcomes,
+            )
+
+            step = float(self.orsim_settings["STEP_INTERVAL"])
+            outcomes = compute_order_outcomes(
+                self.run_id,
+                step_interval=step,
+                reference_time=self.orsim_settings.get("REFERENCE_TIME") or self.reference_time,
+                horizon_s=int(self.steps) * step,
+                final=True,
+            )
+        except Exception:
+            logger.exception("Run %s: order-outcome recount failed (continuing).", self.run_id)
+            return None
+        self._final_order_outcomes = outcomes
+        if outcomes.get("invariants_ok"):
+            logger.info(
+                "Run %s: order outcomes released=%s done_same_day=%s failed=%s",
+                self.run_id,
+                outcomes["totals"]["released"],
+                outcomes["totals"]["done_same_day"],
+                outcomes["totals"]["failed"]["total"],
+            )
+        else:
+            logger.error(
+                "Run %s: order-outcome INVARIANTS FAILED: %s",
+                self.run_id,
+                "; ".join(outcomes.get("invariant_errors") or []),
+            )
+        self._patch_run_meta(META_KEY, outcomes)
+        return outcomes
+
+    def _patch_run_meta(self, key: str, value) -> bool:
+        """Dotted PATCH of ``run_config.meta.<key>`` with the cached etag; never raises.
+
+        On success the response's eve metadata (fresh ``_etag``) is ADOPTED into
+        ``self.run_record``, so the terminal-status write that follows still lands at
+        attempt 1 (perf summary ``status_write_outcomes`` unchanged). A 412 gets exactly
+        one re-GET-etag retry; anything else is logged and given up. No sleep, no loop.
+        """
+        record = self.run_record
+        if not isinstance(record, dict) or "_id" not in record or "_etag" not in record:
+            logger.error("Run %s: cannot write run_config.meta.%s: no run record.", self.run_id, key)
+            return False
+        url = f"{settings['OPENRIDE_SERVER_URL']}/run-config/{record['_id']}"
+        timeout = settings.get("NETWORK_REQUEST_TIMEOUT", 10)
+        try:
+            body = json.dumps({f"meta.{key}": value})
+            session = get_http_session()
+            etag = record["_etag"]
+            for attempt in (1, 2):
+                response = session.patch(
+                    url, headers=self.user.get_headers(etag=etag), data=body, timeout=timeout
+                )
+                if response.status_code in (200, 201):
+                    adopted = {}
+                    try:
+                        adopted = {
+                            k: v
+                            for k, v in (response.json() or {}).items()
+                            if k in RUN_RECORD_METADATA_KEYS
+                        }
+                    except Exception:
+                        pass
+                    if adopted.get("_etag"):
+                        self.run_record = {**record, **adopted}
+                    return True
+                if response.status_code != 412 or attempt == 2:
+                    logger.error(
+                        "Run %s: run_config.meta.%s PATCH failed http=%s attempt=%s: %s",
+                        self.run_id, key, response.status_code, attempt, response.text,
+                    )
+                    return False
+                refreshed = session.get(url, headers=self.user.get_headers(), timeout=timeout)
+                if refreshed.status_code != 200:
+                    logger.error(
+                        "Run %s: etag refresh for run_config.meta.%s failed http=%s",
+                        self.run_id, key, refreshed.status_code,
+                    )
+                    return False
+                etag = refreshed.json()["_etag"]
+        except Exception:
+            logger.exception("Run %s: run_config.meta.%s PATCH raised (continuing).", self.run_id, key)
+        return False
 
     def _finalize_unserved_orders(self):
         """Terminalize any orders left non-terminal at run end (container_logistics only).
